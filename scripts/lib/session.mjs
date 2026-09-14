@@ -1,7 +1,8 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { assess } from "./assess.mjs";
 import { ensureSession, loadSession } from "./session-state.mjs";
+import { recordGateError } from "./context.mjs";
 import { attachLedger, openRuns } from "./ledger.mjs";
 
 function mandate(ctx) {
@@ -13,6 +14,17 @@ export const verbs = {
     if (ctx.input?.agent_id) return; // subagents get no mandate and no snapshot
     if (!ctx.session) return;
     ensureSession(ctx.stateDir, ctx.root, ctx.session);
+    try {
+      mkdirSync(ctx.stateDir, { recursive: true });
+      writeFileSync(path.join(ctx.stateDir, "current-session"), ctx.session);
+    } catch (error) {
+      // courtesy for shell-run verbs; the hooks keep their own id, and the mandate must still ship
+      try {
+        recordGateError(error, "session-start");
+      } catch {
+        // the state dir itself is unwritable; nothing left to record
+      }
+    }
     const parts = [mandate(ctx)];
     // A /clear, resume or compaction must not orphan a task: join the newest open run.
     try {

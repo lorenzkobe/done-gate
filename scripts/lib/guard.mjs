@@ -4,8 +4,8 @@ import { toPosixRel } from "./paths.mjs";
 
 // Files only the gate's own verbs may write. A model that could edit these could
 // forge its evidence, so the deny is unconditional and every attempt is logged.
-const EVIDENCE_FILES = new Set(["events.jsonl", "verify.json", "decisions.tsv", "ledger.json", "blocks.json", "state.json", "gate-error.log"]);
-const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(events\.jsonl|verify\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json)/;
+const EVIDENCE_FILES = new Set(["events.jsonl", "verify.json", "decisions.tsv", "ledger.json", "blocks.json", "state.json", "gate-error.log", "current-session"]);
+const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(events\.jsonl|verify\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json|current-session)/;
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
 function targetPaths(input, root) {
