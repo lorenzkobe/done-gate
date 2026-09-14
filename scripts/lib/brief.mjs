@@ -6,6 +6,8 @@ import { caseTable, section, verifyLines } from "./report.mjs";
 import { renderTierBlock, tierOf } from "./size.mjs";
 import { gitTracked } from "./tree.mjs";
 import { ROLES, flag, positional } from "./verbs.mjs";
+import { UsageError } from "./context.mjs";
+import { printNext } from "./next.mjs";
 
 // A packet is everything a helper needs, generated from gate state and the working tree.
 // The model authors none of it; the helper reads it instead of the ledger and the diff.
@@ -199,9 +201,9 @@ export function renderPacket(state, role, { round, reviewN }) {
 export const verbs = {
   brief(ctx) {
     const [role] = positional(ctx.args);
-    if (!ROLES.includes(role)) throw new Error(`usage: gate brief <${ROLES.join("|")}> [--round n]`);
+    if (!ROLES.includes(role)) throw new UsageError(`usage: gate brief <${ROLES.join("|")}> [--round n]`);
     const state = buildState(ctx, {});
-    if (!state.ledger) throw new Error("no open ledger for this session — run `gate open <slug> <playbook>` first");
+    if (!state.ledger) throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
     const rounds = state.ledger.huddles.filter((h) => h.role === role).length;
     const round = Number(flag(ctx.args, "--round")) || rounds + 1;
     const existing = state.reviews.map((f) => Number(/\d+/.exec(f)[0]));
@@ -210,5 +212,6 @@ export const verbs = {
     writeFileSync(file, renderPacket(state, role, { round, reviewN }));
     ctx.out(`packet: ${file}`);
     ctx.out(`prompt: Read ${file} and follow your role brief.`);
+    printNext(ctx);
   },
 };

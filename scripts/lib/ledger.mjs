@@ -8,6 +8,8 @@ import { gitHead, gitNumstat } from "./tree.mjs";
 import { emptyTier } from "./size.mjs";
 import { loadPolicy } from "./policy.mjs";
 import { implementationHash } from "./rules.mjs";
+import { UsageError } from "./context.mjs";
+import { printNext } from "./next.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PLAYBOOKS = ["feature", "bugfix", "refactor", "plan", "investigation"];
@@ -34,7 +36,7 @@ export function saveLedger(dir, ledger) {
 // Playbook steps: numbered lines, optional trailing {key} naming the evidence kind.
 export function playbookSteps(playbook) {
   const file = path.join(pluginRoot, "skills", "gate", "playbooks", `${playbook}.md`);
-  if (!existsSync(file)) throw new Error(`unknown playbook "${playbook}" (have: ${PLAYBOOKS.join(", ")})`);
+  if (!existsSync(file)) throw new UsageError(`unknown playbook "${playbook}" (have: ${PLAYBOOKS.join(", ")})`);
   const steps = [];
   for (const line of readFileSync(file, "utf8").split("\n")) {
     const m = /^(\d+)\.\s+(.*?)\s*(?:\{([a-z-]+)\})?\s*$/.exec(line.replace(/\r$/, ""));
@@ -78,7 +80,7 @@ function template() {
 
 export function attachLedger(ctx, slug) {
   const found = findRun(ctx.stateDir, slug);
-  if (!found) throw new Error(`no run for slug "${slug}" — use \`gate open ${slug} <playbook>\``);
+  if (!found) throw new UsageError(`no run for slug "${slug}" — use \`gate open ${slug} <playbook>\``);
   const { dir, ledger } = found;
   if (!ledger.sessions.includes(ctx.session)) {
     ledger.sessions.push(ctx.session);
@@ -92,7 +94,7 @@ export function attachLedger(ctx, slug) {
 export function openLedger(ctx, slug, playbook) {
   const existing = findRun(ctx.stateDir, slug);
   if (existing) return attachLedger(ctx, slug);
-  if (!PLAYBOOKS.includes(playbook)) throw new Error(`unknown playbook "${playbook}" (have: ${PLAYBOOKS.join(", ")})`);
+  if (!PLAYBOOKS.includes(playbook)) throw new UsageError(`unknown playbook "${playbook}" (have: ${PLAYBOOKS.join(", ")})`);
   const session = ensureSession(ctx.stateDir, ctx.root, ctx.session);
   const config = loadConfig(ctx.root);
   const name = `${new Date().toISOString().slice(0, 10)}-${slugify(slug)}`;
@@ -167,24 +169,25 @@ function printStepLines(ctx, steps, ledger = null) {
 function printOpen(ctx, dir, ledger) {
   ctx.out(`ledger: ${dir}`);
   printStepLines(ctx, ledger.steps.filter((s) => s.key), ledger);
+  printNext(ctx);
 }
 
 export const verbs = {
   open(ctx) {
     const [slug, playbook] = ctx.args;
-    if (!slug) throw new Error("usage: gate open <slug> <feature|bugfix|refactor|plan>");
+    if (!slug) throw new UsageError("usage: gate open <slug> <feature|bugfix|refactor|plan>");
     const { dir, ledger } = openLedger(ctx, slug, playbook ?? "feature");
     printOpen(ctx, dir, ledger);
   },
   attach(ctx) {
     const [slug] = ctx.args;
-    if (!slug) throw new Error("usage: gate attach <slug>");
+    if (!slug) throw new UsageError("usage: gate attach <slug>");
     const { dir, ledger } = attachLedger(ctx, slug);
     printOpen(ctx, dir, ledger);
   },
   steps(ctx) {
     const current = currentLedger(ctx.stateDir, ctx.session);
-    if (!current || current.ledger.status === "closed") throw new Error("no open ledger for this session — run `gate open <slug> <playbook>` first");
+    if (!current || current.ledger.status === "closed") throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
     ctx.out(`ledger: ${current.dir}`);
     ctx.out(`playbook: ${current.ledger.playbook} (${current.ledger.status})`);
     printStepLines(ctx, current.ledger.steps, current.ledger);

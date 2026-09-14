@@ -9,6 +9,7 @@ import { readEvents } from "./events.mjs";
 import { loadPolicy, requires } from "./policy.mjs";
 import { effectiveTier, renderTierBlock, tiered, tierOf } from "./size.mjs";
 import { isRole } from "./rules.mjs";
+import { UsageError } from "./context.mjs";
 
 export function section(md, heading) {
   const m = new RegExp(`## ${heading}\\n([\\s\\S]*?)(?=\\n## |$)`).exec(md ?? "");
@@ -348,7 +349,7 @@ export const verbs = {
       unmet = evaluate(state);
     } else {
       const last = loadSession(ctx.stateDir, ctx.session)?.lastClosed;
-      if (!last) throw new Error("no open or recently closed ledger for this session");
+      if (!last) throw new UsageError("no open or recently closed ledger for this session");
       const dir = path.join(runsDir(ctx.stateDir), last);
       const ledger = loadLedger(dir);
       const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);

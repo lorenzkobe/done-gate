@@ -94,6 +94,9 @@ const subagentStop = (repo, agentType, extra = {}) =>
   hook(repo, { hook_event_name: "SubagentStop", agent_id: "A9", agent_type: agentType, stop_hook_active: false, ...extra });
 
 const lines = (s) => s.split("\n").filter((l) => l.trim() !== "");
+// Every mutating verb ends with a `next:` hint (tests/next-hints.test.mjs owns that line);
+// assertions about a verb's own output ignore it.
+const withoutHint = (s) => lines(s).filter((l) => !l.startsWith("next:"));
 
 function sectionOf(md, heading) {
   const m = new RegExp(`\\n## ${heading}\\n([\\s\\S]*?)(?=\\n## |$)`).exec(md);
@@ -210,7 +213,7 @@ test("C2 happy: the full report's Tier block carries the predicted and measured 
   assert.ok(block[0].startsWith("tier:"), `the Tier section must open with the tier line:\n${block.join("\n")}`);
 
   // the first three lines are the block `gate size` prints (minus its files detail line)
-  const size = lines(cli(repo, "size").stdout).filter((l) => !l.startsWith("files:"));
+  const size = withoutHint(cli(repo, "size").stdout).filter((l) => !l.startsWith("files:"));
   assert.deepEqual(block.slice(0, size.length), size, "the report's Tier block disagrees with `gate size`");
 
   assert.ok(block[0].includes("predicted small (1 file)"), block[0]);

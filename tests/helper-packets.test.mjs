@@ -49,6 +49,9 @@ function committed(name, files = {}) {
 }
 
 const lines = (s) => s.split("\n").filter((l) => l.trim() !== "");
+// Every mutating verb ends with a `next:` hint (tests/next-hints.test.mjs owns that line);
+// assertions about a verb's own output ignore it.
+const withoutHint = (s) => lines(s).filter((l) => !l.startsWith("next:"));
 
 // ---------------------------------------------------------------------------
 // source-of-truth anchors
@@ -135,7 +138,7 @@ test("C1 happy: `gate brief <role>` writes brief-<role>-1.md in the run dir and 
 
   for (const role of ["skeptic", "qa", "reviewer", "reviewer-2"]) {
     const r = cli(repo, "brief", [role]);
-    const out = lines(r.stdout);
+    const out = withoutHint(r.stdout);
     const abs = briefFile(repo, role);
 
     assert.ok(existsSync(abs), `${role}: ${abs} was not written`);

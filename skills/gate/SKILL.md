@@ -5,138 +5,63 @@ description: The done-gate workflow. Use before any task that will change source
 
 # done-gate: evidenced done
 
-`gate` is `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"`. Define it once per session:
-`GATE='node "'"$CLAUDE_PLUGIN_ROOT"'/scripts/gate.mjs"'` — or call the full path each time.
-If `CLAUDE_PLUGIN_ROOT` is not set in your shell, the plugin lives under
-`~/.claude/plugins/cache/done-gate/done-gate/<version>/`.
+`gate` is `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"`. Every mutating verb ends with a
+`next:` line naming the next step and its exact verb: follow it. `gate check` lists what is
+still unmet at any time.
 
-## What the gate enforces (so you know why each step exists)
-
-The Stop hook refuses to end a turn while any of these is unmet; `gate check` shows the
-list at any time. Evidence comes from scripts, hooks and agent-written files, never from
-what you or a helper say.
+## What the Stop hook enforces
 
 | Rule | Unmet when |
 | --- | --- |
 | R1 | source changed and no ledger is open |
 | R2 | Plan or case table written after the first source edit |
 | R3 | `gate verify` missing, red, or older than the last source edit |
-| R4 | UI files changed and the real surface was not driven after the last edit |
-| R5 | no reviewer pass after the last edit, or an Act-on item still open |
-| R6 | schema files changed and no real-schema probe recorded |
+| R4 | UI changed and the real surface was not driven after the last edit |
+| R5 | no reviewer pass after the last implementation edit, or an Act-on item open |
+| R6 | schema changed and no real-schema probe recorded |
 | R7 | source changed and no test file changed |
-| R8 | any case, step or blast-radius row left blank |
+| R8 | a case, step or blast-radius row left blank |
 | R9 | high-risk paths changed without the second reviewer |
 | R10 | a repo check failed (CLAUDE.md budget, migration number) |
-| R11 | a verification claim without `[measured] (ptr)` / `[inferred]` / `[guess]`, or a pointer that does not resolve |
+| R11 | a claim without `[measured] (ptr)` / `[inferred]` / `[guess]`, or a pointer that does not resolve |
 | R12 | a waiver quotes words the user never said |
-| R13 | `.claude/gate.json` changed mid-task |
+| R13 | `.claude/gate.json` or the plugin's `models.json` changed mid-task |
 | R14 | the task outgrew its predicted size and a step that size requires is blank again |
 
-Waivers are the only way past a keyed step you cannot do: ask the user, then
-`gate waive <key> "<their exact words>"`. The gate looks for those words in the transcript.
+## The loop
 
-## The workflow
-
-**0. Open.** `gate open <slug> <feature|bugfix|refactor|plan>`. It prints the playbook's
-steps; they are now rows in the ledger and every one must end DONE / SKIPPED / WAIVED / N/A.
-Read `gate doctor` once per repo to see the config the gate resolved.
-
-**1. Before any edit.** `gate note task "<the user's ask, quoted, then your own words>"`,
-`gate note plan "<approach, files, data/cost plan if data is touched>" --files a.ts,b.ts`
-(use `-` to read a long note from stdin; `--files` names the files you intend to touch and
-predicts the task's size: one file that is not UI, schema or high-risk is *small* and a
-feature then skips the skeptic and the QA reconcile round automatically), then the case table: one `gate case add "<case>" --kind <kind>` per
-row. Kinds: `happy`, `edge`, `refused` (the side a gate turns away), `boundary` (empty,
-null, midnight, timezone, first/last page), `idempotent` (retry, double submit), and
-`reported-surface` (exactly what the user reported, when it is a bug). R2 is checked by
-sequence number, so this order is not optional.
-
-**2. Design huddle (feature, plan).** Unless `gate size` shows tier small (the ledger has
-already marked `{skeptic}` N/A), run `gate brief skeptic` and spawn `done-gate:skeptic`
-(subagent_type; if the scoped name is rejected use `skeptic`) with the one-line prompt it
-prints. The packet carries the ask, the Plan, the case table and the files; write nothing
-else into the prompt. Answer each finding in the ledger (`gate huddle add skeptic --summary "<what changed>"`),
-amend the Plan and cases. Close step `{skeptic}` with `--evidence` pointing at the huddle.
-
-**3. QA in parallel.** Run `gate brief qa` and spawn `done-gate:qa` with the prompt it
-prints; the packet carries the ask, the case table, the tests globs, sample tests and the
-files you will touch, and never the diff. It writes tests under the tests
-globs only (the fence denies anything else) and must not read your new implementation.
-While it works, implement. Then reconcile, at most two rounds, through `SendMessage` to the
-same agent: each disagreement ends as code-wrong, test-wrong, or a question for the user.
-Close each case with `gate case close C<n> --test <file:testname>` or `--na "<reason>"`.
-
-**4. Verify.** `gate verify` after your last source edit. It runs the repo's verify
-commands detached with timeouts, writes verify.json, and closes `{verify}` when green.
-Red output is in the ledger; fix and run again. Never run the suite any other way for
-evidence: only verify.json counts.
-
-**5. Drive the real surface.** If UI changed, run the project's `/verify` driver skill
-(phone viewport first, then desktop) through the Chrome tools; the hooks log the browser
-calls. Record what you drove and saw: `gate decide driver "<feature>" "<why>" "events#<seq>"
-"<result>"`. If the repo has no driver, run `/done-gate:verify-setup` once.
-
-**6. Schema probe.** If schema files changed, hit the endpoint in dev or run the query once
-against the real database, then `gate step schema done "<what you ran>" --evidence <ptr>`.
-
-**7. Blast radius.** For each fact the change is safe because of:
-`gate blast add "<fact>" --rung <1-5> --proof "<ptr>"`. Rungs: 1 you said so · 2 you
-pointed at the line · 3 you walked the failure and it does not reach · 4 you ran code that
-fails loud if wrong · 5 you reproduced it in the running app. Below 4 the report prints
-*unproven*; that is allowed and honest.
-
-**8. Review.** Run `gate brief reviewer` and spawn `done-gate:reviewer` with the prompt it
-prints; the packet carries the diff, the verify results, the blast rows and the path of the
-`review-<n>.md` it writes. Record it:
-`gate huddle add reviewer --file review-<n>.md`, one `gate huddle acton H<k> "<finding>"`
-per Act-on item, fix each, then `gate huddle resolve H<k>.<i> --evidence <ptr>`. At most
-two rounds with the same agent via `SendMessage`. High-risk paths also need
-`gate brief reviewer-2` and `done-gate:reviewer-2` (`--file review-<n+1>.md`). Blindness for
-QA is a convention the prompt asks for, not a fence: the packet withholds the diff, and the
-agent is told not to fetch it.
-
-**9. Close.** Close remaining steps (`gate step <key|n> done "<note>" --evidence <ptr>`,
-`skipped "<reason>"`, `na "<reason>"`), fill `gate note attention "<gaps the user should
-see first>"`, then `gate close`, `gate check` (must be clean), `gate report --brief`. Paste
-that short output verbatim as your final message, with at most two lines of your own before
-it, written in the same plain words: say "the reviewer", "the tests", "the checks"; never
-"ledger", "huddle", "blast radius", "rung" or a rule number. The full report is written to
-`report.md` in the run dir; `gate report` prints it when someone asks for the detail. The
-Stop hook finalises the ledger when it agrees the run is clean.
-
-## Spend where it pays
-
-`gate size` prints the task's tier (small, standard, large, measured from the real diff and
-re-checked at every `gate check`), the helpers that tier requires and their models, and the
-ceiling of six helper invocations per task. The policy lives in `models.json`; you never
-reason about escalation yourself. If the diff outgrows the predicted tier, the skipped steps
-come back and `gate check` says so (R14). Bugfix and refactor playbooks have no optional
-steps, so the tier changes nothing for them beyond the review-round model.
-
-## Ask before you build, ship nothing half-working
-
-The user would rather answer a question than receive a fix that still misbehaves in use.
-Two rules follow:
-
-- **Unclear ask → ask first.** If two readings of the request would lead to different
-  work, stop at step 1 and use `AskUserQuestion`: say what you think they mean, the other
-  reading, what each would change, and your recommendation, in plain words. A minute of
-  clarification beats a shipped bug and a "it doesn't work" report.
-- **"Passes the tests" is not "works in use."** Drive the real surface (R4) and probe the
-  real schema (R6) yourself; do not ask for a waiver on those to save time. If something
-  might still misbehave for a real user, say so in Attention and keep working, or ask.
+1. `gate open <slug> <feature|bugfix|refactor|plan>`.
+2. Before any edit: `gate note task "<the ask, quoted, then your words>"`,
+   `gate note plan "<approach>" --files a.ts,b.ts` (the files predict the size; one plain
+   file is small and a feature then skips the skeptic and the QA reconcile round), then
+   `gate case add "<case>" --kind <happy|edge|refused|boundary|idempotent|reported-surface>`
+   per row. R2 checks the order.
+3. Follow each `next:` line. Helpers are spawned from packets: `gate brief <role>` prints a
+   one-sentence prompt; put nothing else in it. Roles: `done-gate:skeptic` (design huddle),
+   `done-gate:qa` (writes tests blind to your code, under the tests globs only; reconcile
+   at most two rounds), `done-gate:reviewer` (writes `review-<n>.md`; at most two rounds,
+   the second on Opus when the size or the first round calls for it), `done-gate:reviewer-2`
+   (high-risk paths). `gate size` shows the size and the helpers it
+   requires from `models.json`; never pick helper models yourself. Ceiling: six helper
+   invocations per task.
+4. `gate verify` after your last edit; only verify.json counts. Drive the real surface
+   yourself when UI changed (R4); probe the real schema when schema changed (R6).
+5. `gate note attention "<what the user should see first>"`, `gate close`, `gate check`,
+   then paste `gate report --brief` as your final message with at most two lines of your own
+   before it, in the same plain words: say "the reviewer", "the tests", "the checks"; never
+   "ledger", "huddle", "blast radius", "rung" or a rule number.
 
 ## Rules that hold throughout
 
-- You own the diff and write your own summary. A helper's self-report is never evidence;
-  the report embeds the reviewer's file, not your paraphrase of it.
-- Every claim you write in ledger.md or the final message carries a label:
-  `[measured] (verify.json)`, `[measured] (events#123)`, `[inferred]`, `[guess]`.
-- Need the user mid-task? Use `AskUserQuestion`, or end your message with a final line
-  `PAUSED: <what you need>`. Any other message with an open ledger is judged as a close.
-- Never hand-edit files under `.claude/gate/runs/` except `ledger.md`; the fence denies it
-  and counts the attempt in the report.
-- Do not commit unless the user asks; the repo's CLAUDE.md rules win over any playbook step.
-- `gate decide <phase> <decision> <why> <evidence> <result>` logs a decision row whenever you
-  choose between approaches, revert, or hit a blocker.
+- If two readings of the ask lead to different work, stop and ask with `AskUserQuestion`
+  before step 2. The user prefers a question to a fix that still misbehaves.
+- Every claim you write carries `[measured] (pointer)`, `[inferred]` or `[guess]`.
+- A helper's self-report is never evidence; only `gate verify`, hook events and the
+  helper's own file count.
+- Waivers are the only way past a keyed step you cannot do: ask, then
+  `gate waive <key> "<their exact words>"`.
+- Never hand-edit `.claude/gate/runs/**` except `ledger.md`; the rest is fenced.
+- Need the user mid-task? `AskUserQuestion`, or end with a final line `PAUSED: <need>`.
+- No commits unless asked; the repo's CLAUDE.md wins over any playbook step.
+- Blast rungs: 1 said so, 2 pointed at the line, 3 walked the failure, 4 ran code that
+  fails loud, 5 reproduced in the app. Below 4 prints unproven, which is honest.

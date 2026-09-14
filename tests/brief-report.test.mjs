@@ -56,6 +56,9 @@ function stopHook(repo, message = "report", session = "S1", bin = gate) {
 }
 
 const lines = (s) => s.split("\n").filter((l) => l.trim() !== "");
+// Every mutating verb ends with a `next:` hint (tests/next-hints.test.mjs owns that line);
+// assertions about a verb's own output ignore it.
+const withoutHint = (s) => lines(s).filter((l) => !l.startsWith("next:"));
 const numbered = (s) => lines(s).filter((l) => /^\s*\d+[.)]/.test(l));
 const checksLine = (s) => lines(s).find((l) => /\b(green|red|failed|not run)\b/i.test(l));
 
@@ -229,7 +232,7 @@ test("C4 happy: `gate verify` shows a red command's output tail and stays quiet 
   const greenOut = cli(green, "verify").stdout;
   assert.ok(!greenOut.includes("```"), `a green verify printed a fenced block:\n${greenOut}`);
   assert.ok(!greenOut.includes("quiet"), `a green verify echoed command output:\n${greenOut}`);
-  assert.equal(lines(greenOut).length, 3, "two per-command lines plus the one-line summary");
+  assert.equal(withoutHint(greenOut).length, 3, "two per-command lines plus the one-line summary");
 });
 
 // ---------------------------------------------------------------------------

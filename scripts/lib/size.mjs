@@ -2,6 +2,8 @@ import { nextSeq } from "./events.mjs";
 import { loadPolicy, requires, tierFor, tierMax } from "./policy.mjs";
 import { gitNumstat, gitTracked } from "./tree.mjs";
 import { buildState } from "./assess.mjs";
+import { UsageError } from "./context.mjs";
+import { printNext } from "./next.mjs";
 
 // Steps a small task may skip, per playbook. Only the feature playbook has a design huddle
 // and a QA reconcile round; bugfix's {reconcile} is the proof that the failing test now
@@ -190,12 +192,13 @@ export function renderTierBlock(ledger, policy, measured, { details = false } = 
 export const verbs = {
   size(ctx) {
     const state = buildState(ctx, {});
-    if (!state.ledger) throw new Error("no open ledger for this session — run `gate open <slug> <playbook>` first");
+    if (!state.ledger) throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
     if (!tiered(state.ledger)) {
       ctx.out(`playbook ${state.ledger.playbook} is not tiered; every step applies`);
       return;
     }
     for (const line of renderTierBlock(state.ledger, state.policy, state.tier?.measured ?? null, { details: true })) ctx.out(line);
+    printNext(ctx);
   },
 };
 

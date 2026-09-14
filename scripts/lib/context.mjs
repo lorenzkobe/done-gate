@@ -1,6 +1,10 @@
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+// A mistake in how a verb was called: bad arguments, empty text, no open ledger. Reported on
+// stderr and never logged as a gate error, so the GATE ERROR stamp means a real failure.
+export class UsageError extends Error {}
+
 // Where the gate keeps its state for a repo. Tests override with DONE_GATE_STATE_DIR.
 export function stateDirFor(root) {
   return process.env.DONE_GATE_STATE_DIR ?? path.join(root, ".claude", "gate");

@@ -7,6 +7,8 @@ import { nextSeq } from "./events.mjs";
 import { sourceHash } from "./rules.mjs";
 import { loadSession } from "./session-state.mjs";
 import { snapshot } from "./tree.mjs";
+import { UsageError } from "./context.mjs";
+import { printNext } from "./next.mjs";
 
 const TAIL_LINES = 40;
 const TAIL_BYTES = 8000;
@@ -74,10 +76,10 @@ export function runCommand({ cmd, timeout }, cwd) {
 export async function runVerify(ctx, { stepKey = "verify" } = {}) {
   const current = currentLedger(ctx.stateDir, ctx.session);
   if (!current || current.ledger.status === "closed") {
-    throw new Error("no open ledger for this session — run `gate open <slug> <playbook>` first");
+    throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
   }
   const config = loadConfig(ctx.root);
-  if (config.verify.length === 0) throw new Error("nothing to verify: no verify commands in .claude/gate.json and no lint/test/build scripts in package.json");
+  if (config.verify.length === 0) throw new UsageError("nothing to verify: no verify commands in .claude/gate.json and no lint/test/build scripts in package.json");
 
   const session = loadSession(ctx.stateDir, ctx.session);
   const snap = snapshot(ctx.root, session?.lastTree ?? current.ledger.baseline);
@@ -113,5 +115,6 @@ export const verbs = {
       if (!green) ctx.out("```\n" + c.tail.split("\n").slice(-12).join("\n") + "\n```"); // the failing tail: the same 12 lines the report shows
     }
     ctx.out(red.length ? `${red.length} of ${record.commands.length} red — fix and run \`gate verify\` again` : `all ${record.commands.length} green — step {${stepKey}} closed with verify.json`);
+    printNext(ctx);
   },
 };

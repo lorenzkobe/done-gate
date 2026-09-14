@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveContext, recordGateError } from "./lib/context.mjs";
+import { resolveContext, recordGateError, UsageError } from "./lib/context.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const VERSION = JSON.parse(
@@ -61,6 +61,19 @@ function parseInput(raw) {
   }
 }
 
+// A reader that closes early (`gate … | head -1`) must not turn a finished verb into a
+// crash: the state was saved before the output, so a broken pipe just ends the process.
+process.stdout.on("error", (error) => {
+  if (error?.code !== "EPIPE") {
+    try {
+      recordGateError(error, "stdout");
+    } catch {
+      // nothing left to do
+    }
+  }
+  process.exit(0); // fail open either way: the verb's state was already saved
+});
+
 async function main() {
   const [verb, ...args] = process.argv.slice(2);
   if (verb === "--version" || verb === "-v") {
@@ -89,10 +102,12 @@ async function main() {
 try {
   await main();
 } catch (error) {
-  try {
-    recordGateError(error, process.argv[2]);
-  } catch {
-    // nothing left to do; stay silent and fail open
+  if (!(error instanceof UsageError)) {
+    try {
+      recordGateError(error, process.argv[2]);
+    } catch {
+      // nothing left to do; stay silent and fail open
+    }
   }
   process.stderr.write(`done-gate: ${error?.message ?? error}\n`);
 }
