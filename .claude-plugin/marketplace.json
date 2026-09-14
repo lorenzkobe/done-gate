@@ -7,7 +7,7 @@
       "name": "done-gate",
       "source": "./",
       "description": "Evidence-enforced definition of done for Claude Code",
-      "version": "0.1.0"
+      "version": "0.2.0"
     }
   ]
 }
