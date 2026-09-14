@@ -1,9 +1,19 @@
 {
-  "note": "Helpers never run on Fable. The main session is whatever the user chose; every role below is capped at Opus.",
+  "principle": "Spend tokens where they buy correctness, never where they don't. Defaults are the cheapest model that does the job well; escalation is by evidence, not by habit. Helpers never run on Fable.",
   "roles": {
     "skeptic": "sonnet",
     "qa": "opus",
     "reviewer": "sonnet",
     "reviewer-2": "opus"
-  }
+  },
+  "escalate": {
+    "reviewer": "Run the SECOND review round on opus (pass `model: \"opus\"` to the Agent call) when the first round returned 2+ Act-on items, or the diff spans more than 10 source files, or it touches concurrency, auth, or money outside the highRisk globs.",
+    "skeptic": "Stays on sonnet; a plan is one page. Skip the huddle entirely for a bugfix or refactor whose plan touches a single file — the playbooks do not require it there.",
+    "qa": "Stays on opus: the tests are what catch the bugs you are losing to. For a one-case change, hand QA that one case; cost follows the case table, not the model."
+  },
+  "never": [
+    "spawn a helper the rules do not require (a doc-only or test-only change needs no reviewer)",
+    "run three reviewers on anything",
+    "re-run `gate verify` to 'be safe' when verify.json is already fresh — the gate checks freshness by content hash"
+  ]
 }

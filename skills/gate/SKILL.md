@@ -93,6 +93,17 @@ see first>"`, then `gate close`, `gate check` (must be clean), `gate report`. Pa
 report verbatim as your final message, with at most five lines of your own framing before
 it. The Stop hook finalises the ledger when it agrees the run is clean.
 
+## Spend where it pays
+
+Cost is not the goal; correctness per token is. `models.json` sets the defaults (skeptic
+and reviewer on Sonnet, QA and the high-risk second reviewer on Opus) and the escalation
+rules: run a second review round on Opus when the first returned two or more Act-on items,
+the diff spans more than ten source files, or it touches concurrency, auth or money outside
+the high-risk globs. Skip the skeptic for a single-file bugfix or refactor. Never spawn a
+helper the rules do not require, never three reviewers, never a "just to be safe" re-run of
+`gate verify` when verify.json is already fresh. A helper that reads a page costs little;
+a bug that reaches production costs the most, so the money goes to tests and review.
+
 ## Rules that hold throughout
 
 - You own the diff and write your own summary. A helper's self-report is never evidence;
