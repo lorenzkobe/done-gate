@@ -108,7 +108,9 @@ export const verbs = {
     const stepKey = stepIdx >= 0 ? ctx.args[stepIdx + 1] : "verify";
     const { record, red } = await runVerify(ctx, { stepKey });
     for (const c of record.commands) {
-      ctx.out(`${c.exit === 0 && !c.timedOut ? "✓" : "✗"} ${c.cmd} — ${c.timedOut ? "timed out" : `exit ${c.exit}`}, ${(c.ms / 1000).toFixed(1)}s`);
+      const green = c.exit === 0 && !c.timedOut;
+      ctx.out(`${green ? "✓" : "✗"} ${c.cmd} — ${c.timedOut ? "timed out" : `exit ${c.exit}`}, ${(c.ms / 1000).toFixed(1)}s`);
+      if (!green) ctx.out("```\n" + c.tail.split("\n").slice(-12).join("\n") + "\n```"); // the failing tail: the same 12 lines the report shows
     }
     ctx.out(red.length ? `${red.length} of ${record.commands.length} red — fix and run \`gate verify\` again` : `all ${record.commands.length} green — step {${stepKey}} closed with verify.json`);
   },

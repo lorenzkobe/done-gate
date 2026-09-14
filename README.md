@@ -96,36 +96,27 @@ gitignored automatically.
 
 ## What you see
 
-You delegate as usual. The last message of a task is the report:
+You delegate as usual. The last message of a task is short and in plain words:
 
 ```
-# venue-badge — feature — closing
+venue-badge: done
 
-DONE 13 · SKIPPED 0 · WAIVED 1 · N/A 1 · blank 0 · cases 6/6 closed (1 n/a) ·
-blast 2 fact(s), 0 unproven · tampering attempts 0 · gate: clean
+Changed 3 files. Tested 6 cases, all covered.
+Lint, tests, build green.
+Reviewer found 2 problems, all fixed.
+Design check: 3 concerns, all addressed.
 
-## Task
-…
-## Case table
-| id | case | kind | test | status |
-| C1 | badge renders for a rated venue | happy | tests/CourtCard.test.tsx:renders badge | closed |
-| C2 | hidden when review_count is 0 | refused | tests/CourtCard.test.tsx:hidden unrated | closed |
-…
-## Huddles
-### H1 reviewer round 1 — review-1.md
-- H1.1 null venue crashes the badge — closed [tests/CourtCard.test.tsx:null venue]
-<details><summary>review-1.md</summary> … the reviewer's own words … </details>
+Please look at first:
+- Skipped with your OK: "skip the phone pass this time".
+- The badge hides for unrated venues — my belief, not verified.
 
-## Verify
-- ✓ `npm run lint` — exit 0, 14.2s
-- ✓ `npm run test` — exit 0, 191.0s
-- ✓ `npm run build` — exit 0, 88.7s
-
-## Attention
-- waived driver: "skip the phone pass this time" — found in transcript
+Full report: .claude/gate/runs/2026-09-14-venue-badge/report.md
 ```
 
-Read the first line, then **Attention**. Everything you'd want to spot-check has a pointer.
+Lines that would be empty are left out. The full report on disk has every case with its
+test, each step with its evidence, the reviewer's own file, the check output, blast-radius
+facts with their proof rung, the decision log and the changed files; `gate report` prints it
+when you want the detail.
 
 Mid-task, Claude can only pause two ways: a question through the question prompt, or a
 final line `PAUSED: <what it needs>`. Anything else with an open ledger is judged as an
@@ -195,7 +186,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `waive <key> "<user's words>"` | record a waiver for the transcript check |
 | `verify [--step verify-before]` | run the repo's verify commands, write `verify.json` |
 | `decide <phase> <decision> <why> <evidence> <result>` | append a decision-log row |
-| `check` · `report` · `close` · `doctor` | see unmet items · render the report · finish · inspect config |
+| `check` · `steps` · `report [--brief]` · `close` · `doctor` | unmet items only · every step · the report, short or full · finish · inspect config |
 
 ## Configuration
 

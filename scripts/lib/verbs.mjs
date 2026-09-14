@@ -231,6 +231,6 @@ export const verbs = {
       ledger.closingSeq = nextSeq();
       markStep(ledger, "close", { state: "DONE", evidence: "report.md", note: "closing" });
     });
-    ctx.out("ledger closing — run `gate check`; when it is clean, `gate report` and paste it as your final message. The stop gate finalises the close.");
+    ctx.out("ledger closing — run `gate check`; when it is clean, `gate report --brief` and paste it as your final message (the full report is written to report.md). The stop gate finalises the close.");
   },
 };

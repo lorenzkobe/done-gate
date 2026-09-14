@@ -140,10 +140,15 @@ export function currentLedger(stateDir, session) {
   return { dir, ledger: loadLedger(dir) };
 }
 
-function printSteps(ctx, dir, ledger) {
+function printStepLines(ctx, steps) {
+  for (const s of steps) ctx.out(`${String(s.n).padStart(2)}. [${s.state ?? "    "}] ${s.text}${s.key ? `  {${s.key}}` : ""}`);
+}
+
+// `open` and `attach` show only the keyed steps (the ones with script or agent evidence);
+// `gate steps` shows all of them.
+function printOpen(ctx, dir, ledger) {
   ctx.out(`ledger: ${dir}`);
-  ctx.out(`playbook: ${ledger.playbook} (${ledger.status})`);
-  for (const s of ledger.steps) ctx.out(`${String(s.n).padStart(2)}. [${s.state ?? "    "}] ${s.text}${s.key ? `  {${s.key}}` : ""}`);
+  printStepLines(ctx, ledger.steps.filter((s) => s.key));
 }
 
 export const verbs = {
@@ -151,12 +156,19 @@ export const verbs = {
     const [slug, playbook] = ctx.args;
     if (!slug) throw new Error("usage: gate open <slug> <feature|bugfix|refactor|plan>");
     const { dir, ledger } = openLedger(ctx, slug, playbook ?? "feature");
-    printSteps(ctx, dir, ledger);
+    printOpen(ctx, dir, ledger);
   },
   attach(ctx) {
     const [slug] = ctx.args;
     if (!slug) throw new Error("usage: gate attach <slug>");
     const { dir, ledger } = attachLedger(ctx, slug);
-    printSteps(ctx, dir, ledger);
+    printOpen(ctx, dir, ledger);
+  },
+  steps(ctx) {
+    const current = currentLedger(ctx.stateDir, ctx.session);
+    if (!current || current.ledger.status === "closed") throw new Error("no open ledger for this session — run `gate open <slug> <playbook>` first");
+    ctx.out(`ledger: ${current.dir}`);
+    ctx.out(`playbook: ${current.ledger.playbook} (${current.ledger.status})`);
+    printStepLines(ctx, current.ledger.steps);
   },
 };

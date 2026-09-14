@@ -31,6 +31,7 @@ const VERBS = {
   verify: { hook: false, load: () => import("./lib/verify.mjs") },
   check: { hook: false, load: () => import("./lib/check.mjs") },
   report: { hook: false, load: () => import("./lib/report.mjs") },
+  steps: { hook: false, load: () => import("./lib/ledger.mjs") },
   doctor: { hook: false, load: () => import("./lib/doctor.mjs") },
 };
 

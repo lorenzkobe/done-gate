@@ -89,9 +89,12 @@ two rounds with the same agent via `SendMessage`. High-risk paths also need
 
 **9. Close.** Close remaining steps (`gate step <key|n> done "<note>" --evidence <ptr>`,
 `skipped "<reason>"`, `na "<reason>"`), fill `gate note attention "<gaps the user should
-see first>"`, then `gate close`, `gate check` (must be clean), `gate report`. Paste the
-report verbatim as your final message, with at most five lines of your own framing before
-it. The Stop hook finalises the ledger when it agrees the run is clean.
+see first>"`, then `gate close`, `gate check` (must be clean), `gate report --brief`. Paste
+that short output verbatim as your final message, with at most two lines of your own before
+it, written in the same plain words: say "the reviewer", "the tests", "the checks"; never
+"ledger", "huddle", "blast radius", "rung" or a rule number. The full report is written to
+`report.md` in the run dir; `gate report` prints it when someone asks for the detail. The
+Stop hook finalises the ledger when it agrees the run is clean.
 
 ## Spend where it pays
 
