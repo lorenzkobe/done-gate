@@ -4,6 +4,7 @@ import { runChecks } from "./checks.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parseFindings } from "./review.mjs";
+import { tierMax } from "./policy.mjs";
 
 // Hash of the SOURCE files in a snapshot. verify.json stores it, so a docs or ledger
 // edit after `gate verify` does not force a re-run, but any source edit does.
@@ -182,10 +183,20 @@ export function evaluate(state) {
   if (reopened.length) {
     const m = state.tier?.measured;
     const todo = { skeptic: "spawn the skeptic", reconcile: "run the QA reconcile round" };
-    unmet.push({
-      rule: "R14",
-      text: `tier grew from ${ledger.tier.predicted ?? "unpredicted"} to ${m?.tier ?? "standard"}${m ? ` (${m.files} files, ${m.lines} lines)` : ""}: step(s) ${reopened.map((k) => `{${k}}`).join(", ")} reopened; ${reopened.map((k) => todo[k] ?? `do {${k}}`).join(", then ")}, then close with evidence.`,
-    });
+    const steps = reopened.map((k) => `{${k}}`).join(", ");
+    const n = (count, one) => `${count} ${one}${count === 1 ? "" : "s"}`;
+    const numbers = m ? `${n(m.files, "file")}, ${n(m.lines, "line")}` : "";
+    const predicted = ledger.tier.predicted ?? null;
+    const measuredTier = m?.tier ?? "standard";
+    // "grew" only when the measured size ranks above the prediction; otherwise the step was
+    // reopened because the effective size (the larger of the two) requires it
+    const order = Object.keys(state.policy?.tiers ?? { small: 1, standard: 1, large: 1 });
+    const grew = predicted !== null && order.indexOf(measuredTier) > order.indexOf(predicted);
+    const effective = state.policy ? tierMax(state.policy, predicted, measuredTier) ?? measuredTier : measuredTier;
+    const lead = grew
+      ? `tier grew from ${predicted} to ${measuredTier}${numbers ? ` (${numbers})` : ""}: step(s) ${steps} reopened`
+      : `the task's size (${effective}${numbers ? `, ${numbers}` : ""}) requires step(s) ${steps}, which were marked N/A; reopened`;
+    unmet.push({ rule: "R14", text: `${lead}; ${reopened.map((k) => todo[k] ?? `do {${k}}`).join(", then ")}, then close with evidence.` });
   }
 
   // R15: every Act-on finding in a helper file is recorded from the file (hand-typed items do
