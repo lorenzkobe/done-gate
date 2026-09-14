@@ -1,0 +1,9 @@
+{
+  "note": "Helpers never run on Fable. The main session is whatever the user chose; every role below is capped at Opus.",
+  "roles": {
+    "skeptic": "sonnet",
+    "qa": "opus",
+    "reviewer": "sonnet",
+    "reviewer-2": "opus"
+  }
+}

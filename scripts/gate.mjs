@@ -59,6 +59,7 @@ async function main() {
   const raw = await readStdin();
   const input = parseInput(raw);
   const ctx = resolveContext({ input, args, pluginRoot, version: VERSION });
+  ctx.rawStdin = raw;
 
   if (verb === "__throw" && process.env.DONE_GATE_TEST === "1") {
     throw new Error("__throw: deliberate test crash");

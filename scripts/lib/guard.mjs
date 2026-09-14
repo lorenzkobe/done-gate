@@ -43,16 +43,17 @@ export function decide(input, root, config = loadConfig(root)) {
       return { deny: true, reason: `done-gate: ${rel} is gate evidence and is written only by \`gate\` verbs.`, paths };
     }
   }
-  if (agentType === "done-gate:skeptic") {
+  const role = (r) => agentType === `done-gate:${r}` || agentType === r;
+  if (role("skeptic")) {
     return { deny: true, reason: "done-gate: the skeptic is read-only; return findings in your reply.", paths };
   }
-  if (agentType === "done-gate:qa") {
+  if (role("qa")) {
     const outside = paths.filter((p) => !config.isTest(p));
     if (outside.length) {
       return { deny: true, reason: `done-gate: QA may write only under the tests globs; ${outside.join(", ")} is outside them. Report what the implementation should change instead.`, paths };
     }
   }
-  if (agentType === "done-gate:reviewer" || agentType === "done-gate:reviewer-2") {
+  if (role("reviewer") || role("reviewer-2")) {
     const outside = paths.filter((p) => !isReviewFile(p));
     if (outside.length) {
       return { deny: true, reason: `done-gate: the reviewer writes only its own review-<n>.md in the run dir; ${outside.join(", ")} is not that. Report findings, do not fix.`, paths };

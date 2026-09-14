@@ -50,7 +50,12 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
   const sessions = current ? current.ledger.sessions : [ctx.session];
   const events = sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
 
+  const ledgerMd = current && existsSync(path.join(current.dir, "ledger.md")) ? readFileSync(path.join(current.dir, "ledger.md"), "utf8") : "";
+
   return {
+    root: ctx.root,
+    stateDir: ctx.stateDir,
+    ledgerMd,
     config,
     session,
     current,

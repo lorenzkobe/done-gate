@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": ".claude/gate.json — done-gate per-repo configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "source": { "type": "array", "items": { "type": "string" }, "description": "Globs (root-relative POSIX) that count as source. Default: every non-ignored file except docs/** and **/*.md. The gate's own state, node_modules, .git and .gitignore never count." },
+    "tests": { "type": "array", "items": { "type": "string" }, "description": "Globs for test files. Default: **/{tests,test,__tests__,spec}/** and **/*.{test,spec}.*" },
+    "ui": { "type": "array", "items": { "type": "string" }, "description": "Globs whose change requires driving the real surface (R4). Default: **/*.{tsx,vue,svelte}" },
+    "schema": { "type": "array", "items": { "type": "string" }, "description": "Globs whose change requires a real-schema probe (R6). Default: none." },
+    "docs": { "type": "array", "items": { "type": "string" }, "description": "Globs treated as documentation (zero-friction path). Default: docs/** and **/*.md" },
+    "highRisk": { "type": "array", "items": { "type": "string" }, "description": "Globs whose change requires the second reviewer (R9). Default: none." },
+    "verify": {
+      "type": "array",
+      "description": "Commands `gate verify` runs, in order. Default: the lint, typecheck, test and build scripts that exist in package.json.",
+      "items": {
+        "oneOf": [
+          { "type": "string" },
+          { "type": "object", "additionalProperties": false, "required": ["cmd"], "properties": { "cmd": { "type": "string" }, "timeout": { "type": "number", "description": "seconds, default 600" } } }
+        ]
+      }
+    },
+    "checks": { "type": "array", "items": { "type": "string", "enum": ["claude-md-budget", "migration-number"] }, "description": "Named repo checks run at every Stop (R10)." },
+    "driver": { "type": ["string", "null"], "description": "\"skill:verify\" once /done-gate:verify-setup has generated .claude/skills/verify/; null otherwise." }
+  }
+}

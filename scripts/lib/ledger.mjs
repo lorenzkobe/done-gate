@@ -119,6 +119,19 @@ export function openLedger(ctx, slug, playbook) {
   return { dir, ledger };
 }
 
+// Every run whose ledger is still open or closing, newest first.
+export function openRuns(stateDir) {
+  const dir = runsDir(stateDir);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .map((d) => path.join(dir, d))
+    .filter((d) => existsSync(path.join(d, "ledger.json")))
+    .sort()
+    .reverse()
+    .map((d) => ({ dir: d, ledger: loadLedger(d) }))
+    .filter(({ ledger }) => ledger.status !== "closed");
+}
+
 export function currentLedger(stateDir, session) {
   const state = loadSession(stateDir, session);
   if (!state?.current) return null;
