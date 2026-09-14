@@ -47,14 +47,17 @@ function defaultVerify(root) {
     return [];
   }
   const pm = packageManager(root);
-  return SCRIPT_ORDER.filter((name) => typeof scripts[name] === "string").map((name) => `${pm} ${name}`);
+  // build only matters when the implementation changed; lint, typecheck and test always run
+  return SCRIPT_ORDER.filter((name) => typeof scripts[name] === "string").map((name) => ({ cmd: `${pm} ${name}`, when: name === "build" ? "source" : "always" }));
 }
+
+const WHEN = new Set(["always", "source"]);
 
 function normaliseVerify(entries, fallbackTimeout) {
   return (entries ?? []).map((entry) =>
     typeof entry === "string"
-      ? { cmd: entry, timeout: fallbackTimeout }
-      : { cmd: String(entry.cmd), timeout: Number(entry.timeout ?? fallbackTimeout) },
+      ? { cmd: entry, timeout: fallbackTimeout, when: "always" }
+      : { cmd: String(entry.cmd), timeout: Number(entry.timeout ?? fallbackTimeout), when: WHEN.has(entry.when) ? entry.when : "always" },
   );
 }
 
@@ -87,7 +90,14 @@ export function loadConfig(root) {
     driver: typeof r.driver === "string" ? r.driver : DEFAULTS.driver,
     verify: normaliseVerify(r.verify ?? defaultVerify(root), DEFAULTS.verifyTimeout),
   };
-  const hash = createHash("sha1").update(JSON.stringify(resolved)).digest("hex");
+  // R13 asks whether what the gate runs changed mid-task: the repo's config text (or its
+  // absence) plus the verify command list it resolves to. A plugin upgrade that only
+  // reshapes entries (a new field) does not move it; removing the test script does.
+  const hash = createHash("sha1")
+    .update(existsSync(file) ? readFileSync(file, "utf8") : "defaults")
+    .update("\n")
+    .update(resolved.verify.map((v) => v.cmd).join("\n"))
+    .digest("hex");
   const opts = { ignoreCase: IGNORE_CASE };
   const not = (globs) => (p) => !matchAny(globs, p, opts);
   return {

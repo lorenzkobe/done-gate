@@ -6,7 +6,7 @@ import path from "node:path";
 import { makeRepo, write, gate } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
-import { evaluate } from "../scripts/lib/rules.mjs";
+import { evaluate, lateOrder } from "../scripts/lib/rules.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 
 function cli(repo, verb, args = [], input = "") {
@@ -140,7 +140,7 @@ test("close sets status closing and marks the close step; the stop gate then fin
   assert.equal(loadSession(path.join(repo, ".claude", "gate"), "S1").current, null);
 });
 
-test("R8: blank steps, open cases and rung-less blast rows block; R2: plan/cases must predate the first source edit", () => {
+test("R8: blank steps, open cases and rung-less blast rows block; R2: the Plan and case table must exist at all, and a late one is recorded rather than blocked", () => {
   const cfg = loadConfig(makeRepo("verbs-rules"));
   const base = { config: cfg, changed: ["src/a.ts", "tests/a.test.ts"], now: { hash: "x", files: {} }, verify: { sourceHash: "n/a", commands: [] }, events: [], reviews: [], lastMessage: "" };
   const ledger = {
@@ -151,9 +151,24 @@ test("R8: blank steps, open cases and rung-less blast rows block; R2: plan/cases
   };
   const ids = evaluate({ ...base, ledger }).map((u) => u.rule);
   assert.ok(ids.includes("R8"));
+  // R2 matches its own message: it blocks only while the Plan or the case table is missing
+  // altogether. A plan written after the first source edit is recorded, not blocked.
   const edited = { ...base, ledger: { ...ledger, planSeq: 100, cases: [{ id: "C1", status: "closed", test: "t", seq: 101 }], blast: [], steps: [] }, events: [{ seq: 50, kind: "edit", path: "src/a.ts", agent: null }] };
-  const ids2 = evaluate(edited).map((u) => u.rule);
-  assert.ok(ids2.includes("R2"));
+  assert.ok(!evaluate(edited).map((u) => u.rule).includes("R2"), "a late Plan that exists does not block");
+  // lateOrder names what was written late and the path of the first source edit
+  assert.deepEqual(
+    lateOrder(edited),
+    { late: ["Plan", "case table"], path: "src/a.ts" },
+    "the late order is recorded instead",
+  );
+
+  assert.ok(evaluate({ ...edited, ledger: { ...edited.ledger, planSeq: null } }).map((u) => u.rule).includes("R2"), "no Plan at all blocks");
+  assert.ok(evaluate({ ...edited, ledger: { ...edited.ledger, cases: [] } }).map((u) => u.rule).includes("R2"), "no case table at all blocks");
+
   const fine = { ...edited, ledger: { ...edited.ledger, planSeq: 1, cases: [{ id: "C1", status: "closed", test: "t", seq: 2 }] } };
   assert.ok(!evaluate(fine).map((u) => u.rule).includes("R2"));
+  // `path` names the first source edit whenever there is one, so what says "nothing is
+  // late" is an empty `late` list, not a null path.
+  assert.deepEqual(lateOrder(fine), { late: [], path: "src/a.ts" }, "a plan written before the first edit is not late");
+  assert.deepEqual(lateOrder({ ...fine, events: [] }), { late: [], path: null }, "no source edit at all: nothing to be late against");
 });

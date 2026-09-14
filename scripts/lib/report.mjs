@@ -8,7 +8,7 @@ import { readVerify, reviewFiles } from "./assess.mjs";
 import { readEvents } from "./events.mjs";
 import { loadPolicy, requires } from "./policy.mjs";
 import { effectiveTier, renderTierBlock, tiered, tierOf } from "./size.mjs";
-import { isRole } from "./rules.mjs";
+import { isRole, lateOrder } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 
 export function section(md, heading) {
@@ -55,6 +55,10 @@ export function verifyLines(verify, { tails = true } = {}) {
   if (!verify) return ["_not run_"];
   const out = [];
   for (const c of verify.commands) {
+    if (c.skipped) {
+      out.push(`- – \`${c.cmd}\` — skipped: ${c.skipped}`);
+      continue;
+    }
     out.push(`- ${c.exit === 0 && !c.timedOut ? "✓" : "✗"} \`${c.cmd}\` — ${c.timedOut ? "timed out" : `exit ${c.exit}`}, ${(c.ms / 1000).toFixed(1)}s`);
     if (tails && (c.exit !== 0 || c.timedOut)) out.push(`\n\`\`\`\n${c.tail.split("\n").slice(-12).join("\n")}\n\`\`\``);
   }
@@ -86,6 +90,8 @@ export function attentionLines(state, unmet) {
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) out.push(`- skipped: ${s.text} — ${s.note}`);
   if (denies) out.push(`- ${denies} denied write(s) to gate evidence files (see events)`);
   if (ledger.overridden) out.push("- the gate was OVERRIDDEN; treat every claim above as unverified");
+  const order = lateOrder(state);
+  if (order.late.length) out.push(`- ${order.late.join(" and ")} written after the first source edit (${order.path})`);
   for (const u of unmet) out.push(`- unmet ${u.rule}: ${u.text}`);
   return out;
 }
@@ -231,10 +237,17 @@ function checksLine(verify) {
   if (!verify) return "Checks not run yet.";
   const ok = [];
   const bad = [];
-  for (const c of verify.commands) (c.exit === 0 && !c.timedOut ? ok : bad).push(plainCommand(c.cmd));
-  if (!bad.length) return `${cap(ok.join(", "))} green.`;
-  const failed = `${bad.join(", ")} ${bad.length === 1 ? "failed" : "failed"}`;
-  return ok.length ? `${cap(ok.join(", "))} green; ${failed}.` : `${cap(failed)}.`;
+  const skipped = [];
+  for (const c of verify.commands) {
+    if (c.skipped) skipped.push(plainCommand(c.cmd));
+    else (c.exit === 0 && !c.timedOut ? ok : bad).push(plainCommand(c.cmd));
+  }
+  const parts = [];
+  if (ok.length) parts.push(`${ok.join(", ")} green`);
+  if (bad.length) parts.push(`${bad.join(", ")} failed`);
+  if (skipped.length) parts.push(`${skipped.join(", ")} skipped (test-only change)`);
+  if (!parts.length) return "Checks not run yet.";
+  return `${cap(parts.join("; "))}.`;
 }
 
 function reviewLine(ledger) {
@@ -312,6 +325,8 @@ function lookFirst(state) {
   const denies = events.filter((e) => e.kind === "deny").length;
   if (denies) out.push(`- Blocked writes to check files: ${denies}.`);
   if (ledger.overridden) out.push("- ⚠ I could not satisfy the checks and ended anyway; treat everything above as unverified.");
+  const order = lateOrder(state);
+  if (order.late.length) out.push(`- The ${order.late.join(" and ").replace("case table", "list of test cases").replace("Plan", "plan")} was written after the first code change, not before.`);
   const errors = gateErrorsSince(state);
   if (errors) out.push(`- ⚠ The gate itself logged ${plural(errors, "error")} during this task; see gate-error.log.`);
   return out;

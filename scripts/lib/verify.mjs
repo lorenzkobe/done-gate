@@ -6,7 +6,7 @@ import { currentLedger, loadLedger, saveLedger } from "./ledger.mjs";
 import { nextSeq } from "./events.mjs";
 import { sourceHash } from "./rules.mjs";
 import { loadSession } from "./session-state.mjs";
-import { snapshot } from "./tree.mjs";
+import { diffSnapshots, snapshot } from "./tree.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 
@@ -83,9 +83,17 @@ export async function runVerify(ctx, { stepKey = "verify" } = {}) {
 
   const session = loadSession(ctx.stateDir, ctx.session);
   const snap = snapshot(ctx.root, session?.lastTree ?? current.ledger.baseline);
+  // a "source" command (the build, by default) only runs when the implementation changed
+  const changed = diffSnapshots(current.ledger.baseline, snap).changed;
+  const implementationChanged = changed.some((p) => config.isSource(p) && !config.isTest(p) && !config.isDoc(p));
   const startedAt = new Date().toISOString();
   const commands = [];
   for (const entry of config.verify) {
+    if (entry.when === "source" && !implementationChanged) {
+      ctx.err(`verify: ${entry.cmd} skipped (no implementation change)`);
+      commands.push({ cmd: entry.cmd, skipped: "no implementation change (tests or docs only)", ms: 0 });
+      continue;
+    }
     ctx.err(`verify: ${entry.cmd} (timeout ${entry.timeout}s)`);
     const result = await runCommand(entry, ctx.root);
     commands.push(result);
@@ -94,7 +102,7 @@ export async function runVerify(ctx, { stepKey = "verify" } = {}) {
   const record = { startedAt, finishedAt: new Date().toISOString(), sourceHash: sourceHash(snap, config), commands };
   writeFileSync(path.join(current.dir, "verify.json"), JSON.stringify(record, null, 2));
 
-  const red = commands.filter((c) => c.exit !== 0 || c.timedOut);
+  const red = commands.filter((c) => !c.skipped && (c.exit !== 0 || c.timedOut));
   const ledger = loadLedger(current.dir);
   const step = ledger.steps.find((s) => s.key === stepKey);
   if (step && red.length === 0) {
@@ -110,11 +118,16 @@ export const verbs = {
     const stepKey = stepIdx >= 0 ? ctx.args[stepIdx + 1] : "verify";
     const { record, red } = await runVerify(ctx, { stepKey });
     for (const c of record.commands) {
+      if (c.skipped) {
+        ctx.out(`– ${c.cmd} — skipped: ${c.skipped}`);
+        continue;
+      }
       const green = c.exit === 0 && !c.timedOut;
       ctx.out(`${green ? "✓" : "✗"} ${c.cmd} — ${c.timedOut ? "timed out" : `exit ${c.exit}`}, ${(c.ms / 1000).toFixed(1)}s`);
       if (!green) ctx.out("```\n" + c.tail.split("\n").slice(-12).join("\n") + "\n```"); // the failing tail: the same 12 lines the report shows
     }
-    ctx.out(red.length ? `${red.length} of ${record.commands.length} red — fix and run \`gate verify\` again` : `all ${record.commands.length} green — step {${stepKey}} closed with verify.json`);
+    const ran = record.commands.filter((c) => !c.skipped).length;
+    ctx.out(red.length ? `${red.length} of ${ran} red — fix and run \`gate verify\` again` : `all ${ran} green — step {${stepKey}} closed with verify.json`);
     printNext(ctx);
   },
 };

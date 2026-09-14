@@ -15,7 +15,7 @@ export const verbs = {
     ctx.out(`  ui: ${config.ui.join(", ")}`);
     ctx.out(`  schema: ${config.schema.join(", ") || "none"}`);
     ctx.out(`  highRisk: ${config.highRisk.join(", ") || "none"}`);
-    ctx.out(`  verify: ${config.verify.map((v) => `${v.cmd} (${v.timeout}s)`).join(" · ") || "NOTHING — add verify commands to gate.json"}`);
+    ctx.out(`  verify: ${config.verify.map((v) => `${v.cmd} (${v.timeout}s)${v.when === "source" ? " (when source)" : ""}`).join(" · ") || "NOTHING — add verify commands to gate.json"}`);
     ctx.out(`  checks: ${config.checks.join(", ") || "none"}`);
     const driverSkill = path.join(ctx.root, ".claude", "skills", "verify", "SKILL.md");
     ctx.out(`  driver: ${existsSync(driverSkill) ? driverSkill : "none — run /done-gate:verify-setup once"}`);

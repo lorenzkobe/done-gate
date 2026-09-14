@@ -97,7 +97,13 @@ Per repo, optionally:
   launches your app and drives it like a user, phone viewport first.
 
 Both travel with the repo through git. The run state under `.claude/gate/` is local and
-gitignored automatically.
+gitignored automatically. A verify entry may say `"when": "source"`: it then runs only when
+a file that is not a test or a doc changed since the task opened, and is recorded as skipped
+otherwise (the short report says so). The `build` script from package.json gets that by
+default; lint, typecheck and test always run. If your build type-checks tests or builds a
+docs site, write `{ "cmd": "npm run build", "when": "always" }` to opt out. A build command
+written into gate.json by hand as a plain string runs always; give it `"when": "source"`
+yourself to get the skip.
 
 ## What you see
 
@@ -210,7 +216,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
   "ui":       ["src/app/**", "src/components/**"],
   "schema":   ["src/lib/data/db.ts", "supabase/migrations/**"],
   "highRisk": ["src/lib/payments/**", "src/lib/auth/**", "supabase/migrations/**"],
-  "verify":   ["npm run lint", { "cmd": "npm run test", "timeout": 1500 }, "npm run build"],
+  "verify":   ["npm run lint", { "cmd": "npm run test", "timeout": 1500 }, { "cmd": "npm run build", "when": "source" }],
   "checks":   ["claude-md-budget", "migration-number"],
   "driver":   "skill:verify"
 }

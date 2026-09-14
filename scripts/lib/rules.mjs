@@ -50,6 +50,21 @@ function waived(ledger, key) {
   return (ledger.waivers ?? []).some((w) => w.key === key && w.found !== false);
 }
 
+// Which of Plan and case table came after the first source edit of this task, if any:
+// { late: ["Plan", "case table"], path: "<first edited file>" } or { late: [], path: null }.
+export function lateOrder(state) {
+  const { config, ledger } = state;
+  const none = { late: [], path: null };
+  if (!ledger) return none;
+  const firstEdit = (state.events ?? []).find((e) => e.kind === "edit" && !e.agent && e.path && config.isSource(e.path) && e.seq > (ledger.baseline?.seq ?? 0));
+  if (!firstEdit) return none;
+  const firstCase = ledger.cases?.[0]?.seq ?? Infinity;
+  const late = [];
+  if (!(ledger.planSeq < firstEdit.seq)) late.push("Plan");
+  if (!(firstCase < firstEdit.seq)) late.push("case table");
+  return { late, path: firstEdit.path };
+}
+
 // Pure: state in, unmet rules out. Every item says what to do next.
 export function evaluate(state) {
   const { config, ledger, changed, now, verify } = state;
@@ -73,7 +88,7 @@ export function evaluate(state) {
     if (!verify) {
       unmet.push({ rule: "R3", text: "no verify.json for this run. Run `gate verify` after your last source edit." });
     } else {
-      const red = (verify.commands ?? []).filter((c) => c.exit !== 0 || c.timedOut);
+      const red = (verify.commands ?? []).filter((c) => !c.skipped && (c.exit !== 0 || c.timedOut));
       if (red.length) {
         unmet.push({
           rule: "R3",
@@ -138,15 +153,16 @@ export function evaluate(state) {
     unmet.push({ rule: "R13", text: "the plugin's models.json (tier policy) changed since this ledger opened. Restore it, or get the user's waiver (`gate waive gate-config \"<their words>\"`)." });
   }
 
-  // R2: plan and case table must predate the first source edit this task
-  const firstEdit = (state.events ?? []).find((e) => e.kind === "edit" && !e.agent && e.path && config.isSource(e.path) && e.seq > (ledger.baseline?.seq ?? 0));
-  if (firstEdit) {
-    const firstCase = ledger.cases?.[0]?.seq ?? Infinity;
-    const late = [];
-    if (!(ledger.planSeq < firstEdit.seq)) late.push("Plan");
-    if (!(firstCase < firstEdit.seq)) late.push("case table");
-    if (late.length) {
-      unmet.push({ rule: "R2", text: `${late.join(" and ")} written after the first source edit (${firstEdit.path}). Record the order honestly in Attention; next time plan before editing. (Blocks until a note/case exists at all.)` });
+  // R2: plan and case table must predate the first source edit this task. Blocks only while
+  // a Plan or a case is missing altogether; a late order is recorded (lateOrder) and shown in
+  // the report, since the model cannot travel back to write them earlier.
+  const { late, path: firstPath } = lateOrder(state);
+  if (late.length) {
+    const missing = [];
+    if (!ledger.planSeq) missing.push("Plan");
+    if (!ledger.cases?.length) missing.push("case table");
+    if (missing.length) {
+      unmet.push({ rule: "R2", text: `${late.join(" and ")} written after the first source edit (${firstPath}). Write the ${missing.join(" and ")} now; the late order is recorded in the report.` });
     }
   }
 
