@@ -153,7 +153,7 @@ test("C1 boundary: loadPolicy returns models.json's policy; missing keys fall ba
   assert.deepEqual(p.tiers.standard, { maxFiles: 10, maxLines: 400, requires: ["skeptic", "qa", "reviewer"] });
   assert.deepEqual(p.tiers.large.requires, ["skeptic", "qa", "reviewer", "reviewer:opus"]);
   assert.deepEqual(p.forceStandard, ["ui", "schema", "highRisk"]);
-  assert.equal(p.ceiling.helpersPerTask, 6);
+  assert.equal(p.ceiling.helpersPerTask, 7);
   assert.deepEqual(p.tiers, shipped.tiers, "loadPolicy() must report what models.json actually says");
   assert.deepEqual(p.forceStandard, shipped.forceStandard);
 
@@ -589,10 +589,10 @@ test("C15 boundary: the brief for a ledger with an unproven fact passes lintClai
 // C16
 // ---------------------------------------------------------------------------
 
-test("C16 happy: models.json carries the policy object and no escalate/never/ceiling prose keys; roles unchanged", () => {
+test("C16 happy: models.json carries the policy object and no escalate/never/ceiling prose keys; roles carry the arbiter", () => {
   const m = modelsJson();
 
-  assert.deepEqual(m.roles, { skeptic: "sonnet", qa: "opus", reviewer: "sonnet", "reviewer-2": "opus" });
+  assert.deepEqual(m.roles, { skeptic: "sonnet", qa: "opus", reviewer: "sonnet", "reviewer-2": "opus", arbiter: "opus" });
 
   assert.equal(typeof m.policy, "object");
   assert.deepEqual(Object.keys(m.policy).sort(), ["ceiling", "escalate", "forceStandard", "tiers"]);
@@ -602,7 +602,7 @@ test("C16 happy: models.json carries the policy object and no escalate/never/cei
   assert.deepEqual(m.policy.tiers.large, { requires: ["skeptic", "qa", "reviewer", "reviewer:opus"] });
   assert.deepEqual(m.policy.forceStandard, ["ui", "schema", "highRisk"]);
   assert.deepEqual(m.policy.escalate, { reviewerRound2: { model: "opus", whenActOnAtLeast: 2, orTier: "large" } });
-  assert.deepEqual(m.policy.ceiling, { helpersPerTask: 6 });
+  assert.deepEqual(m.policy.ceiling, { helpersPerTask: 7 });
 
   for (const key of ["escalate", "never", "ceiling"]) {
     assert.ok(!(key in m), `top-level ${key} prose key is gone`);

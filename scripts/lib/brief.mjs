@@ -138,8 +138,9 @@ function header(state, role, round) {
   return out;
 }
 
-function mayWrite(state, role, reviewN, skepticN) {
+function mayWrite(state, role, reviewN, skepticN, arbiterN = 1) {
   if (role === "skeptic") return `only ${path.join(state.dir, `skeptic-${skepticN}.md`)}; reply with its Act-on list only.`;
+  if (role === "arbiter") return `only ${path.join(state.dir, `arbiter-${arbiterN}.md`)}; reply with the ruling line only.`;
   if (role === "qa") return `only files under the tests globs (${state.config.tests.join(", ")}); nothing else.`;
   return `only ${path.join(state.dir, `review-${reviewN}.md`)}.`;
 }
@@ -166,11 +167,32 @@ function fileList(state, files, { blind = false } = {}) {
   });
 }
 
-export function renderPacket(state, role, { round, reviewN, skepticN = 1 }) {
+// The one disagreement an arbiter settles: the finding, both sides' evidence, the cited code.
+function arbiterBody(state, item) {
+  const out = ["## The disagreement", ""];
+  out.push(`Finding ${item.id}: ${item.text}`, "");
+  out.push(`Implementer's dispute: ${item.dispute.why}`, `Implementer's evidence: ${item.dispute.evidence}`, "");
+  out.push(`Reviewer upheld it: ${item.dispute.reviewerReason ?? "(no reason recorded)"}`, "");
+  const cited = /([\w./-]+\.[a-z]+):(\d+)/i.exec(item.text);
+  out.push("## The cited code", "");
+  if (cited) {
+    const rel = cited[1];
+    const full = unifiedDiff(state, { cap: 100000 });
+    const block = full.split("\n\n").find((b) => b.startsWith(`diff --git a/${rel} `));
+    out.push(block ?? `no diff for ${rel} in this task; read the file at ${path.join(state.root, rel)}`, "");
+  } else out.push("the finding cites no file:line; read the files in the diff below", "", unifiedDiff(state), "");
+  out.push("## Rule", "", "Rule for exactly one side, in writing, from the evidence. If neither side's evidence holds, rule for the reviewer (the safe side) and say why.", "");
+  out.push("## File shape", "", "```", `# Arbiter <n> — ${state.ledger.slug}`, "", "## Ruling", `- ${item.id} — implementer: <reason>   (or)   - ${item.id} — reviewer: <reason>`, "```", "");
+  return out;
+}
+
+export function renderPacket(state, role, { round, reviewN, skepticN = 1, arbiterN = 1, item = null }) {
   const out = header(state, role, round);
-  out.push("## You may write", "", mayWrite(state, role, reviewN, skepticN), "");
+  out.push("## You may write", "", mayWrite(state, role, reviewN, skepticN, arbiterN), "");
   const files = planFiles(state.ledger);
-  if (role === "skeptic") {
+  if (role === "arbiter") {
+    out.push(...arbiterBody(state, item));
+  } else if (role === "skeptic") {
     out.push("## Files", "", ...fileList(state, files), "");
   } else if (role === "qa") {
     // never a line starting with +, - or @@: the QA renderer uses numbered lists and indented fences
@@ -210,8 +232,17 @@ export const verbs = {
     const next = (prefix) => (numbers(prefix).length ? Math.max(...numbers(prefix)) : 0) + 1;
     const reviewN = next("review-");
     const skepticN = next("skeptic-");
+    const arbiterN = next("arbiter-");
+    let item = null;
+    if (role === "arbiter") {
+      const aid = flag(ctx.args, "--item");
+      if (!aid) throw new UsageError("usage: gate brief arbiter --item <H#.#> (a disputed item the reviewer upheld)");
+      item = state.ledger.huddles.flatMap((h) => h.actOn).find((a) => a.id === aid);
+      if (!item) throw new UsageError(`no act-on item ${aid}`);
+      if (!item.dispute || item.dispute.verdict !== "upheld") throw new UsageError(`${aid} is not a disputed item the reviewer upheld; the arbiter only settles those`);
+    }
     const file = path.join(state.dir, `brief-${role}-${round}.md`);
-    writeFileSync(file, renderPacket(state, role, { round, reviewN, skepticN }));
+    writeFileSync(file, renderPacket(state, role, { round, reviewN, skepticN, arbiterN, item }));
     ctx.out(`packet: ${file}`);
     ctx.out(`prompt: Read ${file} and follow your role brief.`);
     printNext(ctx);

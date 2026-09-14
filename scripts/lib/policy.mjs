@@ -9,7 +9,7 @@ const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".
 // It lives in models.json, not in the repo's gate.json, so a plugin upgrade mid-task
 // never trips R13 (which hashes the repo config).
 export const DEFAULT_POLICY = Object.freeze({
-  roles: { skeptic: "sonnet", qa: "opus", reviewer: "sonnet", "reviewer-2": "opus" },
+  roles: { skeptic: "sonnet", qa: "opus", reviewer: "sonnet", "reviewer-2": "opus", arbiter: "opus" },
   tiers: {
     small: { maxFiles: 1, maxLines: 40, requires: ["qa", "reviewer"] },
     standard: { maxFiles: 10, maxLines: 400, requires: ["skeptic", "qa", "reviewer"] },
@@ -17,7 +17,7 @@ export const DEFAULT_POLICY = Object.freeze({
   },
   forceStandard: ["ui", "schema", "highRisk"],
   escalate: { reviewerRound2: { model: "opus", whenActOnAtLeast: 2, orTier: "large" } },
-  ceiling: { helpersPerTask: 6 },
+  ceiling: { helpersPerTask: 7 },
 });
 
 function merge(raw) {

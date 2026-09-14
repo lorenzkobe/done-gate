@@ -6,8 +6,7 @@ description: The done-gate workflow. Use before any task that will change source
 # done-gate: evidenced done
 
 `gate` is `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"`. Every mutating verb ends with a
-`next:` line naming the next step and its exact verb: follow it. `gate check` lists what is
-still unmet at any time.
+`next:` line naming the next step and its verb: follow it. `gate check` lists what is unmet.
 
 ## What the Stop hook enforces
 
@@ -23,27 +22,30 @@ still unmet at any time.
 | R8 | a case, step or blast-radius row left blank |
 | R9 | high-risk paths changed without the second reviewer |
 | R10 | a repo check failed (CLAUDE.md budget, migration number) |
-| R11 | a claim without `[measured] (ptr)` / `[inferred]` / `[guess]`, or a pointer that does not resolve |
+| R11 | an unlabelled claim, or a `[measured]` pointer that does not resolve |
 | R12 | a waiver quotes words the user never said |
-| R13 | `.claude/gate.json` or the plugin's `models.json` changed mid-task |
+| R13 | gate.json or models.json changed mid-task |
 | R14 | the task outgrew its predicted size and a step that size requires is blank again |
+| R15 | a helper's file lists more findings than the ledger recorded |
 
 ## The loop
 
 1. `gate open <slug> <feature|bugfix|refactor|plan>`.
 2. Before any edit: `gate note task "<the ask, quoted, then your words>"`,
    `gate note plan "<approach>" --files a.ts,b.ts` (the files predict the size; one plain
-   file is small and a feature then skips the skeptic and the QA reconcile round), then
+   file is small and a feature then skips the skeptic and reconcile), then
    `gate case add "<case>" --kind <happy|edge|refused|boundary|idempotent|reported-surface>`
    per row. R2 checks the order.
 3. Follow each `next:` line. Helpers are spawned from packets: `gate brief <role>` prints a
-   one-sentence prompt; put nothing else in it. Roles: `done-gate:skeptic` (writes `skeptic-<n>.md`),
-   `done-gate:qa` (writes tests blind to your code, under the tests globs only; reconcile
-   at most two rounds), `done-gate:reviewer` (writes `review-<n>.md`; at most two rounds,
-   the second on Opus when the size or the first round calls for it), `done-gate:reviewer-2`
-   (high-risk paths). `gate size` shows the size and the helpers it
-   requires from `models.json`; never pick helper models yourself. Ceiling: six helper
-   invocations per task.
+   one-sentence prompt. Roles: `done-gate:skeptic` (writes
+   `skeptic-<n>.md`), `done-gate:qa` (blind tests under the tests globs;
+   reconcile at most twice), `done-gate:reviewer` (writes `review-<n>.md`; at most two
+   rounds, the second on Opus when size or round one calls for it),
+   `done-gate:reviewer-2` (high-risk paths). A finding you believe wrong:
+   `gate huddle dispute H<k>.<i> "<why>" --evidence <ptr>`, one round; if the reviewer
+   upholds it, `gate brief arbiter --item H<k>.<i>`, spawn `done-gate:arbiter`; it rules.
+   `gate size` shows the size and the helpers it requires; never pick helper models
+   yourself. Ceiling: seven helper invocations per task.
 4. `gate verify` after your last edit; only verify.json counts. Drive the real surface
    yourself when UI changed (R4); probe the real schema when schema changed (R6).
 5. `gate note attention "<what the user should see first>"`, `gate close`, `gate check`,
@@ -53,15 +55,15 @@ still unmet at any time.
 
 ## Rules that hold throughout
 
-- If two readings of the ask lead to different work, stop and ask with `AskUserQuestion`
-  before step 2. The user prefers a question to a fix that still misbehaves.
-- Every claim you write carries `[measured] (pointer)`, `[inferred]` or `[guess]`.
+- If two readings of the ask lead to different work, ask with `AskUserQuestion` before
+  step 2.
+- Every claim carries `[measured] (pointer)`, `[inferred]` or `[guess]`.
 - A helper's self-report is never evidence; only `gate verify`, hook events and the
   helper's own file count.
 - Waivers are the only way past a keyed step you cannot do: ask, then
   `gate waive <key> "<their exact words>"`.
 - Never hand-edit `.claude/gate/runs/**` except `ledger.md`.
-- Need the user mid-task? `AskUserQuestion`, or end with a final line `PAUSED: <need>`.
-- No commits unless asked; the repo's CLAUDE.md wins over any playbook step.
+- Need the user mid-task? `AskUserQuestion`, or end with a last line `PAUSED: <need>`.
+- No commits unless asked; the repo's CLAUDE.md wins over any playbook.
 - Blast rungs: 1 said so, 2 pointed at the line, 3 walked the failure, 4 ran code that
-  fails loud, 5 reproduced in the app. Below 4 prints unproven, which is honest.
+  fails loud, 5 reproduced in the app. Below 4 prints unproven.

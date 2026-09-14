@@ -90,12 +90,13 @@ test("huddle add / acton / resolve track a review round and its Act-on items", (
   assert.match(r.stdout, /H1/);
   cli(repo, "huddle", ["acton", "H1", "null venue crashes the badge"]);
   cli(repo, "huddle", ["acton", "H1", "missing refused-side test"]);
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/CourtCard.test.tsx:null venue"]);
+  // `huddle resolve` requires a pointer that actually resolves; tests/a.test.ts is in the fixture
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts:null venue"]);
   const [h] = ledgerOf(repo).huddles;
   assert.equal(h.role, "reviewer");
   assert.equal(h.file, "review-1.md");
   assert.equal(h.actOn.length, 2);
-  assert.equal(h.actOn[0].closed, "tests/CourtCard.test.tsx:null venue");
+  assert.equal(h.actOn[0].closed, "tests/a.test.ts:null venue");
   assert.equal(h.actOn[1].closed, null);
 });
 

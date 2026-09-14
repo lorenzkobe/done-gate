@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { lintClaims, pointerResolver } from "./claims.mjs";
 import { runChecks } from "./checks.mjs";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { parseFindings } from "./review.mjs";
 
 // Hash of the SOURCE files in a snapshot. verify.json stores it, so a docs or ledger
 // edit after `gate verify` does not force a re-run, but any source edit does.
@@ -183,6 +186,26 @@ export function evaluate(state) {
       rule: "R14",
       text: `tier grew from ${ledger.tier.predicted ?? "unpredicted"} to ${m?.tier ?? "standard"}${m ? ` (${m.files} files, ${m.lines} lines)` : ""}: step(s) ${reopened.map((k) => `{${k}}`).join(", ")} reopened; ${reopened.map((k) => todo[k] ?? `do {${k}}`).join(", then ")}, then close with evidence.`,
     });
+  }
+
+  // R15: every Act-on finding in a helper file is recorded from the file (hand-typed items do
+  // not count toward it), and every helper file in the run dir belongs to a huddle.
+  for (const h of ledger.huddles ?? []) {
+    if (!h.file || !state.dir) continue;
+    const file = path.join(state.dir, h.file);
+    if (!existsSync(file)) continue;
+    const listed = parseFindings(readFileSync(file, "utf8")).length;
+    const fromFile = h.actOn.filter((a) => typeof a.fileIndex === "number").length;
+    if (listed > fromFile) {
+      unmet.push({ rule: "R15", text: `${h.file} lists ${listed} Act-on finding(s) but ${h.id} records ${fromFile} from the file. Run \`gate huddle add ${h.role} --file ${h.file}\` again; it records every bullet.` });
+    }
+  }
+  const recorded = new Set((ledger.huddles ?? []).map((h) => h.file).filter(Boolean));
+  for (const f of state.reviews ?? []) {
+    if (!recorded.has(f)) {
+      const role = f.startsWith("review-") ? "reviewer" : f.startsWith("skeptic-") ? "skeptic" : "arbiter";
+      unmet.push({ rule: "R15", text: `${f} was written but never recorded. Run \`gate huddle add ${role} --file ${f}\`.` });
+    }
   }
 
   // R11: claims carry labels, and [measured] pointers resolve

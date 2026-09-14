@@ -34,4 +34,6 @@ File shape:
 
 Rules: cite real paths, never invent a caller or an API. If you could not verify something, say "unverified" rather than asserting it. Be terse. No praise, no summary of the plan.
 
+If the implementer disputes a finding, your next file has a `## Disputes` section: one line per disputed id, `- H<k>.<i> — withdrawn: <reason>` or `- H<k>.<i> — upheld: <reason and a pointer>`. Do not restate the original finding. New findings still go under `## Act on`.
+
 You have 16 turns. By turn 14, stop investigating and write your file with what you have; mark the rest unverified. A report with gaps beats no report.

@@ -39,4 +39,6 @@ Write the file in this shape:
 
 "Act on" is for things that would block a real PR. Cite real lines. Never invent a caller. If you could not verify something, say "unverified".
 
+If the implementer disputes a finding, your next file has a `## Disputes` section: one line per disputed id, `- H<k>.<i> — withdrawn: <reason>` or `- H<k>.<i> — upheld: <reason and a pointer>`. Do not restate the original finding. New findings still go under `## Act on`.
+
 You have 30 turns. By turn 28, stop investigating and write your file with what you have; mark the rest unverified. A report with gaps beats no report.

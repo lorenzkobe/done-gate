@@ -7,9 +7,9 @@ import { toPosixRel } from "./paths.mjs";
 // Files only the gate's own verbs may write. A model that could edit these could
 // forge its evidence, so the deny is unconditional and every attempt is logged.
 const EVIDENCE_FILES = new Set(["events.jsonl", "verify.json", "decisions.tsv", "ledger.json", "blocks.json", "state.json", "gate-error.log", "current-session"]);
-const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(events\.jsonl|verify\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json|current-session|brief-[a-z0-9-]+-\d+\.md)/;
+const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(events\.jsonl|verify\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json|current-session|brief-[a-z0-9-]+-\d+\.md|(?:review|skeptic|arbiter)-\d+\.md)/;
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
-const HELPER_ROLES = ["skeptic", "qa", "reviewer", "reviewer-2"];
+const HELPER_ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter"];
 // Shell forms that create or change files. Helpers may use them only on scratch paths
 // (tests/.tmp, /tmp, a scratchpad dir); git commands that change the repo are never theirs.
 const SHELL_WRITE = /(?:^|[;&|(]\s*|\s)(?:tee|rm|mv|cp|touch|mkdir|truncate|install|dd|tar)\s|\bsed\s+(?:-[a-zA-Z]*i|--in-place)|\bperl\s+-[a-zA-Z]*i|(?:^|[^<>])>{1,2}(?!&)/;
@@ -61,6 +61,10 @@ function isSkepticFile(rel) {
   return /^\.claude\/gate\/runs\/[^/]+\/skeptic-\d+\.md$/.test(rel);
 }
 
+function isArbiterFile(rel) {
+  return /^\.claude\/gate\/runs\/[^/]+\/arbiter-\d+\.md$/.test(rel);
+}
+
 // A helper's own file must land in the run it was spawned for, never another task's folder.
 // With no open ledger there is no task, so there is nowhere a helper may write.
 function inCurrentRun(rel, current) {
@@ -99,8 +103,15 @@ export function decide(input, root, config = loadConfig(root), currentRun = null
     }
     return { deny: false };
   }
-  // a skeptic file is the skeptic's evidence: nobody else writes it, review files likewise
-  const foreign = paths.filter((p) => isSkepticFile(p) || (isReviewFile(p) && !(role("reviewer") || role("reviewer-2"))));
+  if (role("arbiter")) {
+    const outside = paths.filter((p) => !isArbiterFile(p) || !inCurrentRun(p, currentRun));
+    if (outside.length) {
+      return { deny: true, reason: `done-gate: the arbiter writes only its own arbiter-<n>.md in the run dir; ${outside.join(", ")} is not that.`, paths };
+    }
+    return { deny: false };
+  }
+  // a helper's file is its evidence: nobody else writes it
+  const foreign = paths.filter((p) => isSkepticFile(p) || isArbiterFile(p) || (isReviewFile(p) && !(role("reviewer") || role("reviewer-2"))));
   if (foreign.length) {
     return { deny: true, reason: `done-gate: ${foreign.join(", ")} is a helper's own evidence file and is written only by that helper.`, paths };
   }

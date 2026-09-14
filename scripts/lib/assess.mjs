@@ -20,7 +20,7 @@ export function readVerify(dir) {
 // The files helpers write for themselves: review-<n>.md and skeptic-<n>.md.
 export function reviewFiles(dir) {
   if (!existsSync(dir)) return [];
-  return readdirSync(dir).filter((f) => /^(?:review|skeptic)-\d+\.md$/.test(f)).sort();
+  return readdirSync(dir).filter((f) => /^(?:review|skeptic|arbiter)-\d+\.md$/.test(f)).sort();
 }
 export const helperFiles = reviewFiles;
 

@@ -18,7 +18,7 @@ const VERB_FOR = {
   schema: "probe the real schema yourself, then `gate step schema done \"<what you ran>\" --evidence <ptr>` (or `na` when no schema file changed); never ask for a waiver here to save time",
   blast: "`gate blast add \"<fact the change is safe because of>\" --rung <1-5> --proof \"<ptr>\"` (rung 1 you said so · 2 you pointed at the line · 3 you walked the failure · 4 you ran code that fails loud if wrong · 5 you reproduced it in the app; below 4 prints unproven, which is allowed and honest)",
   cleanup: "sweep dead code and duplication, then `gate step cleanup done \"…\" --evidence <file>`",
-  review: "`gate brief reviewer`, spawn done-gate:reviewer with the prompt it prints, then `gate huddle add reviewer --file review-<n>.md`, one `gate huddle acton` per Act-on item, fix, `gate huddle resolve`, then `gate step review done … --evidence review-<n>.md`; you own the diff and the summary, the reviewer's file is embedded as it wrote it",
+  review: "`gate brief reviewer`, spawn done-gate:reviewer with the prompt it prints, then `gate huddle add reviewer --file review-<n>.md`, one `gate huddle acton` per Act-on item, fix, `gate huddle resolve`, then `gate step review done … --evidence review-<n>.md`; you own the diff and the summary, the reviewer's file is embedded as it wrote it; a finding you believe is wrong: `gate huddle dispute H<k>.<i> \"<why>\" --evidence <ptr>`, one round with the reviewer, and if it upholds, `gate brief arbiter --item H<k>.<i>` and spawn done-gate:arbiter",
   docs: "update docs and CLAUDE.md if the next assistant must know something, then `gate step docs done|na …`",
   close: "`gate note attention \"<gaps the user should see first>\"`, then `gate close`",
 };

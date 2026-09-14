@@ -39,8 +39,14 @@ export function pointerResolver(state) {
       const seq = Number(ptr.slice(7));
       return (state.events ?? []).some((e) => e.seq === seq);
     }
-    if (/^(?:review|skeptic)-\d+\.md$/.test(ptr)) return (state.reviews ?? []).includes(ptr);
-    if (/^decisions#\d+$/.test(ptr)) return true;
+    if (/^(?:review|skeptic|arbiter)-\d+\.md$/.test(ptr)) return (state.reviews ?? []).includes(ptr);
+    if (/^decisions#\d+$/.test(ptr)) {
+      // the row must exist: decisions.tsv has a header line, then one row per decision
+      const file = state.dir ? path.join(state.dir, "decisions.tsv") : null;
+      if (!file || !existsSync(file)) return false;
+      const rows = readFileSync(file, "utf8").split("\n").filter((l) => l.trim()).length - 1;
+      return Number(ptr.slice(10)) >= 1 && Number(ptr.slice(10)) <= rows;
+    }
     const file = ptr.split(":")[0];
     return [state.dir, state.root].filter(Boolean).some((base) => existsSync(path.join(base, file)));
   };

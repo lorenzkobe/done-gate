@@ -88,6 +88,7 @@ export function attentionLines(state, unmet) {
   for (const w of ledger.waivers) out.push(`- waived ${w.key}: "${w.quote}" — ${w.found === true ? "found in transcript" : w.found === false ? "**NOT found in transcript**" : "not yet checked"}`);
   for (const b of ledger.blast.filter((x) => x.unproven)) out.push(`- unproven: ${b.fact} (rung ${b.rung})`);
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) out.push(`- skipped: ${s.text} — ${s.note}`);
+  for (const a of ledger.huddles.flatMap((h) => h.actOn).filter((x) => x.dispute)) out.push(`- disputed ${a.id}: ${a.dispute.why} [${a.dispute.evidence}] — ${a.dispute.verdict ?? "unanswered"}${a.dispute.reviewerReason ? `; reviewer: ${a.dispute.reviewerReason}` : ""}${a.dispute.arbiterReason ? `; arbiter: ${a.dispute.arbiterReason}` : ""}`);
   if (denies) out.push(`- ${denies} denied write(s) to gate evidence files (see events)`);
   if (ledger.overridden) out.push("- the gate was OVERRIDDEN; treat every claim above as unverified");
   const order = lateOrder(state);
@@ -255,9 +256,33 @@ function reviewLine(ledger) {
   if (!rounds.length) return "No independent review yet.";
   const items = rounds.flatMap((h) => h.actOn);
   if (!items.length) return "Reviewer found no problems.";
+  const overruled = items.filter((a) => a.dispute?.verdict === "arbiter:implementer").length;
+  const withdrawn = items.filter((a) => a.dispute?.verdict === "withdrawn").length;
   const open = items.filter((a) => !a.closed).length;
-  if (!open) return `Reviewer found ${plural(items.length, "problem")}, ${items.length === 1 ? "fixed" : "all fixed"}.`;
-  return `Reviewer found ${plural(items.length, "problem")}, ${open} still open.`;
+  const fixed = items.length - overruled - withdrawn - open;
+  const parts = [];
+  if (!open && !overruled && !withdrawn) return `Reviewer found ${plural(items.length, "problem")}, ${items.length === 1 ? "fixed" : "all fixed"}.`;
+  if (fixed) parts.push(`${fixed} fixed`);
+  if (withdrawn) parts.push(`${withdrawn} withdrawn by the reviewer`);
+  if (overruled) parts.push(`${overruled} overruled by the arbiter`);
+  if (open) parts.push(`${open} still open`);
+  return `Reviewer found ${plural(items.length, "problem")}, ${parts.join(", ")}.`;
+}
+
+function disputeLines(ledger) {
+  const out = [];
+  for (const a of ledger.huddles.flatMap((h) => h.actOn)) {
+    if (!a.dispute) continue;
+    const v = a.dispute.verdict;
+    let outcome;
+    if (v === "arbiter:implementer") outcome = "the arbiter sided with me, not changed";
+    else if (v === "arbiter:reviewer") outcome = a.closed ? "the arbiter sided with the reviewer, fixed" : "the arbiter sided with the reviewer, fix pending";
+    else if (v === "withdrawn") outcome = "the reviewer withdrew it";
+    else if (v === "upheld") outcome = "the reviewer upheld it, waiting for the arbiter";
+    else outcome = "waiting for the reviewer's answer";
+    out.push(`- ${a.text} — disputed; ${outcome}.`);
+  }
+  return out;
 }
 
 function designLine(ledger) {
@@ -320,6 +345,7 @@ function lookFirst(state) {
   for (const w of ledger.waivers) {
     out.push(w.found === false ? `- Skipped, but I could not find you saying that: "${w.quote}".` : `- Skipped with your OK: "${w.quote}".`);
   }
+  out.push(...disputeLines(ledger));
   for (const b of ledger.blast.filter((x) => x.unproven)) out.push(`- ${b.fact} — my belief; I did not run anything that would prove it.`);
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) out.push(`- Skipped: ${s.text} — ${s.note}`);
   const denies = events.filter((e) => e.kind === "deny").length;

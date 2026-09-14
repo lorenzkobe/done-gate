@@ -8,11 +8,14 @@ import { applyPrediction, tiered } from "./size.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
+import { parseDisputes, parseFindings, parseRuling } from "./review.mjs";
+import { pointerResolver } from "./claims.mjs";
+import { buildState } from "./assess.mjs";
 
 // Steps whose evidence comes from a script or an agent: DONE or WAIVED only.
 export const EVIDENCED_KEYS = new Set(["verify", "verify-before", "driver", "review", "qa", "skeptic", "close"]);
 export const CASE_KINDS = ["happy", "edge", "refused", "boundary", "idempotent", "reported-surface"];
-export const ROLES = ["skeptic", "qa", "reviewer", "reviewer-2"];
+export const ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter"];
 
 export function flag(args, name) {
   const i = args.indexOf(name);
@@ -173,23 +176,100 @@ export const verbs = {
     if (action === "add") {
       const [role] = pos;
       if (!ROLES.includes(role)) throw new UsageError(`usage: gate huddle add <${ROLES.join("|")}> [--file review-<n>.md] [--summary "<text>"]`);
-      const id = withLedger(ctx, (ledger) => {
-        const id = `H${ledger.huddles.length + 1}`;
-        const round = ledger.huddles.filter((h) => h.role === role).length + 1;
-        ledger.huddles.push({ id, role, round, file: flag(rest, "--file") ?? null, summary: flag(rest, "--summary") ?? null, actOn: [], seq: nextSeq() });
-        return id;
+      const file = flag(rest, "--file") ?? null;
+      // every role whose evidence is a file must name it, or R15 could never count it, and the
+      // file must be that role's own: a reviewer huddle cannot point at a skeptic file
+      const prefix = role === "arbiter" ? "arbiter" : role === "skeptic" ? "skeptic" : "review";
+      if (!file && role !== "qa") throw new UsageError(`gate huddle add ${role} needs --file <${prefix}-<n>.md>: the helper's own file is the evidence`);
+      if (file && !new RegExp(`^${prefix}-\\d+\\.md$`).test(file)) throw new UsageError(`gate huddle add ${role}: --file must be that role's own ${prefix}-<n>.md, not ${file}`);
+      const same = (a, b) => String(a).toLowerCase().replace(/\s+/g, " ").trim() === String(b).toLowerCase().replace(/\s+/g, " ").trim();
+      const { id, imported, answered } = withLedger(ctx, (ledger, dir) => {
+        // adding the same file again re-reads it into the same huddle instead of a new round
+        let huddle = file ? ledger.huddles.find((h) => h.role === role && h.file === file) : null;
+        if (!huddle) {
+          const id = `H${ledger.huddles.length + 1}`;
+          const round = ledger.huddles.filter((h) => h.role === role).length + 1;
+          huddle = { id, role, round, file, summary: flag(rest, "--summary") ?? null, actOn: [], seq: nextSeq() };
+          ledger.huddles.push(huddle);
+        }
+        const id = huddle.id;
+        let imported = 0;
+        let answered = 0;
+        const text = file && existsSync(path.join(dir, file)) ? readFileSync(path.join(dir, file), "utf8") : null;
+        if (text !== null) {
+          // every Act-on bullet becomes an item, so nothing can be left out (R15 checks the count).
+          // Bullets are matched by their position in the file, so two findings that read alike
+          // are both recorded; a bullet the model already recorded by hand with the same text
+          // is claimed as that position instead of duplicated.
+          parseFindings(text).forEach((f, i) => {
+            if (huddle.actOn.some((a) => a.fileIndex === i)) return;
+            const byHand = huddle.actOn.find((a) => a.fileIndex === undefined && same(a.text, f.text));
+            if (byHand) {
+              byHand.fileIndex = i;
+              return;
+            }
+            huddle.actOn.push({ id: `${id}.${huddle.actOn.length + 1}`, text: f.text, closed: null, fileIndex: i });
+            imported += 1;
+          });
+          const item = (aid) => ledger.huddles.flatMap((h) => h.actOn).find((a) => a.id === aid);
+          for (const d of parseDisputes(text)) {
+            const a = item(d.id);
+            if (!a || !a.dispute) continue;
+            a.dispute.verdict = d.verdict;
+            a.dispute.reviewerReason = d.reason;
+            if (d.verdict === "withdrawn" && !a.closed) {
+              a.closed = `withdrawn (${file})`;
+              a.closedSeq = nextSeq();
+            }
+            answered += 1;
+          }
+          if (role === "arbiter") {
+            for (const r of parseRuling(text)) {
+              const a = item(r.id);
+              if (!a || !a.dispute) continue;
+              a.dispute.verdict = `arbiter:${r.side}`;
+              a.dispute.arbiterReason = r.reason;
+              if (r.side === "implementer" && !a.closed) {
+                a.closed = `overruled (${file})`;
+                a.closedSeq = nextSeq();
+              }
+              answered += 1;
+            }
+          }
+        }
+        return { id, imported, answered };
       });
-      ctx.out(`${id} added (${role})`);
-    printNext(ctx);
+      ctx.out(`${id} added (${role})${imported ? ` · ${imported} Act-on item${imported === 1 ? "" : "s"} recorded` : ""}${answered ? ` · ${answered} dispute${answered === 1 ? "" : "s"} answered` : ""}`);
+      printNext(ctx);
+      return;
+    }
+    if (action === "dispute") {
+      const [aid, ...words] = pos;
+      const why = words.join(" ");
+      const evidence = flag(rest, "--evidence");
+      if (!aid || !why || !evidence) throw new UsageError('usage: gate huddle dispute <H#.#> "<why the finding is wrong>" --evidence <pointer> (evidence is required)');
+      if (!pointerResolver(buildState(ctx, {}))(evidence)) throw new UsageError(`dispute evidence "${evidence}" does not resolve; point at a test (file:name), a file:line, verify.json, events#<seq> or a helper file`);
+      withLedger(ctx, (ledger) => {
+        const a = ledger.huddles.flatMap((h) => h.actOn).find((x) => x.id === aid);
+        if (!a) throw new UsageError(`no act-on item ${aid}`);
+        if (a.closed) throw new UsageError(`${aid} is already closed; nothing to dispute`);
+        if (a.dispute) throw new UsageError(`${aid} was already disputed once; one round is the limit${a.dispute.verdict?.startsWith("arbiter:") ? " and the arbiter has ruled" : ""}`);
+        a.dispute = { why, evidence, seq: nextSeq(), verdict: null };
+      });
+      ctx.out(`${aid} disputed — send it to the reviewer; its next file answers under ## Disputes (withdrawn or upheld)`);
+      printNext(ctx);
       return;
     }
     if (action === "acton") {
       const [hid, ...words] = pos;
       const text = words.join(" ");
       if (!hid || !text) throw new UsageError('usage: gate huddle acton <H#> "<finding>"');
+      const norm = (t) => String(t).toLowerCase().replace(/\s+/g, " ").trim();
       const id = withLedger(ctx, (ledger) => {
         const h = ledger.huddles.find((x) => x.id === hid);
         if (!h) throw new UsageError(`no huddle ${hid}`);
+        const existing = h.actOn.find((a) => norm(a.text) === norm(text));
+        if (existing) return existing.id; // already recorded from the file
         const id = `${hid}.${h.actOn.length + 1}`;
         h.actOn.push({ id, text, closed: null });
         return id;
@@ -202,6 +282,7 @@ export const verbs = {
       const [aid] = pos;
       const evidence = flag(rest, "--evidence");
       if (!aid || !evidence) throw new UsageError("usage: gate huddle resolve <H#.#> --evidence <pointer>");
+      if (!pointerResolver(buildState(ctx, {}))(evidence)) throw new UsageError(`resolve evidence "${evidence}" does not resolve; point at a test (file:name), a file:line, verify.json, events#<seq> or a helper file`);
       withLedger(ctx, (ledger) => {
         for (const h of ledger.huddles) {
           const item = h.actOn.find((a) => a.id === aid);
@@ -217,7 +298,7 @@ export const verbs = {
     printNext(ctx);
       return;
     }
-    throw new UsageError("usage: gate huddle add|acton|resolve ...");
+    throw new UsageError("usage: gate huddle add|acton|resolve|dispute ...");
   },
 
   waive(ctx) {

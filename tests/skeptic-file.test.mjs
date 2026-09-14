@@ -389,7 +389,8 @@ test("C8 boundary: the brief's Design check line counts the skeptic huddle's Act
   cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
   cli(repo, "huddle", ["acton", "H1", "the plan hides a second write path"]);
   cli(repo, "huddle", ["acton", "H1", "the refused side has no case"]);
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "events#1"]);
+  // `huddle resolve` requires a pointer that actually resolves, so this names a real file
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts:a"]);
 
   const open = cli(repo, "report", ["--brief"]).stdout;
   assert.ok(
@@ -397,7 +398,7 @@ test("C8 boundary: the brief's Design check line counts the skeptic huddle's Act
     `expected "Design check: 2 concerns, 1 still open." in:\n${open}`,
   );
 
-  cli(repo, "huddle", ["resolve", "H1.2", "--evidence", "events#1"]);
+  cli(repo, "huddle", ["resolve", "H1.2", "--evidence", "tests/a.test.ts:a"]);
   const closed = cli(repo, "report", ["--brief"]).stdout;
   assert.ok(
     closed.includes("Design check: 2 concerns, all addressed."),

@@ -4,16 +4,51 @@
     "skeptic": "sonnet",
     "qa": "opus",
     "reviewer": "sonnet",
-    "reviewer-2": "opus"
+    "reviewer-2": "opus",
+    "arbiter": "opus"
   },
   "policy": {
     "tiers": {
-      "small": { "maxFiles": 1, "maxLines": 40, "requires": ["qa", "reviewer"] },
-      "standard": { "maxFiles": 10, "maxLines": 400, "requires": ["skeptic", "qa", "reviewer"] },
-      "large": { "requires": ["skeptic", "qa", "reviewer", "reviewer:opus"] }
+      "small": {
+        "maxFiles": 1,
+        "maxLines": 40,
+        "requires": [
+          "qa",
+          "reviewer"
+        ]
+      },
+      "standard": {
+        "maxFiles": 10,
+        "maxLines": 400,
+        "requires": [
+          "skeptic",
+          "qa",
+          "reviewer"
+        ]
+      },
+      "large": {
+        "requires": [
+          "skeptic",
+          "qa",
+          "reviewer",
+          "reviewer:opus"
+        ]
+      }
     },
-    "forceStandard": ["ui", "schema", "highRisk"],
-    "escalate": { "reviewerRound2": { "model": "opus", "whenActOnAtLeast": 2, "orTier": "large" } },
-    "ceiling": { "helpersPerTask": 6 }
+    "forceStandard": [
+      "ui",
+      "schema",
+      "highRisk"
+    ],
+    "escalate": {
+      "reviewerRound2": {
+        "model": "opus",
+        "whenActOnAtLeast": 2,
+        "orTier": "large"
+      }
+    },
+    "ceiling": {
+      "helpersPerTask": 7
+    }
   }
 }

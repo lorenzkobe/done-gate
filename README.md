@@ -74,6 +74,11 @@ Three things make this hard to game:
   results) into the run dir, and the model spawns it with one sentence. QA's packet withholds
   the diff; its blindness is a convention the prompt asks for, since the fence denies writes,
   not reads.
+- **Findings are recorded, not paraphrased, and can be disputed once.** `gate huddle add`
+  records every Act-on bullet of the reviewer's file (R15 blocks if one is missing). A
+  finding the model believes wrong is disputed with evidence; the reviewer withdraws or
+  upholds it in writing; an upheld one goes to a fresh arbiter on the stronger model that
+  rules for one side. Every outcome is in the short report, and you can overrule.
 - **Helpers can't vouch for themselves.** QA may write only under the tests globs; the
   reviewer may write only `review-<n>.md`; the skeptic writes nothing. Their replies are
   never evidence; their files and the hook events are.
@@ -151,6 +156,7 @@ attempt to finish.
 | R12 | a waiver quotes words the user never said |
 | R13 | `.claude/gate.json` changed mid-task |
 | R14 | the task outgrew its predicted size and a step that size requires is blank again |
+| R15 | a helper's file lists more findings than the ledger recorded |
 
 Waivers are the only way past a keyed step: the user says it, Claude records the exact
 words with `gate waive <key> "…"`, and the gate checks the transcript.
@@ -179,11 +185,12 @@ run on the most expensive tier.
 | small | one source file, ≤ 40 lines, no UI, schema or high-risk path | QA (Opus), reviewer (Sonnet) |
 | standard | ≤ 10 files, ≤ 400 lines, or any UI, schema or high-risk file | skeptic (Sonnet), QA, reviewer |
 | large | more than that | skeptic, QA, reviewer with a second round on Opus |
+| any | a review finding the model disputes with evidence and the reviewer upholds | arbiter (Opus), rules once in writing |
 
 `gate note plan --files a.ts,b.ts` predicts the tier before the diff exists, so a small
 feature skips the design critique and the QA reconcile round up front; if the diff then
 outgrows the prediction, those steps come back and the gate says so. `gate size` prints the
-numbers. The policy is in `models.json`. Hard ceiling: **six helper invocations per task**,
+numbers. The policy is in `models.json`. Hard ceiling: **seven helper invocations per task**,
 typically two or three. Always-on context cost is about 500 tokens; everything the hooks do
 is off-model.
 
