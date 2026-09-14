@@ -15,7 +15,7 @@ without a pointer to what proves it.
 ## Install
 
 ```
-/plugin marketplace add kobz/done-gate
+/plugin marketplace add lorenzkobe/done-gate
 /plugin install done-gate@done-gate
 ```
 
