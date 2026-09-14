@@ -1,0 +1,1 @@
+{"session_id":"S1","cwd":"/repo","hook_event_name":"PostToolUse","tool_name":"mcp__claude-in-chrome__computer","tool_input":{"action":"screenshot"},"tool_output":"..."}

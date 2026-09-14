@@ -1,0 +1,10 @@
+{
+  "source": ["src/**", "supabase/**", "tests/**", "package.json"],
+  "tests": ["tests/**"],
+  "ui": ["src/app/**", "src/components/**"],
+  "schema": ["src/lib/data/courtly-db.ts", "supabase/migrations/**"],
+  "highRisk": ["src/lib/payments/**", "supabase/migrations/**"],
+  "verify": ["npm run lint", { "cmd": "npm run test", "timeout": 900 }, "npm run build"],
+  "checks": ["claude-md-budget", "migration-number"],
+  "driver": "skill:verify"
+}

@@ -1,0 +1,13 @@
+{
+  "name": "done-gate",
+  "owner": { "name": "Lorenz Kobe Managbanag" },
+  "description": "done-gate plugin marketplace (single plugin)",
+  "plugins": [
+    {
+      "name": "done-gate",
+      "source": "./",
+      "description": "Evidence-enforced definition of done for Claude Code",
+      "version": "0.1.0"
+    }
+  ]
+}

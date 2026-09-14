@@ -1,0 +1,1 @@
+{"session_id":"S1","cwd":"/repo","hook_event_name":"PostToolUse","tool_name":"Agent","tool_input":{"subagent_type":"done-gate:reviewer","prompt":"review","description":"Review diff"},"tool_output":"..."}

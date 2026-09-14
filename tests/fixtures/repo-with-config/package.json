@@ -1,0 +1,1 @@
+{ "name": "fixture2", "scripts": { "lint": "eslint .", "test": "vitest run", "build": "next build" } }
