@@ -6,6 +6,9 @@ import { loadLedger, runsDir } from "./ledger.mjs";
 import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
 import { readEvents } from "./events.mjs";
+import { loadPolicy, requires } from "./policy.mjs";
+import { effectiveTier, renderTierBlock, tiered, tierOf } from "./size.mjs";
+import { isRole } from "./rules.mjs";
 
 export function section(md, heading) {
   const m = new RegExp(`## ${heading}\\n([\\s\\S]*?)(?=\\n## |$)`).exec(md ?? "");
@@ -86,6 +89,52 @@ export function attentionLines(state, unmet) {
   return out;
 }
 
+// Whether the policy wants the second review round on the stronger model: the first
+// reviewer round returned enough Act-on items, or the task is large.
+function round2Required(state) {
+  const esc = state.policy?.escalate?.reviewerRound2;
+  if (!esc) return false;
+  const first = state.ledger.huddles.find((h) => h.role === "reviewer");
+  const eff = effectiveTier(state.policy, state.ledger, state.tier?.measured ?? null);
+  return Boolean(first && first.actOn.length >= (esc.whenActOnAtLeast ?? 2)) || eff === esc.orTier;
+}
+
+export function tierBlock(state) {
+  const { ledger, policy, events } = state;
+  if (!policy || !tiered(ledger)) return [];
+  const measured = state.tier?.measured ?? tierOf(ledger).measured;
+  const out = renderTierBlock(ledger, policy, measured);
+  const eff = effectiveTier(policy, ledger, measured);
+  // "reviewer:opus" is a second review on the stronger model. It is satisfied either by the
+  // reviewer role stopping a second time (the same agent resumed on opus) or by a reviewer-2
+  // stop (the high-risk role, which always runs on opus), so both ways of running it count.
+  const required = requires(policy, eff);
+  // only this task's events: the session log spans every task the session worked on
+  const opened = ledger.openedSeq ?? ledger.baseline?.seq ?? 0;
+  const stops = events.filter((e) => e.kind === "subagent-stop" && e.seq > opened);
+  const secondRound = () => stops.filter((e) => isRole(e.agentType, "reviewer"))[1] ?? stops.find((e) => isRole(e.agentType, "reviewer-2")) ?? null;
+  const ran = (entry) => {
+    const [role, model] = entry.split(":");
+    if (model) return Boolean(secondRound());
+    return stops.some((e) => isRole(e.agentType, role));
+  };
+  const done = required.filter(ran);
+  out.push(`helpers: spawned ${done.length} of ${required.length} required (${required.map((r) => `${r}${ran(r) ? " ✓" : ""}`).join(", ")})`);
+  if (round2Required(state)) {
+    const second = secondRound();
+    out.push(`round 2 model: ${policy.escalate.reviewerRound2.model} required, recorded: ${second?.model ?? "unrecorded"}`);
+  } else out.push("round 2 model: not required");
+  return out;
+}
+
+function sizeLine(state) {
+  const { ledger, policy } = state;
+  if (!policy || !tiered(ledger)) return null;
+  const m = state.tier?.measured ?? tierOf(ledger).measured;
+  if (!m) return null;
+  return `Size: ${effectiveTier(policy, ledger, m)} (${plural(m.files, "file")}, ${plural(m.lines, "line")}).`;
+}
+
 export function renderReport(state, unmet) {
   const { ledger, dir, config, changed, verify, events, reviews } = state;
   const md = ledgerMd(dir);
@@ -137,6 +186,9 @@ export function renderReport(state, unmet) {
   const other = changed.filter((f) => !seen.has(f));
   if (other.length) out.push(`- other (${other.length}): ${other.slice(0, 20).join(", ")}`);
   if (!changed.length) out.push("_none since baseline_");
+
+  const tier = tierBlock(state);
+  if (tier.length) out.push("\n## Tier\n", ...tier);
 
   const decisions = tailLines(path.join(dir, "decisions.tsv"), 200);
   out.push("\n## Decisions\n");
@@ -270,6 +322,8 @@ export function renderBrief(state, unmet) {
   out.push(unmet.length ? `${ledger.slug}: not finished (${plural(unmet.length, "thing")} missing)` : `${ledger.slug}: done`);
   out.push("");
   out.push(testedLine(ledger, changed, config));
+  const size = sizeLine(state);
+  if (size) out.push(size);
   out.push(checksLine(verify));
   out.push(reviewLine(ledger));
   const design = designLine(ledger);
@@ -298,7 +352,7 @@ export const verbs = {
       const dir = path.join(runsDir(ctx.stateDir), last);
       const ledger = loadLedger(dir);
       const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
-      state = { ...state, ledger, dir, verify: readVerify(dir), reviews: reviewFiles(dir), events, changed: ledger.changedAtClose ?? [] };
+      state = { ...state, ledger, dir, verify: readVerify(dir), reviews: reviewFiles(dir), events, changed: ledger.changedAtClose ?? [], policy: state.policy ?? loadPolicy(), tier: ledger.tier ?? null };
       unmet = [];
     }
     const full = { ...state, stateDir: ctx.stateDir };

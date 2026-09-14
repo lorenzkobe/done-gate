@@ -380,6 +380,16 @@ function normalise(text, repo) {
     .replace(/\b\d{4}-\d{2}-\d{2}-/g, "<DATE>-");
 }
 
+// The Tier section is pinned by tests/report-tier.test.mjs (C8); dropping it from both
+// sides keeps this comparison about the rest of the renderer. From the "## Tier" heading
+// up to the next "## " heading.
+function withoutTier(md) {
+  const start = md.indexOf("\n## Tier\n");
+  if (start < 0) return md;
+  const next = md.indexOf("\n## ", start + 1);
+  return next < 0 ? `${md.slice(0, start)}\n` : md.slice(0, start) + md.slice(next);
+}
+
 function c11Fixture(name, bin) {
   const repo = makeRepo(name, {
     ".claude/gate.json": JSON.stringify({ verify: [`${NODE} -e "process.exit(0)"`] }),
@@ -437,9 +447,9 @@ test("C11 idempotent: the full report is byte-identical twice, and unchanged fro
   const headReport = head.go("report").stdout;
 
   assert.equal(
-    normalise(first, repo),
-    normalise(headReport, head.repo),
-    "the full report changed relative to HEAD",
+    withoutTier(normalise(first, repo)),
+    withoutTier(normalise(headReport, head.repo)),
+    "the full report changed relative to HEAD (outside the Tier section)",
   );
 });
 

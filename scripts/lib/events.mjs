@@ -36,8 +36,10 @@ export function eventsFromHookInput(input, root) {
   const event = input.hook_event_name;
   const b = () => base(input);
 
-  if (event === "SubagentStart") return [{ ...b(), kind: "subagent-start" }];
-  if (event === "SubagentStop") return [{ ...b(), kind: "subagent-stop" }];
+  // the model a helper ran on, when the harness says so (advisory: nothing blocks on it)
+  const model = typeof input.model === "string" && input.model ? { model: input.model } : {};
+  if (event === "SubagentStart") return [{ ...b(), kind: "subagent-start", ...model }];
+  if (event === "SubagentStop") return [{ ...b(), kind: "subagent-stop", ...model }];
   if (event === "UserPromptSubmit") {
     return [{ ...b(), kind: "prompt", text: String(input.user_message ?? input.prompt ?? "").slice(0, TEXT_LIMIT) }];
   }
