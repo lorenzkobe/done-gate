@@ -103,6 +103,9 @@ the high-risk globs. Skip the skeptic for a single-file bugfix or refactor. Neve
 helper the rules do not require, never three reviewers, never a "just to be safe" re-run of
 `gate verify` when verify.json is already fresh. A helper that reads a page costs little;
 a bug that reaches production costs the most, so the money goes to tests and review.
+The ceiling is fixed: **at most six helper invocations per task** (QA 1, skeptic 0–1,
+reviewer 1–2 rounds, second reviewer 0–2 rounds); a typical task uses two or three. A
+review round that returns no Act-on items ends the review.
 
 ## Rules that hold throughout
 

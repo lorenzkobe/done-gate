@@ -8,12 +8,16 @@
   },
   "escalate": {
     "reviewer": "Run the SECOND review round on opus (pass `model: \"opus\"` to the Agent call) when the first round returned 2+ Act-on items, or the diff spans more than 10 source files, or it touches concurrency, auth, or money outside the highRisk globs.",
-    "skeptic": "Stays on sonnet; a plan is one page. Skip the huddle entirely for a bugfix or refactor whose plan touches a single file — the playbooks do not require it there.",
+    "skeptic": "Stays on sonnet; a plan is one page. Skip the huddle entirely for a bugfix or refactor whose plan touches a single file \u2014 the playbooks do not require it there.",
     "qa": "Stays on opus: the tests are what catch the bugs you are losing to. For a one-case change, hand QA that one case; cost follows the case table, not the model."
   },
   "never": [
     "spawn a helper the rules do not require (a doc-only or test-only change needs no reviewer)",
     "run three reviewers on anything",
-    "re-run `gate verify` to 'be safe' when verify.json is already fresh — the gate checks freshness by content hash"
-  ]
+    "re-run `gate verify` to 'be safe' when verify.json is already fresh \u2014 the gate checks freshness by content hash"
+  ],
+  "ceiling": {
+    "perTask": "at most 6 helper invocations: QA 1, skeptic 0-1, reviewer 1-2 rounds, reviewer-2 0-2 rounds. Typical task: 2-3. Nothing else is spawned for the gate.",
+    "perRound": "a review round is one Agent call or one SendMessage; a round that returns no Act-on items ends the review."
+  }
 }
