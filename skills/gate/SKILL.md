@@ -107,6 +107,19 @@ The ceiling is fixed: **at most six helper invocations per task** (QA 1, skeptic
 reviewer 1–2 rounds, second reviewer 0–2 rounds); a typical task uses two or three. A
 review round that returns no Act-on items ends the review.
 
+## Ask before you build, ship nothing half-working
+
+The user would rather answer a question than receive a fix that still misbehaves in use.
+Two rules follow:
+
+- **Unclear ask → ask first.** If two readings of the request would lead to different
+  work, stop at step 1 and use `AskUserQuestion`: say what you think they mean, the other
+  reading, what each would change, and your recommendation, in plain words. A minute of
+  clarification beats a shipped bug and a "it doesn't work" report.
+- **"Passes the tests" is not "works in use."** Drive the real surface (R4) and probe the
+  real schema (R6) yourself; do not ask for a waiver on those to save time. If something
+  might still misbehave for a real user, say so in Attention and keep working, or ask.
+
 ## Rules that hold throughout
 
 - You own the diff and write your own summary. A helper's self-report is never evidence;
