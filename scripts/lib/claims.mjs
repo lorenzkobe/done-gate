@@ -39,7 +39,7 @@ export function pointerResolver(state) {
       const seq = Number(ptr.slice(7));
       return (state.events ?? []).some((e) => e.seq === seq);
     }
-    if (/^review-\d+\.md$/.test(ptr)) return (state.reviews ?? []).includes(ptr);
+    if (/^(?:review|skeptic)-\d+\.md$/.test(ptr)) return (state.reviews ?? []).includes(ptr);
     if (/^decisions#\d+$/.test(ptr)) return true;
     const file = ptr.split(":")[0];
     return [state.dir, state.root].filter(Boolean).some((base) => existsSync(path.join(base, file)));

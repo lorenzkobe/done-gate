@@ -186,7 +186,10 @@ test("C2 happy: every packet starts with Task, Plan, the case table, the tier bl
 
     const may = section(text, "You may write");
     if (role === "skeptic") {
-      assert.match(may, /\bnothing\b/, `skeptic may write: expected "nothing", got:\n${may}`);
+      // The skeptic now writes its findings to skeptic-<n>.md in the run dir (tests/skeptic-file.test.mjs C4).
+      const m = /(\S*skeptic-(\d+)\.md)/.exec(may);
+      assert.ok(m, `skeptic may write: no skeptic-<n>.md named:\n${may}`);
+      assert.equal(m[1], path.join(runDir(repo), `skeptic-${m[2]}.md`), "skeptic may write: the path is not absolute");
     } else if (role === "qa") {
       for (const glob of TESTS_GLOBS) assert.ok(may.includes(glob), `qa may write: tests glob ${glob} missing:\n${may}`);
     } else {
@@ -547,8 +550,23 @@ test("C13 happy: the four agent files say their inputs are in the packet and no 
       body(now).includes("in the packet named in your prompt"),
       `${rel} does not tell the agent its inputs are in the packet named in its prompt`,
     );
-    assert.deepEqual(frontmatter(now), frontmatter(head(rel)), `${rel}: pinned frontmatter lines changed`);
+    // skeptic.md's frontmatter changes by design when it gains its own file (it needs Write
+    // and a bigger turn budget); tests/skeptic-file.test.mjs C5 owns those lines.
+    if (role !== "skeptic") {
+      assert.deepEqual(frontmatter(now), frontmatter(head(rel)), `${rel}: pinned frontmatter lines changed`);
+    }
     assert.ok(!now.includes("git diff"), `${rel} still names the literal phrase "git diff"`);
+  }
+
+  // The skeptic keeps its identity, its model and its no-editing posture.
+  const skepticFm = frontmatter(readFileSync(path.join(pluginRoot, "agents", "skeptic.md"), "utf8"));
+  const fmLine = (key) => skepticFm.find((l) => l.split(":")[0].trim() === key);
+  assert.ok(fmLine("name"), "agents/skeptic.md has no name in its frontmatter");
+  assert.match(fmLine("model") ?? "", /sonnet/, `agents/skeptic.md is no longer on sonnet: ${fmLine("model")}`);
+  assert.ok(fmLine("effort"), "agents/skeptic.md has no effort in its frontmatter");
+  const skepticDisallowed = fmLine("disallowedTools") ?? "";
+  for (const tool of ["Edit", "MultiEdit", "NotebookEdit"]) {
+    assert.ok(skepticDisallowed.includes(tool), `agents/skeptic.md no longer disallows ${tool}: ${skepticDisallowed}`);
   }
 
   const reviewer = readFileSync(path.join(pluginRoot, "agents", "reviewer.md"), "utf8");

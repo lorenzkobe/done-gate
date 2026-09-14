@@ -17,3 +17,5 @@ For each case:
 - For a bug fix, the first test is the reported reproduction; run it and quote the failing output trimmed to the assertion diff.
 
 Reply with: a table `case id → test file:test name`, the cases you could not cover and why, and any disagreement between the requirements and what the existing code does. Report; do not fix the implementation.
+
+You have 40 turns. By turn 38, stop investigating and write your file with what you have; mark the rest unverified. A report with gaps beats no report.

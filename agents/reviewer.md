@@ -38,3 +38,5 @@ Write the file in this shape:
 ```
 
 "Act on" is for things that would block a real PR. Cite real lines. Never invent a caller. If you could not verify something, say "unverified".
+
+You have 30 turns. By turn 28, stop investigating and write your file with what you have; mark the rest unverified. A report with gaps beats no report.

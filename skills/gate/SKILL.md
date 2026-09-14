@@ -37,7 +37,7 @@ still unmet at any time.
    `gate case add "<case>" --kind <happy|edge|refused|boundary|idempotent|reported-surface>`
    per row. R2 checks the order.
 3. Follow each `next:` line. Helpers are spawned from packets: `gate brief <role>` prints a
-   one-sentence prompt; put nothing else in it. Roles: `done-gate:skeptic` (design huddle),
+   one-sentence prompt; put nothing else in it. Roles: `done-gate:skeptic` (writes `skeptic-<n>.md`),
    `done-gate:qa` (writes tests blind to your code, under the tests globs only; reconcile
    at most two rounds), `done-gate:reviewer` (writes `review-<n>.md`; at most two rounds,
    the second on Opus when the size or the first round calls for it), `done-gate:reviewer-2`
@@ -60,7 +60,7 @@ still unmet at any time.
   helper's own file count.
 - Waivers are the only way past a keyed step you cannot do: ask, then
   `gate waive <key> "<their exact words>"`.
-- Never hand-edit `.claude/gate/runs/**` except `ledger.md`; the rest is fenced.
+- Never hand-edit `.claude/gate/runs/**` except `ledger.md`.
 - Need the user mid-task? `AskUserQuestion`, or end with a final line `PAUSED: <need>`.
 - No commits unless asked; the repo's CLAUDE.md wins over any playbook step.
 - Blast rungs: 1 said so, 2 pointed at the line, 3 walked the failure, 4 ran code that

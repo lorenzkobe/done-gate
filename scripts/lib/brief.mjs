@@ -138,8 +138,8 @@ function header(state, role, round) {
   return out;
 }
 
-function mayWrite(state, role, reviewN) {
-  if (role === "skeptic") return "nothing: return your findings in your reply.";
+function mayWrite(state, role, reviewN, skepticN) {
+  if (role === "skeptic") return `only ${path.join(state.dir, `skeptic-${skepticN}.md`)}; reply with its Act-on list only.`;
   if (role === "qa") return `only files under the tests globs (${state.config.tests.join(", ")}); nothing else.`;
   return `only ${path.join(state.dir, `review-${reviewN}.md`)}.`;
 }
@@ -166,9 +166,9 @@ function fileList(state, files, { blind = false } = {}) {
   });
 }
 
-export function renderPacket(state, role, { round, reviewN }) {
+export function renderPacket(state, role, { round, reviewN, skepticN = 1 }) {
   const out = header(state, role, round);
-  out.push("## You may write", "", mayWrite(state, role, reviewN), "");
+  out.push("## You may write", "", mayWrite(state, role, reviewN, skepticN), "");
   const files = planFiles(state.ledger);
   if (role === "skeptic") {
     out.push("## Files", "", ...fileList(state, files), "");
@@ -206,10 +206,12 @@ export const verbs = {
     if (!state.ledger) throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
     const rounds = state.ledger.huddles.filter((h) => h.role === role).length;
     const round = Number(flag(ctx.args, "--round")) || rounds + 1;
-    const existing = state.reviews.map((f) => Number(/\d+/.exec(f)[0]));
-    const reviewN = (existing.length ? Math.max(...existing) : 0) + 1;
+    const numbers = (prefix) => state.reviews.filter((f) => f.startsWith(prefix)).map((f) => Number(/\d+/.exec(f)[0]));
+    const next = (prefix) => (numbers(prefix).length ? Math.max(...numbers(prefix)) : 0) + 1;
+    const reviewN = next("review-");
+    const skepticN = next("skeptic-");
     const file = path.join(state.dir, `brief-${role}-${round}.md`);
-    writeFileSync(file, renderPacket(state, role, { round, reviewN }));
+    writeFileSync(file, renderPacket(state, role, { round, reviewN, skepticN }));
     ctx.out(`packet: ${file}`);
     ctx.out(`prompt: Read ${file} and follow your role brief.`);
     printNext(ctx);

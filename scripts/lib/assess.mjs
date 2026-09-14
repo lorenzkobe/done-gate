@@ -17,10 +17,12 @@ export function readVerify(dir) {
   return JSON.parse(readFileSync(file, "utf8").replace(/\r/g, ""));
 }
 
+// The files helpers write for themselves: review-<n>.md and skeptic-<n>.md.
 export function reviewFiles(dir) {
   if (!existsSync(dir)) return [];
-  return readdirSync(dir).filter((f) => /^review-\d+\.md$/.test(f)).sort();
+  return readdirSync(dir).filter((f) => /^(?:review|skeptic)-\d+\.md$/.test(f)).sort();
 }
+export const helperFiles = reviewFiles;
 
 // Everything the rules need, gathered once. Throws LedgerParseError when our own
 // state is unreadable so the caller can apply the block-once-then-fail-open policy.
