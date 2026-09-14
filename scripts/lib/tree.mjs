@@ -58,8 +58,59 @@ function sha1(buf) {
   return createHash("sha1").update(buf).digest("hex");
 }
 
-// {hash, files: {rel: {h, s, m}}, rehashed}. Content-hashed; size+mtime only decide
+// Newline count, plus one for an unterminated last line; an empty file has no lines and a
+// binary file (a NUL byte in its first 8 KB) has null, so it is never sized by lines.
+export function countLines(buf) {
+  if (!buf.length) return 0;
+  const probe = buf.subarray(0, 8000);
+  for (let i = 0; i < probe.length; i++) if (probe[i] === 0) return null;
+  let n = 0;
+  for (let i = 0; i < buf.length; i++) if (buf[i] === 0x0a) n += 1;
+  return buf[buf.length - 1] === 0x0a ? n : n + 1;
+}
+
+function git(root, args) {
+  return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
+}
+
+// Tracked files, or an empty set when git cannot answer (no repo, no commits).
+export function gitTracked(root) {
+  try {
+    return new Set(git(root, ["ls-files", "-z"]).split("\0").filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
+// Added/deleted line counts of uncommitted changes vs HEAD, keyed by the current path;
+// empty when git cannot answer. NUL-separated output, so quoted or odd filenames survive,
+// and renames arrive as one row with `from` set (a pure move is 0 lines).
+export function gitNumstat(root, paths = []) {
+  const out = new Map();
+  try {
+    const raw = git(root, ["diff", "--numstat", "-z", "-M", "HEAD", "--", ...paths]);
+    const parts = raw.split("\0");
+    for (let i = 0; i < parts.length; i++) {
+      const m = /^(\S+)\t(\S+)\t(.*)$/.exec(parts[i]);
+      if (!m) continue;
+      const binary = m[1] === "-" || m[2] === "-";
+      const row = { added: binary ? 0 : Number(m[1]), deleted: binary ? 0 : Number(m[2]), binary, from: null };
+      if (m[3] === "") {
+        // rename: the path field is empty and the next two parts are old and new path
+        row.from = parts[i + 1];
+        out.set(parts[i + 2], row);
+        i += 2;
+      } else out.set(m[3], row);
+    }
+  } catch {
+    // no HEAD (fresh repo) or not a git repo: callers fall back to line-count deltas
+  }
+  return out;
+}
+
+// {hash, files: {rel: {h, s, m, l}}, rehashed}. Content-hashed; size+mtime only decide
 // whether a previous snapshot's hash can be reused, so a touch never counts as a change.
+// `l` is the line count, kept so the tier can be estimated without a second read.
 export function snapshot(root, previous = null) {
   const files = {};
   let rehashed = 0;
@@ -72,11 +123,12 @@ export function snapshot(root, previous = null) {
       continue; // deleted between listing and stat
     }
     const prev = previous?.files?.[rel];
-    if (prev && prev.s === st.size && prev.m === st.mtimeMs) {
+    if (prev && prev.s === st.size && prev.m === st.mtimeMs && "l" in prev) {
       files[rel] = prev;
       continue;
     }
-    files[rel] = { h: sha1(readFileSync(abs)), s: st.size, m: st.mtimeMs };
+    const buf = readFileSync(abs);
+    files[rel] = { h: sha1(buf), s: st.size, m: st.mtimeMs, l: countLines(buf) };
     rehashed += 1;
   }
   const digest = createHash("sha1");

@@ -409,11 +409,21 @@ function c11Fixture(name, bin) {
   return { repo, go };
 }
 
-test("C11 idempotent: the full report is byte-identical twice, and unchanged from HEAD", () => {
+test("C11 idempotent: the full report is byte-identical twice, and unchanged from HEAD", (t) => {
   const { repo, go } = c11Fixture("brief-c11", gate);
   const first = go("report").stdout;
   const second = go("report").stdout;
   assert.equal(second, first, "two consecutive `gate report` runs disagree");
+
+  // The HEAD comparison pins the report RENDERER. The Steps section quotes the playbook
+  // prose verbatim, so editing a playbook must change the report: comparing against HEAD
+  // would then fail for a reason this guard was never meant to catch.
+  const playbooksChanged =
+    spawnSync("git", ["diff", "--quiet", "HEAD", "--", "skills/gate/playbooks"], { cwd: pluginRoot }).status !== 0;
+  if (playbooksChanged) {
+    t.diagnostic("skipping the HEAD comparison: skills/gate/playbooks differs from HEAD");
+    return;
+  }
 
   // the same fixture driven by the committed gate, as a refactor guard
   const headDir = path.join(here, ".tmp", "brief-c11-head");

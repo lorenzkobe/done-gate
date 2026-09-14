@@ -2,18 +2,22 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import path from "node:path";
 import { nextSeq } from "./events.mjs";
 import { currentLedger, loadLedger, saveLedger } from "./ledger.mjs";
+import { loadConfig } from "./config.mjs";
+import { loadPolicy } from "./policy.mjs";
+import { applyPrediction, tiered } from "./size.mjs";
+import { toPosixRel } from "./paths.mjs";
 
 // Steps whose evidence comes from a script or an agent: DONE or WAIVED only.
 export const EVIDENCED_KEYS = new Set(["verify", "verify-before", "driver", "review", "qa", "skeptic", "close"]);
 export const CASE_KINDS = ["happy", "edge", "refused", "boundary", "idempotent", "reported-surface"];
 export const ROLES = ["skeptic", "qa", "reviewer", "reviewer-2"];
 
-function flag(args, name) {
+export function flag(args, name) {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
 }
 
-function positional(args) {
+export function positional(args) {
   const out = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith("--")) {
@@ -66,8 +70,10 @@ export const verbs = {
   note(ctx) {
     const [section, ...rest] = ctx.args;
     if (!["task", "plan", "attention"].includes(section)) throw new Error('usage: gate note <task|plan|attention> "<text>" (or - to read stdin)');
-    const text = readText(ctx, rest.join(" ")).trim();
+    const files = flag(rest, "--files");
+    const text = readText(ctx, positional(rest).join(" ")).trim();
     if (!text) throw new Error("note: empty text");
+    let predicted = null;
     withLedger(ctx, (ledger, dir) => {
       const file = path.join(dir, "ledger.md");
       const heading = section[0].toUpperCase() + section.slice(1);
@@ -77,9 +83,14 @@ export const verbs = {
       if (section === "plan") {
         ledger.planSeq = seq;
         if (ledger.taskSeq) markStep(ledger, "plan", { state: "DONE", evidence: "ledger.md#plan", note: "Task and Plan written" });
+        if (files !== undefined && tiered(ledger)) {
+          // paths outside the repo are dropped: they cannot be part of this task's diff
+          const paths = files.split(",").map((f) => f.trim()).filter(Boolean).map((f) => toPosixRel(ctx.root, f)).filter((f) => f);
+          predicted = applyPrediction(ledger, loadPolicy(), loadConfig(ctx.root), paths);
+        }
       }
     });
-    ctx.out(`${section} noted`);
+    ctx.out(predicted ? `${section} noted · tier predicted ${predicted.tier} (${predicted.files} file${predicted.files === 1 ? "" : "s"}${predicted.forced.length ? `, forced by ${predicted.forced.join(", ")}` : ""})` : `${section} noted`);
   },
 
   case(ctx) {

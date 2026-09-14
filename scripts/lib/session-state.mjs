@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { sessionDir } from "./events.mjs";
 import { nextSeq } from "./events.mjs";
@@ -14,10 +14,13 @@ export function loadSession(stateDir, session) {
   return JSON.parse(readFileSync(file, "utf8").replace(/\r/g, ""));
 }
 
+// Written whole then renamed, so a concurrent reader never sees a torn file.
 export function saveSession(stateDir, state) {
   const file = stateFile(stateDir, state.session);
   mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify(state));
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(state));
+  renameSync(tmp, file);
   return state;
 }
 

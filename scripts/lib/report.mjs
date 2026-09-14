@@ -252,7 +252,7 @@ function lookFirst(state) {
   for (const w of ledger.waivers) {
     out.push(w.found === false ? `- Skipped, but I could not find you saying that: "${w.quote}".` : `- Skipped with your OK: "${w.quote}".`);
   }
-  for (const b of ledger.blast.filter((x) => x.unproven)) out.push(`- ${b.fact} — my belief, not verified.`);
+  for (const b of ledger.blast.filter((x) => x.unproven)) out.push(`- ${b.fact} — my belief; I did not run anything that would prove it.`);
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) out.push(`- Skipped: ${s.text} — ${s.note}`);
   const denies = events.filter((e) => e.kind === "deny").length;
   if (denies) out.push(`- Blocked writes to check files: ${denies}.`);

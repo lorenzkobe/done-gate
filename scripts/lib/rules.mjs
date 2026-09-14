@@ -12,6 +12,16 @@ export function sourceHash(snap, config) {
   return digest.digest("hex");
 }
 
+// Source minus tests: the freshness clock for R4/R5. QA's test files move the source hash
+// (tests are source) but are agent work, which the "last edit" has always excluded.
+export function implementationHash(snap, config) {
+  const digest = createHash("sha1");
+  for (const rel of Object.keys(snap?.files ?? {}).sort()) {
+    if (config.isSource(rel) && !config.isTest(rel)) digest.update(`${rel}\0${snap.files[rel].h}\n`);
+  }
+  return digest.digest("hex");
+}
+
 function list(paths, max = 3) {
   const shown = paths.slice(0, max).join(", ");
   return paths.length > max ? `${shown}, +${paths.length - max} more` : shown;
@@ -21,9 +31,12 @@ export function isRole(agentType, role) {
   return agentType === `done-gate:${role}` || agentType === role;
 }
 
+// The last moment source changed: the newest Edit/Write event by the main session, or the
+// moment the source hash moved (edits made with sed, perl or git apply leave no tool event).
 function lastEditSeq(state, config, ledger) {
   const edits = (state.events ?? []).filter((e) => e.kind === "edit" && !e.agent && e.path && config.isSource(e.path));
-  return edits.length ? edits[edits.length - 1].seq : (ledger.baseline?.seq ?? 0);
+  const fromEvents = edits.length ? edits[edits.length - 1].seq : (ledger.baseline?.seq ?? 0);
+  return Math.max(fromEvents, ledger.lastSourceChangeSeq ?? 0);
 }
 
 function reviewed(state, role, after) {
@@ -121,6 +134,9 @@ export function evaluate(state) {
   if (ledger.gateHash && config.hash !== ledger.gateHash && !waived(ledger, "gate-config")) {
     unmet.push({ rule: "R13", text: ".claude/gate.json changed since this ledger opened. Restore it, or get the user's waiver (`gate waive gate-config \"<their words>\"`)." });
   }
+  if (ledger.policyHash && state.policy?.hash && state.policy.hash !== ledger.policyHash && !waived(ledger, "gate-config")) {
+    unmet.push({ rule: "R13", text: "the plugin's models.json (tier policy) changed since this ledger opened. Restore it, or get the user's waiver (`gate waive gate-config \"<their words>\"`)." });
+  }
 
   // R2: plan and case table must predate the first source edit this task
   const firstEdit = (state.events ?? []).find((e) => e.kind === "edit" && !e.agent && e.path && config.isSource(e.path) && e.seq > (ledger.baseline?.seq ?? 0));
@@ -141,6 +157,17 @@ export function evaluate(state) {
   if (blankSteps.length) unmet.push({ rule: "R8", text: `step(s) blank: ${blankSteps.map((s) => `${s.n}${s.key ? ` {${s.key}}` : ""}`).join(", ")}. Close each with \`gate step <n|key> done|skipped|na "<note>"\`.` });
   const badBlast = (ledger.blast ?? []).filter((b) => !(b.rung >= 1 && b.rung <= 5));
   if (badBlast.length) unmet.push({ rule: "R8", text: "a blast-radius fact has no rung." });
+
+  // R14: the task outgrew its predicted tier and a reopened step is still blank
+  const reopened = (ledger.tier?.reopened ?? []).filter((k) => (ledger.steps ?? []).some((s) => s.key === k && !s.state));
+  if (reopened.length) {
+    const m = state.tier?.measured;
+    const todo = { skeptic: "spawn the skeptic", reconcile: "run the QA reconcile round" };
+    unmet.push({
+      rule: "R14",
+      text: `tier grew from ${ledger.tier.predicted ?? "unpredicted"} to ${m?.tier ?? "standard"}${m ? ` (${m.files} files, ${m.lines} lines)` : ""}: step(s) ${reopened.map((k) => `{${k}}`).join(", ")} reopened; ${reopened.map((k) => todo[k] ?? `do {${k}}`).join(", then ")}, then close with evidence.`,
+    });
+  }
 
   // R11: claims carry labels, and [measured] pointers resolve
   const resolves = pointerResolver(state);

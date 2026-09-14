@@ -1,9 +1,13 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync, appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.mjs";
 import { nextSeq } from "./events.mjs";
 import { ensureSession, loadSession, updateSession } from "./session-state.mjs";
+import { gitNumstat } from "./tree.mjs";
+import { emptyTier } from "./size.mjs";
+import { loadPolicy } from "./policy.mjs";
+import { implementationHash } from "./rules.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PLAYBOOKS = ["feature", "bugfix", "refactor", "plan", "investigation"];
@@ -16,10 +20,14 @@ export function loadLedger(dir) {
   return JSON.parse(readFileSync(path.join(dir, "ledger.json"), "utf8").replace(/\r/g, ""));
 }
 
+// Written whole then renamed, so a reader (or a second writer) never sees a torn file.
 export function saveLedger(dir, ledger) {
   ledger.seq = nextSeq();
   ledger.updatedAt = new Date().toISOString();
-  writeFileSync(path.join(dir, "ledger.json"), JSON.stringify(ledger, null, 2));
+  const file = path.join(dir, "ledger.json");
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(ledger, null, 2));
+  renameSync(tmp, file);
   return ledger;
 }
 
@@ -99,7 +107,13 @@ export function openLedger(ctx, slug, playbook) {
     closedAt: null,
     sessions: [ctx.session],
     gateHash: config.hash,
-    baseline: { hash: session.baseline.hash, files: session.baseline.files, seq: session.baselineSeq },
+    policyHash: loadPolicy().hash,
+    // the freshness clock starts here, so the first real edit gets a real timestamp
+    lastSourceHash: implementationHash(session.baseline, config),
+    lastSourceChangeSeq: 0,
+    // files already dirty vs HEAD now cannot be measured by git later; they get a line-count estimate
+    baseline: { hash: session.baseline.hash, files: session.baseline.files, seq: session.baselineSeq, dirty: [...gitNumstat(ctx.root).keys()] },
+    tier: ["feature", "bugfix", "refactor"].includes(playbook) ? emptyTier() : null,
     planSeq: null,
     taskSeq: null,
     cases: [],
@@ -140,15 +154,19 @@ export function currentLedger(stateDir, session) {
   return { dir, ledger: loadLedger(dir) };
 }
 
-function printStepLines(ctx, steps) {
-  for (const s of steps) ctx.out(`${String(s.n).padStart(2)}. [${s.state ?? "    "}] ${s.text}${s.key ? `  {${s.key}}` : ""}`);
+function printStepLines(ctx, steps, ledger = null) {
+  const reopened = new Set(ledger?.tier?.reopened ?? []);
+  for (const s of steps) {
+    const mark = s.key && !s.state && reopened.has(s.key) ? "  (reopened: the task outgrew its tier)" : "";
+    ctx.out(`${String(s.n).padStart(2)}. [${s.state ?? "    "}] ${s.text}${s.key ? `  {${s.key}}` : ""}${mark}`);
+  }
 }
 
 // `open` and `attach` show only the keyed steps (the ones with script or agent evidence);
 // `gate steps` shows all of them.
 function printOpen(ctx, dir, ledger) {
   ctx.out(`ledger: ${dir}`);
-  printStepLines(ctx, ledger.steps.filter((s) => s.key));
+  printStepLines(ctx, ledger.steps.filter((s) => s.key), ledger);
 }
 
 export const verbs = {
@@ -169,6 +187,6 @@ export const verbs = {
     if (!current || current.ledger.status === "closed") throw new Error("no open ledger for this session — run `gate open <slug> <playbook>` first");
     ctx.out(`ledger: ${current.dir}`);
     ctx.out(`playbook: ${current.ledger.playbook} (${current.ledger.status})`);
-    printStepLines(ctx, current.ledger.steps);
+    printStepLines(ctx, current.ledger.steps, current.ledger);
   },
 };

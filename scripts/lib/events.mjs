@@ -93,10 +93,24 @@ export function readEvents(stateDir, session) {
 
 export const SILENT = { continue: true, suppressOutput: true };
 
+const WRITING_TOOLS = new Set([...EDIT_TOOLS, "Bash"]);
+
 export const verbs = {
-  log(ctx) {
+  async log(ctx) {
     const events = eventsFromHookInput(ctx.input, ctx.root);
     appendEvents(ctx.stateDir, ctx.session, events);
+    // Right after a tool that can change files, record whether the implementation moved,
+    // so the freshness clock for R4/R5 points at the tool call that made the change.
+    // Subagents are skipped: their edits carry an agent event, and the next assess dates
+    // the change to it; skipping keeps helper tool calls from racing the main session.
+    if (ctx.input?.hook_event_name === "PostToolUse" && WRITING_TOOLS.has(ctx.input.tool_name) && ctx.session && !ctx.input.agent_id) {
+      try {
+        const { stampNow } = await import("./assess.mjs");
+        stampNow(ctx);
+      } catch {
+        // a stamp is a courtesy; the next assess dates the change itself
+      }
+    }
     ctx.out(SILENT);
   },
 };

@@ -139,6 +139,7 @@ attempt to finish.
 | R11 | a verification claim has no label, or its `[measured]` pointer doesn't resolve |
 | R12 | a waiver quotes words the user never said |
 | R13 | `.claude/gate.json` changed mid-task |
+| R14 | the task outgrew its predicted size and a step that size requires is blank again |
 
 Waivers are the only way past a keyed step: the user says it, Claude records the exact
 words with `gate waive <key> "…"`, and the gate checks the transcript.
@@ -159,17 +160,21 @@ words with `gate waive <key> "…"`, and the gate checks the transcript.
 
 ## Cost
 
-Spend where it pays, within a ceiling. Helpers never run on the most expensive tier.
+The gate sizes each task from the real diff and spends helpers accordingly. Helpers never
+run on the most expensive tier.
 
-| Role | Model | When |
+| Tier | When | Helpers |
 | --- | --- | --- |
-| Skeptic | Sonnet | features and plans; skipped for single-file fixes |
-| QA | Opus | every source change — tests are where the money goes |
-| Reviewer | Sonnet | every source change; second round on Opus when the first found 2+ issues or the diff is large |
-| Second reviewer | Opus | high-risk paths only (money, auth, RLS, migrations) |
+| small | one source file, ≤ 40 lines, no UI, schema or high-risk path | QA (Opus), reviewer (Sonnet) |
+| standard | ≤ 10 files, ≤ 400 lines, or any UI, schema or high-risk file | skeptic (Sonnet), QA, reviewer |
+| large | more than that | skeptic, QA, reviewer with a second round on Opus |
 
-Hard ceiling: **six helper invocations per task**, typically two or three. Always-on
-context cost is about 500 tokens. Everything the hooks do is off-model.
+`gate note plan --files a.ts,b.ts` predicts the tier before the diff exists, so a small
+feature skips the design critique and the QA reconcile round up front; if the diff then
+outgrows the prediction, those steps come back and the gate says so. `gate size` prints the
+numbers. The policy is in `models.json`. Hard ceiling: **six helper invocations per task**,
+typically two or three. Always-on context cost is about 500 tokens; everything the hooks do
+is off-model.
 
 ## Commands
 
@@ -178,7 +183,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | Verb | Does |
 | --- | --- |
 | `open <slug> <feature\|bugfix\|refactor\|plan>` | start a ledger with the playbook's steps |
-| `note task\|plan\|attention "…"` | write the prose sections (stamps the order for R2) |
+| `note task\|plan\|attention "…"` · `note plan "…" --files a,b` | write the prose sections (stamps the order for R2); `--files` predicts the size |
 | `case add "…" --kind <kind>` · `case close C1 --test file:name \| --na "…"` | the case table |
 | `step <key\|n> done\|skipped\|na "…" [--evidence ptr]` | close a playbook step |
 | `blast add "…" --rung 1-5 --proof "…"` | a blast-radius fact |
@@ -186,7 +191,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `waive <key> "<user's words>"` | record a waiver for the transcript check |
 | `verify [--step verify-before]` | run the repo's verify commands, write `verify.json` |
 | `decide <phase> <decision> <why> <evidence> <result>` | append a decision-log row |
-| `check` · `steps` · `report [--brief]` · `close` · `doctor` | unmet items only · every step · the report, short or full · finish · inspect config |
+| `check` · `steps` · `size` · `report [--brief]` · `close` · `doctor` | unmet items only · every step · the report, short or full · finish · inspect config |
 
 ## Configuration
 

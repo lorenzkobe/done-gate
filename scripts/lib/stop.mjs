@@ -49,6 +49,7 @@ function finalise(ctx, state) {
   ledger.closedAt = new Date().toISOString();
   ledger.closedTreeHash = state.now.hash;
   ledger.changedAtClose = state.changed;
+  if (state.tier) ledger.tier = state.tier;
   saveLedger(state.dir, ledger);
   const session = loadSession(ctx.stateDir, ctx.session);
   saveSession(ctx.stateDir, { ...session, current: null, lastClosed: path.basename(state.dir), baseline: { files: state.now.files, hash: state.now.hash }, baselineSeq: nextSeq() });

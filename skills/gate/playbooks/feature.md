@@ -7,10 +7,10 @@ evidence and can only be `DONE` or `WAIVED`, never `SKIPPED`.
 1. Read the affected code paths and write down how they behave today. {read}
 2. Write Task and Plan in ledger.md (`gate note task|plan`); include the data/cost plan when data is touched. {plan}
 3. Write the case table (`gate case add`): happy path, each edge, the refused side of every gate, boundaries, idempotency, and the surface the user reported. {cases}
-4. Design huddle: spawn the skeptic on the plan, answer every finding, amend the plan. {skeptic}
+4. Design huddle: spawn the skeptic on the plan, answer every finding, amend the plan (N/A at tier small). {skeptic}
 5. Spawn QA on the case table, blind to src; QA writes the tests under the tests globs. {qa}
 6. Implement, keeping the diff to the plan. {implement}
-7. Reconcile with QA (at most 2 rounds): each disagreement ends as code-wrong, test-wrong, or ask-the-user. {reconcile}
+7. Reconcile with QA (at most 2 rounds): each disagreement ends as code-wrong, test-wrong, or ask-the-user (N/A at tier small). {reconcile}
 8. Run `gate verify` (lint, test, build) after the last edit. {verify}
 9. Drive the real surface with the project's /verify driver, phone viewport first for UI. {driver}
 10. Real-schema probe when schema files changed: hit the endpoint or run the query once. {schema}

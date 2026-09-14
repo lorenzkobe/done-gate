@@ -31,6 +31,7 @@ what you or a helper say.
 | R11 | a verification claim without `[measured] (ptr)` / `[inferred]` / `[guess]`, or a pointer that does not resolve |
 | R12 | a waiver quotes words the user never said |
 | R13 | `.claude/gate.json` changed mid-task |
+| R14 | the task outgrew its predicted size and a step that size requires is blank again |
 
 Waivers are the only way past a keyed step you cannot do: ask the user, then
 `gate waive <key> "<their exact words>"`. The gate looks for those words in the transcript.
@@ -42,14 +43,17 @@ steps; they are now rows in the ledger and every one must end DONE / SKIPPED / W
 Read `gate doctor` once per repo to see the config the gate resolved.
 
 **1. Before any edit.** `gate note task "<the user's ask, quoted, then your own words>"`,
-`gate note plan "<approach, files, data/cost plan if data is touched>"` (use `-` to read a
-long note from stdin), then the case table: one `gate case add "<case>" --kind <kind>` per
+`gate note plan "<approach, files, data/cost plan if data is touched>" --files a.ts,b.ts`
+(use `-` to read a long note from stdin; `--files` names the files you intend to touch and
+predicts the task's size: one file that is not UI, schema or high-risk is *small* and a
+feature then skips the skeptic and the QA reconcile round automatically), then the case table: one `gate case add "<case>" --kind <kind>` per
 row. Kinds: `happy`, `edge`, `refused` (the side a gate turns away), `boundary` (empty,
 null, midnight, timezone, first/last page), `idempotent` (retry, double submit), and
 `reported-surface` (exactly what the user reported, when it is a bug). R2 is checked by
 sequence number, so this order is not optional.
 
-**2. Design huddle (feature, plan).** Spawn `done-gate:skeptic` (subagent_type; if the
+**2. Design huddle (feature, plan).** Unless `gate size` shows tier small (the ledger has
+already marked `{skeptic}` N/A), spawn `done-gate:skeptic` (subagent_type; if the
 scoped name is rejected use `skeptic`) with the ask, the Plan, the case table and the paths.
 Answer each finding in the ledger (`gate huddle add skeptic --summary "<what changed>"`),
 amend the Plan and cases. Close step `{skeptic}` with `--evidence` pointing at the huddle.
@@ -98,17 +102,12 @@ Stop hook finalises the ledger when it agrees the run is clean.
 
 ## Spend where it pays
 
-Cost is not the goal; correctness per token is. `models.json` sets the defaults (skeptic
-and reviewer on Sonnet, QA and the high-risk second reviewer on Opus) and the escalation
-rules: run a second review round on Opus when the first returned two or more Act-on items,
-the diff spans more than ten source files, or it touches concurrency, auth or money outside
-the high-risk globs. Skip the skeptic for a single-file bugfix or refactor. Never spawn a
-helper the rules do not require, never three reviewers, never a "just to be safe" re-run of
-`gate verify` when verify.json is already fresh. A helper that reads a page costs little;
-a bug that reaches production costs the most, so the money goes to tests and review.
-The ceiling is fixed: **at most six helper invocations per task** (QA 1, skeptic 0–1,
-reviewer 1–2 rounds, second reviewer 0–2 rounds); a typical task uses two or three. A
-review round that returns no Act-on items ends the review.
+`gate size` prints the task's tier (small, standard, large, measured from the real diff and
+re-checked at every `gate check`), the helpers that tier requires and their models, and the
+ceiling of six helper invocations per task. The policy lives in `models.json`; you never
+reason about escalation yourself. If the diff outgrows the predicted tier, the skipped steps
+come back and `gate check` says so (R14). Bugfix and refactor playbooks have no optional
+steps, so the tier changes nothing for them beyond the review-round model.
 
 ## Ask before you build, ship nothing half-working
 
