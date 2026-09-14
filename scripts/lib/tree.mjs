@@ -73,6 +73,16 @@ function git(root, args) {
   return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
 }
 
+// The commit HEAD points at, or null (no repo, no commits). Recorded at `gate open` so a
+// commit made mid-task does not shrink the diff the reviewer sees.
+export function gitHead(root) {
+  try {
+    return git(root, ["rev-parse", "HEAD"]).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 // Tracked files, or an empty set when git cannot answer (no repo, no commits).
 export function gitTracked(root) {
   try {
@@ -85,10 +95,10 @@ export function gitTracked(root) {
 // Added/deleted line counts of uncommitted changes vs HEAD, keyed by the current path;
 // empty when git cannot answer. NUL-separated output, so quoted or odd filenames survive,
 // and renames arrive as one row with `from` set (a pure move is 0 lines).
-export function gitNumstat(root, paths = []) {
+export function gitNumstat(root, paths = [], ref = "HEAD") {
   const out = new Map();
   try {
-    const raw = git(root, ["diff", "--numstat", "-z", "-M", "HEAD", "--", ...paths]);
+    const raw = git(root, ["diff", "--numstat", "-z", "-M", ref, "--", ...paths]);
     const parts = raw.split("\0");
     for (let i = 0; i < parts.length; i++) {
       const m = /^(\S+)\t(\S+)\t(.*)$/.exec(parts[i]);

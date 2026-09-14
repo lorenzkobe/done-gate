@@ -53,13 +53,15 @@ null, midnight, timezone, first/last page), `idempotent` (retry, double submit),
 sequence number, so this order is not optional.
 
 **2. Design huddle (feature, plan).** Unless `gate size` shows tier small (the ledger has
-already marked `{skeptic}` N/A), spawn `done-gate:skeptic` (subagent_type; if the
-scoped name is rejected use `skeptic`) with the ask, the Plan, the case table and the paths.
-Answer each finding in the ledger (`gate huddle add skeptic --summary "<what changed>"`),
+already marked `{skeptic}` N/A), run `gate brief skeptic` and spawn `done-gate:skeptic`
+(subagent_type; if the scoped name is rejected use `skeptic`) with the one-line prompt it
+prints. The packet carries the ask, the Plan, the case table and the files; write nothing
+else into the prompt. Answer each finding in the ledger (`gate huddle add skeptic --summary "<what changed>"`),
 amend the Plan and cases. Close step `{skeptic}` with `--evidence` pointing at the huddle.
 
-**3. QA in parallel.** Spawn `done-gate:qa` with the ask, the case table, the tests globs,
-the repo's test conventions, and the files you will touch. It writes tests under the tests
+**3. QA in parallel.** Run `gate brief qa` and spawn `done-gate:qa` with the prompt it
+prints; the packet carries the ask, the case table, the tests globs, sample tests and the
+files you will touch, and never the diff. It writes tests under the tests
 globs only (the fence denies anything else) and must not read your new implementation.
 While it works, implement. Then reconcile, at most two rounds, through `SendMessage` to the
 same agent: each disagreement ends as code-wrong, test-wrong, or a question for the user.
@@ -84,12 +86,15 @@ pointed at the line · 3 you walked the failure and it does not reach · 4 you r
 fails loud if wrong · 5 you reproduced it in the running app. Below 4 the report prints
 *unproven*; that is allowed and honest.
 
-**8. Review.** Spawn `done-gate:reviewer` with the run dir, the changed files, the
-requirements and the review number `n`; it writes `review-<n>.md` there. Record it:
+**8. Review.** Run `gate brief reviewer` and spawn `done-gate:reviewer` with the prompt it
+prints; the packet carries the diff, the verify results, the blast rows and the path of the
+`review-<n>.md` it writes. Record it:
 `gate huddle add reviewer --file review-<n>.md`, one `gate huddle acton H<k> "<finding>"`
 per Act-on item, fix each, then `gate huddle resolve H<k>.<i> --evidence <ptr>`. At most
 two rounds with the same agent via `SendMessage`. High-risk paths also need
-`done-gate:reviewer-2` (`--file review-<n+1>.md`).
+`gate brief reviewer-2` and `done-gate:reviewer-2` (`--file review-<n+1>.md`). Blindness for
+QA is a convention the prompt asks for, not a fence: the packet withholds the diff, and the
+agent is told not to fetch it.
 
 **9. Close.** Close remaining steps (`gate step <key|n> done "<note>" --evidence <ptr>`,
 `skipped "<reason>"`, `na "<reason>"`), fill `gate note attention "<gaps the user should

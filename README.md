@@ -69,6 +69,11 @@ Three things make this hard to game:
 - **Evidence files are fenced.** A PreToolUse hook denies writes to `events.jsonl`,
   `verify.json`, `ledger.json` and friends, for the model and every helper. Attempts are
   counted in the report.
+- **Helpers read packets, not the ledger.** `gate brief <role>` writes each helper's inputs
+  (ask, plan, case table, size, test conventions, and for the reviewer the diff and check
+  results) into the run dir, and the model spawns it with one sentence. QA's packet withholds
+  the diff; its blindness is a convention the prompt asks for, since the fence denies writes,
+  not reads.
 - **Helpers can't vouch for themselves.** QA may write only under the tests globs; the
   reviewer may write only `review-<n>.md`; the skeptic writes nothing. Their replies are
   never evidence; their files and the hook events are.
@@ -191,6 +196,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `waive <key> "<user's words>"` | record a waiver for the transcript check |
 | `verify [--step verify-before]` | run the repo's verify commands, write `verify.json` |
 | `decide <phase> <decision> <why> <evidence> <result>` | append a decision-log row |
+| `brief <skeptic\|qa\|reviewer\|reviewer-2> [--round n]` | write the helper's packet and print its spawn prompt |
 | `check` · `steps` · `size` · `report [--brief]` · `close` · `doctor` | unmet items only · every step · the report, short or full · finish · inspect config |
 
 ## Configuration

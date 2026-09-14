@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.mjs";
 import { nextSeq } from "./events.mjs";
 import { ensureSession, loadSession, updateSession } from "./session-state.mjs";
-import { gitNumstat } from "./tree.mjs";
+import { gitHead, gitNumstat } from "./tree.mjs";
 import { emptyTier } from "./size.mjs";
 import { loadPolicy } from "./policy.mjs";
 import { implementationHash } from "./rules.mjs";
@@ -112,7 +112,7 @@ export function openLedger(ctx, slug, playbook) {
     lastSourceHash: implementationHash(session.baseline, config),
     lastSourceChangeSeq: 0,
     // files already dirty vs HEAD now cannot be measured by git later; they get a line-count estimate
-    baseline: { hash: session.baseline.hash, files: session.baseline.files, seq: session.baselineSeq, dirty: [...gitNumstat(ctx.root).keys()] },
+    baseline: { hash: session.baseline.hash, files: session.baseline.files, seq: session.baselineSeq, head: gitHead(ctx.root), dirty: [...gitNumstat(ctx.root).keys()] },
     tier: ["feature", "bugfix", "refactor"].includes(playbook) ? emptyTier() : null,
     planSeq: null,
     taskSeq: null,

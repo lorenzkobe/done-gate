@@ -5,7 +5,7 @@ import { toPosixRel } from "./paths.mjs";
 // Files only the gate's own verbs may write. A model that could edit these could
 // forge its evidence, so the deny is unconditional and every attempt is logged.
 const EVIDENCE_FILES = new Set(["events.jsonl", "verify.json", "decisions.tsv", "ledger.json", "blocks.json", "state.json", "gate-error.log", "current-session"]);
-const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(events\.jsonl|verify\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json|current-session)/;
+const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(events\.jsonl|verify\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json|current-session|brief-[a-z0-9-]+-\d+\.md)/;
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
 function targetPaths(input, root) {
@@ -14,9 +14,12 @@ function targetPaths(input, root) {
   return raw.map((p) => toPosixRel(root, p)).filter((p) => typeof p === "string" && p.length);
 }
 
+const PACKET = /^\.claude\/gate\/runs\/[^/]+\/brief-[a-z0-9-]+-\d+\.md$/;
+
 function isEvidence(rel) {
   if (!rel.startsWith(".claude/gate/")) return false;
   if (rel.startsWith(".claude/gate/sessions/")) return true;
+  if (PACKET.test(rel)) return true; // a helper's packet is written by `gate brief` only
   return EVIDENCE_FILES.has(rel.split("/").pop());
 }
 

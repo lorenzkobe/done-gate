@@ -63,6 +63,8 @@ export function actOnRows(ledger, dir, reviews, { embed = true } = {}) {
   for (const h of ledger.huddles) {
     out.push(`### ${h.id} ${h.role} round ${h.round}${h.file ? ` — ${h.file}` : ""}`);
     if (h.summary) out.push(h.summary);
+    const packet = `brief-${h.role}-${h.round}.md`;
+    if (existsSync(path.join(dir, packet))) out.push(`packet: ${packet}`);
     for (const a of h.actOn) out.push(`- ${a.id} ${cell(a.text)} — ${a.closed ? `closed [${a.closed}]` : "**OPEN**"}`);
     if (embed && h.file && reviews.includes(h.file)) out.push(`\n<details><summary>${h.file}</summary>\n\n${readFileSync(path.join(dir, h.file), "utf8").trim()}\n\n</details>`);
   }

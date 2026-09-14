@@ -67,7 +67,7 @@ export function measure({ config, policy, diff, baseline, now, root }) {
   const dirty = new Set(baseline?.dirty ?? []);
   const tracked = gitTracked(root);
   const exact = paths.filter((p) => (tracked.has(p) || diff.deleted.includes(p)) && !dirty.has(p));
-  const numstat = exact.length ? gitNumstat(root, exact) : new Map();
+  const numstat = exact.length ? gitNumstat(root, exact, baseline?.head ?? "HEAD") : new Map();
   const renamedAway = new Set([...numstat.values()].map((r) => r.from).filter(Boolean));
   const details = [];
   for (const p of paths) {
