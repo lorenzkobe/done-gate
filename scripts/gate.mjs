@@ -34,6 +34,14 @@ const VERBS = {
   doctor: { hook: false, load: () => import("./lib/doctor.mjs") },
 };
 
+// Only hook verbs, and the verbs that accept a "-" argument for a long text, have anything on
+// stdin. Reading it unconditionally hung every other verb inside Claude Code's Bash tool,
+// whose stdin is a pipe that never closes.
+const STDIN_TEXT_VERBS = new Set(["note"]);
+function wantsStdin(verb, args) {
+  return VERBS[verb]?.hook === true || (STDIN_TEXT_VERBS.has(verb) && args.includes("-"));
+}
+
 async function readStdin() {
   if (process.stdin.isTTY) return "";
   const chunks = [];
@@ -56,7 +64,7 @@ async function main() {
     process.stdout.write(`${VERSION}\n`);
     return;
   }
-  const raw = await readStdin();
+  const raw = wantsStdin(verb, args) ? await readStdin() : "";
   const input = parseInput(raw);
   const ctx = resolveContext({ input, args, pluginRoot, version: VERSION });
   ctx.rawStdin = raw;

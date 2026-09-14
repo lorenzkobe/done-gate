@@ -18,7 +18,15 @@ export const DEFAULTS = Object.freeze({
 });
 
 // The gate's own state, dependencies and VCS internals never count as source.
-const ALWAYS_EXCLUDE = [".claude/gate/**", "node_modules/**", ".git/**", ".gitignore"];
+const ALWAYS_EXCLUDE = [
+  ".claude/gate/**",
+  ".claude/**/*.lock",
+  ".claude/scheduled_tasks*",
+  ".claude/settings.local.json",
+  "node_modules/**",
+  ".git/**",
+  ".gitignore",
+];
 
 const SCRIPT_ORDER = ["lint", "typecheck", "test", "build"];
 

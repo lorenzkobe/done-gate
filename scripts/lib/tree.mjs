@@ -2,13 +2,17 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import { IGNORE_CASE } from "./paths.mjs";
 
 // Never part of a snapshot: the gate's own state, dependencies, VCS internals.
 const SKIP_PREFIXES = [".claude/gate/", "node_modules/", ".git/"];
 const SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build", "coverage"]);
 
+// Claude Code's own harness files under .claude/ are never part of a snapshot either.
+const SKIP_HARNESS = new RegExp(String.raw`^\.claude/(?:.*\.lock|scheduled_tasks[^/]*|settings\.local\.json)$`, IGNORE_CASE ? "i" : "");
+
 function skip(rel) {
-  return SKIP_PREFIXES.some((p) => rel.startsWith(p));
+  return SKIP_PREFIXES.some((p) => rel.startsWith(p)) || SKIP_HARNESS.test(rel);
 }
 
 function gitFiles(root) {
