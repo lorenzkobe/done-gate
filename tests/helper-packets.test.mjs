@@ -385,10 +385,10 @@ test("C8 edge: round defaults to the role's huddle count plus one, --round overr
     `expected review-4.md after review-1.md and review-3.md:\n${section(third.text, "Write your findings to")}`,
   );
 
-  // --round overrides the default.
-  const forced = packet(repo, "reviewer", ["--round", "5"]);
-  assert.equal(forced.path, briefFile(repo, "reviewer", 5));
-  assert.ok(existsSync(briefFile(repo, "reviewer", 5)));
+  // --round overrides the default (up to the three-round cap).
+  const forced = packet(repo, "reviewer", ["--round", "3"]);
+  assert.equal(forced.path, briefFile(repo, "reviewer", 3));
+  assert.ok(existsSync(briefFile(repo, "reviewer", 3)));
 
   // Rounds are per role: the skeptic is still on round 1.
   assert.equal(packet(repo, "skeptic").path, briefFile(repo, "skeptic", 1));

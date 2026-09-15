@@ -245,6 +245,16 @@ export const verbs = {
     if (!state.ledger) throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
     const rounds = state.ledger.huddles.filter((h) => h.role === role).length;
     const round = Number(flag(ctx.args, "--round")) || rounds + 1;
+    // the cap counts review files written as well as huddles recorded, so skipping
+    // `gate huddle add` cannot stretch the loop
+    // (review files are numbered across both reviewer roles; the second reviewer's own
+    // files do not count against the first reviewer's cap, and reviewer-2 has one mandatory
+    // round, never a cap)
+    const secondsFiles = state.ledger.huddles.filter((h) => h.role === "reviewer-2" && h.file).length;
+    const written = state.reviews.filter((f) => f.startsWith("review-")).length - secondsFiles;
+    if (role === "reviewer" && Math.max(round, written + 1) > 3) {
+      throw new UsageError(`review round ${round}: three rounds is the cap. What is still disputed goes to the arbiter (\`gate brief arbiter --item H<k>.<i>\`, spawn done-gate:arbiter); what is still open is fixed and closed with \`gate huddle resolve\`.`);
+    }
     const numbers = (prefix) => state.reviews.filter((f) => f.startsWith(prefix)).map((f) => Number(/\d+/.exec(f)[0]));
     const next = (prefix) => (numbers(prefix).length ? Math.max(...numbers(prefix)) : 0) + 1;
     const reviewN = next("review-");

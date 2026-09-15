@@ -8,7 +8,7 @@ import { applyPrediction, tiered } from "./size.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
-import { parseDisputes, parseFindings, parseRuling, pointerResolver } from "./rules.mjs";
+import { parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver } from "./rules.mjs";
 import { buildState } from "./assess.mjs";
 
 // Steps whose evidence comes from a script or an agent: DONE or WAIVED only.
@@ -282,7 +282,50 @@ export const verbs = {
     printNext(ctx);
       return;
     }
-    throw new UsageError("usage: gate huddle add|acton|resolve|dispute ...");
+    if (action === "reply") {
+      const file = flag(rest, "--file");
+      if (!file || !/^worker-\d+\.md$/.test(file)) throw new UsageError("usage: gate huddle reply --file worker-<n>.md (the worker's own file in the run dir)");
+      const { dir } = open(ctx);
+      if (!existsSync(path.join(dir, file))) throw new UsageError(`gate huddle reply: ${file} does not exist in the run dir; the worker must write it first`);
+      const text = readFileSync(path.join(dir, file), "utf8");
+      const replies = parseReplies(text);
+      const shape = "'H<k>.<i> — fixed: <ptr>' or 'H<k>.<i> — disagree: <why> — <ptr>'";
+      if (!replies.length) throw new UsageError(`${file} has no '## Replies' lines of the form ${shape}`);
+      const bulletCount = parseFindings(text.replace(/^## Replies\s*$/m, "## Act on")).length;
+      if (bulletCount > replies.length) throw new UsageError(`${file}: ${bulletCount - replies.length} line(s) under ## Replies do not read ${shape}; every bullet must be a reply`);
+      const resolves = pointerResolver(buildState(ctx, {}));
+      const lines = [];
+      withLedger(ctx, (ledger) => {
+        const items = ledger.huddles.flatMap((h) => h.actOn);
+        // validate every line first, so a bad reply changes nothing
+        for (const r of replies) {
+          const a = items.find((x) => x.id === r.id);
+          if (!a) throw new UsageError(`no act-on item ${r.id}`);
+          if (a.closed) continue;
+          // a fix is shown by a test, a source line, verify.json or an event, never by the
+          // worker's own reply file or a packet
+          if (r.kind === "fixed" && (/^(?:worker|brief)-/.test(r.pointer) || !resolves(r.pointer))) throw new UsageError(`${r.id} fixed: pointer "${r.pointer}" does not resolve; point at a test (file:name), a file:line, verify.json or events#<seq>`);
+          if (r.kind === "disagree" && (!r.pointer || /^(?:worker|brief)-/.test(r.pointer) || !resolves(r.pointer))) throw new UsageError(`${r.id} disagree: needs a pointer that resolves after the reason (… — <ptr>), not the worker's own file`);
+          if (r.kind === "disagree" && a.dispute) throw new UsageError(`${r.id} was already disputed once; one round is the limit${a.dispute.verdict?.startsWith("arbiter:") ? " and the arbiter has ruled" : ""}`);
+        }
+        for (const r of replies) {
+          const a = items.find((x) => x.id === r.id);
+          if (a.closed) {
+            lines.push(`${r.id} already closed (${a.closed}); reply ignored`);
+          } else if (r.kind === "fixed") {
+            Object.assign(a, { closed: r.pointer, closedSeq: nextSeq(), closedBy: file });
+            lines.push(`${r.id} fixed [${r.pointer}]`);
+          } else {
+            a.dispute = { why: r.why, evidence: r.pointer, seq: nextSeq(), verdict: null, by: file };
+            lines.push(`${r.id} disputed — the reviewer's next file answers under ## Disputes`);
+          }
+        }
+      });
+      for (const l of lines) ctx.out(l);
+      printNext(ctx);
+      return;
+    }
+    throw new UsageError("usage: gate huddle add|acton|resolve|dispute|reply ...");
   },
 
   waive(ctx) {

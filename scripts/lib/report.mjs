@@ -66,7 +66,10 @@ export function actOnRows(ledger, dir, reviews, { embed = true } = {}) {
     if (h.summary) out.push(h.summary);
     const packet = `brief-${h.role}-${h.round}.md`;
     if (existsSync(path.join(dir, packet))) out.push(`packet: ${packet}`);
-    for (const a of h.actOn) out.push(`- ${a.id} ${cell(a.text)} — ${a.closed ? `closed [${a.closed}]` : "**OPEN**"}`);
+    for (const a of h.actOn) {
+      const state = a.closed ? `closed [${a.closed}]` : a.dispute ? `**OPEN** — disagreed: ${cell(a.dispute.why)} [${a.dispute.evidence}] — ${a.dispute.verdict ?? "unanswered"}` : "**OPEN**";
+      out.push(`- ${a.id} ${cell(a.text)} — ${state}`);
+    }
     if (embed && h.file && reviews.includes(h.file)) out.push(`\n<details><summary>${h.file}</summary>\n\n${readFileSync(path.join(dir, h.file), "utf8").trim()}\n\n</details>`);
   }
   return out;

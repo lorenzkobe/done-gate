@@ -61,7 +61,8 @@ function bullets(lines) {
   for (const raw of lines) {
     const m = /^\s*[-*]\s+(.*\S)\s*$/.exec(raw);
     if (!m) continue;
-    if (/^(?:none|n\/a|nothing)\.?$/i.test(m[1].trim())) continue;
+    // "none", "none.", "none found", "nothing to act on": an empty section, not a finding
+    if (/^(?:none|n\/a|nothing)\b[\s.,;:!-]*(?:found|to act on|here|so far)?[\s.]*$/i.test(m[1].trim())) continue;
     out.push(m[1].trim());
   }
   return out;
@@ -80,6 +81,26 @@ export function parseDisputes(text) {
   for (const b of bullets(sectionLines(text, "Disputes"))) {
     const m = VERDICT.exec(b);
     if (m) out.push({ id: m[1], verdict: m[2].toLowerCase(), reason: m[3].trim() });
+  }
+  return out;
+}
+
+const REPLY = /^(H\d+\.\d+)\s*[—–-]+\s*(fixed|disagree)\s*:\s*(.*)$/i;
+
+// A worker's answers to review findings: `- H1.2 — fixed: <pointer>` or
+// `- H1.2 — disagree: <why> — <pointer>`.
+export function parseReplies(text) {
+  const out = [];
+  for (const b of bullets(sectionLines(text, "Replies"))) {
+    const m = REPLY.exec(b);
+    if (!m) continue;
+    if (m[2].toLowerCase() === "fixed") {
+      out.push({ id: m[1], kind: "fixed", pointer: m[3].trim() });
+    } else {
+      const parts = m[3].split(/\s+[—–-]+\s+/);
+      const pointer = parts.length > 1 ? parts.pop().trim() : null;
+      out.push({ id: m[1], kind: "disagree", why: parts.join(" — ").trim(), pointer });
+    }
   }
   return out;
 }
@@ -109,6 +130,7 @@ export function pointerResolver(state) {
       return (state.events ?? []).some((e) => e.seq === seq);
     }
     if (/^(?:review|skeptic|arbiter)-\d+\.md$/.test(ptr)) return (state.reviews ?? []).includes(ptr);
+    if (/^worker-\d+\.md$/.test(ptr)) return Boolean(state.dir) && existsSync(path.join(state.dir, ptr));
     if (/^decisions#\d+$/.test(ptr)) {
       // the row must exist: decisions.tsv has a header line, then one row per decision
       const file = state.dir ? path.join(state.dir, "decisions.tsv") : null;
