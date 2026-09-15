@@ -321,7 +321,7 @@ export function evaluate(state) {
 
   // R16: at a size where the lead delegates, the lead's own source edits after the plan are a
   // worker's job. The fence stops the edit tools; this catches what slipped past it.
-  const delegated = leadDelegates(ledger, state.policy ?? undefined);
+  const delegated = waived(ledger, "delegate") ? null : leadDelegates(ledger, state.policy ?? undefined);
   if (delegated) {
     const since = ledger.tier?.predictedSeq ?? ledger.planSeq ?? 0;
     // the lead's own edit-tool calls, or those of any agent that is not a worker

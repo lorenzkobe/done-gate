@@ -150,7 +150,7 @@ attempt to finish.
 | R10 | a repo check failed (`claude-md-budget`, `migration-number`) |
 | R13 | `.claude/gate.json` changed mid-task |
 | R15 | a helper's file lists more findings than the ledger recorded |
-| R16 | the lead edited source itself at size standard or large (a worker's job) |
+| R16 | the lead edited source itself at size standard or large (a worker's job); waivable with `gate waive delegate` |
 
 Waivers are the only way past a keyed step: the user OKs it, Claude records the reason
 with `gate waive <key> "…"`, and the report lists every waiver.
