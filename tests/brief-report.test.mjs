@@ -253,15 +253,15 @@ test("C5 happy: `gate report --brief` prints the short plain-language form", () 
 
   assert.equal(all[0], `badge: not finished (${STANDARD_UNMET} things missing)`);
 
-  const changed = all.find((l) => /^Changed \d+ files?\./.test(l));
-  assert.ok(changed, `no "Changed <n> files." line:\n${out}`);
-  assert.ok(changed.includes("Tested 2 cases"), `the changed line does not report the 2 cases: ${changed}`);
+  const changed = all.find((l) => /^Changed \d+ files?\b/.test(l));
+  assert.ok(changed, `no "Changed <n> files" line:\n${out}`);
 
   const checks = all.find((l) => /green|red|not run/i.test(l));
   assert.ok(checks, `no checks line:\n${out}`);
+  assert.ok(checks.includes("Tested 2 cases"), `the checks line does not report the 2 cases: ${checks}`);
 
   assert.ok(
-    all.some((l) => l.startsWith("Reviewer found") || l.startsWith("No independent review yet")),
+    all.some((l) => l.startsWith("Review:") || l.startsWith("No review yet")),
     `no reviewer line:\n${out}`,
   );
 
@@ -302,18 +302,18 @@ test("C6 refused: the brief never leaks the gate's internal vocabulary", () => {
 // C7
 // ---------------------------------------------------------------------------
 
-test("C7 boundary: \"Please look at first:\" appears only when something needs looking at", () => {
+test("C7 boundary: the \"For you:\" line says nothing when nothing needs looking at", () => {
   const quiet = cleanClosingFixture("brief-c7-quiet", "quiet");
   const quietOut = brief(quiet);
   assert.ok(
-    !quietOut.includes("Please look at first"),
-    `nothing is waived, unproven, skipped, denied or overridden, yet:\n${quietOut}`,
+    quietOut.includes("For you: nothing."),
+    `nothing is waived, skipped, denied or overridden, yet:\n${quietOut}`,
   );
 
   const flagged = cleanClosingFixture("brief-c7-waived", "flagged");
   cli(flagged, "waive", ["read", "skip the phone pass this time, chrome is disconnected"]);
   const flaggedOut = brief(flagged);
-  assert.ok(flaggedOut.includes("Please look at first:"), `a waiver did not raise the block:\n${flaggedOut}`);
+  assert.ok(flaggedOut.includes("For you: skipped with your OK"), `a waiver did not reach the For you line:\n${flaggedOut}`);
   assert.ok(
     flaggedOut.includes("chrome is disconnected"),
     `the waiver's quoted words are missing:\n${flaggedOut}`,
@@ -360,6 +360,7 @@ test("C9 edge: with no open ledger the brief renders the most recently closed ru
 test("C10 boundary: the checks line says not-run with no verify, and names the red command", () => {
   const none = makeRepo("brief-c10-none");
   cli(none, "open", ["nocheck", "feature"]);
+  write(none, "src/a.ts", "export const a = 2;\n"); // a source change makes the checks owed
   const noneOut = brief(none);
   assert.ok(noneOut.includes("Checks not run"), `expected a not-run checks line:\n${noneOut}`);
 
@@ -438,7 +439,7 @@ test("C12 edge: an unrecognised check prints its own text; a multi-word match fo
   const bothOut = cli(both, "report", ["--brief"]).stdout;
   const checks = checksLine(bothOut);
   assert.ok(checks, `no checks line:\n${bothOut}`);
-  assert.match(checks, /^Tests green\.$/, `expected the tests word to win: ${JSON.stringify(checks)}`);
+  assert.match(checks, /^Tests green\./, `expected the tests word to win: ${JSON.stringify(checks)}`);
   assert.ok(!/build/i.test(checks), `the checks line leaked the raw command: ${JSON.stringify(checks)}`);
 });
 
@@ -483,10 +484,10 @@ test("C15 boundary: only gate errors logged after the run opened are flagged", (
 
   const after = brief(repo);
   assert.ok(
-    after.includes("The gate itself logged 1 error during this task"),
+    after.includes("the gate itself logged 1 error"),
     `expected exactly the one in-run error to be flagged:\n${after}`,
   );
-  assert.ok(after.includes("Please look at first:"), after);
+  assert.ok(after.includes("For you:"), after);
 });
 
 // ---------------------------------------------------------------------------
@@ -502,7 +503,7 @@ test("C16 edge: a chained lint+typecheck command reports as lint, and an npx-pre
   cli(chained, "open", ["chained", "feature"], redPath);
   cli(chained, "verify", [], redPath);
   const redOut = cli(chained, "report", ["--brief"], redPath).stdout;
-  assert.equal(checksLine(redOut), "Lint failed.", `checks line was: ${JSON.stringify(checksLine(redOut))}`);
+  assert.ok(checksLine(redOut).startsWith("Lint failed."), `checks line was: ${JSON.stringify(checksLine(redOut))}`);
   assert.ok(!/typecheck/i.test(redOut), `typecheck outranked lint:\n${redOut}`);
 
   // the same word behind an npx prefix, green. The fake npx just execs its args, so
@@ -514,7 +515,7 @@ test("C16 edge: a chained lint+typecheck command reports as lint, and an npx-pre
   cli(green, "open", ["npxed", "feature"], greenPath);
   cli(green, "verify", [], greenPath);
   const greenOut = cli(green, "report", ["--brief"], greenPath).stdout;
-  assert.equal(checksLine(greenOut), "Lint green.", `checks line was: ${JSON.stringify(checksLine(greenOut))}`);
+  assert.ok(checksLine(greenOut).startsWith("Lint green."), `checks line was: ${JSON.stringify(checksLine(greenOut))}`);
 });
 
 // ---------------------------------------------------------------------------

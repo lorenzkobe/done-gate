@@ -524,8 +524,8 @@ test("C9 happy: the brief's review line reads n problems, k fixed, m overruled b
 
   const out = cli(repo, "report", ["--brief"]).stdout;
   assert.ok(
-    out.includes("Reviewer found 3 problems, 2 fixed, 1 overruled by the arbiter."),
-    `expected "Reviewer found 3 problems, 2 fixed, 1 overruled by the arbiter." in:\n${out}`,
+    out.includes("found 3 problems, 2 fixed, 1 overruled by the arbiter."),
+    `expected "found 3 problems, 2 fixed, 1 overruled by the arbiter." in:\n${out}`,
   );
 
   // one ledger carrying all three dispute outcomes at once
@@ -549,14 +549,10 @@ test("C9 happy: the brief's review line reads n problems, k fixed, m overruled b
   cli(three, "huddle", ["add", "arbiter", "--file", "arbiter-1.md"]);
 
   const briefOut = cli(three, "report", ["--brief"]).stdout;
-  const all = lines(briefOut);
-  const start = all.findIndex((l) => l.startsWith("Please look at first:"));
-  assert.ok(start >= 0, `no look-first block in:\n${briefOut}`);
-  const block = all.slice(start + 1);
+  const forYou = lines(briefOut).find((l) => l.startsWith("For you:"));
+  assert.ok(forYou, `no "For you:" line in:\n${briefOut}`);
   for (const phrase of ["sided with me", "sided with the reviewer", "waiting for the arbiter"]) {
-    const hit = block.find((l) => l.includes(phrase));
-    assert.ok(hit, `no look-first line says "${phrase}":\n${briefOut}`);
-    assert.ok(hit.includes("disputed"), `the "${phrase}" line does not say the finding was disputed: ${hit}`);
+    assert.ok(forYou.includes(phrase), `the For you line does not say "${phrase}":\n${briefOut}`);
   }
 });
 

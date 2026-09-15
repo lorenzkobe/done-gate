@@ -7,7 +7,7 @@ import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
 import { readEvents } from "./events.mjs";
 import { effectiveTier, loadPolicy, renderTierBlock, requires, tiered, tierOf } from "./size.mjs";
-import { isRole, lateOrder } from "./rules.mjs";
+import { isRole, lastEditSeq, lateOrder } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 
 function tailLines(file, n) {
@@ -130,14 +130,6 @@ export function tierBlock(state) {
   return out;
 }
 
-function sizeLine(state) {
-  const { ledger, policy } = state;
-  if (!policy || !tiered(ledger)) return null;
-  const m = state.tier?.measured ?? tierOf(ledger).measured;
-  if (!m) return null;
-  return `Size: ${effectiveTier(policy, ledger, m)} (${plural(m.files, "file")}, ${plural(m.lines, "line")}).`;
-}
-
 export function renderReport(state, unmet) {
   const { ledger, dir, config, changed, verify, events, reviews } = state;
   const md = ledgerMd(dir);
@@ -258,42 +250,117 @@ function reviewLine(ledger) {
   return `Reviewer found ${plural(items.length, "problem")}, ${parts.join(", ")}.`;
 }
 
-function disputeLines(ledger) {
-  const out = [];
+// The five lines of the brief. Plain words only: the user reads this as the final message.
+const PLAIN_RULES = {
+  R1: "no task was opened for this change",
+  R2: "the plan or the case list came after the first edit",
+  R3: "the checks are stale or red",
+  R4: "the app was not driven after the last change",
+  R5: "no review after the last change, or a finding is still open",
+  R6: "the real schema was not probed",
+  R7: "no test file changed",
+  R8: "a case or a step is still blank",
+  R9: "the second reviewer did not run",
+  R10: "a repo check failed",
+  R13: "the gate config changed mid-task",
+  R15: "a helper's findings were not all recorded",
+  R16: "the lead edited source at a size a worker should handle",
+};
+
+function changedLine(state) {
+  const { ledger, config, changed, policy } = state;
+  const src = changed.filter((p) => config.isSource(p) && !config.isTest(p));
+  if (!src.length) return "Changed no source files.";
+  const names = src.slice(0, 3).join(", ") + (src.length > 3 ? ` and ${src.length - 3} more` : "");
+  const m = policy && tiered(ledger) ? (state.tier?.measured ?? tierOf(ledger).measured) : null;
+  const size = m ? `, size ${effectiveTier(policy, ledger, m)}` : "";
+  return `Changed ${plural(src.length, "file")} (${names})${size}.`;
+}
+
+function checksLine2(state) {
+  const { ledger, config, changed, verify } = state;
+  const tests = changed.filter((p) => config.isTest(p));
+  const cases = ledger.cases;
+  let casesText = "No test cases recorded.";
+  if (cases.length) {
+    const open = cases.filter((c) => c.status !== "closed").length;
+    const na = cases.filter((c) => c.na).length;
+    const parts = [];
+    if (open) parts.push(`${open} still open`);
+    if (na) parts.push(`${na} marked not applicable`);
+    casesText = `Tested ${plural(cases.length, "case")}, ${parts.length ? parts.join(", ") : "all covered"}.`;
+  }
+  const testsText = tests.length ? `Test files changed (${plural(tests.length, "file")}).` : "No test file changed.";
+  const src = changed.filter((p) => config.isSource(p));
+  const checks = !verify && !src.length ? "Checks not needed: no source changed." : checksLine(verify);
+  return `${checks} ${casesText} ${testsText}`;
+}
+
+function reviewLine2(ledger) {
+  const rounds = ledger.huddles.filter((h) => h.role === "reviewer" || h.role === "reviewer-2");
+  if (!rounds.length) return "No review yet.";
+  const base = reviewLine(ledger).replace(/^Reviewer found/, "found").replace(/\.$/, "");
+  return `Review: ${plural(rounds.length, "round")}, ${base}.`;
+}
+
+function appLine(state) {
+  const { config, changed, events } = state;
+  const ui = changed.filter((p) => config.isUi(p));
+  if (!ui.length) return "No screen change.";
+  // the same clock R4 uses, so line 4 and the missing list can never disagree
+  const lastEdit = lastEditSeq(state, config, state.ledger);
+  const driven = events.some((e) => !e.agent && e.seq > lastEdit && (e.kind === "browser" || (e.kind === "skill" && e.skill === "verify")));
+  return driven ? "App driven after the last change." : "App not yet driven after the last change.";
+}
+
+// Free text written by helpers or the lead may carry the gate's own words; swap them for
+// plain ones so the user never meets them. Standalone words only (ledger-service stays).
+const alone = (word) => new RegExp(`(?<![\\w-])${word}(?![\\w-])`, "gi");
+const PLAIN_WORDS = [
+  [alone("ledger(?:\\.md|\\.json)?"), "task record"],
+  [alone("huddles?"), "review round"],
+  [alone("rungs?"), "proof level"],
+  [alone("skeptic"), "design critic"],
+  [alone("blast[- ]radius"), "side effects"],
+  [alone("R\\d{1,2}"), "a check"],
+  [alone("N/A"), "not applicable"],
+];
+function plain(text) {
+  let t = String(text ?? "");
+  for (const [re, word] of PLAIN_WORDS) t = t.replace(re, word);
+  return t;
+}
+
+const FOR_YOU_MAX = 6;
+
+function forYouLine(state, unmet) {
+  const { ledger, events } = state;
+  const items = [];
+  for (const w of ledger.waivers) items.push(`skipped with your OK: ${plain(w.reason ?? w.quote)}`);
   for (const a of ledger.huddles.flatMap((h) => h.actOn)) {
     if (!a.dispute) continue;
     const v = a.dispute.verdict;
-    let outcome;
-    if (v === "arbiter:implementer") outcome = "the arbiter sided with me, not changed";
-    else if (v === "arbiter:reviewer") outcome = a.closed ? "the arbiter sided with the reviewer, fixed" : "the arbiter sided with the reviewer, fix pending";
-    else if (v === "withdrawn") outcome = "the reviewer withdrew it";
-    else if (v === "upheld") outcome = "the reviewer upheld it, waiting for the arbiter";
-    else outcome = "waiting for the reviewer's answer";
-    out.push(`- ${a.text} — disputed; ${outcome}.`);
+    const text = plain(a.text);
+    if (v === "arbiter:implementer") items.push(`"${text}": the arbiter sided with me, not changed`);
+    else if (v === "arbiter:reviewer") items.push(`"${text}": the arbiter sided with the reviewer${a.closed ? ", fixed" : ", fix pending"}`);
+    else if (v === "upheld") items.push(`"${text}": the reviewer upheld it, waiting for the arbiter`);
+    else if (v !== "withdrawn") items.push(`"${text}": disputed, waiting for the reviewer's answer`);
   }
-  return out;
-}
-
-function designLine(ledger) {
-  const rounds = ledger.huddles.filter((h) => h.role === "skeptic");
-  if (!rounds.length) return null;
-  const items = rounds.flatMap((h) => h.actOn);
-  if (!items.length) return "Design check done.";
-  const open = items.filter((a) => !a.closed).length;
-  return open ? `Design check: ${plural(items.length, "concern")}, ${open} still open.` : `Design check: ${plural(items.length, "concern")}, all addressed.`;
-}
-
-function testedLine(ledger, changed, config) {
-  const src = changed.filter((p) => config.isSource(p) && !config.isTest(p));
-  const changedText = src.length ? `Changed ${plural(src.length, "file")}.` : "Changed no source files.";
-  const cases = ledger.cases;
-  if (!cases.length) return `${changedText} No test cases recorded.`;
-  const open = cases.filter((c) => c.status !== "closed").length;
-  const na = cases.filter((c) => c.na).length;
-  const parts = [];
-  if (open) parts.push(`${open} still open`);
-  if (na) parts.push(`${na} marked not applicable`);
-  return `${changedText} Tested ${plural(cases.length, "case")}, ${parts.length ? parts.join(", ") : "all covered"}.`;
+  for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) items.push(`skipped: ${plain(s.text)} (${plain(s.note)})`);
+  for (const p of ledger.pauses ?? []) items.push(`paused for: ${plain(p.text)}`);
+  const denies = events.filter((e) => e.kind === "deny" && !e.delegate).length;
+  if (denies) items.push(`${plural(denies, "blocked write")} to check files`);
+  if (ledger.overridden) items.push("I could not satisfy the checks and ended anyway; treat everything above as unverified");
+  const order = lateOrder(state);
+  if (order.late.length) items.push(`the ${order.late.join(" and ").replace("case table", "list of test cases").replace("Plan", "plan")} was written after the first code change`);
+  const errors = gateErrorsSince(state);
+  if (errors) items.push(`the gate itself logged ${plural(errors, "error")}; see gate-error.log`);
+  const missing = [...new Set(unmet.map((u) => PLAIN_RULES[u.rule] ?? u.text.replace(/\bR\d{1,2}\b/g, "a check")))];
+  for (const m of missing) items.push(`missing: ${m}`);
+  if (!items.length) return "For you: nothing.";
+  const shown = items.slice(0, FOR_YOU_MAX);
+  const more = items.length - shown.length;
+  return `For you: ${shown.join("; ")}${more ? `; and ${more} more in the full report` : ""}.`;
 }
 
 // Only errors logged since this task opened belong to it; the log is shared and append-only.
@@ -304,42 +371,16 @@ function gateErrorsSince(state) {
   return readFileSync(errLog, "utf8").split("\n").filter((l) => /^\d{4}-\d{2}-\d{2}T/.test(l) && l.slice(0, 24) >= since).length;
 }
 
-function lookFirst(state) {
-  const { ledger, events } = state;
-  const out = [];
-  for (const w of ledger.waivers) {
-    out.push(`- Skipped with your OK: ${w.reason ?? w.quote}.`);
-  }
-  out.push(...disputeLines(ledger));
-  for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) out.push(`- Skipped: ${s.text} — ${s.note}`);
-  const denies = events.filter((e) => e.kind === "deny" && !e.delegate).length;
-  if (denies) out.push(`- Blocked writes to check files: ${denies}.`);
-  if (ledger.overridden) out.push("- ⚠ I could not satisfy the checks and ended anyway; treat everything above as unverified.");
-  const order = lateOrder(state);
-  if (order.late.length) out.push(`- The ${order.late.join(" and ").replace("case table", "list of test cases").replace("Plan", "plan")} was written after the first code change, not before.`);
-  const errors = gateErrorsSince(state);
-  if (errors) out.push(`- ⚠ The gate itself logged ${plural(errors, "error")} during this task; see gate-error.log.`);
-  return out;
-}
-
 export function renderBrief(state, unmet) {
-  const { ledger, dir, config, changed, verify } = state;
+  const { ledger, dir } = state;
   const out = [];
   out.push(unmet.length ? `${ledger.slug}: not finished (${plural(unmet.length, "thing")} missing)` : `${ledger.slug}: done`);
   out.push("");
-  out.push(testedLine(ledger, changed, config));
-  const size = sizeLine(state);
-  if (size) out.push(size);
-  out.push(checksLine(verify));
-  out.push(reviewLine(ledger));
-  const design = designLine(ledger);
-  if (design) out.push(design);
-  const look = lookFirst(state);
-  if (look.length) {
-    out.push("");
-    out.push("Please look at first:");
-    out.push(...look);
-  }
+  out.push(changedLine(state));
+  out.push(checksLine2(state));
+  out.push(reviewLine2(ledger));
+  out.push(appLine(state));
+  out.push(forYouLine(state, unmet));
   out.push("");
   out.push(`Full report: ${path.join(dir, "report.md")}`);
   return `${out.join("\n")}\n`;

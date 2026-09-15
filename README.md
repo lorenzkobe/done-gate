@@ -109,24 +109,22 @@ yourself to get the skip.
 
 ## What you see
 
-You delegate as usual. The last message of a task is short and in plain words:
+You delegate as usual. The last message of a task is short and in plain words: a headline,
+five lines, and where the full report is.
 
 ```
 venue-badge: done
 
-Changed 3 files. Tested 6 cases, all covered.
-Lint, tests, build green.
-Reviewer found 2 problems, all fixed.
-Design check: 3 concerns, all addressed.
-
-Please look at first:
-- Skipped with your OK: "skip the phone pass this time".
-- The badge hides for unrated venues — my belief, not verified.
+Changed 3 files (src/badge.tsx, src/card.tsx, src/venue.ts), size standard.
+Lint, tests, build green. Tested 6 cases, all covered. Test files changed (2 files).
+Review: 2 rounds, found 2 problems, all fixed.
+App driven after the last change.
+For you: skipped with your OK: chrome is disconnected, no phone pass this time.
 
 Full report: .claude/gate/runs/2026-09-14-venue-badge/report.md
 ```
 
-Lines that would be empty are left out. The full report on disk has every case with its
+The five lines are always there ("For you: nothing." when there is nothing). The full report on disk has every case with its
 test, each step with its evidence, the reviewer's own file, the check output, the decision log and the changed files; `gate report` prints it
 when you want the detail.
 

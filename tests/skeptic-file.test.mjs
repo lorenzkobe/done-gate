@@ -384,33 +384,6 @@ test("C7 boundary: SKILL.md stays under 4096 bytes after mentioning the skeptic 
 });
 
 // ---------------------------------------------------------------------------
-// C8 — the brief's Design check line counts the skeptic huddle's Act-on items
-// ---------------------------------------------------------------------------
-
-test("C8 boundary: the brief's Design check line counts the skeptic huddle's Act-on items, n still open then all addressed", () => {
-  const repo = opened("skeptic-brief");
-  writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1 — skeptic-brief\n\n## Act on\n\n1. a\n2. b\n");
-  cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
-  cli(repo, "huddle", ["acton", "H1", "the plan hides a second write path"]);
-  cli(repo, "huddle", ["acton", "H1", "the refused side has no case"]);
-  // `huddle resolve` requires a pointer that actually resolves, so this names a real file
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts:a"]);
-
-  const open = cli(repo, "report", ["--brief"]).stdout;
-  assert.ok(
-    open.includes("Design check: 2 concerns, 1 still open."),
-    `expected "Design check: 2 concerns, 1 still open." in:\n${open}`,
-  );
-
-  cli(repo, "huddle", ["resolve", "H1.2", "--evidence", "tests/a.test.ts:a"]);
-  const closed = cli(repo, "report", ["--brief"]).stdout;
-  assert.ok(
-    closed.includes("Design check: 2 concerns, all addressed."),
-    `expected "Design check: 2 concerns, all addressed." in:\n${closed}`,
-  );
-});
-
-// ---------------------------------------------------------------------------
 // C9 — a helper's file belongs to the session's own run dir, not to any run dir
 // ---------------------------------------------------------------------------
 

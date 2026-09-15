@@ -180,7 +180,7 @@ export function implementationEdit(e, config) {
   return e.kind === "edit" && Boolean(e.path) && config.isSource(e.path) && !isRole(e.agentType, "qa");
 }
 
-function lastEditSeq(state, config, ledger) {
+export function lastEditSeq(state, config, ledger) {
   const edits = (state.events ?? []).filter((e) => implementationEdit(e, config));
   const fromEvents = edits.length ? edits[edits.length - 1].seq : (ledger.baseline?.seq ?? 0);
   return Math.max(fromEvents, ledger.lastSourceChangeSeq ?? 0);

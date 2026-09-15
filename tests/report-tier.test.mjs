@@ -284,28 +284,22 @@ test("C4 edge: the round 2 model line is required by Act-on count or by a large 
 // C5
 // ---------------------------------------------------------------------------
 
-test("C5 refused: the brief has exactly one plain Size line after the Changed line and none of the ledger's own words", () => {
+test("C5 refused: the brief's Changed line carries the plain size word and none of the ledger's own words", () => {
   const repo = standardTier("report-tier-c5");
   const brief = cli(repo, "report", ["--brief"]).stdout;
   const all = lines(brief);
 
-  const sizeLines = all.filter((l) => l.startsWith("Size:"));
-  assert.equal(sizeLines.length, 1, `expected exactly one Size line:\n${brief}`);
-
-  const changedAt = all.findIndex((l) => l.startsWith("Changed"));
-  assert.ok(changedAt >= 0, `no Changed line in the brief:\n${brief}`);
-  assert.equal(all[changedAt + 1], sizeLines[0], `the Size line must follow the Changed line:\n${brief}`);
-
-  assert.match(sizeLines[0], SIZE_RE, `the Size line is not the plain sentence:\n${sizeLines[0]}`);
+  assert.equal(all.filter((l) => l.startsWith("Size:")).length, 0, `the brief has no separate Size line any more:\n${brief}`);
+  const changed = all.find((l) => l.startsWith("Changed"));
+  assert.ok(changed, `no Changed line in the brief:\n${brief}`);
   for (const word of INTERNAL_WORDS) {
-    assert.ok(!sizeLines[0].toLowerCase().includes(word.toLowerCase()), `"${word}" leaked into the brief: ${sizeLines[0]}`);
+    assert.ok(!changed.toLowerCase().includes(word.toLowerCase()), `"${word}" leaked into the brief: ${changed}`);
   }
 
-  // the numbers are the measured ones and the word is the effective tier
+  // the size word is the effective tier
   const tierLine = lines(cli(repo, "size").stdout)[0];
   const effective = /^tier: (\S+)/.exec(tierLine)[1];
-  const measured = /measured \S+: (\d+) files?, (\d+) lines?/.exec(tierLine);
-  assert.equal(sizeLines[0], `Size: ${effective} (${measured[1]} files, ${measured[2]} lines).`);
+  assert.ok(changed.includes(`size ${effective}`), `expected "size ${effective}" in: ${changed}`);
 });
 
 // ---------------------------------------------------------------------------

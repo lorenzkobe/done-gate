@@ -162,7 +162,7 @@ test("C9 happy: one session end to end — session start, a blocked stop, open, 
   const brief = sh(repo, ["report", "--brief"]).stdout;
   assert.match(
     brief,
-    /written after the first code change, not before/,
+    /written after the first code change/,
     `the brief should say the plan came after the code:\n${brief}`,
   );
 
