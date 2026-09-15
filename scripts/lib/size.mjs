@@ -101,6 +101,18 @@ export function tiered(ledger) {
   return Boolean(ledger) && TIERED_PLAYBOOKS.has(ledger.playbook);
 }
 
+// At size standard or large the lead plans and delegates; workers edit the source. The
+// larger of the prediction and the last measurement decides, so a task that outgrows a
+// small prediction hands its remaining edits to a worker; with neither known yet, the lead
+// may edit (R2 already demands a plan first).
+// Returns that size, or null when the lead may edit.
+export function leadDelegates(ledger, policy = loadPolicy()) {
+  if (!tiered(ledger)) return null;
+  const t = tierOf(ledger);
+  const size = tierMax(policy, t.predicted, t.measured?.tier ?? null);
+  return size !== null && size !== "small" ? size : null;
+}
+
 // predicted stays null until `gate note plan --files` names the files; the measured diff
 // alone then decides, so a task that never predicts is judged by what it actually changed.
 export function emptyTier() {

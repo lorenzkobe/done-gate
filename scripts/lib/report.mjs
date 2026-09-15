@@ -29,7 +29,7 @@ export function summaryLine(ledger, events, unmet) {
   const blank = ledger.steps.filter((x) => !x.state).length;
   const closedCases = ledger.cases.filter((c) => c.status === "closed").length;
   const naCases = ledger.cases.filter((c) => c.na).length;
-  const denies = events.filter((e) => e.kind === "deny").length;
+  const denies = events.filter((e) => e.kind === "deny" && !e.delegate).length;
   return (
     `DONE ${count("DONE")} · SKIPPED ${count("SKIPPED")} · WAIVED ${count("WAIVED")} · N/A ${count("N/A")} · blank ${blank} · ` +
     `cases ${closedCases}/${ledger.cases.length} closed (${naCases} n/a) · ` +
@@ -74,12 +74,14 @@ export function actOnRows(ledger, dir, reviews, { embed = true } = {}) {
 
 export function attentionLines(state, unmet) {
   const { ledger, events } = state;
-  const denies = events.filter((e) => e.kind === "deny").length;
+  const denies = events.filter((e) => e.kind === "deny" && !e.delegate).length;
+  const handoffs = events.filter((e) => e.kind === "deny" && e.delegate).length;
   const out = [];
   for (const w of ledger.waivers) out.push(`- waived ${w.key}: ${w.reason ?? w.quote}`);
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) out.push(`- skipped: ${s.text} — ${s.note}`);
   for (const a of ledger.huddles.flatMap((h) => h.actOn).filter((x) => x.dispute)) out.push(`- disputed ${a.id}: ${a.dispute.why} [${a.dispute.evidence}] — ${a.dispute.verdict ?? "unanswered"}${a.dispute.reviewerReason ? `; reviewer: ${a.dispute.reviewerReason}` : ""}${a.dispute.arbiterReason ? `; arbiter: ${a.dispute.arbiterReason}` : ""}`);
   if (denies) out.push(`- ${denies} denied write(s) to gate evidence files (see events)`);
+  if (handoffs) out.push(`- ${handoffs} lead edit(s) fenced off at this size and handed to a worker`);
   if (ledger.overridden) out.push("- the gate was OVERRIDDEN; treat every claim above as unverified");
   const order = lateOrder(state);
   if (order.late.length) out.push(`- ${order.late.join(" and ")} written after the first source edit (${order.path})`);
@@ -307,7 +309,7 @@ function lookFirst(state) {
   }
   out.push(...disputeLines(ledger));
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) out.push(`- Skipped: ${s.text} — ${s.note}`);
-  const denies = events.filter((e) => e.kind === "deny").length;
+  const denies = events.filter((e) => e.kind === "deny" && !e.delegate).length;
   if (denies) out.push(`- Blocked writes to check files: ${denies}.`);
   if (ledger.overridden) out.push("- ⚠ I could not satisfy the checks and ended anyway; treat everything above as unverified.");
   const order = lateOrder(state);

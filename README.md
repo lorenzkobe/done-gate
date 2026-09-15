@@ -164,6 +164,10 @@ with `gate waive <key> "…"`, and the report lists every waiver.
   that could wedge every session in every repo would cost more than one unreported task.
 - **Zero friction when nothing changed.** Questions, investigations, a second terminal in
   the same repo: the tree hash is unchanged, the gate stays silent.
+- **The lead delegates at size standard and up.** With a ledger open and the task sized
+  standard or large, the lead's own `Edit`/`Write` on source or tests is refused and it is
+  told to brief a worker. A shell edit (`sed -i`, a heredoc) slips past this fence; the
+  Stop hook's R16 catches it after the fact from the event log.
 - **What it cannot know.** Whether a test asserts the right thing. It makes that visible
   instead: case → test mapping and the reviewer's own file, so a human can check them in
   two minutes.

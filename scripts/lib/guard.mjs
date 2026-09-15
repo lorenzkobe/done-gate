@@ -1,6 +1,7 @@
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { currentLedger } from "./ledger.mjs";
+import { leadDelegates } from "./size.mjs";
 import { appendEvents, nextSeq } from "./events.mjs";
 import { toPosixRel } from "./paths.mjs";
 
@@ -75,7 +76,7 @@ function inCurrentRun(rel, current) {
   return Boolean(current) && rel.startsWith(`${current}/`);
 }
 
-export function decide(input, root, config = loadConfig(root), currentRun = null) {
+export function decide(input, root, config = loadConfig(root), currentRun = null, ledger = null) {
   const tool = input.tool_name ?? "";
   const agentType = input.agent_type ?? null;
 
@@ -100,6 +101,16 @@ export function decide(input, root, config = loadConfig(root), currentRun = null
     }
   }
   const role = (r) => agentType === `done-gate:${r}` || agentType === r;
+  // the lead delegates at size standard and above: source and tests belong to the worker and
+  // QA, and so does any other agent the lead might spawn instead of a worker
+  const size = !role("worker") && !role("qa") && ledger ? leadDelegates(ledger) : null;
+  if (size) {
+    const owned = paths.filter((p) => config.isSource(p));
+    if (owned.length) {
+      const who = agentType === null ? "the lead does not edit source" : `${agentType} is not a worker`;
+      return { deny: true, delegate: true, reason: `done-gate: size ${size}: ${who}; ${owned.join(", ")} belongs to a worker. Run \`gate brief worker\` and spawn done-gate:worker with the prompt it prints (or re-plan with \`gate note plan --files\` if this is really one small file).`, paths };
+    }
+  }
   if (role("skeptic")) {
     const outside = paths.filter((p) => !isSkepticFile(p) || !inCurrentRun(p, currentRun));
     if (outside.length) {
@@ -143,13 +154,17 @@ export function decide(input, root, config = loadConfig(root), currentRun = null
 export const verbs = {
   fence(ctx) {
     let currentRun = null;
+    let ledger = null;
     try {
       const current = currentLedger(ctx.stateDir, ctx.session);
-      if (current) currentRun = path.relative(ctx.root, current.dir).split(path.sep).join("/");
+      if (current) {
+        currentRun = path.relative(ctx.root, current.dir).split(path.sep).join("/");
+        ledger = current.ledger;
+      }
     } catch {
       // unreadable state: fall back to the role rules alone
     }
-    const verdict = decide(ctx.input, ctx.root, undefined, currentRun);
+    const verdict = decide(ctx.input, ctx.root, undefined, currentRun, ledger);
     if (!verdict.deny) return;
     appendEvents(ctx.stateDir, ctx.session, [
       {
@@ -159,6 +174,7 @@ export const verbs = {
         agent: ctx.input?.agent_id ?? null,
         agentType: ctx.input?.agent_type ?? null,
         kind: "deny",
+        delegate: verdict.delegate === true,
         tool: ctx.input?.tool_name ?? null,
         path: verdict.paths?.[0] ?? null,
         reason: verdict.reason,
