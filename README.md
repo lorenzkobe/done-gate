@@ -183,7 +183,7 @@ run on the most expensive tier.
 `gate note plan --files a.ts,b.ts` predicts the tier before the diff exists, so a small
 feature skips the design critique up front; if the diff then outgrows the prediction, the
 step comes back and the gate says so. `gate size` prints the
-numbers. The policy is in `models.json`. Hard ceiling: **seven helper invocations per task**,
+numbers. The policy is in `models.json`. Hard ceiling: **ten helper invocations per task**,
 typically two or three. Always-on context cost is about 500 tokens; everything the hooks do
 is off-model.
 

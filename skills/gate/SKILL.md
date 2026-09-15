@@ -42,7 +42,7 @@ description: The done-gate workflow. Use before any task that will change source
    `gate huddle dispute H<k>.<i> "<why>" --evidence <ptr>`, one round; if the reviewer
    upholds it, `gate brief arbiter --item H<k>.<i>`, spawn `done-gate:arbiter`; it rules.
    `gate size` shows the size and the helpers it requires; never pick helper models
-   yourself. Ceiling: seven helper invocations per task.
+   yourself. Ceiling: ten helper invocations per task.
 4. `gate verify` after your last edit; only verify.json counts. Drive the real surface
    yourself when UI changed (R4); probe the real schema when schema changed (R6).
 5. `gate close`, `gate check`,

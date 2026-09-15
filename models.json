@@ -5,7 +5,8 @@
     "qa": "opus",
     "reviewer": "sonnet",
     "reviewer-2": "opus",
-    "arbiter": "opus"
+    "arbiter": "opus",
+    "worker": "sonnet"
   },
   "policy": {
     "tiers": {
@@ -48,7 +49,7 @@
       }
     },
     "ceiling": {
-      "helpersPerTask": 7
+      "helpersPerTask": 10
     }
   }
 }

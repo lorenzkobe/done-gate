@@ -14,7 +14,7 @@ import { buildState } from "./assess.mjs";
 // Steps whose evidence comes from a script or an agent: DONE or WAIVED only.
 export const EVIDENCED_KEYS = new Set(["verify", "verify-before", "driver", "review", "qa", "skeptic", "close"]);
 export const CASE_KINDS = ["happy", "edge", "refused", "boundary", "idempotent", "reported-surface"];
-export const ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter"];
+export const ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter", "worker"];
 
 export function flag(args, name) {
   const i = args.indexOf(name);
@@ -163,7 +163,7 @@ export const verbs = {
       const file = flag(rest, "--file") ?? null;
       // every role whose evidence is a file must name it, or R15 could never count it, and the
       // file must be that role's own: a reviewer huddle cannot point at a skeptic file
-      const prefix = role === "arbiter" ? "arbiter" : role === "skeptic" ? "skeptic" : "review";
+      const prefix = { arbiter: "arbiter", skeptic: "skeptic", worker: "worker" }[role] ?? "review";
       if (!file && role !== "qa") throw new UsageError(`gate huddle add ${role} needs --file <${prefix}-<n>.md>: the helper's own file is the evidence`);
       if (file && !new RegExp(`^${prefix}-\\d+\\.md$`).test(file)) throw new UsageError(`gate huddle add ${role}: --file must be that role's own ${prefix}-<n>.md, not ${file}`);
       const same = (a, b) => String(a).toLowerCase().replace(/\s+/g, " ").trim() === String(b).toLowerCase().replace(/\s+/g, " ").trim();

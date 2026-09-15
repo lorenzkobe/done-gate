@@ -7,7 +7,7 @@ import { toPosixRel } from "./paths.mjs";
 // Files only the gate's own verbs may write. A model that could edit these could
 // forge its evidence, so the deny is unconditional and every attempt is logged.
 const EVIDENCE_FILES = new Set(["events.jsonl", "verify.json", "decisions.tsv", "ledger.json", "blocks.json", "state.json", "gate-error.log", "current-session"]);
-const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(events\.jsonl|verify\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json|current-session|brief-[a-z0-9-]+-\d+\.md|(?:review|skeptic|arbiter)-\d+\.md)/;
+const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(events\.jsonl|verify\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json|current-session|brief-[a-z0-9-]+-\d+\.md|(?:review|skeptic|arbiter|worker)-\d+\.md)/;
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const HELPER_ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter"];
 // Shell forms that create or change files. Helpers may use them only on scratch paths
@@ -65,6 +65,10 @@ function isArbiterFile(rel) {
   return /^\.claude\/gate\/runs\/[^/]+\/arbiter-\d+\.md$/.test(rel);
 }
 
+function isWorkerFile(rel) {
+  return /^\.claude\/gate\/runs\/[^/]+\/worker-\d+\.md$/.test(rel);
+}
+
 // A helper's own file must land in the run it was spawned for, never another task's folder.
 // With no open ledger there is no task, so there is nowhere a helper may write.
 function inCurrentRun(rel, current) {
@@ -111,7 +115,7 @@ export function decide(input, root, config = loadConfig(root), currentRun = null
     return { deny: false };
   }
   // a helper's file is its evidence: nobody else writes it
-  const foreign = paths.filter((p) => isSkepticFile(p) || isArbiterFile(p) || (isReviewFile(p) && !(role("reviewer") || role("reviewer-2"))));
+  const foreign = paths.filter((p) => isSkepticFile(p) || isArbiterFile(p) || (isReviewFile(p) && !(role("reviewer") || role("reviewer-2"))) || (isWorkerFile(p) && !role("worker")));
   if (foreign.length) {
     return { deny: true, reason: `done-gate: ${foreign.join(", ")} is a helper's own evidence file and is written only by that helper.`, paths };
   }
@@ -119,6 +123,12 @@ export function decide(input, root, config = loadConfig(root), currentRun = null
     const outside = paths.filter((p) => !config.isTest(p));
     if (outside.length) {
       return { deny: true, reason: `done-gate: QA may write only under the tests globs; ${outside.join(", ")} is outside them. Report what the implementation should change instead.`, paths };
+    }
+  }
+  if (role("worker")) {
+    const outside = paths.filter((p) => isWorkerFile(p) && !inCurrentRun(p, currentRun));
+    if (outside.length) {
+      return { deny: true, reason: `done-gate: the worker writes its worker-<n>.md only in the current run dir; ${outside.join(", ")} is not that.`, paths };
     }
   }
   if (role("reviewer") || role("reviewer-2")) {

@@ -99,7 +99,7 @@ test("agent briefs exist with the fixed model table and the write fences describ
   const path = (await import("node:path")).default;
   const { pluginRoot } = await import("./helpers.mjs");
   const models = JSON.parse(readFileSync(path.join(pluginRoot, "models.json"), "utf8"));
-  assert.deepEqual(models.roles, { skeptic: "sonnet", qa: "opus", reviewer: "sonnet", "reviewer-2": "opus", arbiter: "opus" });
+  assert.deepEqual(models.roles, { skeptic: "sonnet", qa: "opus", reviewer: "sonnet", "reviewer-2": "opus", arbiter: "opus", worker: "sonnet" });
   for (const [name, model] of Object.entries(models.roles)) {
     const file = path.join(pluginRoot, "agents", `${name}.md`);
     assert.ok(existsSync(file), file);

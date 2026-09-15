@@ -143,6 +143,7 @@ function mayWrite(state, role, reviewN, skepticN, arbiterN = 1) {
   if (role === "skeptic") return `only ${path.join(state.dir, `skeptic-${skepticN}.md`)}; reply with its Act-on list only.`;
   if (role === "arbiter") return `only ${path.join(state.dir, `arbiter-${arbiterN}.md`)}; reply with the ruling line only.`;
   if (role === "qa") return `only files under the tests globs (${state.config.tests.join(", ")}); nothing else.`;
+  if (role === "worker") return `the files named in this packet and files under the tests globs (${state.config.tests.join(", ")}); on a review round also ${path.join(state.dir, `worker-${reviewN}.md`)}.`;
   return `only ${path.join(state.dir, `review-${reviewN}.md`)}.`;
 }
 
@@ -187,6 +188,12 @@ function arbiterBody(state, item) {
   return out;
 }
 
+// The verify commands a helper may run itself; "when: source" entries are listed too.
+function testCommands(state) {
+  const cmds = (state.config.verify ?? []).map((v) => `- \`${v.cmd}\``);
+  return cmds.length ? cmds : ["_no verify command in gate.json_"];
+}
+
 export function renderPacket(state, role, { round, reviewN, skepticN = 1, arbiterN = 1, item = null }) {
   const out = header(state, role, round);
   out.push("## You may write", "", mayWrite(state, role, reviewN, skepticN, arbiterN), "");
@@ -206,9 +213,21 @@ export function renderPacket(state, role, { round, reviewN, skepticN = 1, arbite
       const text = readFileSync(path.join(state.root, t), "utf8").split("\n").slice(0, SAMPLE_LINES).join("\n");
       out.push(`${i + 1}. ${t}`, "", ...fence(text), "");
     });
+  } else if (role === "worker") {
+    out.push("## Files you own", "", ...fileList(state, files), "");
+    const qaTests = (state.changed ?? []).filter((p) => state.config.isTest(p));
+    out.push("## Tests QA wrote", "", ...(qaTests.length ? qaTests.map((t) => `- ${t}`) : ["_none yet_"]), "");
+    out.push("## Test command", "", ...testCommands(state), "");
+    const open = state.ledger.huddles.filter((h) => h.role === "reviewer" || h.role === "reviewer-2").flatMap((h) => h.actOn.filter((a) => !a.closed));
+    if (open.length) {
+      out.push("## Diff so far", "", unifiedDiff(state), "");
+      out.push("## Open findings", "", ...open.map((a) => `- ${a.id} — ${a.text}`), "");
+      out.push("## Write your replies to", "", path.join(state.dir, `worker-${reviewN}.md`), "");
+    }
   } else {
     out.push("## Diff", "", unifiedDiff(state), "");
     out.push("## Verify", "", ...verifyLines(state.verify, { tails: false }), "");
+    out.push("## Test command", "", ...testCommands(state), "");
     out.push("", "## Write your findings to", "", path.join(state.dir, `review-${reviewN}.md`), "");
     if (role === "reviewer-2") {
       const first = path.join(state.dir, "review-1.md");

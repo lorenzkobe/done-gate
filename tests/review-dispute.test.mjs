@@ -564,14 +564,14 @@ test("C9 happy: the brief's review line reads n problems, k fixed, m overruled b
 // C10 — the policy gains the arbiter and one more helper
 // ---------------------------------------------------------------------------
 
-test("C10 happy: models.json has roles.arbiter opus and ceiling 7; the tier block prints the ceiling", () => {
+test("C10 happy: models.json has roles.arbiter opus and ceiling 10; the tier block prints the ceiling", () => {
   const m = modelsJson();
   assert.equal(m.roles.arbiter, "opus", `models.json roles: ${JSON.stringify(m.roles)}`);
-  assert.equal(m.policy.ceiling.helpersPerTask, 7, `models.json ceiling: ${JSON.stringify(m.policy.ceiling)}`);
+  assert.equal(m.policy.ceiling.helpersPerTask, 10, `models.json ceiling: ${JSON.stringify(m.policy.ceiling)}`);
 
   const repo = opened("rd-c10");
   const out = cli(repo, "size").stdout;
-  assert.ok(out.includes("ceiling 7"), `\`gate size\` does not print the new ceiling:\n${out}`);
+  assert.ok(out.includes("ceiling 10"), `\`gate size\` does not print the new ceiling:\n${out}`);
 });
 
 // ---------------------------------------------------------------------------

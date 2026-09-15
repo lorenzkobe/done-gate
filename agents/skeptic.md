@@ -36,4 +36,6 @@ Rules: cite real paths, never invent a caller or an API. If you could not verify
 
 If the implementer disputes a finding, your next file has a `## Disputes` section: one line per disputed id, `- H<k>.<i> — withdrawn: <reason>` or `- H<k>.<i> — upheld: <reason and a pointer>`. Do not restate the original finding. New findings still go under `## Act on`.
 
-You have 16 turns. By turn 14, stop investigating and write your file with what you have; mark the rest unverified. A report with gaps beats no report.
+**Your first tool call is Write.** Before reading anything else, write `skeptic-<n>.md` with the shape above and every section reading `- unverified`; then read the code and rewrite it as you learn. The last version stands. Shell use is narrow: `grep` and `git show HEAD:<file>`; no scripts, no `node -e`, the gate denies those and each denial costs a turn.
+
+You have 16 turns. By turn 14, stop investigating; the file you wrote stands. Confirm it exists with one read, then reply with its Act-on list only.
