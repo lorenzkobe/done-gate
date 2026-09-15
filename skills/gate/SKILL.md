@@ -6,25 +6,9 @@ description: The done-gate workflow. Use before any task that will change source
 # done-gate: evidenced done
 
 `gate` is `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"`. Every mutating verb ends with a
-`next:` line naming the next step and its verb: follow it. `gate check` lists what is unmet.
-
-## What the Stop hook enforces
-
-| Rule | Unmet when |
-| --- | --- |
-| R1 | source changed and no ledger is open |
-| R2 | Plan or case table written after the first source edit |
-| R3 | `gate verify` missing, red, or older than the last source edit |
-| R4 | UI changed and the real surface was not driven after the last edit |
-| R5 | no reviewer pass after the last implementation edit, or an Act-on item open |
-| R6 | schema changed and no real-schema probe recorded |
-| R7 | source changed and no test file changed |
-| R8 | a case or step left blank |
-| R9 | high-risk paths changed without the second reviewer |
-| R10 | a repo check failed (CLAUDE.md budget, migration number) |
-| R13 | gate.json or models.json changed mid-task |
-| R15 | a helper's file lists more findings than the ledger recorded |
-| R16 | the lead edited source itself at size standard or large |
+`next:` line naming the next step and its verb: follow it. `gate check` lists what is unmet
+(rules R1–R10, R13, R15, R16; the README has the table). You are the lead: you plan, size,
+delegate and report; at size small you also edit.
 
 ## The loop
 
@@ -34,29 +18,36 @@ description: The done-gate workflow. Use before any task that will change source
    file is small and a feature then skips the skeptic), then
    `gate case add "<case>" --kind <happy|edge|refused|boundary|idempotent|reported-surface>`
    per row. R2 checks the order.
-3. Follow each `next:` line. Helpers are spawned from packets: `gate brief <role>` prints a
-   one-sentence prompt. Roles: `done-gate:skeptic` (writes
-   `skeptic-<n>.md`), `done-gate:qa` (blind tests under the tests globs),
-   `done-gate:reviewer` (writes `review-<n>.md`; at most two
-   rounds, the second on Opus when size or round one calls for it),
-   `done-gate:reviewer-2` (high-risk paths). A finding you believe wrong:
-   `gate huddle dispute H<k>.<i> "<why>" --evidence <ptr>`, one round; if the reviewer
-   upholds it, `gate brief arbiter --item H<k>.<i>`, spawn `done-gate:arbiter`; it rules.
-   `gate size` shows the size and the helpers it requires; never pick helper models
-   yourself. Ceiling: ten helper invocations per task.
-4. `gate verify` after your last edit; only verify.json counts. Drive the real surface
+3. Follow each `next:` line. Helpers are spawned from packets: `gate brief <role>` prints
+   the prompt. Roles: `done-gate:skeptic` (writes `skeptic-<n>.md`), `done-gate:qa`
+   (blind tests under the tests globs), `done-gate:worker` (edits the files its packet
+   names, answers reviews in `worker-<n>.md`), `done-gate:reviewer` (writes
+   `review-<n>.md`), `done-gate:reviewer-2` (high-risk paths), `done-gate:arbiter`.
+4. Size small: implement yourself. Size standard or large: never edit source; `gate brief
+   worker` per piece and spawn `done-gate:worker`; the fence refuses your own edits.
+5. Review: `gate brief reviewer`, spawn, `gate huddle add reviewer --file review-<n>.md`.
+   Small: fix and `gate huddle resolve H<k>.<i> --evidence <ptr>`. Standard+: `gate brief
+   worker`, SendMessage the worker the review path, then `gate huddle reply --file
+   worker-<n>.md` (fixed: closes, disagree: disputes). Repeat with the same reviewer
+   (SendMessage it the next packet), at most three rounds; what is still disputed then goes
+   to `gate brief arbiter --item H<k>.<i>` and `done-gate:arbiter`. A finding you believe
+   wrong at small: `gate huddle dispute H<k>.<i> "<why>" --evidence <ptr>`, one round.
+6. `gate verify` after the last edit; only verify.json counts. Drive the real surface
    yourself when UI changed (R4); probe the real schema when schema changed (R6).
-5. `gate close`, `gate check`,
-   then paste `gate report --brief` as your final message with at most two lines of your own
-   before it, in the same plain words: say "the reviewer", "the tests", "the checks"; never
-   "ledger", "huddle" or a rule number.
+7. `gate close`, `gate check`, then paste `gate report --brief` as your final message with
+   at most two lines of your own before it, in the same plain words: say "the reviewer",
+   "the tests", "the checks"; never "ledger", "huddle" or a rule number.
 
 ## Rules that hold throughout
 
 - If two readings of the ask lead to different work, ask with `AskUserQuestion` before
   step 2.
 - A helper's self-report is never evidence; only `gate verify`, hook events and the
-  helper's own file count.
+  helper's own file count. A helper that stops with no file: SendMessage it once,
+  "write <file> now"; never brief the next round without the file.
+- Waiting for a helper is a legal turn end: just end the turn; its hand-back wakes you.
+- `gate size` shows the size and the helpers it requires; never pick helper models
+  yourself. Ceiling: ten helper invocations per task.
 - Waivers are the only way past a keyed step you cannot do: ask, then
   `gate waive <key> "<the reason>"`; the report lists it.
 - Never hand-edit `.claude/gate/runs/**` except `ledger.md`.

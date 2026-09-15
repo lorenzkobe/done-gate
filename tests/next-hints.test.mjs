@@ -346,8 +346,10 @@ test("C10 boundary: SKILL.md is under 4096 bytes and still carries the live rule
   assert.ok(size < 4096, `skills/gate/SKILL.md is ${size} bytes, the budget is 4096`);
 
   const text = readFileSync(SKILL_MD, "utf8");
-  for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 15]) {
-    assert.match(text, new RegExp(`\\bR${i}\\b`), `SKILL.md no longer names rule R${i}`);
+  // the rule table lives in the README now; the skill names the live set in one line
+  assert.match(text, /R1[–-]R10, R13, R15, R16/, "SKILL.md no longer names the live rule set");
+  for (const i of [2, 4, 6]) {
+    assert.match(text, new RegExp(`\\bR${i}\\b`), `SKILL.md no longer names rule R${i} where the loop needs it`);
   }
   for (const fragment of ["gate open", "gate note", "gate case", "gate brief", "gate verify", "gate report --brief"]) {
     assert.ok(text.includes(fragment), `SKILL.md no longer names \`${fragment}\``);

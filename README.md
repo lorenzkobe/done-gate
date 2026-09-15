@@ -44,11 +44,12 @@ judgment out of the model and into hooks that can't be talked out of it.
    ├─ case table             ├─ must exist BEFORE the first source edit (R2)
    ├─ skeptic huddle        ─┘
    │
-   ├─ QA writes tests (blind to src)  ║  you implement
-   │
+   ├─ QA writes tests (blind to src)  ║  small: you implement
+   │                                   ║  standard+: a worker per piece
    ├─ gate verify        ──► verify.json  (exit codes, tails, source hash)
    ├─ drive the real app ──► browser events logged by hooks
-   ├─ reviewer           ──► review-1.md, written by the reviewer itself
+   ├─ reviewer ⇄ worker  ──► review-<n>.md / worker-<n>.md, up to 3 rounds
+   ├─ arbiter            ──► settles what is still disputed
    │
    ▼
  gate close · gate check · gate report
@@ -146,7 +147,7 @@ attempt to finish.
 | R8 | any case or step is blank |
 | R9 | high-risk paths changed without the second reviewer |
 | R10 | a repo check failed (`claude-md-budget`, `migration-number`) |
-| R13 | `.claude/gate.json` changed mid-task |
+| R13 | `.claude/gate.json` or the plugin's `models.json` changed mid-task |
 | R15 | a helper's file lists more findings than the ledger recorded |
 | R16 | the lead edited source itself at size standard or large (a worker's job); waivable with `gate waive delegate` |
 
@@ -206,11 +207,12 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `note task\|plan "…"` · `note plan "…" --files a,b` | write the prose sections (stamps the order for R2); `--files` predicts the size |
 | `case add "…" --kind <kind>` · `case close C1 --test file:name \| --na "…"` | the case table |
 | `step <key\|n> done\|skipped\|na "…" [--evidence ptr]` | close a playbook step |
-| `huddle add <role> --file review-1.md` · `acton` · `resolve` | reviewer rounds and Act-on items |
+| `huddle add <role> --file review-1.md` · `acton` · `resolve` · `dispute` | reviewer rounds and Act-on items |
+| `huddle reply --file worker-1.md` | record a worker's answers: `fixed:` closes an item, `disagree:` disputes it |
 | `waive <key> "<reason>"` | record a waiver; it shows in the report |
 | `verify [--step verify-before]` | run the repo's verify commands, write `verify.json` |
 | `decide <phase> <decision> <why> <evidence> <result>` | append a decision-log row |
-| `brief <skeptic\|qa\|reviewer\|reviewer-2> [--round n]` | write the helper's packet and print its spawn prompt |
+| `brief <skeptic\|qa\|worker\|reviewer\|reviewer-2\|arbiter> [--round n] [--item H#.#]` | write the helper's packet and print its spawn prompt |
 | `check` · `steps` · `size` · `report [--brief]` · `close` · `doctor` | unmet items only · every step · the report, short or full · finish · inspect config |
 
 ## Configuration
