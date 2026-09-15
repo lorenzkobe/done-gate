@@ -1,3 +1,204 @@
+import { test, beforeEach } from "node:test";
+import assert from "node:assert/strict";
+import { spawnSync, execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { eventsFromHookInput, readEvents, appendEvents } from "../scripts/lib/events.mjs";
+import { makeRepo, gate, write, here } from "./helpers.mjs";
+import { decide } from "../scripts/lib/guard.mjs";
+import { loadConfig } from "../scripts/lib/config.mjs";
+import { loadSession } from "../scripts/lib/session-state.mjs";
+
+// ===== from tests/events.test.mjs =====
+{
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(here, "..");
+const stdin = (name) => JSON.parse(readFileSync(path.join(here, "fixtures", "stdin", `${name}.json`), "utf8"));
+const tmp = path.join(here, ".tmp", "events-state");
+
+beforeEach(() => {
+  rmSync(tmp, { recursive: true, force: true });
+  mkdirSync(tmp, { recursive: true });
+});
+
+function pick(e) {
+  const { seq, ts, ...rest } = e;
+  assert.equal(typeof seq, "number");
+  assert.match(ts, /^\d{4}-\d{2}-\d{2}T/);
+  return rest;
+}
+
+test("Edit/Write become edit events with root-relative POSIX paths", () => {
+  assert.deepEqual(pick(eventsFromHookInput(stdin("edit"), "/repo")[0]), {
+    session: "S1", agent: null, agentType: null, kind: "edit", tool: "Edit", path: "src/app/page.tsx",
+  });
+  assert.equal(eventsFromHookInput(stdin("write"), "/repo")[0].path, "tests/x.test.ts");
+});
+
+test("MultiEdit emits one edit event per file", () => {
+  const evs = eventsFromHookInput(stdin("multiedit"), "/repo");
+  assert.deepEqual(evs.map((e) => e.path), ["src/a.ts", "src/b.ts"]);
+  assert.ok(evs.every((e) => e.kind === "edit" && e.tool === "MultiEdit"));
+});
+
+test("Bash is attribution only: a truncated command, never a path", () => {
+  const [e] = eventsFromHookInput(stdin("bash"), "/repo");
+  assert.equal(e.kind, "command");
+  assert.equal(e.cmd, "rtk npm run test");
+  assert.equal(e.path, undefined);
+});
+
+test("Agent, Skill and Chrome tools map to agent, skill and browser kinds", () => {
+  assert.deepEqual(pick(eventsFromHookInput(stdin("agent"), "/repo")[0]), {
+    session: "S1", agent: null, agentType: null, kind: "agent", tool: "Agent", spawned: "done-gate:reviewer",
+  });
+  assert.deepEqual(pick(eventsFromHookInput(stdin("skill"), "/repo")[0]), {
+    session: "S1", agent: null, agentType: null, kind: "skill", tool: "Skill", skill: "verify",
+  });
+  assert.deepEqual(pick(eventsFromHookInput(stdin("chrome"), "/repo")[0]), {
+    session: "S1", agent: null, agentType: null, kind: "browser", tool: "mcp__claude-in-chrome__computer",
+  });
+});
+
+test("an edit inside a subagent keeps the agent id and type", () => {
+  const [e] = eventsFromHookInput(stdin("sub-edit"), "/repo");
+  assert.equal(e.agent, "A9");
+  assert.equal(e.agentType, "done-gate:qa");
+  assert.equal(e.path, "tests/y.test.ts");
+});
+
+test("SubagentStart/Stop, UserPromptSubmit and SessionStart map to their kinds", () => {
+  assert.equal(eventsFromHookInput(stdin("subagent-start"), "/repo")[0].kind, "subagent-start");
+  const stop = eventsFromHookInput(stdin("subagent-stop"), "/repo")[0];
+  assert.equal(stop.kind, "subagent-stop");
+  assert.equal(stop.agentType, "done-gate:reviewer");
+  const prompt = eventsFromHookInput(stdin("prompt"), "/repo")[0];
+  assert.equal(prompt.kind, "prompt");
+  assert.equal(prompt.text, "fix the badge on the venue card please");
+  const start = eventsFromHookInput(stdin("session-start"), "/repo")[0];
+  assert.equal(start.kind, "session-start");
+  assert.equal(start.source, "startup");
+});
+
+test("an unrecognised payload produces no events and never throws", () => {
+  assert.deepEqual(eventsFromHookInput({ __unparseable: "garbage" }, "/repo"), []);
+  assert.deepEqual(eventsFromHookInput({ hook_event_name: "PostToolUse", tool_name: "Read", tool_input: {} }, "/repo"), []);
+});
+
+test("appendEvents/readEvents round-trip per session, in seq order", () => {
+  const a = eventsFromHookInput(stdin("edit"), "/repo");
+  const b = eventsFromHookInput(stdin("bash"), "/repo");
+  appendEvents(tmp, "S1", a);
+  appendEvents(tmp, "S1", b);
+  appendEvents(tmp, "S2", eventsFromHookInput(stdin("write"), "/repo"));
+  const s1 = readEvents(tmp, "S1");
+  assert.deepEqual(s1.map((e) => e.kind), ["edit", "command"]);
+  assert.ok(s1[0].seq < s1[1].seq);
+  assert.equal(readEvents(tmp, "S2").length, 1);
+  assert.deepEqual(readEvents(tmp, "nope"), []);
+});
+
+test("`gate log` CLI writes the line and answers the silent PostToolUse envelope", () => {
+  const r = spawnSync(process.execPath, [path.join(root, "scripts", "gate.mjs"), "log"], {
+    input: readFileSync(path.join(here, "fixtures", "stdin", "edit.json"), "utf8"),
+    encoding: "utf8",
+    env: { ...process.env, DONE_GATE_STATE_DIR: tmp, CLAUDE_PROJECT_DIR: "/repo" },
+  });
+  assert.equal(r.status, 0);
+  assert.deepEqual(JSON.parse(r.stdout), { continue: true, suppressOutput: true });
+  const file = path.join(tmp, "sessions", "S1", "events.jsonl");
+  assert.ok(existsSync(file));
+  assert.equal(JSON.parse(readFileSync(file, "utf8").trim()).path, "src/app/page.tsx");
+});
+}
+
+// ===== from tests/guard.test.mjs =====
+{
+const repo = makeRepo("guard", { ".claude/gate.json": JSON.stringify({ tests: ["tests/**"] }) });
+const cfg = loadConfig(repo);
+const input = (tool, file_path, extra = {}) => ({ hook_event_name: "PreToolUse", tool_name: tool, tool_input: { file_path }, cwd: repo, session_id: "S1", ...extra });
+
+test("evidence files under the run dir are denied for everyone, ledger.md stays writable", () => {
+  for (const f of ["events.jsonl", "verify.json", "decisions.tsv", "ledger.json", "blocks.json"]) {
+    assert.equal(decide(input("Write", `${repo}/.claude/gate/runs/x/${f}`), repo, cfg).deny, true, f);
+  }
+  assert.equal(decide(input("Edit", `${repo}/.claude/gate/sessions/S1/state.json`), repo, cfg).deny, true);
+  assert.equal(decide(input("Edit", `${repo}/.claude/gate/runs/x/ledger.md`), repo, cfg).deny, false);
+});
+
+test("a Bash command that names an evidence file is denied; ordinary commands pass", () => {
+  const bash = (command) => ({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: repo, session_id: "S1" });
+  assert.equal(decide(bash("echo x >> .claude/gate/runs/x/events.jsonl"), repo, cfg).deny, true);
+  assert.equal(decide(bash("cat .claude/gate/runs/x/verify.json"), repo, cfg).deny, true);
+  assert.equal(decide(bash("npm test"), repo, cfg).deny, false);
+  assert.equal(decide(bash("node gate.mjs verify"), repo, cfg).deny, false);
+});
+
+test("the QA agent may write only under the tests globs", () => {
+  const qa = { agent_id: "A1", agent_type: "done-gate:qa" };
+  assert.equal(decide(input("Write", `${repo}/tests/new.test.ts`, qa), repo, cfg).deny, false);
+  assert.equal(decide(input("Edit", `${repo}/src/a.ts`, qa), repo, cfg).deny, true);
+  assert.equal(decide(input("Write", `${repo}/.claude/gate/runs/x/ledger.md`, qa), repo, cfg).deny, true);
+});
+
+test("the reviewer may write only its own review-<n>.md inside the open task's run dir, and nothing at all when no ledger is open", () => {
+  // A helper's file belongs to the session's own task, so the rule needs a real open run dir.
+  const open = makeRepo("guard-open", { ".claude/gate.json": JSON.stringify({ tests: ["tests/**"] }) });
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: open, DONE_GATE_SESSION: "S1" };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  const opened = spawnSync(process.execPath, [gate, "open", "guard-open", "feature"], { encoding: "utf8", env });
+  assert.equal(opened.status, 0, opened.stderr);
+  const dir = path.join(open, ".claude", "gate", "runs", loadSession(path.join(open, ".claude", "gate"), "S1").current);
+  const openInput = (tool, file_path, extra = {}) => ({ hook_event_name: "PreToolUse", tool_name: tool, tool_input: { file_path }, cwd: open, session_id: "S1", ...extra });
+
+  // Which run dir is "the open task's" is resolved from the session, so this half goes
+  // through `gate fence` — the hook entry point — rather than the in-process helper.
+  const fence = (payload) => {
+    const r = spawnSync(process.execPath, [gate, "fence"], { input: JSON.stringify(payload), encoding: "utf8", env });
+    assert.equal(r.status, 0, r.stderr);
+    const out = r.stdout.trim();
+    return out === "" ? false : JSON.parse(out).hookSpecificOutput.permissionDecision === "deny";
+  };
+
+  const rv = { agent_id: "A2", agent_type: "done-gate:reviewer" };
+  assert.equal(fence(openInput("Write", path.join(dir, "review-1.md"), rv)), false);
+  assert.equal(fence(openInput("Write", path.join(dir, "review-2.md"), { ...rv, agent_type: "done-gate:reviewer-2" })), false);
+  assert.equal(fence(openInput("Edit", `${open}/src/a.ts`, rv)), true);
+  assert.equal(fence(openInput("Write", path.join(dir, "ledger.md"), rv)), true);
+  // another task's run dir is not this reviewer's to write
+  assert.equal(fence(openInput("Write", path.join(open, ".claude", "gate", "runs", "other", "review-1.md"), rv)), true);
+
+  // the refused side: no ledger means no task, so there is no file the reviewer may write
+  assert.equal(decide(input("Write", `${repo}/.claude/gate/runs/x/review-1.md`, rv), repo, cfg).deny, true);
+});
+
+test("the skeptic may write only its own skeptic-<n>.md in the open task's run dir; unknown agents and the main session follow the evidence rule only", () => {
+  assert.equal(decide(input("Write", `${repo}/notes.md`, { agent_id: "A3", agent_type: "done-gate:skeptic" }), repo, cfg).deny, true);
+  // no ledger is open in this repo, so even a well-named skeptic file is refused
+  assert.equal(decide(input("Write", `${repo}/.claude/gate/runs/x/skeptic-1.md`, { agent_id: "A3", agent_type: "done-gate:skeptic" }), repo, cfg).deny, true);
+  assert.equal(decide(input("Write", `${repo}/src/a.ts`, { agent_id: "A4", agent_type: "general-purpose" }), repo, cfg).deny, false);
+  assert.equal(decide(input("Write", `${repo}/src/a.ts`), repo, cfg).deny, false);
+});
+
+test("`gate fence` emits the PreToolUse deny envelope and logs the attempt; allows are silent", () => {
+  const run = (payload) => spawnSync(process.execPath, [gate, "fence"], {
+    input: JSON.stringify(payload), encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo },
+  });
+  const denied = run(input("Write", `${repo}/.claude/gate/runs/x/verify.json`));
+  assert.equal(denied.status, 0);
+  const out = JSON.parse(denied.stdout);
+  assert.equal(out.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /evidence/);
+  const events = readFileSync(path.join(repo, ".claude", "gate", "sessions", "S1", "events.jsonl"), "utf8");
+  assert.match(events, /"kind":"deny"/);
+  const allowed = run(input("Write", `${repo}/src/a.ts`));
+  assert.equal(allowed.stdout.trim(), "");
+});
+}
+
+// ===== from tests/events-hooks.test.mjs =====
+{
 // T6 — the lead-delegation fence. When a ledger is open on a tiered playbook and the
 // plan predicted standard or large, the main session (no agent_type) may not edit source
 // or tests; it is told to brief and spawn a worker. The worker may. Everything else —
@@ -8,15 +209,6 @@
 // `gate fence`, so which run dir and which ledger are "the open task's" is resolved by the
 // session, not by this test. Ledgers are built with the real CLI and read back from
 // ledger.json (tests/tier-policy.test.mjs's ledgerOf()).
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { makeRepo, write, gate, here } from "./helpers.mjs";
-import { loadConfig } from "../scripts/lib/config.mjs";
-import { loadSession } from "../scripts/lib/session-state.mjs";
-import { readEvents } from "../scripts/lib/events.mjs";
 
 // ---------------------------------------------------------------------------
 // conventions (mirrors tests/guard.test.mjs and tests/tier-policy.test.mjs)
@@ -289,3 +481,4 @@ test("C7 idempotent: the tests/fixtures/stdin edit payloads still pass the fence
   // and a Bash payload that names no evidence file is still none of the fence's business
   assert.equal(fence(repo, asPreToolUse("bash")), null, "bash");
 });
+}
