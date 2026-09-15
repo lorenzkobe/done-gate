@@ -6,7 +6,9 @@ import { nextSeq } from "./events.mjs";
 import { ensureSession, loadSession, updateSession } from "./session-state.mjs";
 import { gitHead, gitNumstat } from "./tree.mjs";
 import { emptyTier } from "./size.mjs";
-import { loadPolicy } from "./policy.mjs";
+// size.mjs imports assess.mjs, which imports this module: loadPolicy is only ever called at
+// verb time, never at module top level, or the cycle would hit a TDZ error.
+import { loadPolicy } from "./size.mjs";
 import { implementationHash } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";

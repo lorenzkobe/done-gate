@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { matchGlob, matchAny } from "../scripts/lib/glob.mjs";
+import { matchGlob, matchAny } from "../scripts/lib/config.mjs";
 import { toPosixRel } from "../scripts/lib/paths.mjs";
 import { loadConfig, DEFAULTS } from "../scripts/lib/config.mjs";
 

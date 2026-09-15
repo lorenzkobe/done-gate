@@ -11,7 +11,7 @@ import { loadConfig } from "../scripts/lib/config.mjs";
 import { evaluate } from "../scripts/lib/rules.mjs";
 import { snapshot, diffSnapshots } from "../scripts/lib/tree.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
-import { loadPolicy, tierFor } from "../scripts/lib/policy.mjs";
+import { loadPolicy, tierFor } from "../scripts/lib/size.mjs";
 import { measure, OPTIONAL_STEPS, optionalSteps } from "../scripts/lib/size.mjs";
 
 // ---------------------------------------------------------------------------

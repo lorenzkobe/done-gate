@@ -1,6 +1,6 @@
 // `when` on a verify command: "always" (default) or "source" (a command that only earns
 // its cost when real implementation changed). Written from the case table, blind to
-// config.mjs / verify.mjs / rules.mjs / report.mjs / doctor.mjs.
+// config.mjs / verify.mjs / rules.mjs / report.mjs / check.mjs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

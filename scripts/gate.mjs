@@ -33,7 +33,7 @@ const VERBS = {
   steps: { hook: false, load: () => import("./lib/ledger.mjs") },
   size: { hook: false, load: () => import("./lib/size.mjs") },
   brief: { hook: false, load: () => import("./lib/brief.mjs") },
-  doctor: { hook: false, load: () => import("./lib/doctor.mjs") },
+  doctor: { hook: false, load: () => import("./lib/check.mjs") },
 };
 
 // Only hook verbs, and the verbs that accept a "-" argument for a long text, have anything on

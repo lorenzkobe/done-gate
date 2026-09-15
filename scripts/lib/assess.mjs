@@ -3,7 +3,7 @@ import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { readEvents } from "./events.mjs";
 import { currentLedger, saveLedger } from "./ledger.mjs";
-import { loadPolicy } from "./policy.mjs";
+import { loadPolicy } from "./size.mjs";
 import { measure, reconcileTier, tiered } from "./size.mjs";
 import { implementationHash } from "./rules.mjs";
 import { nextSeq } from "./events.mjs";

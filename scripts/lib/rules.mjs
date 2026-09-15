@@ -1,8 +1,99 @@
 import { createHash } from "node:crypto";
-import { runChecks } from "./checks.mjs";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { parseFindings } from "./review.mjs";
+
+// Named repo checks, opted into via gate.json "checks". Each returns an unmet text or null.
+const CHECKS = {
+  "claude-md-budget": ({ root, changed }) => {
+    const file = path.join(root, "CLAUDE.md");
+    if (!existsSync(file)) return null;
+    if (!changed.includes("CLAUDE.md")) return null;
+    const size = statSync(file).size;
+    return size > 150_000 ? `CLAUDE.md is ${size} chars, over the 150000 budget an assistant can load. Move detail into the linked docs before closing.` : null;
+  },
+  "migration-number": ({ root, changed }) => {
+    const added = changed.filter((p) => /^supabase\/migrations\/\d{4}_.*\.sql$/.test(p));
+    if (!added.length) return null;
+    const dir = path.join(root, "supabase", "migrations");
+    const max = Math.max(...readdirSync(dir).map((f) => Number(/^(\d{4})_/.exec(f)?.[1] ?? 0)));
+    const claude = path.join(root, "CLAUDE.md");
+    if (!existsSync(claude)) return null;
+    const m = /Next number:\s*`?(\d{4})`?/.exec(readFileSync(claude, "utf8"));
+    if (!m) return "CLAUDE.md has no `Next number:` line for migrations.";
+    const expected = String(max + 1).padStart(4, "0");
+    return m[1] === expected ? null : `migration ${String(max).padStart(4, "0")} was added but CLAUDE.md says the next number is ${m[1]}; it should say ${expected}.`;
+  },
+};
+
+export function runChecks({ config, root, changed }) {
+  const out = [];
+  for (const name of config.checks ?? []) {
+    const fn = CHECKS[name];
+    if (!fn) {
+      out.push(`unknown check "${name}" in gate.json (have: ${Object.keys(CHECKS).join(", ")})`);
+      continue;
+    }
+    try {
+      const text = fn({ root, changed });
+      if (text) out.push(`${name}: ${text}`);
+    } catch (error) {
+      out.push(`${name} could not run: ${error.message}`);
+    }
+  }
+  return out;
+}
+
+// Readers for the files helpers write: a reviewer's or skeptic's findings, a reviewer's
+// answers to disputes, and an arbiter's ruling. Bullets only; prose is ignored.
+
+function sectionLines(text, heading) {
+  const re = new RegExp(`^## ${heading}\\s*$`, "m");
+  const m = re.exec(String(text ?? "").replace(/\r/g, ""));
+  if (!m) return [];
+  const rest = text.slice(m.index + m[0].length);
+  const end = /^## /m.exec(rest);
+  return (end ? rest.slice(0, end.index) : rest).split("\n");
+}
+
+function bullets(lines) {
+  const out = [];
+  for (const raw of lines) {
+    const m = /^\s*[-*]\s+(.*\S)\s*$/.exec(raw);
+    if (!m) continue;
+    if (/^(?:none|n\/a|nothing)\.?$/i.test(m[1].trim())) continue;
+    out.push(m[1].trim());
+  }
+  return out;
+}
+
+// Every Act-on bullet of a helper file. "none" and a missing section are empty.
+export function parseFindings(text) {
+  return bullets(sectionLines(text, "Act on")).map((t) => ({ text: t }));
+}
+
+const VERDICT = /^(H\d+\.\d+)\s*[—–-]+\s*(withdrawn|upheld)\s*:\s*(.*)$/i;
+
+// A reviewer's answers to disputed items: `- H1.2 — withdrawn: reason` / `upheld: reason`.
+export function parseDisputes(text) {
+  const out = [];
+  for (const b of bullets(sectionLines(text, "Disputes"))) {
+    const m = VERDICT.exec(b);
+    if (m) out.push({ id: m[1], verdict: m[2].toLowerCase(), reason: m[3].trim() });
+  }
+  return out;
+}
+
+const RULING = /^(H\d+\.\d+)\s*[—–-]+\s*(implementer|reviewer)\s*:\s*(.*)$/i;
+
+// An arbiter's ruling: `- H1.2 — implementer: reason` / `reviewer: reason`.
+export function parseRuling(text) {
+  const out = [];
+  for (const b of bullets(sectionLines(text, "Ruling"))) {
+    const m = RULING.exec(b);
+    if (m) out.push({ id: m[1], side: m[2].toLowerCase(), reason: m[3].trim() });
+  }
+  return out;
+}
 
 // Builds the "does this pointer resolve" predicate from gate state; dispute and resolve
 // evidence must point at something real.

@@ -6,8 +6,7 @@ import { loadLedger, runsDir } from "./ledger.mjs";
 import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
 import { readEvents } from "./events.mjs";
-import { loadPolicy, requires } from "./policy.mjs";
-import { effectiveTier, renderTierBlock, tiered, tierOf } from "./size.mjs";
+import { effectiveTier, loadPolicy, renderTierBlock, requires, tiered, tierOf } from "./size.mjs";
 import { isRole, lateOrder } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 

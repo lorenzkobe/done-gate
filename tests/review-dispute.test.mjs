@@ -199,7 +199,7 @@ function upheld(name, { findings = [FIND_1, FIND_2] } = {}) {
 // ---------------------------------------------------------------------------
 
 test("C1 happy: parseFindings returns one entry per Act-on bullet and none for 'none' or a missing section; parseDisputes and parseRuling read their sections with ids and verdicts", async () => {
-  const { parseFindings, parseDisputes, parseRuling } = await import("../scripts/lib/review.mjs");
+  const { parseFindings, parseDisputes, parseRuling } = await import("../scripts/lib/rules.mjs");
 
   // The file shape agents/reviewer.md tells the reviewer to write.
   const body = [

@@ -3,13 +3,12 @@ import path from "node:path";
 import { nextSeq } from "./events.mjs";
 import { currentLedger, loadLedger, saveLedger } from "./ledger.mjs";
 import { loadConfig } from "./config.mjs";
-import { loadPolicy } from "./policy.mjs";
+import { loadPolicy } from "./size.mjs";
 import { applyPrediction, tiered } from "./size.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
-import { parseDisputes, parseFindings, parseRuling } from "./review.mjs";
-import { pointerResolver } from "./rules.mjs";
+import { parseDisputes, parseFindings, parseRuling, pointerResolver } from "./rules.mjs";
 import { buildState } from "./assess.mjs";
 
 // Steps whose evidence comes from a script or an agent: DONE or WAIVED only.
