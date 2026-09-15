@@ -159,7 +159,7 @@ test("C2 happy: `gate brief worker` writes brief-worker-1.md, every other role s
     const abs = path.join(runDir(repo), `brief-${role}-1.md`);
     assert.ok(existsSync(abs), `${role}: ${abs} was not written`);
     assert.equal(out[0], `packet: ${abs}`, `${role}: ${out.join(" | ")}`);
-    assert.equal(out[1], `prompt: Read ${abs} and follow your role brief.`);
+    assert.ok(out[1].startsWith(`prompt: Read ${abs} and follow your role brief.`), `${role}: ${out[1]}`);
     assert.ok(readFileSync(abs, "utf8").trim().length > 0, `${role}: the packet is empty`);
   }
 

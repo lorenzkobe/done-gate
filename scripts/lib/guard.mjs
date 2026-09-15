@@ -1,3 +1,4 @@
+import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { currentLedger } from "./ledger.mjs";
@@ -19,6 +20,7 @@ const GIT_WRITE = /\bgit\s+(?:add|commit|checkout|switch|reset|restore|stash|app
 // put such code in a scratch script instead, where the write shows as a path
 const INLINE_CODE = /\b(?:node|nodejs|deno|bun|python3?|perl|ruby|sh|bash|zsh)\s+(?:-[a-zA-Z]*[ecp]\b|--eval\b|--print\b)|\bphp\s+-r\b/;
 const SCRATCH = /(?:^|\/)(?:tests\/\.tmp|tmp|scratchpad)(?:\/|$)|^\/private\/tmp\//;
+const INLINE_WRITE = /\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|rename(?:Sync)?|unlink(?:Sync)?|rm(?:Sync)?|rmdir(?:Sync)?|mkdir(?:Sync)?|copyFile(?:Sync)?|truncate(?:Sync)?|createWriteStream|open\s*\([^)]*["'][wa][+]?["'])|os\.(?:remove|rename|unlink|makedirs|mkdir)|shutil\.|file_put_contents|fopen|fwrite|unlink/;
 
 // Does a helper's shell write stay inside scratch space? Every path-looking token must be
 // scratch; for cp/mv only the destination (the last path) is a write.
@@ -28,7 +30,11 @@ function shellWriteOutsideScratch(raw) {
     .replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""')
     .replace(/\d*>{1,2}\s*\/dev\/null/g, " ")
     .replace(/\d>&\d/g, " ");
-  if (GIT_WRITE.test(cmd) || INLINE_CODE.test(cmd)) return true;
+  if (GIT_WRITE.test(cmd)) return true;
+  // inline code is fine to read with; it is a write only when the snippet names a write call
+  // or the command redirects output (tested with quoted strings stripped, so `2 > 1` inside
+  // the snippet is not a redirection)
+  if (INLINE_CODE.test(cmd) && (INLINE_WRITE.test(String(raw)) || />\s*[^&\s]/.test(cmd))) return true;
   if (!SHELL_WRITE.test(cmd)) return false;
   const tokens = cmd.split(/\s+/).filter((t) => /[\/.]/.test(t) && !t.startsWith("-") && !/^https?:/.test(t) && !/^\d+([.]\d+)?$/.test(t));
   const paths = tokens.map((t) => t.replace(/^["']|["']$/g, "")).filter((t) => !/^s[\/|#].*[\/|#]$/.test(t)); // sed expressions are not paths
@@ -76,9 +82,39 @@ function inCurrentRun(rel, current) {
   return Boolean(current) && rel.startsWith(`${current}/`);
 }
 
+// A reading helper (skeptic, reviewer, arbiter) owes a draft when the run dir holds more
+// packets for its role family than files it wrote. Until the draft exists it may only read
+// its packet and write its file, so a helper that runs out of turns always leaves a file.
+const OWN_FILE = { skeptic: "skeptic", reviewer: "review", "reviewer-2": "review", arbiter: "arbiter" };
+function draftOwed(roleName, root, currentRun) {
+  const prefix = OWN_FILE[roleName];
+  if (!prefix || !currentRun) return null;
+  const dir = path.join(root, currentRun);
+  if (!existsSync(dir)) return null;
+  const names = readdirSync(dir);
+  const family = prefix === "review" ? ["reviewer", "reviewer-2"] : [roleName];
+  const packets = names.filter((f) => family.some((r) => new RegExp(`^brief-${r}-\\d+\\.md$`).test(f))).length;
+  const files = names.filter((f) => new RegExp(`^${prefix}-\\d+\\.md$`).test(f));
+  if (packets <= files.length) return null;
+  const n = (files.length ? Math.max(...files.map((f) => Number(/\d+/.exec(f)[0]))) : 0) + 1;
+  return `${currentRun}/${prefix}-${n}.md`;
+}
+
 export function decide(input, root, config = loadConfig(root), currentRun = null, ledger = null) {
   const tool = input.tool_name ?? "";
   const agentType = input.agent_type ?? null;
+  const roleName = Object.keys(OWN_FILE).find((r) => agentType === `done-gate:${r}` || agentType === r) ?? null;
+  const owed = roleName ? draftOwed(roleName, root, currentRun) : null;
+  if (owed) {
+    const rel = targetPaths(input, root)[0] ?? null;
+    const packet = rel && PACKET.test(rel);
+    const ownFile = rel === owed;
+    if (!((tool === "Read" && packet) || (EDIT_TOOLS.has(tool) && ownFile))) {
+      return { deny: true, reason: `done-gate: write your draft first: ${owed} (every section may read "- unverified"); until it exists you may only read your packet. Then investigate and rewrite it.`, paths: rel ? [rel] : [] };
+    }
+    return { deny: false };
+  }
+  if (tool === "Read") return { deny: false };
 
   if (tool === "Bash") {
     const cmd = String(input.tool_input?.command ?? "");
@@ -88,7 +124,7 @@ export function decide(input, root, config = loadConfig(root), currentRun = null
     // Helpers write only through the edit tools, where the role rules apply; a shell write
     // would bypass them. Pattern-based, so a helper that needs to write says so instead.
     if (HELPER_ROLES.some((r) => agentType === `done-gate:${r}` || agentType === r) && shellWriteOutsideScratch(cmd)) {
-      return { deny: true, reason: "done-gate: helpers write through the shell only under scratch paths (tests/.tmp, /tmp, a scratchpad), never with git write commands or inline interpreter code (node -e, python -c). Put code in a scratch script, use the Write tool for your own file, or report what should change.", paths: [] };
+      return { deny: true, reason: "done-gate: helpers write through the shell only under scratch paths (tests/.tmp, /tmp, a scratchpad) and never with git write commands. Reading, grep, the test command and read-only node -e are fine; use the Write tool for your own file, or report what should change.", paths: [] };
     }
     return { deny: false };
   }

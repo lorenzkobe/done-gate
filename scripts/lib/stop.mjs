@@ -24,6 +24,17 @@ function clearBlocks(ctx) {
   if (session?.blocks?.count) saveSession(ctx.stateDir, { ...session, blocks: { key: null, count: 0 } });
 }
 
+// A done-gate helper this session started since the last prompt and that has not stopped.
+// Bounded: a helper older than HELPER_MAX_MS is treated as gone, so a crashed or hung one
+// cannot let the turn end quietly forever.
+const HELPER_MAX_MS = 45 * 60 * 1000;
+function helperRunning(events, session, now = Date.now()) {
+  const mine = events.filter((e) => e.session === session);
+  const lastPrompt = mine.filter((e) => e.kind === "prompt").pop()?.seq ?? 0;
+  const starts = mine.filter((e) => e.kind === "subagent-start" && e.seq > lastPrompt && String(e.agentType ?? "").startsWith("done-gate:"));
+  return starts.some((st) => now - Date.parse(st.ts ?? 0) < HELPER_MAX_MS && !mine.some((e) => e.kind === "subagent-stop" && e.agent === st.agent && e.seq > st.seq));
+}
+
 // The ledger closes only when the gate agrees it is clean; the session's baseline
 // moves to the current tree so the next task starts from zero changes.
 function finalise(ctx, state) {
@@ -72,6 +83,13 @@ export const verbs = {
 
     const { state, unmet } = result;
     const ledgerOpen = Boolean(state.ledger);
+
+    // a helper this session spawned is still running: the turn ends so the helper's
+    // hand-back can wake the lead; nothing is finalised
+    if (ledgerOpen && helperRunning(state.events ?? [], ctx.session)) {
+      clearBlocks(ctx);
+      return;
+    }
 
     if (ledgerOpen) {
       const pause = PAUSE_RE.exec(lastMessage);

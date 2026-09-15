@@ -144,7 +144,7 @@ test("C1 happy: `gate brief <role>` writes brief-<role>-1.md in the run dir and 
     assert.ok(existsSync(abs), `${role}: ${abs} was not written`);
     assert.equal(out.length, 2, `${role}: expected exactly two printed lines, got:\n${r.stdout}`);
     assert.equal(out[0], `packet: ${abs}`);
-    assert.equal(out[1], `prompt: Read ${abs} and follow your role brief.`);
+    assert.ok(out[1].startsWith(`prompt: Read ${abs} and follow your role brief.`), `${role}: ${out[1]}`);
     assert.ok(path.isAbsolute(abs), `${role}: the packet path is not absolute`);
   }
 });
@@ -320,21 +320,25 @@ test("C5 happy: the reviewer packet holds the unified diff of changed source and
 // C6
 // ---------------------------------------------------------------------------
 
-test("C6 boundary: a diff longer than 1500 lines is cut with a marker naming how many lines were left out", () => {
+test("C6 boundary: a diff longer than 300 lines is not inlined; the packet lists the changed files with line counts instead", () => {
   const repo = opened("packets-c6");
   const big = Array.from({ length: 3000 }, (_, i) => `export const n${i} = ${i};`).join("\n") + "\n";
   write(repo, "src/big.ts", big);
 
   const { text } = packet(repo, "reviewer");
-  const diff = section(text, "Diff");
-  const body = lines(diff);
-  const marker = body[body.length - 1];
+  assert.ok(!headings(text).includes("Diff"), `an oversized diff was inlined:\n${headings(text).join(", ")}`);
+  const files = headings(text).find((h) => h.startsWith("Changed files"));
+  assert.ok(files, `no "Changed files" section for the oversized diff (got ${headings(text).join(", ")})`);
+  assert.match(files, /\d+ lines/, `the heading does not say how long the diff is: ${files}`);
+  const body = section(text, files);
+  assert.ok(body.includes("src/big.ts"), `the changed file is not listed:\n${body}`);
+  assert.match(body, /src\/big\.ts \(source, 3000 lines now\)/, `no line count for src/big.ts:\n${body}`);
+  assert.ok(!text.includes("export const n2999 = 2999;"), "the oversized diff's tail was inlined anyway");
 
-  const m = /^\[truncated: (\d+) more lines, see git diff\]$/.exec(marker);
-  assert.ok(m, `the diff section does not end with the truncation marker, it ends with:\n${marker}`);
-  assert.ok(Number(m[1]) > 0, `the marker names ${m[1]} more lines`);
-  assert.ok(body.length - 1 <= 1500, `the diff shows ${body.length - 1} lines, over the 1500 cap`);
-  assert.ok(!text.includes("export const n2999 = 2999;"), "the tail of the oversized diff was not cut");
+  // a short diff is still inlined
+  const small = opened("packets-c6-small");
+  write(small, "src/a.ts", "export const a = 2;\n");
+  assert.ok(headings(packet(small, "reviewer").text).includes("Diff"), "a short diff must still be inlined");
 });
 
 // ---------------------------------------------------------------------------
@@ -529,7 +533,7 @@ test("C12 boundary: untracked or non-git files appear in the reviewer diff as al
 
 test("C13 happy: the four agent files say their inputs are in the packet and no longer tell the reviewer to diff itself; frontmatter unchanged", () => {
   const ROLES = ["skeptic", "qa", "reviewer", "reviewer-2"];
-  const PINNED = ["name", "model", "disallowedTools", "maxTurns", "effort"];
+  const PINNED = ["name", "model", "disallowedTools"]; // turn budgets are tuned on their own
 
   // Source of truth for the frontmatter: the committed file, not the working copy.
   const head = (rel) => execFileSync("git", ["show", `HEAD:${rel}`], { cwd: pluginRoot, encoding: "utf8" });
@@ -556,7 +560,7 @@ test("C13 happy: the four agent files say their inputs are in the packet and no 
   }
 
   // The skeptic keeps its identity, its model and its no-editing posture.
-  const skepticFm = frontmatter(readFileSync(path.join(pluginRoot, "agents", "skeptic.md"), "utf8"));
+  const skepticFm = /^---\n([\s\S]*?)\n---\n/.exec(readFileSync(path.join(pluginRoot, "agents", "skeptic.md"), "utf8"))[1].split("\n");
   const fmLine = (key) => skepticFm.find((l) => l.split(":")[0].trim() === key);
   assert.ok(fmLine("name"), "agents/skeptic.md has no name in its frontmatter");
   assert.match(fmLine("model") ?? "", /sonnet/, `agents/skeptic.md is no longer on sonnet: ${fmLine("model")}`);

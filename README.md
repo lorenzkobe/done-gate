@@ -163,6 +163,12 @@ with `gate waive <key> "…"`, and the report lists every waiver.
   that could wedge every session in every repo would cost more than one unreported task.
 - **Zero friction when nothing changed.** Questions, investigations, a second terminal in
   the same repo: the tree hash is unchanged, the gate stays silent.
+- **Helpers write their file first.** A skeptic, reviewer or arbiter may only read its packet
+  and write its own findings file until that file exists; every other read or shell call is
+  refused with "write your draft first". A helper that runs out of turns still leaves a file.
+- **Waiting for a helper is a legal turn end.** While a `done-gate:*` helper this session
+  spawned is still running, the Stop hook lets the turn end quietly (nothing is finalised);
+  the helper's hand-back wakes the lead.
 - **The lead delegates at size standard and up.** With a ledger open and the task sized
   standard or large, the lead's own `Edit`/`Write` on source or tests is refused and it is
   told to brief a worker. A shell edit (`sed -i`, a heredoc) slips past this fence; the

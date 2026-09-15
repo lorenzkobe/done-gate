@@ -13,7 +13,7 @@ import { printNext } from "./next.mjs";
 // A packet is everything a helper needs, generated from gate state and the working tree.
 // The model authors none of it; the helper reads it instead of the ledger and the diff.
 
-const DIFF_CAP = 1500;
+const DIFF_CAP = 300;
 const SAMPLE_LINES = 60;
 
 export function detectFramework(root) {
@@ -194,6 +194,24 @@ function testCommands(state) {
   return cmds.length ? cmds : ["_no verify command in gate.json_"];
 }
 
+// The diff is inlined while it is short; past the cap the helper gets the file list with line
+// counts and reads what it needs, instead of a packet it cannot hold.
+function diffOrFiles(state, heading = "Diff") {
+  const diff = unifiedDiff(state, { cap: Infinity });
+  const lines = diff.split("\n").length;
+  if (lines <= DIFF_CAP) return [`## ${heading}`, "", diff, ""];
+  const changed = state.changed ?? [];
+  const kind = (p) => (state.config.isTest(p) ? "test" : state.config.isSource(p) ? "source" : "other");
+  return [
+    `## Changed files (diff too long to inline: ${lines} lines)`,
+    "",
+    ...changed.map((p) => `- ${p} (${kind(p)}, ${state.now?.files?.[p]?.l ?? "?"} lines now)`),
+    "",
+    "Read the files you need with the Read tool; `git diff` in the repo shows the change.",
+    "",
+  ];
+}
+
 export function renderPacket(state, role, { round, reviewN, skepticN = 1, arbiterN = 1, item = null }) {
   const out = header(state, role, round);
   out.push("## You may write", "", mayWrite(state, role, reviewN, skepticN, arbiterN), "");
@@ -220,12 +238,12 @@ export function renderPacket(state, role, { round, reviewN, skepticN = 1, arbite
     out.push("## Test command", "", ...testCommands(state), "");
     const open = state.ledger.huddles.filter((h) => h.role === "reviewer" || h.role === "reviewer-2").flatMap((h) => h.actOn.filter((a) => !a.closed));
     if (open.length) {
-      out.push("## Diff so far", "", unifiedDiff(state), "");
+      out.push(...diffOrFiles(state, "Diff so far"));
       out.push("## Open findings", "", ...open.map((a) => `- ${a.id} — ${a.text}`), "");
       out.push("## Write your replies to", "", path.join(state.dir, `worker-${reviewN}.md`), "");
     }
   } else {
-    out.push("## Diff", "", unifiedDiff(state), "");
+    out.push(...diffOrFiles(state));
     out.push("## Verify", "", ...verifyLines(state.verify, { tails: false }), "");
     out.push("## Test command", "", ...testCommands(state), "");
     out.push("", "## Write your findings to", "", path.join(state.dir, `review-${reviewN}.md`), "");
@@ -245,6 +263,10 @@ export const verbs = {
     if (!state.ledger) throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
     const rounds = state.ledger.huddles.filter((h) => h.role === role).length;
     const round = Number(flag(ctx.args, "--round")) || rounds + 1;
+    // a round whose earlier file never appeared is not a round: the helper is resumed and
+    // told to write, not briefed again
+    const missing = state.ledger.huddles.filter((h) => h.role === role && h.file && !existsSync(path.join(state.dir, h.file)));
+    if (missing.length) throw new UsageError(`${role} round ${missing[0].round} recorded ${missing[0].file} but the file is not in the run dir; resume that helper and have it write the file (SendMessage: "write ${missing[0].file} now") before briefing another round`);
     // the cap counts review files written as well as huddles recorded, so skipping
     // `gate huddle add` cannot stretch the loop
     // (review files are numbered across both reviewer roles; the second reviewer's own
@@ -270,8 +292,9 @@ export const verbs = {
     }
     const file = path.join(state.dir, `brief-${role}-${round}.md`);
     writeFileSync(file, renderPacket(state, role, { round, reviewN, skepticN, arbiterN, item }));
+    const own = { skeptic: `skeptic-${skepticN}.md`, arbiter: `arbiter-${arbiterN}.md`, reviewer: `review-${reviewN}.md`, "reviewer-2": `review-${reviewN}.md`, worker: `worker-${reviewN}.md` }[role];
     ctx.out(`packet: ${file}`);
-    ctx.out(`prompt: Read ${file} and follow your role brief.`);
+    ctx.out(`prompt: Read ${file} and follow your role brief.${own && role !== "worker" ? ` Your file is ${path.join(state.dir, own)}: write it first, then investigate and rewrite it.` : ""}`);
     printNext(ctx);
   },
 };
