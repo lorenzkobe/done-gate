@@ -223,7 +223,7 @@ test("C2 happy: the full report's Tier block carries the predicted and measured 
 
   const keys = block.find((l) => l.startsWith("auto-N/A:"));
   assert.ok(keys, `no auto-N/A line:\n${block.join("\n")}`);
-  assert.ok(keys.includes("auto-N/A: {skeptic}, {reconcile}"), keys);
+  assert.ok(keys.includes("auto-N/A: {skeptic}"), keys);
 });
 
 // ---------------------------------------------------------------------------

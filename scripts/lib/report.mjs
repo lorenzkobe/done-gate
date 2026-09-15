@@ -2,18 +2,13 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { buildState } from "./assess.mjs";
 import { evaluate } from "./rules.mjs";
-import { loadLedger, runsDir } from "./ledger.mjs";
+import { loadLedger, runsDir, section } from "./ledger.mjs";
 import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
 import { readEvents } from "./events.mjs";
 import { effectiveTier, loadPolicy, renderTierBlock, requires, tiered, tierOf } from "./size.mjs";
 import { isRole, lateOrder } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
-
-export function section(md, heading) {
-  const m = new RegExp(`## ${heading}\\n([\\s\\S]*?)(?=\\n## |$)`).exec(md ?? "");
-  return m ? m[1].replace(/<!--[\s\S]*?-->/g, "").trim() : "";
-}
 
 function tailLines(file, n) {
   if (!existsSync(file)) return "";

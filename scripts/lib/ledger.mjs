@@ -16,6 +16,12 @@ import { printNext } from "./next.mjs";
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PLAYBOOKS = ["feature", "bugfix", "refactor", "plan", "investigation"];
 
+// `## <heading>` section of a markdown file, HTML comments stripped, trimmed; "" when absent.
+export function section(md, heading) {
+  const m = new RegExp(`## ${heading}\\n([\\s\\S]*?)(?=\\n## |$)`).exec(md ?? "");
+  return m ? m[1].replace(/<!--[\s\S]*?-->/g, "").trim() : "";
+}
+
 export function runsDir(stateDir) {
   return path.join(stateDir, "runs");
 }
@@ -35,12 +41,14 @@ export function saveLedger(dir, ledger) {
   return ledger;
 }
 
-// Playbook steps: numbered lines, optional trailing {key} naming the evidence kind.
+// Playbook steps: the `## <name>` section of playbooks.md, numbered lines, optional
+// trailing {key} naming the evidence kind.
 export function playbookSteps(playbook) {
-  const file = path.join(pluginRoot, "skills", "gate", "playbooks", `${playbook}.md`);
-  if (!existsSync(file)) throw new UsageError(`unknown playbook "${playbook}" (have: ${PLAYBOOKS.join(", ")})`);
+  const file = path.join(pluginRoot, "skills", "gate", "playbooks.md");
+  const text = section(readFileSync(file, "utf8").replace(/\r/g, ""), playbook);
+  if (!PLAYBOOKS.includes(playbook) || !text) throw new UsageError(`unknown playbook "${playbook}" (have: ${PLAYBOOKS.join(", ")})`);
   const steps = [];
-  for (const line of readFileSync(file, "utf8").split("\n")) {
+  for (const line of text.split("\n")) {
     const m = /^(\d+)\.\s+(.*?)\s*(?:\{([a-z-]+)\})?\s*$/.exec(line.replace(/\r$/, ""));
     if (!m) continue;
     steps.push({ n: Number(m[1]), key: m[3] ?? null, text: m[2], state: null, note: null, evidence: null, seq: null });
@@ -76,8 +84,19 @@ function ensureGitignore(root) {
   appendFileSync(file, `${current.length && !current.endsWith("\n") ? "\n" : ""}${line}\n`);
 }
 
+const TEMPLATE = `# {{slug}} — {{playbook}} (opened {{opened}})
+
+## Task
+
+<!-- The user's ask, quoted. Then one paragraph in your own words. -->
+
+## Plan
+
+<!-- Approach. Files to touch. If data is touched: queries, indexes, payload, client fetching, cost surface. -->
+`;
+
 function template() {
-  return readFileSync(path.join(pluginRoot, "skills", "gate", "templates", "ledger.md"), "utf8");
+  return TEMPLATE;
 }
 
 export function attachLedger(ctx, slug) {
@@ -172,7 +191,7 @@ function printOpen(ctx, dir, ledger) {
 export const verbs = {
   open(ctx) {
     const [slug, playbook] = ctx.args;
-    if (!slug) throw new UsageError("usage: gate open <slug> <feature|bugfix|refactor|plan>");
+    if (!slug) throw new UsageError("usage: gate open <slug> <feature|bugfix|refactor|plan|investigation>");
     const { dir, ledger } = openLedger(ctx, slug, playbook ?? "feature");
     printOpen(ctx, dir, ledger);
   },

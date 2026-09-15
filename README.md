@@ -45,7 +45,6 @@ judgment out of the model and into hooks that can't be talked out of it.
    ├─ skeptic huddle        ─┘
    │
    ├─ QA writes tests (blind to src)  ║  you implement
-   ├─ reconcile (≤2 rounds)
    │
    ├─ gate verify        ──► verify.json  (exit codes, tails, source hash)
    ├─ drive the real app ──► browser events logged by hooks
@@ -182,8 +181,8 @@ run on the most expensive tier.
 | any | a review finding the model disputes with evidence and the reviewer upholds | arbiter (Opus), rules once in writing |
 
 `gate note plan --files a.ts,b.ts` predicts the tier before the diff exists, so a small
-feature skips the design critique and the QA reconcile round up front; if the diff then
-outgrows the prediction, those steps come back and the gate says so. `gate size` prints the
+feature skips the design critique up front; if the diff then outgrows the prediction, the
+step comes back and the gate says so. `gate size` prints the
 numbers. The policy is in `models.json`. Hard ceiling: **seven helper invocations per task**,
 typically two or three. Always-on context cost is about 500 tokens; everything the hooks do
 is off-model.

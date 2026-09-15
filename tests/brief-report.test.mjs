@@ -81,9 +81,15 @@ function fakeBin(repo, scripts) {
 // source-of-truth anchors (never the implementation's own constants)
 // ---------------------------------------------------------------------------
 
-const playbookPath = (name) => path.join(pluginRoot, "skills", "gate", "playbooks", `${name}.md`);
+const playbookSection = (name) => {
+  const md = readFileSync(path.join(pluginRoot, "skills", "gate", "playbooks.md"), "utf8");
+  const m = new RegExp(`^## ${name}\\s*$`, "m").exec(md);
+  const rest = md.slice(m.index + m[0].length);
+  const end = /^## /m.exec(rest);
+  return end ? rest.slice(0, end.index) : rest;
+};
 const playbookSteps = (name) =>
-  readFileSync(playbookPath(name), "utf8")
+  playbookSection(name)
     .split("\n")
     .filter((l) => /^\d+\.\s/.test(l));
 const keyed = (steps) => steps.filter((l) => /\{[a-z0-9-]+\}\s*$/.test(l.trim()));
@@ -108,7 +114,7 @@ function standardFixture(name, { gateJson = null } = {}) {
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:renders the badge"]);
   cli(repo, "case", ["close", "C2", "--na", "covered by C1's fixture"]);
   cli(repo, "step", ["read", "done", "read it", "--evidence", "events#1"]);
-  cli(repo, "step", ["cleanup", "skipped", "tiny change"]);
+  cli(repo, "step", ["schema", "skipped", "no schema files"]);
   cli(repo, "waive", ["driver", "skip the phone pass this time, chrome is disconnected"]);
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n- null venue crashes\n");
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
@@ -176,8 +182,8 @@ test("C2 happy: `gate check` with unmet items prints only numbered rule lines", 
 
 test("C3 happy: `open`/`attach` print the run dir and keyed steps only; `gate steps` prints every step", () => {
   const feature = playbookSteps("feature");
-  assert.equal(feature.length, 14, "anchor: skills/gate/playbooks/feature.md has 14 numbered steps");
-  assert.equal(keyed(feature).length, 14, "anchor: every feature step carries a {key} today");
+  assert.equal(feature.length, 11, "anchor: the feature playbook has 11 numbered steps");
+  assert.equal(keyed(feature).length, 11, "anchor: every feature step carries a {key} today");
 
   const repo = makeRepo("brief-c3");
   const open = cli(repo, "open", ["slug-c3", "feature"]).stdout;
@@ -196,7 +202,7 @@ test("C3 happy: `open`/`attach` print the run dir and keyed steps only; `gate st
   }
 
   const steps = cli(repo, "steps").stdout;
-  assert.equal(numbered(steps).length, 14);
+  assert.equal(numbered(steps).length, 11);
 
   // the discriminator: a playbook whose steps carry no {key} at all
   const inv = playbookSteps("investigation");
@@ -387,7 +393,7 @@ function c11Fixture(name, bin) {
   go("case", ["close", "C1", "--test", "tests/a.test.ts:renders"]);
   go("case", ["close", "C2", "--na", "covered by C1"]);
   go("step", ["read", "done", "read it", "--evidence", "events#1"]);
-  go("step", ["cleanup", "skipped", "tiny change"]);
+  go("step", ["schema", "skipped", "no schema files"]);
   go("waive", ["driver", "skip the phone pass"]);
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n- null venue crashes\n");
   go("huddle", ["add", "reviewer", "--file", "review-1.md"]);

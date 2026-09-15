@@ -25,7 +25,7 @@ test("report renders every section, the summary counts, and embeds the reviewer'
   cli(repo, "case", ["add", "renders badge", "--kind", "happy"]);
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:renders"]);
   cli(repo, "step", ["read", "done", "read it", "--evidence", "events#1"]);
-  cli(repo, "step", ["cleanup", "skipped", "tiny change"]);
+  cli(repo, "step", ["schema", "skipped", "no schema files"]);
   cli(repo, "waive", ["driver", "skip the phone pass"]);
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n- null venue crashes\n");
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);

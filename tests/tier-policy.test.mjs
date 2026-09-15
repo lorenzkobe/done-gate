@@ -277,7 +277,7 @@ test("C4 happy: snapshot entries carry a line count l; a cached entry without l 
 // C5
 // ---------------------------------------------------------------------------
 
-test("C5 happy: note plan --files src/a.ts predicts small, marks {skeptic} and {reconcile} N/A with note 'tier small (predicted)', fills autoNa, and prints the predicted tier", () => {
+test("C5 happy: note plan --files src/a.ts predicts small, marks {skeptic} N/A with note 'tier small (predicted)', fills autoNa, and prints the predicted tier", () => {
   const repo = committed("tier-c5");
   cli(repo, "open", ["badge", "feature"]);
   cli(repo, "note", ["task", "Add a badge. [inferred]"]);
@@ -287,12 +287,9 @@ test("C5 happy: note plan --files src/a.ts predicts small, marks {skeptic} and {
   const l = ledgerOf(repo);
   assert.equal(l.tier.predicted, "small");
   assert.deepEqual(l.tier.predictedFiles, ["src/a.ts"]);
-  assert.deepEqual([...l.tier.autoNa].sort(), ["reconcile", "skeptic"]);
-
-  for (const key of ["skeptic", "reconcile"]) {
-    assert.equal(stepOf(l, key).state, "N/A", key);
-    assert.equal(stepOf(l, key).note, "tier small (predicted)", key);
-  }
+  assert.deepEqual(l.tier.autoNa, ["skeptic"]);
+  assert.equal(stepOf(l, "skeptic").state, "N/A");
+  assert.equal(stepOf(l, "skeptic").note, "tier small (predicted)");
   assert.equal(stepOf(l, "qa").state, null, "QA is never dropped");
   assert.equal(stepOf(l, "review").state, null, "the reviewer is never dropped");
 });
@@ -320,7 +317,6 @@ test("C6 edge: a second note plan --files with two files revises to standard: th
   assert.deepEqual(l.tier.predictedFiles, ["src/a.ts", "src/b.ts"]);
   assert.deepEqual(l.tier.autoNa, []);
   assert.equal(stepOf(l, "skeptic").state, null);
-  assert.equal(stepOf(l, "reconcile").state, null);
   assert.equal(stepOf(l, "schema").state, "N/A", "a hand-written N/A is not an auto one");
   assert.equal(stepOf(l, "schema").note, "no schema files touched");
 });
@@ -405,18 +401,18 @@ test("C9 boundary: a non-git repo measures every file by line delta and every ro
 // C10
 // ---------------------------------------------------------------------------
 
-test("C10 refused: growth from small to standard blanks {skeptic} and {reconcile} once, including a hand-written N/A; check names them under R8, never R14; a second check leaves ledger.json byte-identical", () => {
+test("C10 refused: growth from small to standard blanks the auto-N/A {skeptic}; a hand-written N/A on {skeptic} is blanked too; check names it under R8, never R14; a second check leaves ledger.json byte-identical", () => {
   const repo = committed("tier-c10");
   cli(repo, "open", ["grow", "feature"]);
   cli(repo, "note", ["task", "One small change. [inferred]"]);
   cli(repo, "note", ["plan", "Touch one file.", "--files", "src/a.ts"]);
-  // {reconcile}'s N/A is now hand-written, not the auto one; it must still be reopened.
-  cli(repo, "step", ["reconcile", "na", "nothing to reconcile, tiny change"]);
+  // {skeptic}'s N/A is now hand-written over the auto one; it must still be blanked on growth.
+  cli(repo, "step", ["skeptic", "na", "no design risk, tiny change"]);
 
   const predicted = ledgerOf(repo);
   assert.equal(predicted.tier.predicted, "small");
   assert.equal(stepOf(predicted, "skeptic").state, "N/A");
-  assert.equal(stepOf(predicted, "reconcile").note, "nothing to reconcile, tiny change");
+  assert.equal(stepOf(predicted, "skeptic").note, "no design risk, tiny change");
   const beforeGrowth = check(repo);
   assert.ok(!/R8 — step\(s\) blank: [^\n]*\{skeptic\}/.test(beforeGrowth), "nothing has outgrown its tier yet");
 
@@ -430,12 +426,10 @@ test("C10 refused: growth from small to standard blanks {skeptic} and {reconcile
   const r8 = out.split("\n").find((l) => l.includes("R8") && l.includes("step(s) blank"));
   assert.ok(r8, out);
   assert.match(r8, /\{skeptic\}/);
-  assert.match(r8, /\{reconcile\}/);
 
   const grown = ledgerOf(repo);
   assert.equal(grown.tier.measured.tier, "standard");
-  assert.equal(stepOf(grown, "skeptic").state, null, "auto N/A blanked");
-  assert.equal(stepOf(grown, "reconcile").state, null, "hand-written N/A blanked too");
+  assert.equal(stepOf(grown, "skeptic").state, null, "hand-written N/A blanked");
   assert.equal("reopened" in grown.tier, false, "no reopened list is kept");
 
   // Re-measuring is idempotent: no write.
@@ -455,7 +449,6 @@ test("C11 edge: a DONE or WAIVED step is never reopened by further growth", () =
   cli(repo, "note", ["task", "One small change. [inferred]"]);
   cli(repo, "note", ["plan", "Touch one file.", "--files", "src/a.ts"]);
   cli(repo, "step", ["skeptic", "done", "huddled, no findings", "--evidence", "events#1"]);
-  cli(repo, "waive", ["reconcile", "skip the reconcile round, I read the tests myself"]);
 
   write(repo, "src/a.ts", "export const a = 2;\n");
   write(repo, "src/b.ts", "export const b = 1;\n");
@@ -466,7 +459,6 @@ test("C11 edge: a DONE or WAIVED step is never reopened by further growth", () =
   const l = ledgerOf(repo);
   assert.equal(l.tier.measured.tier, "standard");
   assert.equal(stepOf(l, "skeptic").state, "DONE");
-  assert.equal(stepOf(l, "reconcile").state, "WAIVED");
   assert.ok(!out.includes("R14"), out);
 });
 
@@ -630,7 +622,7 @@ test("C18 boundary: a git repo with no commits measures changed files by line de
 // C19
 // ---------------------------------------------------------------------------
 
-test("C19 edge: a waived {skeptic} stays WAIVED when the diff grows; only the auto-N/A {reconcile} goes blank", () => {
+test("C19 edge: a waived {skeptic} stays WAIVED when the diff grows; nothing goes blank", () => {
   const repo = committed("tier-c19");
   cli(repo, "open", ["waived", "feature"]);
   cli(repo, "note", ["task", "Small change. [inferred]"]);
@@ -646,18 +638,9 @@ test("C19 edge: a waived {skeptic} stays WAIVED when the diff grows; only the au
   const l = ledgerOf(repo);
   assert.equal(l.tier.measured.tier, "standard");
   assert.equal(stepOf(l, "skeptic").state, "WAIVED", "a waiver survives growth");
-  // {reconcile} was auto-N/A'd by the same small prediction and goes blank, so R8
-  // names it alone: the waived step is never named.
-  assert.equal(stepOf(l, "reconcile").state, null);
   const r8 = out.split("\n").find((x) => x.includes("R8") && x.includes("step(s) blank"));
-  assert.match(r8, /\{reconcile\}/);
-  assert.ok(!r8.includes("{skeptic}"), r8);
-
-  // Waive the reopened step too and nothing is left to reopen.
-  cli(repo, "waive", ["reconcile", "skip the reconcile round as well"]);
-  const out2 = check(repo);
-  assert.ok(!out2.includes("R14"), out2);
-  assert.equal(stepOf(ledgerOf(repo), "skeptic").state, "WAIVED");
+  assert.ok(!r8 || !r8.includes("{skeptic}"), r8);
+  assert.ok(!out.includes("R14"), out);
 });
 
 // ---------------------------------------------------------------------------
@@ -667,11 +650,11 @@ test("C19 edge: a waived {skeptic} stays WAIVED when the diff grows; only the au
 test("C20 refused: only the feature playbook auto-N/As at tier small; bugfix and refactor skip nothing", () => {
   // The source of truth for which steps a tier may drop, per playbook.
   assert.deepEqual(Object.keys(OPTIONAL_STEPS).sort(), ["bugfix", "feature", "refactor"]);
-  assert.deepEqual(OPTIONAL_STEPS.feature, ["skeptic", "reconcile"]);
-  assert.deepEqual(OPTIONAL_STEPS.bugfix, [], "bugfix's {reconcile} is the GREEN proof");
+  assert.deepEqual(OPTIONAL_STEPS.feature, ["skeptic"]);
+  assert.deepEqual(OPTIONAL_STEPS.bugfix, []);
   assert.deepEqual(OPTIONAL_STEPS.refactor, []);
   assert.deepEqual(optionalSteps({ playbook: "bugfix" }), []);
-  assert.deepEqual(optionalSteps({ playbook: "feature" }), ["skeptic", "reconcile"]);
+  assert.deepEqual(optionalSteps({ playbook: "feature" }), ["skeptic"]);
   assert.deepEqual(optionalSteps({ playbook: "plan" }), [], "the plan playbook is never tiered");
 
   for (const playbook of ["bugfix", "refactor"]) {
@@ -684,8 +667,6 @@ test("C20 refused: only the feature playbook auto-N/As at tier small; bugfix and
     const l = ledgerOf(repo);
     assert.equal(l.tier.predicted, "small", playbook);
     assert.deepEqual(l.tier.autoNa, [], `${playbook} drops no step`);
-    const reconcile = stepOf(l, "reconcile");
-    if (reconcile) assert.equal(reconcile.state, null, `${playbook} {reconcile} stays blank`);
     for (const step of l.steps) {
       assert.notEqual(step.note, "tier small (predicted)", `${playbook}: ${step.key}`);
     }

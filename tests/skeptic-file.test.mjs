@@ -62,7 +62,7 @@ function opened(name, { planFiles = "src/a.ts,src/app/page.tsx", files = {} } = 
 // ---------------------------------------------------------------------------
 // source-of-truth anchors
 //   agent roles + their models   → models.json
-//   playbook step keys and order → skills/gate/playbooks/feature.md
+//   playbook step keys and order → skills/gate/playbooks.md (## feature)
 //   agent turn budgets           → each agent file's own frontmatter
 //   tests globs                  → the repo's .claude/gate.json
 // Never the renderer's or the guard's own tables.
@@ -72,7 +72,11 @@ const AGENTS_DIR = path.join(pluginRoot, "agents");
 const SKILL_MD = path.join(pluginRoot, "skills", "gate", "SKILL.md");
 
 function playbookKeys(playbook) {
-  const md = readFileSync(path.join(pluginRoot, "skills", "gate", "playbooks", `${playbook}.md`), "utf8");
+  const all = readFileSync(path.join(pluginRoot, "skills", "gate", "playbooks.md"), "utf8");
+  const m = new RegExp(`^## ${playbook}\\s*$`, "m").exec(all);
+  const rest = all.slice(m.index + m[0].length);
+  const end = /^## /m.exec(rest);
+  const md = end ? rest.slice(0, end.index) : rest;
   return md.split("\n").flatMap((l) => {
     const m = /^\s*\d+\.\s.*\{([a-z0-9-]+)\}\s*$/.exec(l);
     return m ? [m[1]] : [];

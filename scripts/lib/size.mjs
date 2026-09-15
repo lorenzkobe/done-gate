@@ -86,11 +86,10 @@ export function tierFor(policy, { files = 0, lines = 0, forced = [] } = {}) {
   return tier;
 }
 
-// Steps a small task may skip, per playbook. Only the feature playbook has a design huddle
-// and a QA reconcile round; bugfix's {reconcile} is the proof that the failing test now
-// passes and refactor has neither, so tier small skips nothing there. Skipped steps come
-// back the moment the diff outgrows the tier.
-export const OPTIONAL_STEPS = { feature: ["skeptic", "reconcile"], bugfix: [], refactor: [] };
+// Steps a small task may skip, per playbook. Only the feature playbook has a design huddle;
+// bugfix and refactor have none, so tier small skips nothing there. Skipped steps come back
+// the moment the diff outgrows the tier.
+export const OPTIONAL_STEPS = { feature: ["skeptic"], bugfix: [], refactor: [] };
 const TIERED_PLAYBOOKS = new Set(Object.keys(OPTIONAL_STEPS));
 export function optionalSteps(ledgerOrPlaybook) {
   const playbook = typeof ledgerOrPlaybook === "string" ? ledgerOrPlaybook : ledgerOrPlaybook?.playbook;

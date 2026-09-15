@@ -59,7 +59,11 @@ function committed(name, files = {}) {
 // ---------------------------------------------------------------------------
 
 function playbookKeys(playbook) {
-  const md = readFileSync(path.join(pluginRoot, "skills", "gate", "playbooks", `${playbook}.md`), "utf8");
+  const all = readFileSync(path.join(pluginRoot, "skills", "gate", "playbooks.md"), "utf8");
+  const m = new RegExp(`^## ${playbook}\\s*$`, "m").exec(all);
+  const rest = all.slice(m.index + m[0].length);
+  const end = /^## /m.exec(rest);
+  const md = end ? rest.slice(0, end.index) : rest;
   return md.split("\n").flatMap((l) => {
     const m = /^\s*\d+\.\s.*\{([a-z0-9-]+)\}\s*$/.exec(l);
     return m ? [m[1]] : [];
@@ -161,7 +165,7 @@ test("C2 edge: after the case table the hint names `gate brief skeptic` at tier 
 // ---------------------------------------------------------------------------
 
 test("C3 happy: once {qa} is closed the hint moves to the next blank step; a bugfix's first step hint is {repro}", () => {
-  const repo = opened("next-c3", { planFiles: "src/a.ts" }); // tier small: {skeptic}/{reconcile} auto-N/A
+  const repo = opened("next-c3", { planFiles: "src/a.ts" }); // tier small: {skeptic} auto-N/A
   cli(repo, "step", ["read", "done", "read the card", "--evidence", "events#1"]);
   cli(repo, "case", ["add", "renders the badge", "--kind", "happy"]);
 

@@ -30,13 +30,13 @@ description: The done-gate workflow. Use before any task that will change source
 1. `gate open <slug> <feature|bugfix|refactor|plan>`.
 2. Before any edit: `gate note task "<the ask, quoted, then your words>"`,
    `gate note plan "<approach>" --files a.ts,b.ts` (the files predict the size; one plain
-   file is small and a feature then skips the skeptic and reconcile), then
+   file is small and a feature then skips the skeptic), then
    `gate case add "<case>" --kind <happy|edge|refused|boundary|idempotent|reported-surface>`
    per row. R2 checks the order.
 3. Follow each `next:` line. Helpers are spawned from packets: `gate brief <role>` prints a
    one-sentence prompt. Roles: `done-gate:skeptic` (writes
-   `skeptic-<n>.md`), `done-gate:qa` (blind tests under the tests globs;
-   reconcile at most twice), `done-gate:reviewer` (writes `review-<n>.md`; at most two
+   `skeptic-<n>.md`), `done-gate:qa` (blind tests under the tests globs),
+   `done-gate:reviewer` (writes `review-<n>.md`; at most two
    rounds, the second on Opus when size or round one calls for it),
    `done-gate:reviewer-2` (high-risk paths). A finding you believe wrong:
    `gate huddle dispute H<k>.<i> "<why>" --evidence <ptr>`, one round; if the reviewer

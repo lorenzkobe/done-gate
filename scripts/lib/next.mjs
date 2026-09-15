@@ -10,15 +10,12 @@ const VERB_FOR = {
   rootcause: "find the root cause with runtime evidence, then `gate step rootcause done \"<cause>\" --evidence <file:line>`",
   skeptic: "`gate brief skeptic`, spawn done-gate:skeptic with the prompt it prints (it writes skeptic-<n>.md and replies with its Act-on list), then `gate huddle add skeptic --file skeptic-<n>.md`, answer each item, and `gate step skeptic done … --evidence skeptic-<n>.md`",
   qa: "`gate brief qa`, spawn done-gate:qa with the prompt it prints, then `gate step qa done … --evidence <test file>`",
-  implement: "implement, keeping the diff to the plan, then `gate step implement done \"…\" --evidence <file>`",
-  reconcile: "reconcile with QA (code-wrong, test-wrong, or ask the user), close each case with `gate case close C<n> --test <file:name>`, then `gate step reconcile done … --evidence <test file>`",
+  implement: "implement, keeping the diff to the plan; where QA's tests and the code disagree, decide code-wrong, test-wrong or ask the user, close each case with `gate case close C<n> --test <file:name>`, then `gate step implement done \"…\" --evidence <file>`",
   verify: "`gate verify`",
   "verify-before": "`gate verify --step verify-before`",
   driver: "drive the real surface yourself (phone viewport first), then `gate decide driver …` and `gate step driver done … --evidence decisions#<n>` (or `na` when no UI changed); never ask for a waiver here to save time",
   schema: "probe the real schema yourself, then `gate step schema done \"<what you ran>\" --evidence <ptr>` (or `na` when no schema file changed); never ask for a waiver here to save time",
-  cleanup: "sweep dead code and duplication, then `gate step cleanup done \"…\" --evidence <file>`",
   review: "`gate brief reviewer`, spawn done-gate:reviewer with the prompt it prints, then `gate huddle add reviewer --file review-<n>.md`, one `gate huddle acton` per Act-on item, fix, `gate huddle resolve`, then `gate step review done … --evidence review-<n>.md`; you own the diff and the summary, the reviewer's file is embedded as it wrote it; a finding you believe is wrong: `gate huddle dispute H<k>.<i> \"<why>\" --evidence <ptr>`, one round with the reviewer, and if it upholds, `gate brief arbiter --item H<k>.<i>` and spawn done-gate:arbiter",
-  docs: "update docs and CLAUDE.md if the next assistant must know something, then `gate step docs done|na …`",
   close: "`gate close`",
 };
 

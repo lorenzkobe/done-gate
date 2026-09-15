@@ -58,13 +58,13 @@ test("case add/close builds the case table; close needs a test pointer or --na",
 test("step marks a step DONE/SKIPPED/N-A with a note; evidenced steps refuse SKIPPED; DONE needs --evidence", () => {
   const repo = opened("verbs-step");
   cli(repo, "step", ["read", "done", "read CourtCard + its 3 callers", "--evidence", "events#1"]);
-  cli(repo, "step", ["cleanup", "skipped", "one-line change, nothing to sweep"]);
-  cli(repo, "step", ["10", "na", "no schema files touched"]);
+  cli(repo, "step", ["schema", "skipped", "no schema files touched"]);
+  cli(repo, "step", ["6", "na", "nothing to implement in this fixture"]);
   const steps = ledgerOf(repo).steps;
   assert.equal(steps.find((s) => s.key === "read").state, "DONE");
   assert.equal(steps.find((s) => s.key === "read").evidence, "events#1");
-  assert.equal(steps.find((s) => s.key === "cleanup").state, "SKIPPED");
-  assert.equal(steps.find((s) => s.n === 10).state, "N/A");
+  assert.equal(steps.find((s) => s.key === "schema").state, "SKIPPED");
+  assert.equal(steps.find((s) => s.n === 6).state, "N/A");
   const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
   const refuse = spawnSync(process.execPath, [gate, "step", "verify", "skipped", "busy"], { encoding: "utf8", env });
   assert.match(refuse.stderr, /cannot be SKIPPED/);
