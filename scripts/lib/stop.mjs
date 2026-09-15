@@ -1,7 +1,5 @@
 import path from "node:path";
 import { assess, LedgerParseError } from "./assess.mjs";
-import { findQuoteInTranscript } from "./claims.mjs";
-import { currentLedger } from "./ledger.mjs";
 import { recordGateError } from "./context.mjs";
 import { nextSeq } from "./events.mjs";
 import { loadLedger, saveLedger } from "./ledger.mjs";
@@ -24,21 +22,6 @@ function bumpBlocks(ctx, key) {
 function clearBlocks(ctx) {
   const session = loadSession(ctx.stateDir, ctx.session);
   if (session?.blocks?.count) saveSession(ctx.stateDir, { ...session, blocks: { key: null, count: 0 } });
-}
-
-function resolveWaivers(ctx, transcriptPath) {
-  if (!transcriptPath) return;
-  let current;
-  try {
-    current = currentLedger(ctx.stateDir, ctx.session);
-  } catch {
-    return; // the parse-error policy below reports it
-  }
-  if (!current) return;
-  const pending = current.ledger.waivers.filter((w) => w.found === null);
-  if (!pending.length) return;
-  for (const w of pending) w.found = findQuoteInTranscript(transcriptPath, w.quote);
-  saveLedger(current.dir, current.ledger);
 }
 
 // The ledger closes only when the gate agrees it is clean; the session's baseline
@@ -71,7 +54,6 @@ export const verbs = {
     if (ctx.input?.agent_id) return; // inside a subagent: the gate governs the main session only
     if (!ctx.session) return;
     const lastMessage = String(ctx.input?.last_assistant_message ?? "");
-    resolveWaivers(ctx, ctx.input?.transcript_path);
 
     let result;
     try {

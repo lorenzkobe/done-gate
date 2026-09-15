@@ -364,12 +364,12 @@ test("C9 boundary: a malformed stop payload exits 0, surfaces no usage error and
 // C10
 // ---------------------------------------------------------------------------
 
-test("C10 boundary: SKILL.md is under 4096 bytes and still carries R1..R14, the verbs and the plain-words rule", () => {
+test("C10 boundary: SKILL.md is under 4096 bytes and still carries the live rules, the verbs and the plain-words rule", () => {
   const size = statSync(SKILL_MD).size;
   assert.ok(size < 4096, `skills/gate/SKILL.md is ${size} bytes, the budget is 4096`);
 
   const text = readFileSync(SKILL_MD, "utf8");
-  for (let i = 1; i <= 14; i += 1) {
+  for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15]) {
     assert.match(text, new RegExp(`\\bR${i}\\b`), `SKILL.md no longer names rule R${i}`);
   }
   for (const fragment of ["gate open", "gate note", "gate case", "gate brief", "gate verify", "gate report --brief"]) {

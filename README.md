@@ -30,8 +30,7 @@ judgment out of the model and into hooks that can't be talked out of it.
 | Tests written from the same wrong assumption as the code | A QA agent writes tests from the **requirements and case table**, fenced so it can't read the new code or write outside `tests/`. |
 | "Tests pass" that were never run | `gate verify` runs lint/test/build itself and records exit codes. Only that file counts, and it goes stale the moment source changes again. |
 | Nobody else looked at it | An independent reviewer on a different model, fresh context, writes its own findings file. Act-on items block the close. |
-| Confident claims with nothing behind them | Every claim carries `[measured] (pointer)`, `[inferred]` or `[guess]`. A `[measured]` whose pointer doesn't resolve blocks. |
-| A "waiver" you never gave | The quoted words must appear in a user message of the transcript. |
+| A "waiver" you never gave | Every waiver is listed in the final report with its reason. |
 
 ## How it works
 
@@ -152,14 +151,12 @@ attempt to finish.
 | R8 | any case, step or blast-radius row is blank |
 | R9 | high-risk paths changed without the second reviewer |
 | R10 | a repo check failed (`claude-md-budget`, `migration-number`) |
-| R11 | a verification claim has no label, or its `[measured]` pointer doesn't resolve |
-| R12 | a waiver quotes words the user never said |
 | R13 | `.claude/gate.json` changed mid-task |
 | R14 | the task outgrew its predicted size and a step that size requires is blank again |
 | R15 | a helper's file lists more findings than the ledger recorded |
 
-Waivers are the only way past a keyed step: the user says it, Claude records the exact
-words with `gate waive <key> "…"`, and the gate checks the transcript.
+Waivers are the only way past a keyed step: the user OKs it, Claude records the reason
+with `gate waive <key> "…"`, and the report lists every waiver.
 
 ## Guarantees, and their edges
 
@@ -206,7 +203,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `step <key\|n> done\|skipped\|na "…" [--evidence ptr]` | close a playbook step |
 | `blast add "…" --rung 1-5 --proof "…"` | a blast-radius fact |
 | `huddle add <role> --file review-1.md` · `acton` · `resolve` | reviewer rounds and Act-on items |
-| `waive <key> "<user's words>"` | record a waiver for the transcript check |
+| `waive <key> "<reason>"` | record a waiver; it shows in the report |
 | `verify [--step verify-before]` | run the repo's verify commands, write `verify.json` |
 | `decide <phase> <decision> <why> <evidence> <result>` | append a decision-log row |
 | `brief <skeptic\|qa\|reviewer\|reviewer-2> [--round n]` | write the helper's packet and print its spawn prompt |

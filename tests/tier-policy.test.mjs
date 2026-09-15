@@ -10,7 +10,6 @@ import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { evaluate } from "../scripts/lib/rules.mjs";
 import { snapshot, diffSnapshots } from "../scripts/lib/tree.mjs";
-import { lintClaims } from "../scripts/lib/claims.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
 import { loadPolicy, tierFor } from "../scripts/lib/policy.mjs";
 import { measure, OPTIONAL_STEPS, optionalSteps } from "../scripts/lib/size.mjs";
@@ -560,29 +559,6 @@ test("C14 refused: a source edit made through a shell command after the reviewer
 
   browserEvent(r4);
   assert.ok(!check(r4).includes("R4"), "a browser call after the shell edit clears it again");
-});
-
-// ---------------------------------------------------------------------------
-// C15
-// ---------------------------------------------------------------------------
-
-test("C15 boundary: the brief for a ledger with an unproven fact passes lintClaims with no findings", () => {
-  const repo = committed("tier-c15");
-  cli(repo, "open", ["badge", "feature"]);
-  cli(repo, "note", ["task", "Add a badge to the venue card. [inferred]"]);
-  cli(repo, "note", ["plan", "One component, no data change."]);
-  cli(repo, "case", ["add", "renders badge", "--kind", "happy"]);
-  cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:renders the badge"]);
-  // rung 2 is below 4, so the gate records this fact as unproven.
-  cli(repo, "blast", ["add", "only one consumer", "--rung", "2", "--proof", "src/a.ts:1"]);
-  write(repo, "src/a.ts", "export const a = 2;\n");
-
-  const l = ledgerOf(repo);
-  assert.equal(l.blast[0].unproven, true, "the fixture must actually carry an unproven fact");
-
-  const text = cli(repo, "report", ["--brief"]).stdout;
-  assert.match(text, /only one consumer/, "the brief must still surface the fact");
-  assert.deepEqual(lintClaims(text, () => true), []);
 });
 
 // ---------------------------------------------------------------------------

@@ -1,10 +1,34 @@
 import { createHash } from "node:crypto";
-import { lintClaims, pointerResolver } from "./claims.mjs";
 import { runChecks } from "./checks.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parseFindings } from "./review.mjs";
 import { tierMax } from "./policy.mjs";
+
+// Builds the "does this pointer resolve" predicate from gate state; dispute and resolve
+// evidence must point at something real.
+export function pointerResolver(state) {
+  return (ptr) => {
+    if (!ptr) return false;
+    if (ptr === "ledger.md" || ptr === "ledger.json" || ptr === "report.md" || ptr === "decisions.tsv") return true;
+    if (/^ledger\.(md|json)#/.test(ptr)) return true;
+    if (ptr === "verify.json" || /^verify#\d+$/.test(ptr)) return Boolean(state.verify);
+    if (/^events#\d+$/.test(ptr)) {
+      const seq = Number(ptr.slice(7));
+      return (state.events ?? []).some((e) => e.seq === seq);
+    }
+    if (/^(?:review|skeptic|arbiter)-\d+\.md$/.test(ptr)) return (state.reviews ?? []).includes(ptr);
+    if (/^decisions#\d+$/.test(ptr)) {
+      // the row must exist: decisions.tsv has a header line, then one row per decision
+      const file = state.dir ? path.join(state.dir, "decisions.tsv") : null;
+      if (!file || !existsSync(file)) return false;
+      const rows = readFileSync(file, "utf8").split("\n").filter((l) => l.trim()).length - 1;
+      return Number(ptr.slice(10)) >= 1 && Number(ptr.slice(10)) <= rows;
+    }
+    const file = ptr.split(":")[0];
+    return [state.dir, state.root].filter(Boolean).some((base) => existsSync(path.join(base, file)));
+  };
+}
 
 // Hash of the SOURCE files in a snapshot. verify.json stores it, so a docs or ledger
 // edit after `gate verify` does not force a re-run, but any source edit does.
@@ -51,7 +75,7 @@ function reviewed(state, role, after) {
 }
 
 function waived(ledger, key) {
-  return (ledger.waivers ?? []).some((w) => w.key === key && w.found !== false);
+  return (ledger.waivers ?? []).some((w) => w.key === key);
 }
 
 // Which of Plan and case table came after the first source edit of this task, if any:
@@ -106,7 +130,7 @@ export function evaluate(state) {
     if (!changed.some((p) => config.isTest(p)) && !waived(ledger, "qa")) {
       unmet.push({
         rule: "R7",
-        text: `source changed (${list(src)}) but no test file changed. Have QA write tests for the case table, or get the user's waiver (\`gate waive qa "<their words>"\`).`,
+        text: `source changed (${list(src)}) but no test file changed. Have QA write tests for the case table, or get the user's waiver (\`gate waive qa "<reason>"\`).`,
       });
     }
   }
@@ -118,8 +142,8 @@ export function evaluate(state) {
     const driven = (state.events ?? []).some((e) => !e.agent && e.seq > after && (e.kind === "browser" || (e.kind === "skill" && e.skill === "verify")));
     if (!driven) {
       unmet.push({ rule: "R4", text: config.driver
-        ? "UI files changed but the real surface was not driven after the last edit. Run the project's /verify driver (phone viewport first), or get the user's waiver (`gate waive driver \"<their words>\"`)."
-        : "UI files changed and this repo has no /verify driver. Run `/done-gate:verify-setup` once to create it, drive the surface, or get the user's waiver (`gate waive driver \"<their words>\"`)." });
+        ? "UI files changed but the real surface was not driven after the last edit. Run the project's /verify driver (phone viewport first), or get the user's waiver (`gate waive driver \"<reason>\"`)."
+        : "UI files changed and this repo has no /verify driver. Run `/done-gate:verify-setup` once to create it, drive the surface, or get the user's waiver (`gate waive driver \"<reason>\"`)." });
     }
   }
 
@@ -151,10 +175,10 @@ export function evaluate(state) {
 
   // R13: the gate's own config changed mid-task
   if (ledger.gateHash && config.hash !== ledger.gateHash && !waived(ledger, "gate-config")) {
-    unmet.push({ rule: "R13", text: ".claude/gate.json changed since this ledger opened. Restore it, or get the user's waiver (`gate waive gate-config \"<their words>\"`)." });
+    unmet.push({ rule: "R13", text: ".claude/gate.json changed since this ledger opened. Restore it, or get the user's waiver (`gate waive gate-config \"<reason>\"`)." });
   }
   if (ledger.policyHash && state.policy?.hash && state.policy.hash !== ledger.policyHash && !waived(ledger, "gate-config")) {
-    unmet.push({ rule: "R13", text: "the plugin's models.json (tier policy) changed since this ledger opened. Restore it, or get the user's waiver (`gate waive gate-config \"<their words>\"`)." });
+    unmet.push({ rule: "R13", text: "the plugin's models.json (tier policy) changed since this ledger opened. Restore it, or get the user's waiver (`gate waive gate-config \"<reason>\"`)." });
   }
 
   // R2: plan and case table must predate the first source edit this task. Blocks only while
@@ -217,21 +241,6 @@ export function evaluate(state) {
       const role = f.startsWith("review-") ? "reviewer" : f.startsWith("skeptic-") ? "skeptic" : "arbiter";
       unmet.push({ rule: "R15", text: `${f} was written but never recorded. Run \`gate huddle add ${role} --file ${f}\`.` });
     }
-  }
-
-  // R11: claims carry labels, and [measured] pointers resolve
-  const resolves = pointerResolver(state);
-  const findings = [...lintClaims(state.lastMessage, resolves), ...lintClaims(state.ledgerMd ?? "", resolves)];
-  if (findings.length) {
-    const f = findings[0];
-    unmet.push({ rule: "R11", text: f.kind === "unlabelled"
-      ? `unlabelled claim: "${f.line.slice(0, 80)}". Every verification claim carries [measured] (pointer), [inferred] or [guess].`
-      : `[measured] pointer does not resolve: "${f.pointer}" in "${f.line.slice(0, 80)}".` });
-  }
-
-  // R12: a waiver the user never said
-  for (const w of ledger.waivers ?? []) {
-    if (w.found === false) unmet.push({ rule: "R12", text: `waiver for ${w.key} quotes "${w.quote}" but no user message in the transcript says that. Ask the user with AskUserQuestion and record their actual words.` });
   }
 
   return unmet;

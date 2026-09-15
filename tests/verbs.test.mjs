@@ -100,13 +100,13 @@ test("huddle add / acton / resolve track a review round and its Act-on items", (
   assert.equal(h.actOn[1].closed, null);
 });
 
-test("waive records the user's words against a step key or rule", () => {
+test("waive records a reason against a step key or rule", () => {
   const repo = opened("verbs-waive");
   cli(repo, "waive", ["driver", "skip the phone pass this time, chrome is disconnected"]);
   const [w] = ledgerOf(repo).waivers;
   assert.equal(w.key, "driver");
-  assert.match(w.quote, /chrome is disconnected/);
-  assert.equal(w.found, null);
+  assert.match(w.reason, /chrome is disconnected/);
+  assert.equal("found" in w, false);
   assert.equal(ledgerOf(repo).steps.find((s) => s.key === "driver").state, "WAIVED");
 });
 

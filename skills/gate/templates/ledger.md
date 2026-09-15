@@ -1,8 +1,5 @@
 # {{slug}} — {{playbook}} (opened {{opened}})
 
-Label every claim in this file: `[measured] (pointer)`, `[inferred]`, or `[guess]`.
-A `[measured]` pointer must resolve: `verify#<n>`, `events#<seq>`, `review-<n>.md`, `decisions#<n>`, or a file path.
-
 ## Task
 
 <!-- The user's ask, quoted. Then one paragraph in your own words. -->

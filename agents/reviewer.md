@@ -13,7 +13,7 @@ Your inputs are in the packet named in your prompt (a `brief-<role>-<n>.md` file
 
 Review in this order:
 
-1. **Evidence, before code.** For each case in the table, does the named test exist and assert what the case says? For each `[measured]` claim, does the pointer show what the claim says? For each blast-radius fact, does the proof at its rung actually prove it? Anything that fails here is an Act-on item.
+1. **Evidence, before code.** For each case in the table, does the named test exist and assert what the case says? For each blast-radius fact, does the proof at its rung actually prove it? Anything that fails here is an Act-on item.
 2. **Correctness.** Bugs that would reach production: wrong condition, missed branch, race, wrong timezone, unchecked null, a public route widened, money computed twice. Quote `file:line` and give the concrete input that breaks it.
 3. **Scope.** Does the diff do what the ask says, no more (quiet widening) and no less (quiet narrowing)?
 4. **Adjacent flows.** Other readers of the same table, helper or component that the change affects and that no test covers.
@@ -33,7 +33,6 @@ Write the file in this shape:
 - <thing you checked and found fine, and why>
 ## Evidence verdict
 - cases: <k>/<n> tests match their case
-- measured claims: <all resolve | list of failures>
 - blast radius: <proven | which facts are not>
 ```
 

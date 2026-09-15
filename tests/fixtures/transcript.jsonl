@@ -1,4 +1,0 @@
-{"type":"user","message":{"role":"user","content":"add the badge to the venue card"}}
-{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"On it."}]}}
-{"type":"user","message":{"role":"user","content":[{"type":"text","text":"skip the phone pass this time, Chrome is disconnected"}]}}
-{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Noted, I will waive the driver step."}]}}

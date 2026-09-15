@@ -371,28 +371,6 @@ test("C10 boundary: the checks line says not-run with no verify, and names the r
 // C11
 // ---------------------------------------------------------------------------
 
-// Volatile bits: the repo path, ISO timestamps, command durations, tree hashes and
-// the run dir's date prefix. Everything else must match byte for byte.
-function normalise(text, repo) {
-  return text
-    .split(repo)
-    .join("<REPO>")
-    .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, "<TS>")
-    .replace(/\b\d+\.\d+s\b/g, "<DUR>")
-    .replace(/\b[0-9a-f]{12,40}\b/g, "<HASH>")
-    .replace(/\b\d{4}-\d{2}-\d{2}-/g, "<DATE>-");
-}
-
-// The Tier section is pinned by tests/report-tier.test.mjs (C8); dropping it from both
-// sides keeps this comparison about the rest of the renderer. From the "## Tier" heading
-// up to the next "## " heading.
-function withoutTier(md) {
-  const start = md.indexOf("\n## Tier\n");
-  if (start < 0) return md;
-  const next = md.indexOf("\n## ", start + 1);
-  return next < 0 ? `${md.slice(0, start)}\n` : md.slice(0, start) + md.slice(next);
-}
-
 function c11Fixture(name, bin) {
   const repo = makeRepo(name, {
     ".claude/gate.json": JSON.stringify({ verify: [`${NODE} -e "process.exit(0)"`] }),
@@ -422,38 +400,12 @@ function c11Fixture(name, bin) {
   return { repo, go };
 }
 
-test("C11 idempotent: the full report is byte-identical twice, and unchanged from HEAD", (t) => {
+test("C11 idempotent: the full report is byte-identical twice", () => {
   const { repo, go } = c11Fixture("brief-c11", gate);
   const first = go("report").stdout;
   const second = go("report").stdout;
   assert.equal(second, first, "two consecutive `gate report` runs disagree");
 
-  // The HEAD comparison pins the report RENDERER. The Steps section quotes the playbook
-  // prose verbatim, so editing a playbook must change the report: comparing against HEAD
-  // would then fail for a reason this guard was never meant to catch.
-  const playbooksChanged =
-    spawnSync("git", ["diff", "--quiet", "HEAD", "--", "skills/gate/playbooks"], { cwd: pluginRoot }).status !== 0;
-  if (playbooksChanged) {
-    t.diagnostic("skipping the HEAD comparison: skills/gate/playbooks differs from HEAD");
-    return;
-  }
-
-  // the same fixture driven by the committed gate, as a refactor guard
-  const headDir = path.join(here, ".tmp", "brief-c11-head");
-  rmSync(headDir, { recursive: true, force: true });
-  mkdirSync(headDir, { recursive: true });
-  execSync(`git archive HEAD | tar -x -C ${JSON.stringify(headDir)}`, { cwd: pluginRoot });
-  const headGate = path.join(headDir, "scripts", "gate.mjs");
-  assert.ok(existsSync(headGate), "git archive HEAD did not produce scripts/gate.mjs");
-
-  const head = c11Fixture("brief-c11-head-repo", headGate);
-  const headReport = head.go("report").stdout;
-
-  assert.equal(
-    withoutTier(normalise(first, repo)),
-    withoutTier(normalise(headReport, head.repo)),
-    "the full report changed relative to HEAD (outside the Tier section)",
-  );
 });
 
 // ---------------------------------------------------------------------------

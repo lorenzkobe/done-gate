@@ -8,7 +8,7 @@ import path from "node:path";
 import { makeRepo, write, gate, pluginRoot } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
-import { pointerResolver } from "../scripts/lib/claims.mjs";
+import { pointerResolver } from "../scripts/lib/rules.mjs";
 import { reviewFiles } from "../scripts/lib/assess.mjs";
 
 // ---------------------------------------------------------------------------

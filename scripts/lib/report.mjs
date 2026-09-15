@@ -85,7 +85,7 @@ export function attentionLines(state, unmet) {
   const out = [];
   const prose = section(ledgerMd(state.dir), "Attention");
   if (prose) out.push(prose);
-  for (const w of ledger.waivers) out.push(`- waived ${w.key}: "${w.quote}" — ${w.found === true ? "found in transcript" : w.found === false ? "**NOT found in transcript**" : "not yet checked"}`);
+  for (const w of ledger.waivers) out.push(`- waived ${w.key}: ${w.reason ?? w.quote}`);
   for (const b of ledger.blast.filter((x) => x.unproven)) out.push(`- unproven: ${b.fact} (rung ${b.rung})`);
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) out.push(`- skipped: ${s.text} — ${s.note}`);
   for (const a of ledger.huddles.flatMap((h) => h.actOn).filter((x) => x.dispute)) out.push(`- disputed ${a.id}: ${a.dispute.why} [${a.dispute.evidence}] — ${a.dispute.verdict ?? "unanswered"}${a.dispute.reviewerReason ? `; reviewer: ${a.dispute.reviewerReason}` : ""}${a.dispute.arbiterReason ? `; arbiter: ${a.dispute.arbiterReason}` : ""}`);
@@ -343,7 +343,7 @@ function lookFirst(state) {
   const prose = section(ledgerMd(state.dir), "Attention");
   if (prose) out.push(...prose.split("\n").filter((l) => l.trim()).map((l) => plainWords(l.trim().startsWith("-") ? l.trim() : `- ${l.trim()}`)));
   for (const w of ledger.waivers) {
-    out.push(w.found === false ? `- Skipped, but I could not find you saying that: "${w.quote}".` : `- Skipped with your OK: "${w.quote}".`);
+    out.push(`- Skipped with your OK: ${w.reason ?? w.quote}.`);
   }
   out.push(...disputeLines(ledger));
   for (const b of ledger.blast.filter((x) => x.unproven)) out.push(`- ${b.fact} — my belief; I did not run anything that would prove it.`);

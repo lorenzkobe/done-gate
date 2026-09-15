@@ -22,8 +22,6 @@ description: The done-gate workflow. Use before any task that will change source
 | R8 | a case, step or blast-radius row left blank |
 | R9 | high-risk paths changed without the second reviewer |
 | R10 | a repo check failed (CLAUDE.md budget, migration number) |
-| R11 | an unlabelled claim, or a `[measured]` pointer that does not resolve |
-| R12 | a waiver quotes words the user never said |
 | R13 | gate.json or models.json changed mid-task |
 | R14 | the task outgrew its predicted size and a step that size requires is blank again |
 | R15 | a helper's file lists more findings than the ledger recorded |
@@ -57,11 +55,10 @@ description: The done-gate workflow. Use before any task that will change source
 
 - If two readings of the ask lead to different work, ask with `AskUserQuestion` before
   step 2.
-- Every claim carries `[measured] (pointer)`, `[inferred]` or `[guess]`.
 - A helper's self-report is never evidence; only `gate verify`, hook events and the
   helper's own file count.
 - Waivers are the only way past a keyed step you cannot do: ask, then
-  `gate waive <key> "<their exact words>"`.
+  `gate waive <key> "<the reason>"`; the report lists it.
 - Never hand-edit `.claude/gate/runs/**` except `ledger.md`.
 - Need the user mid-task? `AskUserQuestion`, or end with a last line `PAUSED: <need>`.
 - No commits unless asked; the repo's CLAUDE.md wins over any playbook.

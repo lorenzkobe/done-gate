@@ -9,7 +9,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { parseDisputes, parseFindings, parseRuling } from "./review.mjs";
-import { pointerResolver } from "./claims.mjs";
+import { pointerResolver } from "./rules.mjs";
 import { buildState } from "./assess.mjs";
 
 // Steps whose evidence comes from a script or an agent: DONE or WAIVED only.
@@ -145,7 +145,7 @@ export const verbs = {
       const step = ledger.steps.find((s) => s.key === ref || String(s.n) === ref);
       if (!step) throw new UsageError(`no step "${ref}"`);
       if (state === "SKIPPED" && step.key && EVIDENCED_KEYS.has(step.key)) {
-        throw new UsageError(`step {${step.key}} has script/agent evidence and cannot be SKIPPED — do it, or get the user's waiver with \`gate waive ${step.key} "<their words>"\``);
+        throw new UsageError(`step {${step.key}} has script/agent evidence and cannot be SKIPPED — do it, or get the user's waiver with \`gate waive ${step.key} "<reason>"\``);
       }
       if (state === "DONE" && !evidence) throw new UsageError("DONE needs --evidence <pointer> (events#seq, verify.json, review-<n>.md, decisions#n, or a file path)");
       if (state !== "DONE" && !note) throw new UsageError(`${state} needs a reason`);
@@ -303,14 +303,14 @@ export const verbs = {
 
   waive(ctx) {
     const [key, ...words] = ctx.args;
-    const quote = words.join(" ").trim();
-    if (!key || !quote) throw new UsageError('usage: gate waive <stepKey|R#> "<the user\'s exact words>"');
+    const reason = words.join(" ").trim();
+    if (!key || !reason) throw new UsageError('usage: gate waive <stepKey|R#> "<why, with the user\'s OK>"');
     withLedger(ctx, (ledger) => {
-      ledger.waivers.push({ key, quote, found: null, seq: nextSeq() });
+      ledger.waivers.push({ key, reason, seq: nextSeq() });
       const step = ledger.steps.find((s) => s.key === key);
-      if (step) Object.assign(step, { state: "WAIVED", note: quote, evidence: null, seq: nextSeq() });
+      if (step) Object.assign(step, { state: "WAIVED", note: reason, evidence: null, seq: nextSeq() });
     });
-    ctx.out(`waived ${key} — the stop gate will look for that quote in the transcript`);
+    ctx.out(`waived ${key} — the report will show the reason`);
     printNext(ctx);
   },
 
