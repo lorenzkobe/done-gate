@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import { leadDelegates } from "./size.mjs";
 
 // Named repo checks, opted into via gate.json "checks". Each returns an unmet text or null.
 const CHECKS = {
@@ -151,8 +152,14 @@ export function isRole(agentType, role) {
 
 // The last moment source changed: the newest Edit/Write event by the main session, or the
 // moment the source hash moved (edits made with sed, perl or git apply leave no tool event).
+// An implementation edit: a source edit by anyone but QA (the lead, a worker, or any other
+// agent the lead spawned). QA's test edits and helper file writes are not implementation.
+export function implementationEdit(e, config) {
+  return e.kind === "edit" && Boolean(e.path) && config.isSource(e.path) && !isRole(e.agentType, "qa");
+}
+
 function lastEditSeq(state, config, ledger) {
-  const edits = (state.events ?? []).filter((e) => e.kind === "edit" && !e.agent && e.path && config.isSource(e.path));
+  const edits = (state.events ?? []).filter((e) => implementationEdit(e, config));
   const fromEvents = edits.length ? edits[edits.length - 1].seq : (ledger.baseline?.seq ?? 0);
   return Math.max(fromEvents, ledger.lastSourceChangeSeq ?? 0);
 }
@@ -174,7 +181,7 @@ export function lateOrder(state) {
   const { config, ledger } = state;
   const none = { late: [], path: null };
   if (!ledger) return none;
-  const firstEdit = (state.events ?? []).find((e) => e.kind === "edit" && !e.agent && e.path && config.isSource(e.path) && e.seq > (ledger.baseline?.seq ?? 0));
+  const firstEdit = (state.events ?? []).find((e) => implementationEdit(e, config) && e.seq > (ledger.baseline?.seq ?? 0));
   if (!firstEdit) return none;
   const firstCase = ledger.cases?.[0]?.seq ?? Infinity;
   const late = [];
@@ -289,6 +296,25 @@ export function evaluate(state) {
   if (openCases.length) unmet.push({ rule: "R8", text: `case(s) not closed: ${openCases.map((c) => c.id).join(", ")}. \`gate case close <id> --test <file:name>\` or \`--na <reason>\`.` });
   const blankSteps = (ledger.steps ?? []).filter((s) => !s.state);
   if (blankSteps.length) unmet.push({ rule: "R8", text: `step(s) blank: ${blankSteps.map((s) => `${s.n}${s.key ? ` {${s.key}}` : ""}`).join(", ")}. Close each with \`gate step <n|key> done|skipped|na "<note>"\`.` });
+
+  // R16: at a size where the lead delegates, the lead's own source edits after the plan are a
+  // worker's job. The fence stops the edit tools; this catches what slipped past it.
+  const delegated = leadDelegates(ledger, state.policy ?? undefined);
+  if (delegated) {
+    const since = ledger.tier?.predictedSeq ?? ledger.planSeq ?? 0;
+    // the lead's own edit-tool calls, or those of any agent that is not a worker
+    const own = (state.events ?? []).filter((e) => implementationEdit(e, config) && !isRole(e.agentType, "worker") && e.seq > since);
+    if (own.length) {
+      unmet.push({ rule: "R16", text: `the lead edited ${list([...new Set(own.map((e) => e.path))])} at size ${delegated}; hand that piece to a worker (\`gate brief worker\`, spawn done-gate:worker) and let it own the file from here.` });
+    }
+    // source changed with no edit-tool event to explain it: a shell edit, unless the last
+    // shell command was a worker's, whose shell edits are its own business
+    const shell = (ledger.unexplainedChanges ?? []).filter((c) => c.seq > since && !isRole(c.agentType, "worker"));
+    if (shell.length) {
+      const last = shell[shell.length - 1];
+      unmet.push({ rule: "R16", text: `source changed with no worker edit behind it (${last.cmd ? `after \`${String(last.cmd).slice(0, 60)}\`` : "a shell edit"}) at size ${delegated}; at this size only workers edit source. Hand the piece to a worker (\`gate brief worker\`).` });
+    }
+  }
 
   // R15: every Act-on finding in a helper file is recorded from the file (hand-typed items do
   // not count toward it), and every helper file in the run dir belongs to a huddle.

@@ -39,6 +39,11 @@ export function stampSourceChange(ledger, hash, events) {
   const cause = events.filter((e) => (e.kind === "edit" || e.kind === "command") && e.seq > prev).pop();
   ledger.lastSourceHash = hash;
   ledger.lastSourceChangeSeq = first ? 0 : (cause?.seq ?? nextSeq());
+  // a change no edit-tool event accounts for came through the shell (sed, a heredoc, git
+  // apply); R16 reads this list at a size where only workers may edit
+  if (!first && !events.some((e) => e.kind === "edit" && e.seq > prev)) {
+    ledger.unexplainedChanges = [...(ledger.unexplainedChanges ?? []), { seq: ledger.lastSourceChangeSeq, cmd: cause?.kind === "command" ? cause.cmd ?? null : null, agentType: cause?.agentType ?? null }];
+  }
   return true;
 }
 

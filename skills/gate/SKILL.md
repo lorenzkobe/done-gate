@@ -24,6 +24,7 @@ description: The done-gate workflow. Use before any task that will change source
 | R10 | a repo check failed (CLAUDE.md budget, migration number) |
 | R13 | gate.json or models.json changed mid-task |
 | R15 | a helper's file lists more findings than the ledger recorded |
+| R16 | the lead edited source itself at size standard or large |
 
 ## The loop
 
