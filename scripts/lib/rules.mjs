@@ -3,7 +3,6 @@ import { runChecks } from "./checks.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parseFindings } from "./review.mjs";
-import { tierMax } from "./policy.mjs";
 
 // Builds the "does this pointer resolve" predicate from gate state; dispute and resolve
 // evidence must point at something real.
@@ -199,29 +198,6 @@ export function evaluate(state) {
   if (openCases.length) unmet.push({ rule: "R8", text: `case(s) not closed: ${openCases.map((c) => c.id).join(", ")}. \`gate case close <id> --test <file:name>\` or \`--na <reason>\`.` });
   const blankSteps = (ledger.steps ?? []).filter((s) => !s.state);
   if (blankSteps.length) unmet.push({ rule: "R8", text: `step(s) blank: ${blankSteps.map((s) => `${s.n}${s.key ? ` {${s.key}}` : ""}`).join(", ")}. Close each with \`gate step <n|key> done|skipped|na "<note>"\`.` });
-  const badBlast = (ledger.blast ?? []).filter((b) => !(b.rung >= 1 && b.rung <= 5));
-  if (badBlast.length) unmet.push({ rule: "R8", text: "a blast-radius fact has no rung." });
-
-  // R14: the task outgrew its predicted tier and a reopened step is still blank
-  const reopened = (ledger.tier?.reopened ?? []).filter((k) => (ledger.steps ?? []).some((s) => s.key === k && !s.state));
-  if (reopened.length) {
-    const m = state.tier?.measured;
-    const todo = { skeptic: "spawn the skeptic", reconcile: "run the QA reconcile round" };
-    const steps = reopened.map((k) => `{${k}}`).join(", ");
-    const n = (count, one) => `${count} ${one}${count === 1 ? "" : "s"}`;
-    const numbers = m ? `${n(m.files, "file")}, ${n(m.lines, "line")}` : "";
-    const predicted = ledger.tier.predicted ?? null;
-    const measuredTier = m?.tier ?? "standard";
-    // "grew" only when the measured size ranks above the prediction; otherwise the step was
-    // reopened because the effective size (the larger of the two) requires it
-    const order = Object.keys(state.policy?.tiers ?? { small: 1, standard: 1, large: 1 });
-    const grew = predicted !== null && order.indexOf(measuredTier) > order.indexOf(predicted);
-    const effective = state.policy ? tierMax(state.policy, predicted, measuredTier) ?? measuredTier : measuredTier;
-    const lead = grew
-      ? `tier grew from ${predicted} to ${measuredTier}${numbers ? ` (${numbers})` : ""}: step(s) ${steps} reopened`
-      : `the task's size (${effective}${numbers ? `, ${numbers}` : ""}) requires step(s) ${steps}, which were marked N/A; reopened`;
-    unmet.push({ rule: "R14", text: `${lead}; ${reopened.map((k) => todo[k] ?? `do {${k}}`).join(", then ")}, then close with evidence.` });
-  }
 
   // R15: every Act-on finding in a helper file is recorded from the file (hand-typed items do
   // not count toward it), and every helper file in the run dir belongs to a huddle.

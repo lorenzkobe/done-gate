@@ -208,9 +208,6 @@ export function renderPacket(state, role, { round, reviewN, skepticN = 1, arbite
   } else {
     out.push("## Diff", "", unifiedDiff(state), "");
     out.push("## Verify", "", ...verifyLines(state.verify, { tails: false }), "");
-    out.push("## Blast radius", "");
-    if (state.ledger.blast.length) for (const b of state.ledger.blast) out.push(`- ${b.fact} — rung ${b.rung}${b.unproven ? " (unproven)" : ""} — ${b.proof}`);
-    else out.push("_none recorded yet_");
     out.push("", "## Write your findings to", "", path.join(state.dir, `review-${reviewN}.md`), "");
     if (role === "reviewer-2") {
       const first = path.join(state.dir, "review-1.md");

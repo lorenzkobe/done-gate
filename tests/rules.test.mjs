@@ -32,7 +32,7 @@ test("doc-only changes without a ledger pass R1", () => {
 });
 
 test("R3: with a ledger, verify.json must exist, be green, and match the current source hash", () => {
-  const ledger = { status: "open", steps: [], waivers: [], cases: [], blast: [] };
+  const ledger = { status: "open", steps: [], waivers: [], cases: [] };
   const now = { hash: "x", files: { "src/a.ts": { h: "1" }, "docs/x.md": { h: "2" } } };
   const changed = ["src/a.ts", "tests/a.test.ts"];
   assert.ok(ids(evaluate(state({ ledger, changed, now }))).includes("R3"));
@@ -55,7 +55,7 @@ test("sourceHash ignores non-source files so a docs edit after verify does not i
 });
 
 test("R7: source changed without any test file changing blocks unless the qa step is waived", () => {
-  const ledger = { status: "open", steps: [], waivers: [], cases: [], blast: [] };
+  const ledger = { status: "open", steps: [], waivers: [], cases: [] };
   assert.ok(ids(evaluate(state({ ledger, changed: ["src/a.ts"] }))).includes("R7"));
   assert.ok(!ids(evaluate(state({ ledger, changed: ["src/a.ts", "tests/a.test.ts"] }))).includes("R7"));
   const waived = { ...ledger, waivers: [{ key: "qa", quote: "skip tests", found: true }] };

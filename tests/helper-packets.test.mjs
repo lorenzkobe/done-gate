@@ -285,11 +285,10 @@ test("C4 refused: the QA packet contains no line starting with @@, + or -, lists
 // C5
 // ---------------------------------------------------------------------------
 
-test("C5 happy: the reviewer packet holds the unified diff of changed source and test files, the verify lines, the blast rows, the review number and the exact output path", () => {
+test("C5 happy: the reviewer packet holds the unified diff of changed source and test files, the verify lines, the review number and the exact output path", () => {
   const repo = opened("packets-c5", { verify: ["true", "false"] });
   write(repo, PLAN_FILE, `${X_SRC}export const gamma = 3;\n`);
   write(repo, "tests/a.test.ts", "test('a', () => {});\ntest('b', () => {});\n");
-  cli(repo, "blast", ["add", "only one consumer of alpha", "--rung", "4", "--proof", `${PLAN_FILE}:1`]);
   cli(repo, "verify");
 
   const { text } = packet(repo, "reviewer");
@@ -307,9 +306,7 @@ test("C5 happy: the reviewer packet holds the unified diff of changed source and
   assert.match(verifyLine("false") ?? "", /✗/, `no red mark on the line for "false":\n${verify}`);
   assert.ok(/exit 1/.test(verifyLine("false")), `the line for "false" does not carry its exit code:\n${verify}`);
 
-  const blast = section(text, "Blast radius");
-  assert.ok(blast.includes("only one consumer of alpha"), `the blast fact is missing:\n${blast}`);
-  assert.ok(blast.includes("4"), `the blast rung is missing:\n${blast}`);
+  assert.ok(!text.includes("## Blast radius"), "the packet has no Blast radius section any more");
 
   const write_ = section(text, "Write your findings to");
   assert.ok(write_.includes(path.join(runDir(repo), "review-1.md")), `the output path is not the run dir's review-1.md:\n${write_}`);

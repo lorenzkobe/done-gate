@@ -119,7 +119,6 @@ export function openLedger(ctx, slug, playbook) {
     planSeq: null,
     taskSeq: null,
     cases: [],
-    blast: [],
     steps: playbookSteps(playbook),
     huddles: [],
     waivers: [],
@@ -156,19 +155,15 @@ export function currentLedger(stateDir, session) {
   return { dir, ledger: loadLedger(dir) };
 }
 
-function printStepLines(ctx, steps, ledger = null) {
-  const reopened = new Set(ledger?.tier?.reopened ?? []);
-  for (const s of steps) {
-    const mark = s.key && !s.state && reopened.has(s.key) ? "  (reopened: the task outgrew its tier)" : "";
-    ctx.out(`${String(s.n).padStart(2)}. [${s.state ?? "    "}] ${s.text}${s.key ? `  {${s.key}}` : ""}${mark}`);
-  }
+function printStepLines(ctx, steps) {
+  for (const s of steps) ctx.out(`${String(s.n).padStart(2)}. [${s.state ?? "    "}] ${s.text}${s.key ? `  {${s.key}}` : ""}`);
 }
 
 // `open` and `attach` show only the keyed steps (the ones with script or agent evidence);
 // `gate steps` shows all of them.
 function printOpen(ctx, dir, ledger) {
   ctx.out(`ledger: ${dir}`);
-  printStepLines(ctx, ledger.steps.filter((s) => s.key), ledger);
+  printStepLines(ctx, ledger.steps.filter((s) => s.key));
   printNext(ctx);
 }
 
@@ -190,6 +185,6 @@ export const verbs = {
     if (!current || current.ledger.status === "closed") throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
     ctx.out(`ledger: ${current.dir}`);
     ctx.out(`playbook: ${current.ledger.playbook} (${current.ledger.status})`);
-    printStepLines(ctx, current.ledger.steps, current.ledger);
+    printStepLines(ctx, current.ledger.steps);
   },
 };

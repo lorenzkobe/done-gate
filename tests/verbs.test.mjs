@@ -73,17 +73,6 @@ test("step marks a step DONE/SKIPPED/N-A with a note; evidenced steps refuse SKI
   assert.match(noEvidence.stderr, /--evidence/);
 });
 
-test("blast add records a fact with its rung; rungs below 4 are marked unproven", () => {
-  const repo = opened("verbs-blast");
-  cli(repo, "blast", ["add", "CourtCard is the only consumer of playerRateRange", "--rung", "4", "--proof", "tests/blast.test.ts"]);
-  cli(repo, "blast", ["add", "the sitemap does not read the badge", "--rung", "2", "--proof", "src/app/sitemap.ts:40"]);
-  const blast = ledgerOf(repo).blast;
-  assert.equal(blast[0].rung, 4);
-  assert.equal(blast[0].unproven, false);
-  assert.equal(blast[1].unproven, true);
-  assert.equal(ledgerOf(repo).steps.find((s) => s.key === "blast").state, "DONE");
-});
-
 test("huddle add / acton / resolve track a review round and its Act-on items", () => {
   const repo = opened("verbs-huddle");
   const r = cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
@@ -141,20 +130,19 @@ test("close sets status closing and marks the close step; the stop gate then fin
   assert.equal(loadSession(path.join(repo, ".claude", "gate"), "S1").current, null);
 });
 
-test("R8: blank steps, open cases and rung-less blast rows block; R2: the Plan and case table must exist at all, and a late one is recorded rather than blocked", () => {
+test("R8: blank steps and open cases block; R2: the Plan and case table must exist at all, and a late one is recorded rather than blocked", () => {
   const cfg = loadConfig(makeRepo("verbs-rules"));
   const base = { config: cfg, changed: ["src/a.ts", "tests/a.test.ts"], now: { hash: "x", files: {} }, verify: { sourceHash: "n/a", commands: [] }, events: [], reviews: [], lastMessage: "" };
   const ledger = {
     status: "open", waivers: [], planSeq: 10, taskSeq: 9,
     cases: [{ id: "C1", status: "closed", test: "t:x", seq: 11 }, { id: "C2", status: "open", seq: 12 }],
-    blast: [{ fact: "f", rung: null }],
     steps: [{ n: 1, key: "read", state: "DONE" }, { n: 2, key: "plan", state: null }],
   };
   const ids = evaluate({ ...base, ledger }).map((u) => u.rule);
   assert.ok(ids.includes("R8"));
   // R2 matches its own message: it blocks only while the Plan or the case table is missing
   // altogether. A plan written after the first source edit is recorded, not blocked.
-  const edited = { ...base, ledger: { ...ledger, planSeq: 100, cases: [{ id: "C1", status: "closed", test: "t", seq: 101 }], blast: [], steps: [] }, events: [{ seq: 50, kind: "edit", path: "src/a.ts", agent: null }] };
+  const edited = { ...base, ledger: { ...ledger, planSeq: 100, cases: [{ id: "C1", status: "closed", test: "t", seq: 101 }], steps: [] }, events: [{ seq: 50, kind: "edit", path: "src/a.ts", agent: null }] };
   assert.ok(!evaluate(edited).map((u) => u.rule).includes("R2"), "a late Plan that exists does not block");
   // lateOrder names what was written late and the path of the first source edit
   assert.deepEqual(

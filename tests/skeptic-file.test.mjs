@@ -91,8 +91,8 @@ function hintedKey(h) {
   if (step) return step[1];
   const role = /`gate brief ([a-z0-9-]+)/.exec(h);
   if (role) return ROLE_STEP[role[1]] ?? role[1];
-  const verb = /`gate (verify|blast|close|decide)\b/.exec(h);
-  if (verb) return { verify: "verify", blast: "blast", close: "close", decide: "driver" }[verb[1]];
+  const verb = /`gate (verify|close|decide)\b/.exec(h);
+  if (verb) return { verify: "verify", close: "close", decide: "driver" }[verb[1]];
   return null;
 }
 

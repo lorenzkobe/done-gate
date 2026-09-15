@@ -19,7 +19,7 @@ const green = (now) => ({ sourceHash: "n/a", commands: [{ cmd: "x", exit: 0, tim
 const clean = (over = {}) => {
   const ledger = {
     status: "open", planSeq: 1, taskSeq: 1, waivers: [], huddles: [], reviews: [],
-    cases: [{ id: "C1", status: "closed", test: "t", seq: 2 }], blast: [{ fact: "f", rung: 4 }],
+    cases: [{ id: "C1", status: "closed", test: "t", seq: 2 }],
     steps: [{ n: 1, key: "schema", state: "N/A", note: "none" }],
     gateHash: cfg.hash, baseline: { seq: 0 },
     ...over.ledger,

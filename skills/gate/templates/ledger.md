@@ -7,7 +7,3 @@
 ## Plan
 
 <!-- Approach. Files to touch. If data is touched: queries, indexes, payload, client fetching, cost surface. -->
-
-## Attention
-
-<!-- Filled at close: gaps, waivers, unproven facts, anything the user should look at first. -->

@@ -288,7 +288,6 @@ test("C5 happy: note plan --files src/a.ts predicts small, marks {skeptic} and {
   assert.equal(l.tier.predicted, "small");
   assert.deepEqual(l.tier.predictedFiles, ["src/a.ts"]);
   assert.deepEqual([...l.tier.autoNa].sort(), ["reconcile", "skeptic"]);
-  assert.deepEqual(l.tier.reopened, []);
 
   for (const key of ["skeptic", "reconcile"]) {
     assert.equal(stepOf(l, key).state, "N/A", key);
@@ -406,7 +405,7 @@ test("C9 boundary: a non-git repo measures every file by line delta and every ro
 // C10
 // ---------------------------------------------------------------------------
 
-test("C10 refused: growth from small to standard reopens {skeptic} and {reconcile} once, including a hand-written N/A; check prints R14 naming them; a second check leaves ledger.json byte-identical", () => {
+test("C10 refused: growth from small to standard blanks {skeptic} and {reconcile} once, including a hand-written N/A; check names them under R8, never R14; a second check leaves ledger.json byte-identical", () => {
   const repo = committed("tier-c10");
   cli(repo, "open", ["grow", "feature"]);
   cli(repo, "note", ["task", "One small change. [inferred]"]);
@@ -418,7 +417,8 @@ test("C10 refused: growth from small to standard reopens {skeptic} and {reconcil
   assert.equal(predicted.tier.predicted, "small");
   assert.equal(stepOf(predicted, "skeptic").state, "N/A");
   assert.equal(stepOf(predicted, "reconcile").note, "nothing to reconcile, tiny change");
-  assert.ok(!check(repo).includes("R14"), "nothing has outgrown its tier yet");
+  const beforeGrowth = check(repo);
+  assert.ok(!/R8 — step\(s\) blank: [^\n]*\{skeptic\}/.test(beforeGrowth), "nothing has outgrown its tier yet");
 
   // The task outgrows small: three source files.
   write(repo, "src/a.ts", "export const a = 2;\n");
@@ -426,26 +426,23 @@ test("C10 refused: growth from small to standard reopens {skeptic} and {reconcil
   write(repo, "src/c.ts", "export const c = 1;\n");
 
   const out = check(repo);
-  const r14 = out.split("\n").filter((l) => l.includes("R14"));
-  assert.equal(r14.length, 1, out);
-  assert.match(r14[0], /\{skeptic\}/);
-  assert.match(r14[0], /\{reconcile\}/);
-  assert.match(r14[0], /small/);
-  assert.match(r14[0], /standard/);
+  assert.ok(!out.includes("R14"), out);
+  const r8 = out.split("\n").find((l) => l.includes("R8") && l.includes("step(s) blank"));
+  assert.ok(r8, out);
+  assert.match(r8, /\{skeptic\}/);
+  assert.match(r8, /\{reconcile\}/);
 
   const grown = ledgerOf(repo);
   assert.equal(grown.tier.measured.tier, "standard");
-  assert.equal(stepOf(grown, "skeptic").state, null, "auto N/A reopened");
-  assert.equal(stepOf(grown, "reconcile").state, null, "hand-written N/A reopened too");
-  assert.deepEqual([...grown.tier.reopened].sort(), ["reconcile", "skeptic"]);
+  assert.equal(stepOf(grown, "skeptic").state, null, "auto N/A blanked");
+  assert.equal(stepOf(grown, "reconcile").state, null, "hand-written N/A blanked too");
+  assert.equal("reopened" in grown.tier, false, "no reopened list is kept");
 
-  // Re-measuring is idempotent: no second reopen, no write.
+  // Re-measuring is idempotent: no write.
   const before = readFileSync(ledgerFile(repo));
-  const out2 = check(repo);
+  check(repo);
   const after = readFileSync(ledgerFile(repo));
   assert.ok(before.equals(after), "a second check must not rewrite ledger.json");
-  assert.equal(out2.split("\n").filter((l) => l.includes("R14")).length, 1);
-  assert.deepEqual([...ledgerOf(repo).tier.reopened].sort(), ["reconcile", "skeptic"]);
 });
 
 // ---------------------------------------------------------------------------
@@ -470,7 +467,6 @@ test("C11 edge: a DONE or WAIVED step is never reopened by further growth", () =
   assert.equal(l.tier.measured.tier, "standard");
   assert.equal(stepOf(l, "skeptic").state, "DONE");
   assert.equal(stepOf(l, "reconcile").state, "WAIVED");
-  assert.deepEqual(l.tier.reopened, []);
   assert.ok(!out.includes("R14"), out);
 });
 
@@ -478,7 +474,7 @@ test("C11 edge: a DONE or WAIVED step is never reopened by further growth", () =
 // C12
 // ---------------------------------------------------------------------------
 
-test("C12 happy: gate size prints the measured and predicted tiers, files and lines, forced categories, required helpers with models, auto-N/A and reopened keys", () => {
+test("C12 happy: gate size prints the measured and predicted tiers, files and lines, forced categories, required helpers with models and auto-N/A keys", () => {
   const repo = committed("tier-c12");
   cli(repo, "open", ["sized", "feature"]);
   cli(repo, "note", ["task", "Badge. [inferred]"]);
@@ -495,7 +491,6 @@ test("C12 happy: gate size prints the measured and predicted tiers, files and li
   assert.match(out, /\bui\b/, "the forced category is named");
   assert.match(out, /^.*requires:/m);
   assert.match(out, /auto-N\/A:/);
-  assert.match(out, /reopened:/);
 
   // The models come from models.json's roles, not from a constant in the scripts.
   const roles = modelsJson().roles;
@@ -635,7 +630,7 @@ test("C18 boundary: a git repo with no commits measures changed files by line de
 // C19
 // ---------------------------------------------------------------------------
 
-test("C19 edge: a waived {skeptic} stays WAIVED when the diff grows and nothing is reopened", () => {
+test("C19 edge: a waived {skeptic} stays WAIVED when the diff grows; only the auto-N/A {reconcile} goes blank", () => {
   const repo = committed("tier-c19");
   cli(repo, "open", ["waived", "feature"]);
   cli(repo, "note", ["task", "Small change. [inferred]"]);
@@ -651,13 +646,12 @@ test("C19 edge: a waived {skeptic} stays WAIVED when the diff grows and nothing 
   const l = ledgerOf(repo);
   assert.equal(l.tier.measured.tier, "standard");
   assert.equal(stepOf(l, "skeptic").state, "WAIVED", "a waiver survives growth");
-  assert.ok(!l.tier.reopened.includes("skeptic"), JSON.stringify(l.tier.reopened));
-  // {reconcile} was auto-N/A'd by the same small prediction and IS reopened, so R14
-  // fires for it alone: the waived step is never named.
-  const r14 = out.split("\n").filter((x) => x.includes("R14"));
-  assert.equal(r14.length, 1, out);
-  assert.match(r14[0], /\{reconcile\}/);
-  assert.ok(!r14[0].includes("{skeptic}"), r14[0]);
+  // {reconcile} was auto-N/A'd by the same small prediction and goes blank, so R8
+  // names it alone: the waived step is never named.
+  assert.equal(stepOf(l, "reconcile").state, null);
+  const r8 = out.split("\n").find((x) => x.includes("R8") && x.includes("step(s) blank"));
+  assert.match(r8, /\{reconcile\}/);
+  assert.ok(!r8.includes("{skeptic}"), r8);
 
   // Waive the reopened step too and nothing is left to reopen.
   cli(repo, "waive", ["reconcile", "skip the reconcile round as well"]);
@@ -722,32 +716,11 @@ test("C21 edge: after a reviewer huddle, a new test file does not re-block R5; a
 // C22
 // ---------------------------------------------------------------------------
 
-test("C22 happy: after a reopen, `gate steps` marks the blank step as reopened", () => {
-  const repo = committed("tier-c22");
-  cli(repo, "open", ["steps-out", "feature"]);
-  cli(repo, "note", ["task", "Small change. [inferred]"]);
-  cli(repo, "note", ["plan", "One file.", "--files", "src/a.ts"]);
-  assert.ok(!/reopened/.test(cli(repo, "steps").stdout), "nothing reopened yet");
-
-  write(repo, "src/a.ts", "export const a = 2;\n");
-  write(repo, "src/b.ts", "export const b = 1;\n");
-  write(repo, "src/c.ts", "export const c = 1;\n");
-  check(repo);
-  assert.deepEqual([...ledgerOf(repo).tier.reopened].sort(), ["reconcile", "skeptic"]);
-
-  const out = cli(repo, "steps").stdout;
-  const reopened = out.split("\n").filter((l) => /reopened/.test(l));
-  assert.equal(reopened.length, 2, out);
-  assert.ok(reopened.some((l) => l.includes("{skeptic}")), out);
-  assert.ok(reopened.some((l) => l.includes("{reconcile}")), out);
-  assert.match(reopened[0], /\(reopened: the task outgrew its tier\)/);
-});
-
 // ---------------------------------------------------------------------------
 // C23
 // ---------------------------------------------------------------------------
 
-test("C23 boundary: with no --files the measured diff alone decides: a small edit leaves a hand-written N/A alone; growth reopens it", () => {
+test("C23 boundary: with no --files the measured diff alone decides: a small edit leaves a hand-written N/A alone; growth blanks it", () => {
   const repo = committed("tier-c23");
   cli(repo, "open", ["no-files", "feature"]);
   cli(repo, "note", ["task", "Small change. [inferred]"]);
@@ -760,22 +733,19 @@ test("C23 boundary: with no --files the measured diff alone decides: a small edi
   cli(repo, "step", ["skeptic", "na", "small"]);
   write(repo, "src/a.ts", "l1\nl2\nl3\nl4\nl5\n"); // one file, 5 lines: measured small
 
-  const small = check(repo);
-  assert.ok(!small.includes("R14"), small);
+  check(repo);
   assert.equal(ledgerOf(repo).tier.measured.tier, "small");
   assert.equal(stepOf(ledgerOf(repo), "skeptic").state, "N/A");
-  assert.deepEqual(ledgerOf(repo).tier.reopened, []);
 
   write(repo, "src/b.ts", "export const b = 1;\n");
   write(repo, "src/c.ts", "export const c = 1;\n");
 
   const grown = check(repo);
-  assert.ok(grown.includes("R14"), grown);
-  assert.match(grown.split("\n").find((l) => l.includes("R14")), /\{skeptic\}/);
+  assert.ok(!grown.includes("R14"), grown);
+  assert.match(grown.split("\n").find((l) => l.includes("R8") && l.includes("step(s) blank")), /\{skeptic\}/);
   const l = ledgerOf(repo);
   assert.equal(l.tier.measured.tier, "standard");
   assert.equal(stepOf(l, "skeptic").state, null);
-  assert.deepEqual(l.tier.reopened, ["skeptic"]);
 });
 
 // ---------------------------------------------------------------------------

@@ -107,7 +107,6 @@ function standardFixture(name, { gateJson = null } = {}) {
   cli(repo, "case", ["add", "hidden when the venue has no rating", "--kind", "edge"]);
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:renders the badge"]);
   cli(repo, "case", ["close", "C2", "--na", "covered by C1's fixture"]);
-  cli(repo, "blast", ["add", "only one consumer", "--rung", "2", "--proof", "src/a.ts:1"]);
   cli(repo, "step", ["read", "done", "read it", "--evidence", "events#1"]);
   cli(repo, "step", ["cleanup", "skipped", "tiny change"]);
   cli(repo, "waive", ["driver", "skip the phone pass this time, chrome is disconnected"]);
@@ -177,8 +176,8 @@ test("C2 happy: `gate check` with unmet items prints only numbered rule lines", 
 
 test("C3 happy: `open`/`attach` print the run dir and keyed steps only; `gate steps` prints every step", () => {
   const feature = playbookSteps("feature");
-  assert.equal(feature.length, 15, "anchor: skills/gate/playbooks/feature.md has 15 numbered steps");
-  assert.equal(keyed(feature).length, 15, "anchor: every feature step carries a {key} today");
+  assert.equal(feature.length, 14, "anchor: skills/gate/playbooks/feature.md has 14 numbered steps");
+  assert.equal(keyed(feature).length, 14, "anchor: every feature step carries a {key} today");
 
   const repo = makeRepo("brief-c3");
   const open = cli(repo, "open", ["slug-c3", "feature"]).stdout;
@@ -197,7 +196,7 @@ test("C3 happy: `open`/`attach` print the run dir and keyed steps only; `gate st
   }
 
   const steps = cli(repo, "steps").stdout;
-  assert.equal(numbered(steps).length, 15);
+  assert.equal(numbered(steps).length, 14);
 
   // the discriminator: a playbook whose steps carry no {key} at all
   const inv = playbookSteps("investigation");
@@ -387,7 +386,6 @@ function c11Fixture(name, bin) {
   go("case", ["add", "hidden with no rating", "--kind", "edge"]);
   go("case", ["close", "C1", "--test", "tests/a.test.ts:renders"]);
   go("case", ["close", "C2", "--na", "covered by C1"]);
-  go("blast", ["add", "only one consumer", "--rung", "2", "--proof", "src/a.ts:1"]);
   go("step", ["read", "done", "read it", "--evidence", "events#1"]);
   go("step", ["cleanup", "skipped", "tiny change"]);
   go("waive", ["driver", "skip the phone pass"]);
@@ -454,38 +452,6 @@ test("C13 boundary: a run with no cases says so, and never says \"Tested 0 cases
 // C14
 // ---------------------------------------------------------------------------
 
-test("C14 refused: attention prose is carried into the brief with the internal words translated", () => {
-  const repo = makeRepo("brief-c14");
-  cli(repo, "open", ["prose", "feature"]);
-  cli(repo, "note", [
-    "attention",
-    "The ledger's blast radius rung is low here (rung 2); see R7 for details, N/A elsewhere; huddle H1.",
-  ]);
-
-  const out = brief(repo);
-  assert.ok(out.includes("Please look at first:"), `attention prose did not raise the block:\n${out}`);
-
-  const flagged = lines(out).slice(lines(out).indexOf("Please look at first:") + 1);
-  const carried = flagged.find((l) => /low here/.test(l));
-  assert.ok(carried, `the attention line was dropped from the block:\n${out}`);
-
-  for (const plain of ["task record", "side effects", "a gate check", "not applicable", "review round"]) {
-    assert.ok(carried.includes(plain), `expected ${JSON.stringify(plain)} in: ${JSON.stringify(carried)}`);
-  }
-
-  for (const [re, what] of [
-    [/\bledger'?s?\b/i, "ledger"],
-    [/\bhuddles?\b/i, "huddle"],
-    [/\bblast\b/i, "blast"],
-    [/\brungs?\b/i, "rung"],
-    [/\bR\d+\b/, "a rule id"],
-    [/N\/A/, "N/A"],
-  ]) {
-    const hit = lines(out).find((l) => re.test(l));
-    assert.equal(hit, undefined, `the brief still says ${what}: ${JSON.stringify(hit)}`);
-  }
-});
-
 // ---------------------------------------------------------------------------
 // C15
 // ---------------------------------------------------------------------------
@@ -548,32 +514,6 @@ test("C16 edge: a chained lint+typecheck command reports as lint, and an npx-pre
 // ---------------------------------------------------------------------------
 // C17
 // ---------------------------------------------------------------------------
-
-// "ledger-service" must survive intact: a hyphen is a word boundary, so a naive
-// \bledger\b substitution would mangle it into "task record-service".
-const standalone = (word) => new RegExp(`(?<![\\w-])${word}(?![\\w-])`, "i");
-
-test("C17 boundary: attention prose translates the bare word but leaves hyphenated names alone", () => {
-  const repo = makeRepo("brief-c17");
-  cli(repo, "open", ["names", "feature"]);
-  cli(repo, "note", ["attention", "See ledger-service and huddle-room; the ledger is fine."]);
-
-  const out = brief(repo);
-  const carried = lines(out).find((l) => /is fine/.test(l));
-  assert.ok(carried, `the attention line was dropped:\n${out}`);
-
-  assert.ok(carried.includes("ledger-service"), `"ledger-service" was mangled: ${JSON.stringify(carried)}`);
-  assert.ok(carried.includes("huddle-room"), `"huddle-room" was mangled: ${JSON.stringify(carried)}`);
-  assert.ok(carried.includes("task record"), `the bare word was not translated: ${JSON.stringify(carried)}`);
-  assert.ok(
-    !standalone("ledger").test(carried),
-    `a standalone "ledger" survived: ${JSON.stringify(carried)}`,
-  );
-  assert.ok(
-    !standalone("huddle").test(carried),
-    `a standalone "huddle" survived: ${JSON.stringify(carried)}`,
-  );
-});
 
 // ---------------------------------------------------------------------------
 // C18

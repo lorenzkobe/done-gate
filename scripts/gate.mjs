@@ -23,7 +23,6 @@ const VERBS = {
   note: { hook: false, load: () => import("./lib/verbs.mjs") },
   case: { hook: false, load: () => import("./lib/verbs.mjs") },
   step: { hook: false, load: () => import("./lib/verbs.mjs") },
-  blast: { hook: false, load: () => import("./lib/verbs.mjs") },
   huddle: { hook: false, load: () => import("./lib/verbs.mjs") },
   waive: { hook: false, load: () => import("./lib/verbs.mjs") },
   decide: { hook: false, load: () => import("./lib/verbs.mjs") },

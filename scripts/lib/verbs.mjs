@@ -74,7 +74,7 @@ function replaceSection(md, heading, body) {
 export const verbs = {
   note(ctx) {
     const [section, ...rest] = ctx.args;
-    if (!["task", "plan", "attention"].includes(section)) throw new UsageError('usage: gate note <task|plan|attention> "<text>" (or - to read stdin)');
+    if (!["task", "plan"].includes(section)) throw new UsageError('usage: gate note <task|plan> "<text>" (or - to read stdin)');
     const files = flag(rest, "--files");
     const text = readText(ctx, positional(rest).join(" ")).trim();
     if (!text) throw new UsageError("note: empty text");
@@ -152,21 +152,6 @@ export const verbs = {
       Object.assign(step, { state, note: note || null, evidence: evidence ?? null, seq: nextSeq() });
     });
     ctx.out(`step ${ref} → ${state}`);
-    printNext(ctx);
-  },
-
-  blast(ctx) {
-    const [action, ...rest] = ctx.args;
-    if (action !== "add") throw new UsageError('usage: gate blast add "<fact the change is safe because of>" --rung <1-5> --proof "<pointer>"');
-    const fact = positional(rest).join(" ");
-    const rung = Number(flag(rest, "--rung"));
-    const proof = flag(rest, "--proof") ?? "";
-    if (!fact || !(rung >= 1 && rung <= 5)) throw new UsageError("blast add needs a fact and --rung 1..5 (1 said so · 2 pointed at the line · 3 walked the failure · 4 ran it · 5 reproduced in the app)");
-    withLedger(ctx, (ledger) => {
-      ledger.blast.push({ fact, rung, proof, unproven: rung < 4, seq: nextSeq() });
-      markStep(ledger, "blast", { state: "DONE", evidence: "ledger.json#blast", note: "blast radius recorded" });
-    });
-    ctx.out(`blast fact recorded at rung ${rung}${rung < 4 ? " (unproven)" : ""}`);
     printNext(ctx);
   },
 

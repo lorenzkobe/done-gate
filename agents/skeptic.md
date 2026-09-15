@@ -14,7 +14,7 @@ Your inputs are in the packet named in your prompt (a `brief-<role>-<n>.md` file
 1. **Premise.** What the plan assumes about existing code that might be false. Cite `file:line` for each.
 2. **Missing cases.** Cases the table lacks: the refused side of a gate, an empty or null input, a boundary (midnight, timezone, first/last page), a retry or double-submit, a concurrent writer, a second caller of the same helper.
 3. **Cheaper shape.** A smaller change that meets the ask, or an existing helper the plan re-invents (name it with its path).
-4. **Blast radius.** What else reads or writes the same data, route, component or table, that the plan does not mention.
+4. **Side effects.** What else reads or writes the same data, route, component or table, that the plan does not mention.
 5. **The one question** the implementer should ask the user before building, if any.
 
 File shape:

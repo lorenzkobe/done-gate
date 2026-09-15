@@ -24,7 +24,7 @@ export function tiered(ledger) {
 // predicted stays null until `gate note plan --files` names the files; the measured diff
 // alone then decides, so a task that never predicts is judged by what it actually changed.
 export function emptyTier() {
-  return { predicted: null, predictedFiles: [], measured: null, autoNa: [], reopened: [] };
+  return { predicted: null, predictedFiles: [], measured: null, autoNa: [] };
 }
 
 // A tier record from an older ledger, or a damaged one, is normalised rather than trusted.
@@ -37,7 +37,6 @@ export function tierOf(ledger) {
     predictedFiles: Array.isArray(t.predictedFiles) ? t.predictedFiles : [],
     measured: t.measured && typeof t.measured === "object" ? t.measured : null,
     autoNa: Array.isArray(t.autoNa) ? t.autoNa : [],
-    reopened: Array.isArray(t.reopened) ? t.reopened : [],
   };
 }
 
@@ -148,16 +147,15 @@ export function effectiveTier(policy, ledger, measured) {
 }
 
 // The measured diff outgrew the prediction: any optional step still N/A (auto or by hand)
-// goes back to blank. DONE, WAIVED and SKIPPED are never touched. Returns the reopened keys.
+// goes back to blank, and R8 names it. DONE, WAIVED and SKIPPED are never touched.
 export function reconcileTier(ledger, policy, measured) {
   if (!tiered(ledger)) return [];
-  const tier = (ledger.tier = tierOf(ledger));
+  ledger.tier = tierOf(ledger);
   const reopened = [];
   for (const key of requiredSteps(policy, effectiveTier(policy, ledger, measured), ledger)) {
     const step = ledger.steps.find((s) => s.key === key);
     if (step && step.state === "N/A") {
       blank(step);
-      if (!tier.reopened.includes(key)) tier.reopened.push(key);
       reopened.push(key);
     }
   }
@@ -182,7 +180,7 @@ export function renderTierBlock(ledger, policy, measured, { details = false } = 
   const esc = policy.escalate?.reviewerRound2;
   const escText = esc ? ` · round 2 on ${esc.model} when ${esc.whenActOnAtLeast}+ Act-on or tier ${esc.orTier}` : "";
   out.push(`requires: ${helpers.join(", ")}${escText} · ceiling ${policy.ceiling.helpersPerTask} helpers/task`);
-  out.push(`auto-N/A: ${t.autoNa.length ? t.autoNa.map((k) => `{${k}}`).join(", ") : "none"} · reopened: ${t.reopened.length ? t.reopened.map((k) => `{${k}}`).join(", ") : "none"}`);
+  out.push(`auto-N/A: ${t.autoNa.length ? t.autoNa.map((k) => `{${k}}`).join(", ") : "none"}`);
   if (details && measured?.details?.length) {
     out.push(`files: ${measured.details.map((d) => `${d.path} ${d.lines}${d.estimate ? " (line-delta estimate)" : ""}`).join(" · ")}`);
   }

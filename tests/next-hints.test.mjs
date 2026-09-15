@@ -185,32 +185,6 @@ test("C3 happy: once {qa} is closed the hint moves to the next blank step; a bug
 // C4
 // ---------------------------------------------------------------------------
 
-test("C4 edge: a reopened blank step outranks an earlier blank step", () => {
-  const repo = opened("next-c4", { planFiles: "src/a.ts" }); // small: {skeptic} + {reconcile} auto-N/A
-  cli(repo, "step", ["read", "done", "read the card", "--evidence", "events#1"]);
-  cli(repo, "case", ["add", "renders the badge", "--kind", "happy"]);
-  cli(repo, "waive", ["skeptic", "no design risk here, skip the huddle"]);
-
-  // The task outgrows its tier: {reconcile} is reopened, the waived {skeptic} is not.
-  write(repo, "src/b.ts", "export const b = 1;\n");
-  write(repo, "src/c.ts", "export const c = 1;\n");
-  cli(repo, "check"); // measures the grown diff and reopens
-
-  const l = ledgerOf(repo);
-  assert.deepEqual(l.tier.reopened, ["reconcile"], JSON.stringify(l.tier));
-  assert.equal(stepOf(l, "skeptic").state, "WAIVED", "premise: a waiver survives the growth");
-
-  // `decide` touches no step, so the hint it prints is the ledger's own next step.
-  const h = hint(repo, "decide", ["plan", "kept the badge in the card", "one consumer", "events#3", "open"]);
-
-  assert.equal(stepOf(l, "qa").state, null, "premise: {qa} is blank and earlier in playbook order");
-  const feature = playbookKeys("feature");
-  assert.ok(feature.indexOf("qa") < feature.indexOf("reconcile"), feature.join(","));
-
-  assert.match(h, /`gate step reconcile\b/, `the reopened step must win over the earlier blank one:\n${h}`);
-  assert.ok(!/`gate brief qa/.test(h), h);
-});
-
 // ---------------------------------------------------------------------------
 // C5
 // ---------------------------------------------------------------------------
@@ -257,7 +231,6 @@ test("C6 happy: every mutating verb's last line is the next: hint, and `gate che
     ["note", ["plan", "One component.", "--files", "src/a.ts"], {}],
     ["case", ["add", "renders the badge", "--kind", "happy"], {}],
     ["step", ["read", "done", "read the card", "--evidence", "events#1"], {}],
-    ["blast", ["add", "the card is the only consumer", "--rung", "4", "--proof", "tests/a.test.ts"], {}],
     ["huddle", ["add", "reviewer", "--file", "review-1.md"], {}],
     ["waive", ["driver", "chrome is disconnected, skip the phone pass"], {}],
     ["decide", ["plan", "kept the badge in the card", "one consumer", "events#3", "open"], {}],
@@ -369,7 +342,7 @@ test("C10 boundary: SKILL.md is under 4096 bytes and still carries the live rule
   assert.ok(size < 4096, `skills/gate/SKILL.md is ${size} bytes, the budget is 4096`);
 
   const text = readFileSync(SKILL_MD, "utf8");
-  for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15]) {
+  for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 15]) {
     assert.match(text, new RegExp(`\\bR${i}\\b`), `SKILL.md no longer names rule R${i}`);
   }
   for (const fragment of ["gate open", "gate note", "gate case", "gate brief", "gate verify", "gate report --brief"]) {
@@ -380,8 +353,8 @@ test("C10 boundary: SKILL.md is under 4096 bytes and still carries the live rule
   const sentence = text
     .replace(/\s+/g, " ")
     .split(/(?<=[.!?]) /)
-    .find((s) => /ledger/i.test(s) && /huddle/i.test(s) && /blast/i.test(s));
-  assert.ok(sentence, `no sentence names ledger, huddle and blast together as forbidden words:\n${text}`);
+    .find((s) => /ledger/i.test(s) && /huddle/i.test(s));
+  assert.ok(sentence, `no sentence names ledger and huddle together as forbidden words:\n${text}`);
   assert.match(sentence, /never|not |avoid|don't/i, `the forbidden-words sentence does not forbid anything:\n${sentence}`);
 });
 

@@ -186,7 +186,7 @@ test("C3 happy: with a non-test source change the source-only command runs and r
 
 test("C4 boundary: R3 counts a skipped entry as green, and still fires stale after a further source edit", () => {
   const cfg = loadConfig(makeRepo("when-c4-cfg"));
-  const ledger = { status: "open", steps: [], waivers: [], cases: [], blast: [] };
+  const ledger = { status: "open", steps: [], waivers: [], cases: [] };
   const now = { hash: "h1", files: { "src/a.ts": { h: "1" }, "tests/a.test.ts": { h: "2" } } };
   const changed = ["src/a.ts", "tests/a.test.ts"];
   const state = (over = {}) => ({

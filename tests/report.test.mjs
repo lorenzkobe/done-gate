@@ -24,7 +24,6 @@ test("report renders every section, the summary counts, and embeds the reviewer'
   cli(repo, "note", ["plan", "One component."]);
   cli(repo, "case", ["add", "renders badge", "--kind", "happy"]);
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:renders"]);
-  cli(repo, "blast", ["add", "only one consumer", "--rung", "2", "--proof", "src/a.ts:1"]);
   cli(repo, "step", ["read", "done", "read it", "--evidence", "events#1"]);
   cli(repo, "step", ["cleanup", "skipped", "tiny change"]);
   cli(repo, "waive", ["driver", "skip the phone pass"]);
@@ -36,19 +35,16 @@ test("report renders every section, the summary counts, and embeds the reviewer'
   const r = cli(repo, "report");
   const md = r.stdout;
   assert.match(md, /^# badge — feature/m);
-  assert.match(md, /DONE 4 · SKIPPED 1 · WAIVED 1 · N\/A 0 · blank \d+/);
+  assert.match(md, /DONE 3 · SKIPPED 1 · WAIVED 1 · N\/A 0 · blank \d+/);
   assert.match(md, /cases 1\/1 closed/);
-  assert.match(md, /blast 1 fact\(s\), 1 unproven/);
   assert.match(md, /## Task\n\nAdd a badge/);
   assert.match(md, /\| C1 \| renders badge \| happy \| tests\/a\.test\.ts:renders \|/);
-  assert.match(md, /only one consumer \| 2 \| unproven/);
   assert.match(md, /1\. Read the affected code.*DONE.*events#1/);
   assert.match(md, /null venue crashes.*OPEN/);
   assert.match(md, /# Review 1/);
   assert.match(md, /## Changed files\n[\s\S]*src\/a\.ts/);
   assert.match(md, /kept it simple/);
   assert.match(md, /## Attention[\s\S]*waived.*driver/i);
-  assert.match(md, /unproven/);
   assert.ok(existsSync(path.join(runDir(repo), "report.md")));
   assert.equal(readFileSync(path.join(runDir(repo), "report.md"), "utf8"), md);
 });

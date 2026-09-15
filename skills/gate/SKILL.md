@@ -19,11 +19,10 @@ description: The done-gate workflow. Use before any task that will change source
 | R5 | no reviewer pass after the last implementation edit, or an Act-on item open |
 | R6 | schema changed and no real-schema probe recorded |
 | R7 | source changed and no test file changed |
-| R8 | a case, step or blast-radius row left blank |
+| R8 | a case or step left blank |
 | R9 | high-risk paths changed without the second reviewer |
 | R10 | a repo check failed (CLAUDE.md budget, migration number) |
 | R13 | gate.json or models.json changed mid-task |
-| R14 | the task outgrew its predicted size and a step that size requires is blank again |
 | R15 | a helper's file lists more findings than the ledger recorded |
 
 ## The loop
@@ -46,10 +45,10 @@ description: The done-gate workflow. Use before any task that will change source
    yourself. Ceiling: seven helper invocations per task.
 4. `gate verify` after your last edit; only verify.json counts. Drive the real surface
    yourself when UI changed (R4); probe the real schema when schema changed (R6).
-5. `gate note attention "<what the user should see first>"`, `gate close`, `gate check`,
+5. `gate close`, `gate check`,
    then paste `gate report --brief` as your final message with at most two lines of your own
    before it, in the same plain words: say "the reviewer", "the tests", "the checks"; never
-   "ledger", "huddle", "blast radius", "rung" or a rule number.
+   "ledger", "huddle" or a rule number.
 
 ## Rules that hold throughout
 
@@ -62,5 +61,3 @@ description: The done-gate workflow. Use before any task that will change source
 - Never hand-edit `.claude/gate/runs/**` except `ledger.md`.
 - Need the user mid-task? `AskUserQuestion`, or end with a last line `PAUSED: <need>`.
 - No commits unless asked; the repo's CLAUDE.md wins over any playbook.
-- Blast rungs: 1 said so, 2 pointed at the line, 3 walked the failure, 4 ran code that
-  fails loud, 5 reproduced in the app. Below 4 prints unproven.

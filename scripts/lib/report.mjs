@@ -35,11 +35,10 @@ export function summaryLine(ledger, events, unmet) {
   const blank = ledger.steps.filter((x) => !x.state).length;
   const closedCases = ledger.cases.filter((c) => c.status === "closed").length;
   const naCases = ledger.cases.filter((c) => c.na).length;
-  const unproven = ledger.blast.filter((b) => b.unproven).length;
   const denies = events.filter((e) => e.kind === "deny").length;
   return (
     `DONE ${count("DONE")} · SKIPPED ${count("SKIPPED")} · WAIVED ${count("WAIVED")} · N/A ${count("N/A")} · blank ${blank} · ` +
-    `cases ${closedCases}/${ledger.cases.length} closed (${naCases} n/a) · blast ${ledger.blast.length} fact(s), ${unproven} unproven · ` +
+    `cases ${closedCases}/${ledger.cases.length} closed (${naCases} n/a) · ` +
     `tampering attempts ${denies} · gate: ${unmet.length ? `${unmet.length} unmet` : "clean"}`
   );
 }
@@ -83,10 +82,7 @@ export function attentionLines(state, unmet) {
   const { ledger, events } = state;
   const denies = events.filter((e) => e.kind === "deny").length;
   const out = [];
-  const prose = section(ledgerMd(state.dir), "Attention");
-  if (prose) out.push(prose);
   for (const w of ledger.waivers) out.push(`- waived ${w.key}: ${w.reason ?? w.quote}`);
-  for (const b of ledger.blast.filter((x) => x.unproven)) out.push(`- unproven: ${b.fact} (rung ${b.rung})`);
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) out.push(`- skipped: ${s.text} — ${s.note}`);
   for (const a of ledger.huddles.flatMap((h) => h.actOn).filter((x) => x.dispute)) out.push(`- disputed ${a.id}: ${a.dispute.why} [${a.dispute.evidence}] — ${a.dispute.verdict ?? "unanswered"}${a.dispute.reviewerReason ? `; reviewer: ${a.dispute.reviewerReason}` : ""}${a.dispute.arbiterReason ? `; arbiter: ${a.dispute.arbiterReason}` : ""}`);
   if (denies) out.push(`- ${denies} denied write(s) to gate evidence files (see events)`);
@@ -161,12 +157,6 @@ export function renderReport(state, unmet) {
 
   out.push("\n## Case table\n");
   out.push(...caseTable(ledger));
-
-  out.push("\n## Blast radius\n");
-  if (ledger.blast.length) {
-    out.push("| fact | rung | proof |\n| --- | --- | --- |");
-    for (const b of ledger.blast) out.push(`| ${cell(b.fact)} | ${b.rung} | ${b.unproven ? "unproven" : ""}${b.unproven && b.proof ? " — " : ""}${cell(b.proof)} |`);
-  } else out.push("_none_");
 
   out.push("\n## Steps\n");
   for (const s of ledger.steps) {
@@ -307,28 +297,6 @@ function testedLine(ledger, changed, config) {
   return `${changedText} Tested ${plural(cases.length, "case")}, ${parts.length ? parts.join(", ") : "all covered"}.`;
 }
 
-// The Attention prose is written by the model and may slip into the gate's own vocabulary;
-// the brief swaps those words for plain ones so the user never meets them.
-// A word is replaced only when it stands alone: not inside another word and not part of a
-// hyphenated name (ledger-service stays ledger-service).
-const alone = (word, flags = "gi") => new RegExp(`(?<![\\w-])${word}(?![\\w-])`, flags);
-const PLAIN_WORDS = [
-  [alone("blast[- ]radius"), "side effects"],
-  [alone("blast fact"), "side-effect fact"],
-  [alone("ledger(?:\\.md|\\.json)?"), "task record"],
-  [alone("huddles?"), "review round"],
-  [alone("\\(?rung \\d+\\)?"), ""],
-  [alone("rungs?"), "proof level"],
-  [alone("R\\d{1,2}", "g"), "a gate check"],
-  [alone("N/A", "g"), "not applicable"],
-  [alone("skeptic"), "design critic"],
-];
-export function plainWords(text) {
-  let t = String(text);
-  for (const [re, word] of PLAIN_WORDS) t = t.replace(re, word);
-  return t.replace(/  +/g, " ").replace(/ ([.,;])/g, "$1");
-}
-
 // Only errors logged since this task opened belong to it; the log is shared and append-only.
 function gateErrorsSince(state) {
   const errLog = path.join(state.stateDir ?? path.resolve(state.dir, "..", ".."), "gate-error.log");
@@ -340,13 +308,10 @@ function gateErrorsSince(state) {
 function lookFirst(state) {
   const { ledger, events } = state;
   const out = [];
-  const prose = section(ledgerMd(state.dir), "Attention");
-  if (prose) out.push(...prose.split("\n").filter((l) => l.trim()).map((l) => plainWords(l.trim().startsWith("-") ? l.trim() : `- ${l.trim()}`)));
   for (const w of ledger.waivers) {
     out.push(`- Skipped with your OK: ${w.reason ?? w.quote}.`);
   }
   out.push(...disputeLines(ledger));
-  for (const b of ledger.blast.filter((x) => x.unproven)) out.push(`- ${b.fact} — my belief; I did not run anything that would prove it.`);
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) out.push(`- Skipped: ${s.text} — ${s.note}`);
   const denies = events.filter((e) => e.kind === "deny").length;
   if (denies) out.push(`- Blocked writes to check files: ${denies}.`);

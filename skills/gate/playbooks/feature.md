@@ -14,8 +14,7 @@ evidence and can only be `DONE` or `WAIVED`, never `SKIPPED`.
 8. Run `gate verify` (lint, test, build) after the last edit. {verify}
 9. Drive the real surface with the project's /verify driver, phone viewport first for UI. {driver}
 10. Real-schema probe when schema files changed: hit the endpoint or run the query once. {schema}
-11. Blast radius (`gate blast add`): the fact the change is safe because of, proven at rung 4+ or written unproven. {blast}
-12. Cleanup sweep: dead code, comments that restate code, duplication, cost, security. {cleanup}
-13. Review (at most 2 rounds): spawn the reviewer; close every Act-on item with an evidence pointer. {review}
-14. Update docs and CLAUDE.md with anything the next assistant must know. {docs}
-15. `gate close`, then paste the report as the final message. {close}
+11. Cleanup sweep: dead code, comments that restate code, duplication, cost, security. {cleanup}
+12. Review (at most 2 rounds): spawn the reviewer; close every Act-on item with an evidence pointer. {review}
+13. Update docs and CLAUDE.md with anything the next assistant must know. {docs}
+14. `gate close`, then paste the report as the final message. {close}

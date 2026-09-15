@@ -14,8 +14,7 @@ be `DONE` or `WAIVED`.
 8. Run `gate verify` after the last edit. {verify}
 9. Drive the same surface again: the original repro now passes. {driver}
 10. Real-schema probe when schema files changed. {schema}
-11. Blast radius: what else this fix could break, proven or written unproven. {blast}
-12. Cleanup sweep. {cleanup}
-13. Review: spawn the reviewer; close every Act-on item. {review}
-14. Update docs and CLAUDE.md if the bug taught the next assistant something. {docs}
-15. `gate close`, then paste the report. {close}
+11. Cleanup sweep. {cleanup}
+12. Review: spawn the reviewer; close every Act-on item. {review}
+13. Update docs and CLAUDE.md if the bug taught the next assistant something. {docs}
+14. `gate close`, then paste the report. {close}

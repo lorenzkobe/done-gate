@@ -49,7 +49,6 @@ judgment out of the model and into hooks that can't be talked out of it.
    │
    ├─ gate verify        ──► verify.json  (exit codes, tails, source hash)
    ├─ drive the real app ──► browser events logged by hooks
-   ├─ blast radius       ──► each fact has a proof rung 1–5
    ├─ reviewer           ──► review-1.md, written by the reviewer itself
    │
    ▼
@@ -129,8 +128,7 @@ Full report: .claude/gate/runs/2026-09-14-venue-badge/report.md
 ```
 
 Lines that would be empty are left out. The full report on disk has every case with its
-test, each step with its evidence, the reviewer's own file, the check output, blast-radius
-facts with their proof rung, the decision log and the changed files; `gate report` prints it
+test, each step with its evidence, the reviewer's own file, the check output, the decision log and the changed files; `gate report` prints it
 when you want the detail.
 
 Mid-task, Claude can only pause two ways: a question through the question prompt, or a
@@ -148,11 +146,10 @@ attempt to finish.
 | R5 | no reviewer pass after the last edit, or an Act-on item is still open |
 | R6 | schema files changed with no real-schema probe |
 | R7 | source changed and no test file changed |
-| R8 | any case, step or blast-radius row is blank |
+| R8 | any case or step is blank |
 | R9 | high-risk paths changed without the second reviewer |
 | R10 | a repo check failed (`claude-md-budget`, `migration-number`) |
 | R13 | `.claude/gate.json` changed mid-task |
-| R14 | the task outgrew its predicted size and a step that size requires is blank again |
 | R15 | a helper's file lists more findings than the ledger recorded |
 
 Waivers are the only way past a keyed step: the user OKs it, Claude records the reason
@@ -168,9 +165,9 @@ with `gate waive <key> "…"`, and the report lists every waiver.
   that could wedge every session in every repo would cost more than one unreported task.
 - **Zero friction when nothing changed.** Questions, investigations, a second terminal in
   the same repo: the tree hash is unchanged, the gate stays silent.
-- **What it cannot know.** Whether a test asserts the right thing, or whether a blast-radius
-  fact is true. It makes both visible instead: case → test mapping, a proof rung per fact,
-  and the reviewer's own file, so a human can check them in two minutes.
+- **What it cannot know.** Whether a test asserts the right thing. It makes that visible
+  instead: case → test mapping and the reviewer's own file, so a human can check them in
+  two minutes.
 
 ## Cost
 
@@ -198,10 +195,9 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | Verb | Does |
 | --- | --- |
 | `open <slug> <feature\|bugfix\|refactor\|plan>` | start a ledger with the playbook's steps |
-| `note task\|plan\|attention "…"` · `note plan "…" --files a,b` | write the prose sections (stamps the order for R2); `--files` predicts the size |
+| `note task\|plan "…"` · `note plan "…" --files a,b` | write the prose sections (stamps the order for R2); `--files` predicts the size |
 | `case add "…" --kind <kind>` · `case close C1 --test file:name \| --na "…"` | the case table |
 | `step <key\|n> done\|skipped\|na "…" [--evidence ptr]` | close a playbook step |
-| `blast add "…" --rung 1-5 --proof "…"` | a blast-radius fact |
 | `huddle add <role> --file review-1.md` · `acton` · `resolve` | reviewer rounds and Act-on items |
 | `waive <key> "<reason>"` | record a waiver; it shows in the report |
 | `verify [--step verify-before]` | run the repo's verify commands, write `verify.json` |
@@ -237,5 +233,4 @@ Layout: `scripts/gate.mjs` (dispatcher) → `scripts/lib/*` (pure modules) · `h
 `skills/gate` (the workflow + playbooks) · `skills/verify-setup` · `agents/` · `models.json`.
 
 Ideas borrowed with thanks from Lauren Tan's `poteto-mode` (playbooks with explicit skips,
-ownership of delegated work, the blast-radius "how sure" ladder, evidence labels, a
-per-project verify driver) and from Anthropic's `ralph-loop` (the Stop-hook contract).
+ownership of delegated work, a per-project verify driver) and from Anthropic's `ralph-loop` (the Stop-hook contract).

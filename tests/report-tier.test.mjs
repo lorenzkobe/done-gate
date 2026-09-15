@@ -124,7 +124,7 @@ const MODEL = "claude-opus-4";
 const SIZE_RE = new RegExp(`^Size: (${TIER_NAMES.join("|")}) \\(\\d+ files?, \\d+ lines?\\)\\.$`);
 
 // words that belong to the ledger's own vocabulary and must never reach the brief
-const INTERNAL_WORDS = ["tier", "auto-N/A", "reopened", "predicted", "requires"];
+const INTERNAL_WORDS = ["tier", "auto-N/A", "predicted", "requires"];
 
 // ---------------------------------------------------------------------------
 // fixtures
@@ -204,7 +204,7 @@ test("C1 happy: subagent start and stop events carry the payload's model, and om
 // C2
 // ---------------------------------------------------------------------------
 
-test("C2 happy: the full report's Tier block carries the predicted and measured tier, the forced category, and the auto-N/A and reopened keys", () => {
+test("C2 happy: the full report's Tier block carries the predicted and measured tier, the forced category, and the auto-N/A keys", () => {
   const repo = standardTier("report-tier-c2");
   const report = cli(repo, "report").stdout;
 
@@ -224,7 +224,6 @@ test("C2 happy: the full report's Tier block carries the predicted and measured 
   const keys = block.find((l) => l.startsWith("auto-N/A:"));
   assert.ok(keys, `no auto-N/A line:\n${block.join("\n")}`);
   assert.ok(keys.includes("auto-N/A: {skeptic}, {reconcile}"), keys);
-  assert.ok(keys.includes("reopened: {skeptic}, {reconcile}"), keys);
 });
 
 // ---------------------------------------------------------------------------

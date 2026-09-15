@@ -11,8 +11,7 @@ Steps with a `{key}` can only be `DONE` or `WAIVED`.
 6. Make the move. {implement}
 7. Run `gate verify` again after the last edit. {verify}
 8. Drive the real surface if UI files changed. {driver}
-9. Blast radius: every caller still behaves, proven or written unproven. {blast}
-10. Cleanup sweep: no compat shims, no re-exports, names reflect the new shape. {cleanup}
-11. Review: spawn the reviewer; close every Act-on item. {review}
-12. Update docs and CLAUDE.md for any moved path. {docs}
-13. `gate close`, then paste the report. {close}
+9. Cleanup sweep: no compat shims, no re-exports, names reflect the new shape. {cleanup}
+10. Review: spawn the reviewer; close every Act-on item. {review}
+11. Update docs and CLAUDE.md for any moved path. {docs}
+12. `gate close`, then paste the report. {close}
