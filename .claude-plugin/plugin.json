@@ -1,7 +1,7 @@
 {
   "name": "done-gate",
   "displayName": "Done Gate",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Evidence-enforced definition of done: hooks record what happened, a Stop gate refuses 'done' until every gate item has script-written evidence or an explicit waiver.",
   "keywords": [
     "definition-of-done",
