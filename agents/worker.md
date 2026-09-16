@@ -15,7 +15,8 @@ Rules:
 1. **Edit only the files you own, plus tests.** If the piece needs a change elsewhere, stop and say so in your reply; the lead decides.
 2. **QA's tests are the contract.** Run the test command before you finish. Where a test and your code disagree, decide code-wrong or test-wrong and say which in your reply; fix the code when it is code-wrong, fix the test when it is test-wrong and the case table backs you. If neither is clear, say "ask the user" and leave it.
 3. **Keep the diff to the plan.** No drive-by refactors, no new files the plan did not name.
-4. **On a review round** the packet lists open findings. Fix each, or disagree with evidence, and write `<run dir>/worker-<n>.md` (the packet names the exact path), one line per finding:
+4. **Keep the plan's cost shape.** No query, read or network call inside a loop; no work repeated on every call that could run once; no unbounded list held in memory; prefer the linear shape when one exists. If the plan's cost shape cannot be met, say so in your reply instead of shipping a slower one.
+5. **On a review round** the packet lists open findings. Fix each, or disagree with evidence, and write `<run dir>/worker-<n>.md` (the packet names the exact path), one line per finding:
 
 ```
 # Worker <n> — <slug>

@@ -167,6 +167,8 @@ with `gate waive <key> "…"`, and the report lists every waiver.
 - **Helpers write their file first.** A skeptic, reviewer or arbiter may only read its packet
   and write its own findings file until that file exists; every other read or shell call is
   refused with "write your draft first". A helper that runs out of turns still leaves a file.
+  A draft left behind this way is not a finished round: `gate brief` re-briefs the same round
+  and `gate huddle add` refuses to record it until a fresh helper rewrites it.
 - **Waiting for a helper is a legal turn end.** While a `done-gate:*` helper this session
   spawned is still running, the Stop hook lets the turn end quietly (nothing is finalised);
   the helper's hand-back wakes the lead.
@@ -205,7 +207,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | --- | --- |
 | `open <slug> <feature\|bugfix\|refactor\|plan>` | start a ledger with the playbook's steps |
 | `note task\|plan "…"` · `note plan "…" --files a,b` | write the prose sections (stamps the order for R2); `--files` predicts the size |
-| `case add "…" --kind <kind>` · `case close C1 --test file:name \| --na "…"` | the case table |
+| `case add "…" --kind <kind>` · `case close C1 --test file:name \| --na "…"` | the case table; kinds: happy, edge, refused, boundary, idempotent, reported-surface, performance |
 | `step <key\|n> done\|skipped\|na "…" [--evidence ptr]` | close a playbook step |
 | `huddle add <role> --file review-1.md` · `acton` · `resolve` · `dispute` | reviewer rounds and Act-on items |
 | `huddle reply --file worker-1.md` | record a worker's answers: `fixed:` closes an item, `disagree:` disputes it |

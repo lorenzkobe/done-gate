@@ -24,7 +24,7 @@ export function nextHint(ledger) {
   if (ledger.status === "closing") return "next: `gate check`; when it prints clean, `gate report --brief` and paste it as your final message";
   if (!ledger.taskSeq) return "next: `gate note task \"<the user's ask, quoted, then your own words>\"`";
   if (!ledger.planSeq) return "next: `gate note plan \"<approach, files, data plan>\" --files a.ts,b.ts`";
-  if (tiered(ledger) && !ledger.cases.length) return "next: `gate case add \"<case>\" --kind happy|edge|refused|boundary|idempotent|reported-surface`, one per row";
+  if (tiered(ledger) && !ledger.cases.length) return "next: `gate case add \"<case>\" --kind happy|edge|refused|boundary|idempotent|reported-surface|performance`, one per row";
   const blank = ledger.steps.filter((s) => !s.state);
   const step = blank[0];
   const open = ledger.cases.filter((c) => c.status !== "closed");

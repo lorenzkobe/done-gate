@@ -8,12 +8,12 @@ import { applyPrediction, tiered } from "./size.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
-import { parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver } from "./rules.mjs";
+import { isDraft, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver } from "./rules.mjs";
 import { buildState } from "./assess.mjs";
 
 // Steps whose evidence comes from a script or an agent: DONE or WAIVED only.
 export const EVIDENCED_KEYS = new Set(["verify", "verify-before", "driver", "review", "qa", "skeptic", "close"]);
-export const CASE_KINDS = ["happy", "edge", "refused", "boundary", "idempotent", "reported-surface"];
+export const CASE_KINDS = ["happy", "edge", "refused", "boundary", "idempotent", "reported-surface", "performance"];
 export const ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter", "worker"];
 
 export function flag(args, name) {
@@ -104,7 +104,7 @@ export const verbs = {
     if (action === "add") {
       const text = pos.join(" ");
       const kind = flag(rest, "--kind") ?? "happy";
-      if (!text) throw new UsageError('usage: gate case add "<case>" --kind <happy|edge|refused|boundary|idempotent|reported-surface>');
+      if (!text) throw new UsageError('usage: gate case add "<case>" --kind <happy|edge|refused|boundary|idempotent|reported-surface|performance>');
       if (!CASE_KINDS.includes(kind)) throw new UsageError(`unknown kind "${kind}" (have: ${CASE_KINDS.join(", ")})`);
       const id = withLedger(ctx, (ledger) => {
         const id = `C${ledger.cases.length + 1}`;
@@ -166,6 +166,15 @@ export const verbs = {
       const prefix = { arbiter: "arbiter", skeptic: "skeptic", worker: "worker" }[role] ?? "review";
       if (!file && role !== "qa") throw new UsageError(`gate huddle add ${role} needs --file <${prefix}-<n>.md>: the helper's own file is the evidence`);
       if (file && !new RegExp(`^${prefix}-\\d+\\.md$`).test(file)) throw new UsageError(`gate huddle add ${role}: --file must be that role's own ${prefix}-<n>.md, not ${file}`);
+      if (file) {
+        const { dir } = open(ctx);
+        const full = path.join(dir, file);
+        // a draft left by a helper cut off mid-write: every bullet reads "unverified". The
+        // round is unfinished, not done — record nothing and send the lead back to re-brief it.
+        if (existsSync(full) && isDraft(readFileSync(full, "utf8"))) {
+          throw new UsageError(`${file} is a draft: the helper has not finished (every bullet reads "unverified"). Nothing recorded. Run \`gate brief ${role}\` again and spawn a fresh helper for the same round.`);
+        }
+      }
       const same = (a, b) => String(a).toLowerCase().replace(/\s+/g, " ").trim() === String(b).toLowerCase().replace(/\s+/g, " ").trim();
       const { id, imported, answered } = withLedger(ctx, (ledger, dir) => {
         // adding the same file again re-reads it into the same huddle instead of a new round

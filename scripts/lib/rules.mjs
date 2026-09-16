@@ -56,16 +56,28 @@ function sectionLines(text, heading) {
   return (end ? rest.slice(0, end.index) : rest).split("\n");
 }
 
+const BULLET = /^\s*[-*]\s+(.*\S)\s*$/;
+
 function bullets(lines) {
   const out = [];
   for (const raw of lines) {
-    const m = /^\s*[-*]\s+(.*\S)\s*$/.exec(raw);
+    const m = BULLET.exec(raw);
     if (!m) continue;
     // "none", "none.", "none found", "nothing to act on": an empty section, not a finding
     if (/^(?:none|n\/a|nothing)\b[\s.,;:!-]*(?:found|to act on|here|so far)?[\s.]*$/i.test(m[1].trim())) continue;
     out.push(m[1].trim());
   }
   return out;
+}
+
+// A helper cut off mid-write leaves its draft-first placeholder behind: every section reads
+// "- unverified". Shape-agnostic (no heading lookup), so it also catches an arbiter's
+// Ruling-only stub, which has no "## Act on" section at all. Built on bullets(), so a "- none"
+// placeholder (agents/reviewer.md's Dismissed section) is dropped the same way parseFindings
+// drops it, before the "every remaining bullet is unverified" check runs.
+export function isDraft(text) {
+  const found = bullets(String(text ?? "").replace(/\r/g, "").split("\n"));
+  return found.length > 0 && found.every((b) => /^unverified[\s.,;:!-]*$/i.test(b));
 }
 
 // Every Act-on bullet of a helper file. "none" and a missing section are empty.
@@ -352,10 +364,13 @@ export function evaluate(state) {
   }
   const recorded = new Set((ledger.huddles ?? []).map((h) => h.file).filter(Boolean));
   for (const f of state.reviews ?? []) {
-    if (!recorded.has(f)) {
-      const role = f.startsWith("review-") ? "reviewer" : f.startsWith("skeptic-") ? "skeptic" : "arbiter";
-      unmet.push({ rule: "R15", text: `${f} was written but never recorded. Run \`gate huddle add ${role} --file ${f}\`.` });
-    }
+    if (recorded.has(f)) continue;
+    // a draft left by a cut-off helper is an unfinished round, not a written-but-unrecorded
+    // file: brief re-briefs the same round instead
+    const full = state.dir ? path.join(state.dir, f) : null;
+    if (full && existsSync(full) && isDraft(readFileSync(full, "utf8"))) continue;
+    const role = f.startsWith("review-") ? "reviewer" : f.startsWith("skeptic-") ? "skeptic" : "arbiter";
+    unmet.push({ rule: "R15", text: `${f} was written but never recorded. Run \`gate huddle add ${role} --file ${f}\`.` });
   }
 
   return unmet;
