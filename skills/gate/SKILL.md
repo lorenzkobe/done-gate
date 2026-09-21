@@ -8,7 +8,7 @@ description: The done-gate workflow. Use before any task that will change source
 `gate` is `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"`. Every mutating verb ends with a
 `next:` line naming the next step and its verb: follow it. `gate check` lists what is unmet
 (rules R1–R10, R13, R15, R16; the README has the table). You are the lead: you plan, size,
-delegate and report; at size small you also edit.
+delegate and report; below large you also edit.
 
 ## The loop
 
@@ -26,10 +26,11 @@ delegate and report; at size small you also edit.
    (blind tests under the tests globs), `done-gate:worker` (edits the files its packet
    names, answers reviews in `worker-<n>.md`), `done-gate:reviewer` (writes
    `review-<n>.md`), `done-gate:reviewer-2` (high-risk paths), `done-gate:arbiter`.
-4. Size small: implement yourself. Size standard or large: never edit source; `gate brief
-   worker` per piece and spawn `done-gate:worker`; the fence refuses your own edits.
+4. Size small or standard: implement yourself, tests first; you hold the context. Size
+   large: never edit source; `gate brief worker` per piece and spawn `done-gate:worker`;
+   the fence refuses your own edits.
 5. Review: `gate brief reviewer`, spawn, `gate huddle add reviewer --file review-<n>.md`.
-   Small: fix and `gate huddle resolve H<k>.<i> --evidence <ptr>`. Standard+: `gate brief
+   Below large: fix and `gate huddle resolve H<k>.<i> --evidence <ptr>`. Large: `gate brief
    worker`, SendMessage the worker the review path, then `gate huddle reply --file
    worker-<n>.md` (fixed: closes, disagree: disputes). Repeat with the same reviewer
    (SendMessage it the next packet), at most three rounds; what is still disputed then goes

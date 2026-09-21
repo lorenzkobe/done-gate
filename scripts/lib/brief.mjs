@@ -4,7 +4,7 @@ import path from "node:path";
 import { buildState } from "./assess.mjs";
 import { caseTable, verifyLines } from "./report.mjs";
 import { section } from "./ledger.mjs";
-import { renderTierBlock, tierOf } from "./size.mjs";
+import { effectiveTier, leadDelegates, renderTierBlock, tierOf } from "./size.mjs";
 import { gitTracked } from "./tree.mjs";
 import { ROLES, flag, positional } from "./verbs.mjs";
 import { isDraft } from "./rules.mjs";
@@ -262,6 +262,12 @@ export const verbs = {
     if (!ROLES.includes(role)) throw new UsageError(`usage: gate brief <${ROLES.join("|")}> [--round n]`);
     const state = buildState(ctx, {});
     if (!state.ledger) throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
+    // below the delegated size the lead implements with its own context; a worker packet
+    // would hand that context away for nothing
+    if (role === "worker" && !leadDelegates(state.ledger, state.policy)) {
+      const eff = effectiveTier(state.policy, state.ledger, state.tier?.measured ?? null);
+      throw new UsageError(`size ${eff}: implement it yourself; the worker is for size ${state.policy.delegatesAt} (a plan naming more than ${state.policy.tiers.standard?.maxFiles ?? 10} files)`);
+    }
     const rounds = state.ledger.huddles.filter((h) => h.role === role).length;
     const round = Number(flag(ctx.args, "--round")) || rounds + 1;
     // a round whose earlier file never appeared is not a round: the helper is resumed and

@@ -124,6 +124,15 @@ function standardTier(name) {
   return repo;
 }
 
+// A large task (eleven files, past tiers.standard.maxFiles): the only size the worker is for.
+function largeTier(name) {
+  const repo = committed(name);
+  const files = Array.from({ length: 11 }, (_, i) => `src/f${i + 1}.ts`);
+  openTiered(repo, { slug: name, files: files.join(",") });
+  for (const f of files) write(repo, f, "export const x = 2;\n");
+  return repo;
+}
+
 // ---------------------------------------------------------------------------
 // C1
 // ---------------------------------------------------------------------------
@@ -153,8 +162,8 @@ test("C1 happy: models.json and DEFAULT_POLICY both name worker: sonnet and a ce
 // C2
 // ---------------------------------------------------------------------------
 
-test("C2 happy: `gate brief worker` writes brief-worker-1.md, every other role still briefs, and `gate huddle add worker --file worker-1.md` is recorded", () => {
-  const repo = standardTier("roles-c2");
+test("C2 happy: at size large `gate brief worker` writes brief-worker-1.md, every other role still briefs, and `gate huddle add worker --file worker-1.md` is recorded", () => {
+  const repo = largeTier("roles-c2");
 
   // arbiter is left out: it needs --item <H#.#>, a disputed finding, and tests/review-dispute owns it
   for (const role of Object.keys(EXPECTED_ROLES).filter((r) => r !== "arbiter")) {

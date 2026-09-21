@@ -44,8 +44,8 @@ judgment out of the model and into hooks that can't be talked out of it.
    ├─ case table             ├─ must exist BEFORE the first source edit (R2)
    ├─ skeptic huddle        ─┘
    │
-   ├─ QA writes tests (blind to src)  ║  small: you implement
-   │                                   ║  standard+: a worker per piece
+   ├─ QA writes tests (blind to src)  ║  small, standard: you implement
+   │                                   ║  large: a worker per piece
    ├─ gate verify        ──► verify.json  (exit codes, tails, source hash)
    ├─ drive the real app ──► browser events logged by hooks
    ├─ reviewer ⇄ worker  ──► review-<n>.md / worker-<n>.md, up to 3 rounds
@@ -149,7 +149,7 @@ attempt to finish.
 | R10 | a repo check failed (`claude-md-budget`, `migration-number`) |
 | R13 | `.claude/gate.json` or the plugin's `models.json` changed mid-task |
 | R15 | a helper's file lists more findings than the ledger recorded |
-| R16 | the lead edited source itself at size standard or large (a worker's job); waivable with `gate waive delegate` |
+| R16 | the lead edited source itself at size large (a worker's job); waivable with `gate waive delegate` |
 
 Waivers are the only way past a keyed step: the user OKs it, Claude records the reason
 with `gate waive <key> "…"`, and the report lists every waiver.
@@ -180,9 +180,10 @@ with `gate waive <key> "…"`, and the report lists every waiver.
   next session in the repo and says so; `gate abandon <slug> "<reason>"` marks it abandoned
   (reason in its report) so it no longer blocks anything. Nothing is finalised: the changes it
   left behind still count against the next ledger.
-- **The lead delegates at size standard and up.** With a ledger open and the task sized
-  standard or large, the lead's own `Edit`/`Write` on source or tests is refused and it is
-  told to brief a worker. A shell edit (`sed -i`, a heredoc) slips past this fence; the
+- **The lead implements below size large.** It holds the context, so handing a piece to a
+  fresh worker would only lose it. At size large (`policy.delegatesAt` in `models.json`; a
+  plan naming more than ten files) the lead's own `Edit`/`Write` on source or tests is
+  refused and it is told to brief a worker per piece. A shell edit (`sed -i`, a heredoc) slips past this fence; the
   Stop hook's R16 catches it after the fact from the event log.
 - **What it cannot know.** Whether a test asserts the right thing. It makes that visible
   instead: case → test mapping and the reviewer's own file, so a human can check them in

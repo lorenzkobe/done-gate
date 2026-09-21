@@ -559,7 +559,8 @@ test("C16 happy: models.json carries the policy object and no escalate/never/cei
   assert.deepEqual(m.roles, { skeptic: "sonnet", qa: "opus", reviewer: "sonnet", "reviewer-2": "opus", arbiter: "opus", worker: "sonnet" });
 
   assert.equal(typeof m.policy, "object");
-  assert.deepEqual(Object.keys(m.policy).sort(), ["ceiling", "escalate", "forceStandard", "tiers"]);
+  assert.deepEqual(Object.keys(m.policy).sort(), ["ceiling", "delegatesAt", "escalate", "forceStandard", "tiers"]);
+  assert.equal(m.policy.delegatesAt, "large");
   assert.deepEqual(Object.keys(m.policy.tiers).sort(), ["large", "small", "standard"]);
   assert.deepEqual(m.policy.tiers.small, { maxFiles: 1, maxLines: 40, requires: ["qa", "reviewer"] });
   assert.deepEqual(m.policy.tiers.standard, { maxFiles: 10, maxLines: 400, requires: ["skeptic", "qa", "reviewer"] });

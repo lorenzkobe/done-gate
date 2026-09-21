@@ -287,12 +287,16 @@ test("C11 boundary: an edit logged before `gate open` blocks R2 only while the P
 
 const MODELS = JSON.parse(readFileSync(path.join(pluginRoot, "models.json"), "utf8"));
 const SMALL_MAX_FILES = MODELS.policy.tiers.small.maxFiles; // 1: one more file is standard
+const STANDARD_MAX_FILES = MODELS.policy.tiers.standard.maxFiles; // 10: one more file is large
 assert.ok(MODELS.roles.worker, "anchor: models.json roles.worker is the delegated editor");
+assert.equal(MODELS.policy.delegatesAt, "large", "anchor: the lead delegates at large only");
 const WORKER = "done-gate:worker"; // the agent_type the Agent tool reports for that role
 
-// the smallest --files list a prediction calls standard, and a list it calls small
-const STANDARD_FILES = Array.from({ length: SMALL_MAX_FILES + 1 }, (_, i) => `src/f${i}.ts`);
-const SMALL_FILES = STANDARD_FILES.slice(0, SMALL_MAX_FILES);
+// the smallest --files list a prediction calls large (the delegating size), one it calls
+// standard (the lead still edits), and one it calls small
+const LARGE_FILES = Array.from({ length: STANDARD_MAX_FILES + 1 }, (_, i) => `src/f${i}.ts`);
+const STANDARD_FILES = LARGE_FILES.slice(0, SMALL_MAX_FILES + 1);
+const SMALL_FILES = LARGE_FILES.slice(0, SMALL_MAX_FILES);
 
 // ---------------------------------------------------------------------------
 // conventions (mirrors tests/report-tier.test.mjs and tests/late-order.test.mjs)
@@ -412,10 +416,10 @@ const clean = (over = {}) => {
 // C1
 // ---------------------------------------------------------------------------
 
-test("C1 refused: at predicted standard, a lead edit event on src/a.ts after the plan is R16 naming the path and the size; the worker's edit is not", () => {
+test("C1 refused: at predicted large, a lead edit event on src/a.ts after the plan is R16 naming the path and the size; the worker's edit is not", () => {
   const repo = opened("rules-r16-c1");
-  const predicted = notePlan(repo, STANDARD_FILES);
-  assert.match(predicted, /predicted standard/, `${SMALL_FILES.length + 1} files must predict standard: ${predicted}`);
+  const predicted = notePlan(repo, LARGE_FILES);
+  assert.match(predicted, /predicted large/, `${LARGE_FILES.length} files must predict large: ${predicted}`);
 
   // the lead edits one file itself, the worker edits another
   write(repo, "src/a.ts", "export const a = 2;\n");
@@ -424,7 +428,7 @@ test("C1 refused: at predicted standard, a lead edit event on src/a.ts after the
   workerEdit(repo, "src/b.ts");
 
   const size = effectiveSize(repo);
-  assert.equal(size, "standard", "the prediction keeps the task at a delegating size");
+  assert.equal(size, "large", "the prediction keeps the task at a delegating size");
 
   const found = r16Lines(check(repo));
   assert.equal(found.length, 1, `exactly one R16 item was expected:\n${check(repo)}`);
@@ -437,7 +441,7 @@ test("C1 refused: at predicted standard, a lead edit event on src/a.ts after the
 // C2
 // ---------------------------------------------------------------------------
 
-test("C2 happy: at predicted small, and on the untiered plan playbook, a lead edit event never produces R16", () => {
+test("C2 happy: at predicted small and standard, and on the untiered plan playbook, a lead edit event never produces R16", () => {
   const small = opened("rules-r16-c2-small");
   const predicted = notePlan(small, SMALL_FILES);
   assert.match(predicted, /predicted small/, `${SMALL_FILES.length} file must predict small: ${predicted}`);
@@ -446,11 +450,19 @@ test("C2 happy: at predicted small, and on the untiered plan playbook, a lead ed
   assert.equal(effectiveSize(small), "small", "nothing outgrew the prediction");
   assert.deepEqual(r16Lines(check(small)), [], "at small the lead edits its own source");
 
+  // standard: the lead still holds the context and edits itself
+  const standard = opened("rules-r16-c2-standard");
+  assert.match(notePlan(standard, STANDARD_FILES), /predicted standard/);
+  write(standard, "src/a.ts", "export const a = 2;\n");
+  leadEdit(standard, "src/a.ts");
+  assert.equal(effectiveSize(standard), "standard");
+  assert.deepEqual(r16Lines(check(standard)), [], "at standard the lead edits its own source");
+
   // the plan playbook is not tiered at all: there is no size, so there is no delegation
   const notes = committed("rules-r16-c2-plan");
   cli(notes, "open", ["notes", "plan"]);
   cli(notes, "note", ["task", "Write the spec. [inferred]"]);
-  cli(notes, "note", ["plan", "One document.", "--files", STANDARD_FILES.join(",")]);
+  cli(notes, "note", ["plan", "One document.", "--files", LARGE_FILES.join(",")]);
   write(notes, "src/a.ts", "export const a = 2;\n");
   leadEdit(notes, "src/a.ts");
   assert.deepEqual(r16Lines(check(notes)), [], "an untiered playbook never delegates");
@@ -460,7 +472,7 @@ test("C2 happy: at predicted small, and on the untiered plan playbook, a lead ed
 // C3
 // ---------------------------------------------------------------------------
 
-test("C3 boundary: a lead edit before the plan stays clean when the size is re-predicted to standard", () => {
+test("C3 boundary: a lead edit before the plan stays clean when the size is re-predicted to large", () => {
   const repo = opened("rules-r16-c3");
 
   // the edit happens first, while nothing has been predicted at all
@@ -468,9 +480,9 @@ test("C3 boundary: a lead edit before the plan stays clean when the size is re-p
   leadEdit(repo, "src/a.ts");
 
   notePlan(repo, SMALL_FILES); // predicted small
-  notePlan(repo, STANDARD_FILES); // re-predicted standard, after the edit
+  notePlan(repo, LARGE_FILES); // re-predicted large, after the edit
 
-  assert.equal(effectiveSize(repo), "standard", "the second prediction is the one in force");
+  assert.equal(effectiveSize(repo), "large", "the second prediction is the one in force");
   assert.deepEqual(r16Lines(check(repo)), [], "a re-prediction must not backdate a violation");
 });
 
@@ -530,23 +542,25 @@ test("C6 edge: a worker's UI edit and a worker's browser call leave R4 unmet; on
 // when the size first becomes delegated, and a re-prediction keeps it.
 // ---------------------------------------------------------------------------
 
-test("C7 happy: `gate note plan --files` stamps tier.predictedSeq when the size first becomes standard, and a later re-prediction keeps that mark", () => {
+test("C7 happy: `gate note plan --files` stamps tier.predictedSeq when the size first becomes large, and a later re-prediction keeps that mark", () => {
   const repo = opened("rules-r16-c7");
 
-  // small: the lead may edit, so there is no mark to count from
+  // small and standard: the lead may edit, so there is no mark to count from
   notePlan(repo, SMALL_FILES);
   const first = ledgerOf(repo);
   assert.equal(first.tier.predictedSeq, null, `a small prediction must not stamp predictedSeq: ${JSON.stringify(first.tier)}`);
-
-  // standard: the mark is set now
   notePlan(repo, STANDARD_FILES);
+  assert.equal(ledgerOf(repo).tier.predictedSeq, null, "a standard prediction must not stamp predictedSeq either");
+
+  // large: the mark is set now
+  notePlan(repo, LARGE_FILES);
   const second = ledgerOf(repo);
-  assert.equal(second.tier.predicted, "standard");
-  assert.equal(typeof second.tier.predictedSeq, "number", `no tier.predictedSeq after a standard prediction: ${JSON.stringify(second.tier)}`);
+  assert.equal(second.tier.predicted, "large");
+  assert.equal(typeof second.tier.predictedSeq, "number", `no tier.predictedSeq after a large prediction: ${JSON.stringify(second.tier)}`);
   assert.ok(second.tier.predictedSeq >= second.planSeq, `the mark is not older than the Plan: ${second.tier.predictedSeq} < ${second.planSeq}`);
 
   // a re-prediction while already delegated never moves the mark forward (that would erase a standing R16)
-  notePlan(repo, STANDARD_FILES);
+  notePlan(repo, LARGE_FILES);
   const third = ledgerOf(repo);
   assert.equal(third.tier.predictedSeq, second.tier.predictedSeq, "a re-prediction at a delegated size must keep the original mark");
 });
@@ -561,7 +575,7 @@ test("C8 boundary: a ledger with no tier.predictedSeq falls back to planSeq", ()
   // an edit before the Plan, and one after it
   write(repo, "src/b.ts", "export const b = 1;\n");
   leadEdit(repo, "src/b.ts");
-  notePlan(repo, STANDARD_FILES);
+  notePlan(repo, LARGE_FILES);
   write(repo, "src/a.ts", "export const a = 2;\n");
   leadEdit(repo, "src/a.ts");
 
@@ -600,19 +614,19 @@ function shellEdit(repo, agent = null) {
 
 test("C10 edge: at a delegated size a source change explained only by a worker's Bash call is not R16; the lead's own Bash call is", () => {
   const byWorker = opened("rules-r16-c10-worker");
-  notePlan(byWorker, STANDARD_FILES);
+  notePlan(byWorker, LARGE_FILES);
   shellEdit(byWorker, { id: "W1", type: WORKER });
-  assert.equal(effectiveSize(byWorker), "standard", "the prediction keeps the task at a delegating size");
+  assert.equal(effectiveSize(byWorker), "large", "the prediction keeps the task at a delegating size");
   assert.deepEqual(r16Lines(check(byWorker)), [], "the worker is the one allowed to edit, shell or tool");
 
   const byLead = opened("rules-r16-c10-lead");
-  notePlan(byLead, STANDARD_FILES);
+  notePlan(byLead, LARGE_FILES);
   shellEdit(byLead);
-  assert.equal(effectiveSize(byLead), "standard");
+  assert.equal(effectiveSize(byLead), "large");
   const out = check(byLead);
   const found = r16Lines(out);
   assert.equal(found.length, 1, `a lead shell edit at a delegated size is R16:\n${out}`);
-  assert.match(found[0], /\bstandard\b/, `R16 must name the size: ${found[0]}`);
+  assert.match(found[0], /\blarge\b/, `R16 must name the size: ${found[0]}`);
 });
 }
 

@@ -1,6 +1,6 @@
 ---
 name: worker
-description: Implementer for done-gate. Takes one piece of a task from a packet, edits only the files it owns plus tests, runs the test command, and on review rounds answers each finding in worker-<n>.md. Spawned by the lead at size standard and above.
+description: Implementer for done-gate. Takes one piece of a task from a packet, edits only the files it owns plus tests, runs the test command, and on review rounds answers each finding in worker-<n>.md. Spawned by the lead at size large, where a change is worth splitting into pieces.
 model: sonnet
 maxTurns: 60
 effort: high

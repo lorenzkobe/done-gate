@@ -23,6 +23,9 @@ export const DEFAULT_POLICY = Object.freeze({
   forceStandard: ["ui", "schema", "highRisk"],
   escalate: { reviewerRound2: { model: "opus", whenActOnAtLeast: 2, orTier: "large" } },
   ceiling: { helpersPerTask: 10 },
+  // the size at which the lead stops editing and briefs a worker per piece; below it the lead
+  // implements with its own context
+  delegatesAt: "large",
 });
 
 function merge(raw) {
@@ -35,6 +38,7 @@ function merge(raw) {
     forceStandard: Array.isArray(p.forceStandard) ? p.forceStandard.map(String) : DEFAULT_POLICY.forceStandard,
     escalate: { ...DEFAULT_POLICY.escalate, ...(p.escalate && typeof p.escalate === "object" ? p.escalate : {}) },
     ceiling: { ...DEFAULT_POLICY.ceiling, ...(p.ceiling && typeof p.ceiling === "object" ? p.ceiling : {}) },
+    delegatesAt: typeof p.delegatesAt === "string" && p.delegatesAt ? p.delegatesAt : DEFAULT_POLICY.delegatesAt,
   };
   // hashed like the repo config, so a mid-task edit to models.json is caught (R13)
   return { ...resolved, hash: createHash("sha1").update(JSON.stringify(resolved)).digest("hex") };
@@ -101,16 +105,24 @@ export function tiered(ledger) {
   return Boolean(ledger) && TIERED_PLAYBOOKS.has(ledger.playbook);
 }
 
-// At size standard or large the lead plans and delegates; workers edit the source. The
-// larger of the prediction and the last measurement decides, so a task that outgrows a
-// small prediction hands its remaining edits to a worker; with neither known yet, the lead
-// may edit (R2 already demands a plan first).
-// Returns that size, or null when the lead may edit.
+// Whether a tier is one where the lead delegates: policy.delegatesAt or anything past it.
+export function delegatedTier(policy, tier) {
+  const order = tierOrder(policy);
+  const at = order.indexOf(policy.delegatesAt);
+  const i = tier ? order.indexOf(tier) : -1;
+  return at >= 0 && i >= at;
+}
+
+// At policy.delegatesAt (large by default) the lead plans and delegates; workers edit the
+// source. Below it the lead implements itself: it holds the context. The larger of the
+// prediction and the last measurement decides, so a task that outgrows its prediction hands
+// its remaining edits to a worker; with neither known yet, the lead may edit (R2 already
+// demands a plan first). Returns that size, or null when the lead may edit.
 export function leadDelegates(ledger, policy = loadPolicy()) {
   if (!tiered(ledger)) return null;
   const t = tierOf(ledger);
   const size = tierMax(policy, t.predicted, t.measured?.tier ?? null);
-  return size !== null && size !== "small" ? size : null;
+  return delegatedTier(policy, size) ? size : null;
 }
 
 // predicted stays null until `gate note plan --files` names the files; the measured diff
@@ -212,13 +224,14 @@ export function applyPrediction(ledger, policy, config, paths) {
   if (!tiered(ledger)) return null;
   const tier = tierOf(ledger);
   const pred = predictTier(policy, config, paths);
-  const wasDelegated = tier.predicted !== null && tier.predicted !== "small";
+  const wasDelegated = delegatedTier(policy, tier.predicted);
+  const delegated = delegatedTier(policy, pred.tier);
   tier.predicted = pred.tier;
   tier.predictedFiles = paths;
   // R16 counts the lead's source edits from the moment the task became a delegated size;
   // a later re-prediction never moves that mark forward and erases a standing finding
-  if (pred.tier !== "small" && (!wasDelegated || tier.predictedSeq === null)) tier.predictedSeq = nextSeq();
-  if (pred.tier === "small") tier.predictedSeq = null;
+  if (delegated && (!wasDelegated || tier.predictedSeq === null)) tier.predictedSeq = nextSeq();
+  if (!delegated) tier.predictedSeq = null;
   if (pred.tier === "small") {
     for (const key of optionalSteps(ledger)) {
       const step = ledger.steps.find((s) => s.key === key);

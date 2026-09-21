@@ -285,17 +285,21 @@ const stdinFixture = (name) =>
   JSON.parse(readFileSync(path.join(here, "fixtures", "stdin", `${name}.json`), "utf8"));
 
 // ---------------------------------------------------------------------------
-// C1 — the lead is fenced off source once the plan predicts standard or large
+// C1 — the lead is fenced off source once the plan predicts large (policy.delegatesAt)
 // ---------------------------------------------------------------------------
 
-test("C1 refused: at predicted standard the lead's Edit/Write/MultiEdit/NotebookEdit on source is denied, and the reason names the size and `gate brief worker`", () => {
-  const repo = openedWith("fence-c1", { files: ["src/a.ts", "src/b.ts"] });
+// eleven files: one more than models.json tiers.standard.maxFiles
+const LARGE = Array.from({ length: 11 }, (_, i) => `src/f${i + 1}.ts`);
+const LARGE_EXTRA = Object.fromEntries(LARGE.map((f) => [f, "export const x = 1;\n"]));
+
+test("C1 refused: at predicted large the lead's Edit/Write/MultiEdit/NotebookEdit on source is denied, and the reason names the size and `gate brief worker`", () => {
+  const repo = openedWith("fence-c1", { files: LARGE, extra: LARGE_EXTRA });
   // the size the fence must name comes from the ledger the CLI wrote, not from the guard
-  assert.equal(ledgerOf(repo).tier.predicted, "standard");
+  assert.equal(ledgerOf(repo).tier.predicted, "large");
 
   const reason = fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts")));
-  assert.ok(reason, "a lead Edit on source at standard must be denied");
-  assert.match(reason, /standard/, reason);
+  assert.ok(reason, "a lead Edit on source at large must be denied");
+  assert.match(reason, /large/, reason);
   assert.match(reason, /gate brief worker/, reason);
   assert.match(reason, /done-gate:worker/, reason);
   assert.match(reason, /src\/a\.ts/, reason);
@@ -315,23 +319,15 @@ test("C1 refused: at predicted standard the lead's Edit/Write/MultiEdit/Notebook
   );
 });
 
-test("C1 refused: a plan naming 11 files predicts large and the reason names that size", () => {
-  const files = Array.from({ length: 11 }, (_, i) => `src/f${i + 1}.ts`);
-  const repo = openedWith("fence-c1-large", {
-    files,
-    extra: Object.fromEntries(files.map((f) => [f, "export const x = 1;\n"])),
-  });
-  assert.equal(ledgerOf(repo).tier.predicted, "large");
-
-  const reason = fence(repo, pre(repo, "Edit", path.join(repo, "src/f1.ts")));
-  assert.ok(reason, "a lead Edit on source at large must be denied");
-  assert.match(reason, /large/, reason);
-  assert.match(reason, /gate brief worker/, reason);
+test("C1 happy: a plan naming two files predicts standard and the lead still edits source there", () => {
+  const repo = openedWith("fence-c1-standard", { files: ["src/a.ts", "src/b.ts"] });
+  assert.equal(ledgerOf(repo).tier.predicted, "standard");
+  assert.equal(fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts"))), null, "the lead implements at standard");
 });
 
-test("a delegate waiver lets the lead edit source at predicted standard", () => {
-  const repo = openedWith("fence-c1-waived", { files: ["src/a.ts", "src/b.ts"] });
-  assert.equal(ledgerOf(repo).tier.predicted, "standard");
+test("a delegate waiver lets the lead edit source at predicted large", () => {
+  const repo = openedWith("fence-c1-waived", { files: LARGE, extra: LARGE_EXTRA });
+  assert.equal(ledgerOf(repo).tier.predicted, "large");
   cli(repo, "waive", ["delegate", "user said so"]);
 
   assert.equal(fence(repo, pre(repo, "Write", path.join(repo, "src/a.ts"))), null, "delegate waiver lifts the fence");
@@ -362,8 +358,8 @@ test("C2 happy: the lead still edits source when the prediction is small, when t
 
 test("C2 happy: bugfix and refactor are tiered too, so the lead is fenced there as well", () => {
   for (const playbook of ["bugfix", "refactor"]) {
-    const repo = openedWith(`fence-c2-${playbook}`, { playbook, files: ["src/a.ts", "src/b.ts"] });
-    assert.equal(ledgerOf(repo).tier.predicted, "standard", playbook);
+    const repo = openedWith(`fence-c2-${playbook}`, { playbook, files: LARGE, extra: LARGE_EXTRA });
+    assert.equal(ledgerOf(repo).tier.predicted, "large", playbook);
     assert.ok(fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts"))), playbook);
   }
 });
@@ -373,8 +369,8 @@ test("C2 happy: bugfix and refactor are tiered too, so the lead is fenced there 
 // ---------------------------------------------------------------------------
 
 test("C3 edge: a test file is denied to the lead like source; docs/notes.md and the run dir's ledger.md stay writable", () => {
-  const repo = openedWith("fence-c3", { files: ["src/a.ts", "src/b.ts"] });
-  assert.equal(ledgerOf(repo).tier.predicted, "standard");
+  const repo = openedWith("fence-c3", { files: LARGE, extra: LARGE_EXTRA });
+  assert.equal(ledgerOf(repo).tier.predicted, "large");
 
   // the boundary, read from the config that owns it (source **, minus docs/** and **/*.md)
   const cfg = loadConfig(repo);
@@ -395,9 +391,9 @@ test("C3 edge: a test file is denied to the lead like source; docs/notes.md and 
 // C4 — the worker is the role the deny points at
 // ---------------------------------------------------------------------------
 
-test("C4 happy: a done-gate:worker edits source and tests at standard, but not another role's review-1.md", () => {
-  const repo = openedWith("fence-c4", { files: ["src/a.ts", "src/b.ts"] });
-  assert.equal(ledgerOf(repo).tier.predicted, "standard");
+test("C4 happy: a done-gate:worker edits source and tests at large, but not another role's review-1.md", () => {
+  const repo = openedWith("fence-c4", { files: LARGE, extra: LARGE_EXTRA });
+  assert.equal(ledgerOf(repo).tier.predicted, "large");
   const worker = { agent_id: "A7", agent_type: "done-gate:worker" };
 
   assert.equal(fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts"), worker)), null, "source");
@@ -425,7 +421,7 @@ test("C5 boundary: done-gate:qa is still refused source and still allowed tests 
 // ---------------------------------------------------------------------------
 
 test("C6 edge: a fenced lead edit is logged as a deny event and the report counts it", () => {
-  const repo = openedWith("fence-c6", { files: ["src/a.ts", "src/b.ts"] });
+  const repo = openedWith("fence-c6", { files: LARGE, extra: LARGE_EXTRA });
   assert.deepEqual(readEvents(stateDir(repo), "S1").filter((e) => e.kind === "deny"), [], "nothing denied yet");
 
   assert.ok(fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts"))));
@@ -443,21 +439,19 @@ test("C6 edge: a fenced lead edit is logged as a deny event and the report count
 // C8 — a measured size can fence the lead even when the plan predicted small
 // ---------------------------------------------------------------------------
 
-test("C8 boundary: a plan that predicted small but has already grown to a measured standard fences the lead's next source edit", () => {
+test("C8 boundary: a plan that predicted small but has already grown to a measured large fences the lead's next source edit", () => {
   const repo = openedWith("fence-c8", { files: ["src/a.ts"] });
   assert.equal(ledgerOf(repo).tier.predicted, "small", "the plan named one file");
   assert.equal(fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts"))), null, "small and unmeasured: allowed");
 
-  // the task grows; `gate check` is what writes the measured tier into the ledger
-  write(repo, "src/a.ts", "export const a = 2;\n");
-  write(repo, "src/b.ts", "export const b = 1;\n");
-  write(repo, "src/c.ts", "export const c = 1;\n");
+  // the task grows past ten files; `gate check` is what writes the measured tier into the ledger
+  for (const f of LARGE) write(repo, f, "export const x = 2;\n");
   cli(repo, "check");
-  assert.equal(ledgerOf(repo).tier.measured.tier, "standard");
+  assert.equal(ledgerOf(repo).tier.measured.tier, "large");
 
   const reason = fence(repo, pre(repo, "Edit", path.join(repo, "src/d.ts")));
   assert.ok(reason, "the measured size fences the lead too");
-  assert.match(reason, /standard/, reason);
+  assert.match(reason, /large/, reason);
   assert.match(reason, /gate brief worker/, reason);
   assert.match(reason, /done-gate:worker/, reason);
 });

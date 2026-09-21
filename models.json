@@ -50,6 +50,7 @@
     },
     "ceiling": {
       "helpersPerTask": 10
-    }
+    },
+    "delegatesAt": "large"
   }
 }
