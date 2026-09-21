@@ -57,12 +57,12 @@ test("case add/close builds the case table; close needs a test pointer or --na",
 
 test("step marks a step DONE/SKIPPED/N-A with a note; evidenced steps refuse SKIPPED; DONE needs --evidence", () => {
   const repo = opened("verbs-step");
-  cli(repo, "step", ["read", "done", "read CourtCard + its 3 callers", "--evidence", "events#1"]);
+  cli(repo, "step", ["context", "done", "traced it", "--evidence", "events#1"]);
   cli(repo, "step", ["schema", "skipped", "no schema files touched"]);
   cli(repo, "step", ["6", "na", "nothing to implement in this fixture"]);
   const steps = ledgerOf(repo).steps;
-  assert.equal(steps.find((s) => s.key === "read").state, "DONE");
-  assert.equal(steps.find((s) => s.key === "read").evidence, "events#1");
+  assert.equal(steps.find((s) => s.key === "context").state, "DONE");
+  assert.equal(steps.find((s) => s.key === "context").evidence, "events#1");
   assert.equal(steps.find((s) => s.key === "schema").state, "SKIPPED");
   assert.equal(steps.find((s) => s.n === 6).state, "N/A");
   const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
@@ -114,7 +114,7 @@ test("close sets status closing and marks the close step; the stop gate then fin
   const repo = opened("verbs-close", "plan");
   cli(repo, "note", ["task", "t"]);
   cli(repo, "note", ["plan", "p"]);
-  cli(repo, "step", ["read", "done", "read", "--evidence", "events#1"]);
+  cli(repo, "step", ["context", "done", "traced it", "--evidence", "events#1"]);
   cli(repo, "step", ["skeptic", "done", "no findings", "--evidence", "events#2"]);
   cli(repo, "step", ["implement", "done", "spec written", "--evidence", "docs/spec.md"]);
   cli(repo, "close");

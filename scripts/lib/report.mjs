@@ -7,7 +7,7 @@ import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
 import { readEvents } from "./events.mjs";
 import { effectiveTier, loadPolicy, renderTierBlock, requires, tiered, tierOf } from "./size.mjs";
-import { isRole, lastEditSeq, lateOrder } from "./rules.mjs";
+import { isRole, lastEditSeq, hasContextStep, lateOrder, tracedPointers } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 
 function tailLines(file, n) {
@@ -141,6 +141,7 @@ export function renderReport(state, unmet) {
 
   out.push(`\n## Task\n\n${section(md, "Task") || "_not written_"}`);
   out.push(`\n## Plan\n\n${section(md, "Plan") || "_not written_"}`);
+  out.push(`\n## Context\n\n${section(md, "Context") || "_not written_"}`);
 
   out.push("\n## Case table\n");
   out.push(...caseTable(ledger));
@@ -263,14 +264,26 @@ const PLAIN_RULES = {
   R16: "the lead edited source at a size a worker should handle",
 };
 
+// What was understood before the work, on the same line as what changed: the pointers
+// traced and whether anything was researched. Silent when no Context was written (the
+// "For you" line says so) and on ledgers from before the Context step existed.
+function contextSummary(state) {
+  const ctx = section(ledgerMd(state.dir), "Context");
+  if (!ctx || !hasContextStep(state.ledger)) return "";
+  const pointers = tracedPointers(ctx, state.root).length;
+  const research = /^\s*Research:\s*(.*)$/mi.exec(ctx)?.[1]?.trim() ?? "";
+  const researched = /^none needed/i.test(research) ? "research not needed" : research ? "research noted" : "no research line";
+  return ` Understood first: ${plural(pointers, "pointer")} traced, ${researched}.`;
+}
+
 function changedLine(state) {
   const { ledger, config, changed, policy } = state;
   const src = changed.filter((p) => config.isSource(p) && !config.isTest(p));
-  if (!src.length) return "Changed no source files.";
+  if (!src.length) return `Changed no source files.${contextSummary(state)}`;
   const names = src.slice(0, 3).join(", ") + (src.length > 3 ? ` and ${src.length - 3} more` : "");
   const m = policy && tiered(ledger) ? (state.tier?.measured ?? tierOf(ledger).measured) : null;
   const size = m ? `, size ${effectiveTier(policy, ledger, m)}` : "";
-  return `Changed ${plural(src.length, "file")} (${names})${size}.`;
+  return `Changed ${plural(src.length, "file")} (${names})${size}.${contextSummary(state)}`;
 }
 
 function checksLine2(state) {
@@ -347,8 +360,9 @@ function forYouLine(state, unmet) {
   const denies = events.filter((e) => e.kind === "deny" && !e.delegate).length;
   if (denies) items.push(`${plural(denies, "blocked write")} to check files`);
   if (ledger.overridden) items.push("I could not satisfy the checks and ended anyway; treat everything above as unverified");
+  if (ledger.steps.some((s) => s.key === "context" && s.state === null)) items.push("no context was written: what was traced, what depends on it, what was researched");
   const order = lateOrder(state);
-  if (order.late.length) items.push(`the ${order.late.join(" and ").replace("case table", "list of test cases").replace("Plan", "plan")} was written after the first code change`);
+  if (order.late.length) items.push(`the ${order.late.join(" and ").replace("case table", "list of test cases").replace("Plan", "plan").replace("Context", "context")} was written after the first code change`);
   const errors = gateErrorsSince(state);
   if (errors) items.push(`the gate itself logged ${plural(errors, "error")}; see gate-error.log`);
   const missing = [...new Set(unmet.map((u) => PLAIN_RULES[u.rule] ?? u.text.replace(/\bR\d{1,2}\b/g, "a check")))];

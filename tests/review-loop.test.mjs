@@ -1671,10 +1671,10 @@ test("C6 happy: the skeptic hint names `gate huddle add skeptic --file skeptic-<
     const k = hintedKey(h);
     if (k && !(k in hints)) hints[k] = h;
   };
-  record(cli(repo, "step", ["read", "done", "read both modules", "--evidence", "events#1"]).stdout);
+  record(cli(repo, "note", ["context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]).stdout);
   record(cli(repo, "case", ["add", "the skeptic writes its file", "--kind", "happy"]).stdout);
   for (const key of keys) {
-    if (["read", "plan", "cases"].includes(key)) continue;
+    if (["context", "read", "plan", "cases"].includes(key)) continue;
     if (key === "review") break;
     record(cli(repo, "step", [key, "done", `${key} done`, "--evidence", "events#1"]).stdout);
   }

@@ -12,6 +12,9 @@ import { fileURLToPath } from "node:url";
 import { toPosixRel } from "../scripts/lib/paths.mjs";
 import { nextHint } from "../scripts/lib/next.mjs";
 
+// the understand-first note every fixture writes before its plan
+const CONTEXT = "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change.";
+
 // ===== from tests/ledger.test.mjs =====
 {
 const stateOf = (repo) => path.join(repo, ".claude", "gate");
@@ -575,10 +578,10 @@ const PLAYBOOK_FILE = path.join(pluginRoot, "skills", "gate", "playbooks.md");
 
 // key lists exactly as the task states them; `null` is an unkeyed step
 const EXPECTED = {
-  feature: ["read", "plan", "cases", "skeptic", "tests", "implement", "verify", "driver", "schema", "review", "close"],
-  bugfix: ["repro", "rootcause", "plan", "cases", "tests", "implement", "verify", "driver", "schema", "review", "close"],
-  refactor: ["read", "plan", "cases", "tests", "verify-before", "implement", "verify", "driver", "review", "close"],
-  plan: ["read", "plan", "skeptic", "implement", "close"],
+  feature: ["context", "plan", "cases", "skeptic", "tests", "implement", "verify", "driver", "schema", "review", "close"],
+  bugfix: ["repro", "rootcause", "context", "plan", "cases", "tests", "implement", "verify", "driver", "schema", "review", "close"],
+  refactor: ["context", "plan", "cases", "tests", "verify-before", "implement", "verify", "driver", "review", "close"],
+  plan: ["context", "plan", "skeptic", "implement", "close"],
   investigation: [null, null],
 };
 const NAMES = Object.keys(EXPECTED);
@@ -639,7 +642,7 @@ test("C2 refused: an unknown playbook is refused by name and lists the five play
 // C3 — the ledger.md template
 // ---------------------------------------------------------------------------
 
-test("C3 happy: a fresh ledger.md has exactly the Task and Plan sections, with slug, playbook and opened date filled in", () => {
+test("C3 happy: a fresh ledger.md has exactly the Task, Context and Plan sections, with slug, playbook and opened date filled in", () => {
   const repo = makeRepo("playbooks-c3");
   cli(repo, "open", ["venue-badge", "feature"]);
   const l = ledgerOf(repo);
@@ -649,7 +652,7 @@ test("C3 happy: a fresh ledger.md has exactly the Task and Plan sections, with s
     const m = /^##\s+(.+?)\s*$/.exec(line.replace(/\r$/, ""));
     return m ? [m[1]] : [];
   });
-  assert.deepEqual(sections, ["Task", "Plan"]);
+  assert.deepEqual(sections, ["Task", "Context", "Plan"]);
   assert.ok(!/\{\{|\}\}/.test(md), `every placeholder must be filled in:\n${md}`);
   assert.match(md, /venue-badge/);
   assert.match(md, /feature/);
@@ -697,13 +700,13 @@ test("C4 edge: `note plan --files <one file>` marks only {skeptic} N/A on a feat
 // C5 — the next: hints
 // ---------------------------------------------------------------------------
 
-test("C5 edge: after the case table the hint names {read}/{repro}; the {implement} hint drops reconcile; cleanup and docs have no hint", () => {
+test("C5 edge: after the case table the hint names {context}/{repro}; the {implement} hint drops reconcile; cleanup and docs have no hint", () => {
   const feature = committed("playbooks-c5-feature");
   cli(feature, "open", ["badge", "feature"]);
   cli(feature, "note", ["task", "Add a badge. [inferred]"]);
   cli(feature, "note", ["plan", "One component.", "--files", "src/a.ts"]);
   const afterCases = hintOf(cli(feature, "case", ["add", "renders the badge", "--kind", "happy"]).stdout);
-  assert.match(afterCases, /`gate step read done/, `the first blank feature step is {read}:\n${afterCases}`);
+  assert.match(afterCases, /`gate note context/, `the first blank feature step is {context}:\n${afterCases}`);
 
   const bugfix = committed("playbooks-c5-bugfix");
   cli(bugfix, "open", ["badge", "bugfix"]);
@@ -713,7 +716,7 @@ test("C5 edge: after the case table the hint names {read}/{repro}; the {implemen
   assert.match(afterBugCases, /`gate step repro done/, `the first blank bugfix step is {repro}:\n${afterBugCases}`);
 
   // walk the feature run to {implement}: {skeptic} is auto-N/A at tier small
-  cli(feature, "step", ["read", "done", "read the card and its callers", "--evidence", "events#1"]);
+  cli(feature, "note", ["context", CONTEXT]);
   const afterQa = hintOf(cli(feature, "step", ["tests", "done", "wrote the tests, red first", "--evidence", "tests/a.test.ts"]).stdout);
   assert.equal(stepOf(ledgerOf(feature), "skeptic").state, "N/A", "premise: tier small auto-N/As {skeptic}");
   assert.match(afterQa, /`gate step implement done/, `{implement} is the next blank step:\n${afterQa}`);
@@ -894,6 +897,7 @@ function opened(name, { playbook = "feature", planFiles = "src/a.ts", extra = {}
   const repo = committed(name, extra);
   cli(repo, "open", [name, playbook]);
   cli(repo, "note", ["task", "Pin the next hint. [inferred]"]);
+  cli(repo, "note", ["context", CONTEXT]);
   cli(repo, "note", ["plan", "One module.", "--files", planFiles]);
   return repo;
 }
@@ -902,7 +906,7 @@ function opened(name, { playbook = "feature", planFiles = "src/a.ts", extra = {}
 // C1
 // ---------------------------------------------------------------------------
 
-test("C1 happy: a fresh feature ledger hints `gate note task`, then `gate note plan --files`, then `gate case add`", () => {
+test("C1 happy: a fresh feature ledger hints `gate note task`, then `gate note context`, then `gate note plan --files`, then `gate case add`", () => {
   const repo = committed("next-c1");
 
   const afterOpen = hintOf(cli(repo, "open", ["badge", "feature"]).stdout);
@@ -910,7 +914,9 @@ test("C1 happy: a fresh feature ledger hints `gate note task`, then `gate note p
   assert.match(afterOpen, /`gate note task/, `a ledger with no Task must ask for the Task:\n${afterOpen}`);
 
   const afterTask = hint(repo, "note", ["task", "Add a badge to the venue card. [inferred]"]);
-  assert.match(afterTask, /`gate note plan[^`]*--files/, `a ledger with no Plan must ask for the Plan:\n${afterTask}`);
+  assert.match(afterTask, /`gate note context/, `a ledger with no Context must ask for it first:\n${afterTask}`);
+  const afterContext = hint(repo, "note", ["context", CONTEXT]);
+  assert.match(afterContext, /`gate note plan[^`]*--files/, `a ledger with no Plan must ask for the Plan:\n${afterContext}`);
 
   const afterPlan = hint(repo, "note", ["plan", "Touch one component.", "--files", "src/a.ts"]);
   assert.match(afterPlan, /`gate case add/, `a tiered playbook with no cases must ask for the case table:\n${afterPlan}`);
@@ -932,14 +938,14 @@ test("C2 edge: after the case table the hint names `gate brief skeptic` at tier 
   assert.ok(feature.indexOf("skeptic") < feature.indexOf("tests"), feature.join(","));
 
   const standard = opened("next-c2-standard", { planFiles: "src/a.ts,src/app/page.tsx" });
-  cli(standard, "step", ["read", "done", "read the card and its callers", "--evidence", "events#1"]);
+  cli(standard, "note", ["context", CONTEXT]); // the understand-first step
   const std = hint(standard, "case", ["add", "renders the badge", "--kind", "happy"]);
   assert.equal(stepOf(ledgerOf(standard), "skeptic").state, null, "premise: {skeptic} is still blank at tier standard");
   assert.match(std, /`gate brief skeptic/, std);
   assert.ok(!/`gate step tests/.test(std), `the skeptic is still blank, so the tests step must not be hinted yet:\n${std}`);
 
   const small = opened("next-c2-small", { planFiles: "src/a.ts" });
-  cli(small, "step", ["read", "done", "read the card and its callers", "--evidence", "events#1"]);
+  cli(small, "note", ["context", CONTEXT]); // the understand-first step
   const sml = hint(small, "case", ["add", "renders the badge", "--kind", "happy"]);
   assert.equal(stepOf(ledgerOf(small), "skeptic").state, "N/A", "premise: tier small auto-N/As {skeptic}");
   assert.match(sml, /`gate step tests done/, sml);
@@ -952,7 +958,7 @@ test("C2 edge: after the case table the hint names `gate brief skeptic` at tier 
 
 test("C3 happy: once {tests} is closed the hint moves to the next blank step; a bugfix's first step hint is {repro}", () => {
   const repo = opened("next-c3", { planFiles: "src/a.ts" }); // tier small: {skeptic} auto-N/A
-  cli(repo, "step", ["read", "done", "read the card", "--evidence", "events#1"]);
+  cli(repo, "note", ["context", CONTEXT]); // the understand-first step
   cli(repo, "case", ["add", "renders the badge", "--kind", "happy"]);
 
   const afterQa = hint(repo, "step", ["tests", "done", "wrote the tests, red first", "--evidence", "tests/a.test.ts"]);
@@ -1020,7 +1026,7 @@ test("C6 happy: every mutating verb's last line is the next: hint, and `gate che
     ["note", ["task", "Add a badge. [inferred]"], {}],
     ["note", ["plan", "One component.", "--files", "src/a.ts"], {}],
     ["case", ["add", "renders the badge", "--kind", "happy"], {}],
-    ["step", ["read", "done", "read the card", "--evidence", "events#1"], {}],
+    ["note", ["context", CONTEXT], {}],
     ["huddle", ["add", "reviewer", "--file", "review-1.md"], {}],
     ["waive", ["driver", "chrome is disconnected, skip the phone pass"], {}],
     ["decide", ["plan", "kept the badge in the card", "one consumer", "events#3", "open"], {}],

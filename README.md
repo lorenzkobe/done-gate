@@ -40,7 +40,7 @@ judgment out of the model and into hooks that can't be talked out of it.
    ▼
  gate open badge feature ──► ledger.json + playbook steps
    │
-   ├─ note task / plan      ─┐
+   ├─ note task / context / plan ─┐
    ├─ case table             ├─ must exist BEFORE the first source edit (R2)
    ├─ skeptic huddle        ─┘
    │
@@ -138,7 +138,7 @@ attempt to finish.
 | # | Blocks the turn when |
 | --- | --- |
 | R1 | source changed and no ledger is open |
-| R2 | Plan or case table was written after the first source edit |
+| R2 | Context, Plan or case table was written after the first source edit |
 | R3 | `gate verify` is missing, red, or older than the last source edit |
 | R4 | UI files changed and the real surface wasn't driven afterwards |
 | R5 | no reviewer pass after the last edit, or an Act-on item is still open |
@@ -218,7 +218,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | Verb | Does |
 | --- | --- |
 | `open <slug> <feature\|bugfix\|refactor\|plan>` | start a ledger with the playbook's steps |
-| `note task\|plan "…"` · `note plan "…" --files a,b` | write the prose sections (stamps the order for R2); `--files` predicts the size |
+| `note task\|context\|plan "…"` · `note plan "…" --files a,b` | write the prose sections (stamps the order for R2); Context is Traced (file:line pointers), Related, Research; `--files` predicts the size |
 | `case add "…" --kind <kind>` · `case close C1 --test file:name \| --na "…"` | the case table; kinds: happy, edge, refused, boundary, idempotent, reported-surface, performance |
 | `step <key\|n> done\|skipped\|na "…" [--evidence ptr]` | close a playbook step |
 | `huddle add <role> --file review-1.md` · `acton` · `resolve` · `dispute` | reviewer rounds and Act-on items |

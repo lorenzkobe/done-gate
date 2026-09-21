@@ -64,7 +64,7 @@ test("report still renders the ledger that just closed", () => {
   run(repo, "open", "S1", {}, ["p", "plan"]);
   run(repo, "note", "S1", {}, ["task", "t"]);
   run(repo, "note", "S1", {}, ["plan", "p"]);
-  for (const k of ["read", "skeptic", "implement"]) run(repo, "step", "S1", {}, [k, "done", "x", "--evidence", "ledger.md"]);
+  for (const k of ["context", "skeptic", "implement"]) run(repo, "step", "S1", {}, [k, "done", "x", "--evidence", "ledger.md"]);
   run(repo, "close", "S1");
   run(repo, "stop", "S1", { last_assistant_message: "report" });
   const r = run(repo, "report", "S1");

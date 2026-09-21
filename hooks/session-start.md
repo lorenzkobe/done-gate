@@ -4,7 +4,7 @@ You have done-gate. "Done" here means evidenced, not asserted.
 Before any task that will change source files — a feature, bug fix, refactor, or plan — invoke the `done-gate:gate` skill with the Skill tool and follow it. It opens a ledger, copies a playbook's steps in, and a Stop hook will refuse to let the turn end until every step has evidence or an explicit waiver. Pure questions and read-only investigations need nothing: the gate stays silent when the tree is unchanged.
 
 Rules that hold even before the skill loads:
-- No source edit before the ledger has a Task, a Plan and a case table.
+- No source edit before the ledger has a Task, a Context (what you traced, as file:line pointers; what depends on it; what you researched or why nothing needed it), a Plan and a case table.
 - Helper agents (skeptic, QA, worker, reviewer, arbiter) are `done-gate:*` agents; their self-reports are never evidence. Only `gate verify`, hook events and the helper's own file count. Reading helpers write their findings file first.
 - At size large the lead never edits source: it briefs a worker per piece and reviews the result. Small and standard tasks the lead edits itself: it writes the tests first, from the case table, then the code, with its own context; blind QA is for size large.
 - If the ask is unclear, clarify FIRST with a simple, detailed explanation of the readings and your recommendation; the user prefers a question to a fix that still misbehaves.

@@ -23,10 +23,10 @@ test("report renders every section, the summary counts, and embeds the reviewer'
   const repo = makeRepo("report-render");
   cli(repo, "open", ["badge", "feature"]);
   cli(repo, "note", ["task", "Add a badge. [inferred]"]);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   cli(repo, "note", ["plan", "One component."]);
   cli(repo, "case", ["add", "renders badge", "--kind", "happy"]);
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:renders"]);
-  cli(repo, "step", ["read", "done", "read it", "--evidence", "events#1"]);
   cli(repo, "step", ["schema", "skipped", "no schema files"]);
   cli(repo, "waive", ["driver", "skip the phone pass"]);
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n- null venue crashes\n");
@@ -41,7 +41,7 @@ test("report renders every section, the summary counts, and embeds the reviewer'
   assert.match(md, /cases 1\/1 closed/);
   assert.match(md, /## Task\n\nAdd a badge/);
   assert.match(md, /\| C1 \| renders badge \| happy \| tests\/a\.test\.ts:renders \|/);
-  assert.match(md, /1\. Read the affected code.*DONE.*events#1/);
+  assert.match(md, /1\. Understand first.*DONE.*ledger\.md#context/);
   assert.match(md, /null venue crashes.*OPEN/);
   assert.match(md, /# Review 1/);
   assert.match(md, /## Changed files\n[\s\S]*src\/a\.ts/);
@@ -156,12 +156,13 @@ function standardFixture(name, { gateJson = null } = {}) {
   const repo = makeRepo(name, gateJson ? { ".claude/gate.json": JSON.stringify(gateJson) } : {});
   cli(repo, "open", ["badge", "feature"]);
   cli(repo, "note", ["task", "Add a badge to the venue card. [inferred]"]);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   cli(repo, "note", ["plan", "One component, no data change."]);
   cli(repo, "case", ["add", "renders badge", "--kind", "happy"]);
   cli(repo, "case", ["add", "hidden when the venue has no rating", "--kind", "edge"]);
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:renders the badge"]);
   cli(repo, "case", ["close", "C2", "--na", "covered by C1's fixture"]);
-  cli(repo, "step", ["read", "done", "read it", "--evidence", "events#1"]);
+  cli(repo, "step", ["context", "done", "traced it", "--evidence", "events#1"]);
   cli(repo, "step", ["schema", "skipped", "no schema files"]);
   cli(repo, "waive", ["driver", "skip the phone pass this time, chrome is disconnected"]);
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n- null venue crashes\n");
@@ -179,12 +180,13 @@ function cleanClosingFixture(name, slug = "tidy") {
   const repo = makeRepo(name);
   cli(repo, "open", [slug, "plan"]);
   cli(repo, "note", ["task", "Write the spec. [inferred]"]);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   cli(repo, "note", ["plan", "One document."]);
   cli(repo, "case", ["add", "spec covers the refused side", "--kind", "refused"]);
   cli(repo, "case", ["add", "spec covers the happy path", "--kind", "happy"]);
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:refused"]);
   cli(repo, "case", ["close", "C2", "--test", "tests/a.test.ts:happy"]);
-  cli(repo, "step", ["read", "done", "read it", "--evidence", "events#1"]);
+  cli(repo, "step", ["context", "done", "traced it", "--evidence", "events#1"]);
   cli(repo, "step", ["skeptic", "done", "no findings", "--evidence", "events#2"]);
   cli(repo, "step", ["implement", "done", "spec written", "--evidence", "docs/notes.md"]);
   cli(repo, "close");
@@ -359,7 +361,7 @@ test("C7 boundary: the \"For you:\" line says nothing when nothing needs looking
   );
 
   const flagged = cleanClosingFixture("brief-c7-waived", "flagged");
-  cli(flagged, "waive", ["read", "skip the phone pass this time, chrome is disconnected"]);
+  cli(flagged, "waive", ["context", "skip the phone pass this time, chrome is disconnected"]);
   const flaggedOut = brief(flagged);
   assert.ok(flaggedOut.includes("For you: skipped with your OK"), `a waiver did not reach the For you line:\n${flaggedOut}`);
   assert.ok(
@@ -441,7 +443,7 @@ function c11Fixture(name, bin) {
   go("case", ["add", "hidden with no rating", "--kind", "edge"]);
   go("case", ["close", "C1", "--test", "tests/a.test.ts:renders"]);
   go("case", ["close", "C2", "--na", "covered by C1"]);
-  go("step", ["read", "done", "read it", "--evidence", "events#1"]);
+  go("step", ["context", "done", "traced it", "--evidence", "events#1"]);
   go("step", ["schema", "skipped", "no schema files"]);
   go("waive", ["driver", "skip the phone pass"]);
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n- null venue crashes\n");
@@ -758,6 +760,7 @@ function opened(name, slug = name, { source = "src/a.ts" } = {}) {
   const repo = committed(name);
   cli(repo, "open", [slug, "feature"]);
   cli(repo, "note", ["task", "Add a badge to the venue card. [inferred]"]);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   cli(repo, "note", ["plan", "One module.", "--files", source]);
   cli(repo, "case", ["add", "renders the badge", "--kind", "happy"]);
   cli(repo, "case", ["add", "refuses an unknown role", "--kind", "refused"]);
@@ -791,6 +794,7 @@ function noSourceRun(name, slug = name) {
   const repo = committed(name);
   cli(repo, "open", [slug, "plan"]);
   cli(repo, "note", ["task", "Write the spec. [inferred]"]);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   cli(repo, "note", ["plan", "One document."]);
   cli(repo, "case", ["add", "spec covers the refused side", "--kind", "refused"]);
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:refused"]);

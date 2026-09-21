@@ -13,15 +13,16 @@ delegate and report; below large you also edit.
 ## The loop
 
 1. `gate open <slug> <feature|bugfix|refactor|plan>`.
-2. Before any edit: `gate note task "<the ask, quoted, then your words>"`,
+2. Before any edit: `gate note task "<the ask, quoted, then your words>"`; understand
+   first: trace the code, then `gate note context "Traced: <file:line pointers> Related:
+   <what depends on it> Research: <what you looked up, or none needed: why>"`;
    `gate note plan "<approach>" --files a.ts,b.ts` (the files predict the size; one plain
    file is small and a feature then skips the skeptic), then
    `gate case add "<case>" --kind <happy|edge|refused|boundary|idempotent|reported-surface|performance>`
-   per row. R2 checks the order. The plan names the hot paths the change touches, the data
-   sizes they see and the cost shape of the main operation (one pass, one query), or says
-   "no hot path" in one line; a `performance` row names the size that matters and what must
-   not happen at it.
-3. Follow each `next:` line. Write the tests first, from the case table, red before green.
+   per row. R2 checks the order. The plan names the hot paths, their data sizes and the
+   cost shape (one pass, one query) or says "no hot path"; a `performance` row names the
+   size that matters and what must not happen at it.
+3. Follow each `next:` line. Tests first, from the case table, red before green.
    Helpers are spawned from packets: `gate brief <role>` prints the prompt. Roles:
    `done-gate:skeptic` (writes `skeptic-<n>.md`), `done-gate:qa` (blind tests, size large
    only), `done-gate:worker` (edits the files its packet names, answers reviews in
@@ -37,26 +38,23 @@ delegate and report; below large you also edit.
    (SendMessage it the next packet), at most three rounds; what is still disputed then goes
    to `gate brief arbiter --item H<k>.<i>` and `done-gate:arbiter`. A finding you believe
    wrong at small: `gate huddle dispute H<k>.<i> "<why>" --evidence <ptr>`, one round.
-6. `gate verify` after the last edit; only verify.json counts. Drive the real surface
+6. `gate verify` after the last edit (only verify.json counts). Drive the real surface
    yourself when UI changed (R4); probe the real schema when schema changed (R6).
 7. `gate close`, `gate check`, then paste `gate report --brief` as your final message with
-   at most two lines of your own before it, in the same plain words: say "the reviewer",
-   "the tests", "the checks"; never "ledger", "huddle" or a rule number.
+   at most two plain lines of your own before it; never "ledger", "huddle" or a rule number.
 
 ## Rules that hold throughout
 
-- If two readings of the ask lead to different work, ask with `AskUserQuestion` before
-  step 2.
-- A helper's self-report is never evidence; only `gate verify`, hook events and the
-  helper's own file count. A helper that stops with no file: SendMessage it once,
-  "write <file> now"; never brief the next round without the file.
+- Two readings of the ask that lead to different work: `AskUserQuestion` before step 2.
+- A helper's self-report is never evidence; only `gate verify`, hook events and its own
+  file count. A helper that stops with no file: SendMessage it once, "write <file> now";
+  never brief the next round without the file.
 - Waiting for a helper (or any agent you spawned) is a legal turn end: just end the turn; its
   hand-back wakes you. A run left open by an earlier session that is over: `gate abandon
   <slug> "<reason>"`.
-- `gate size` shows the size and the helpers it requires. Ceiling: ten helper invocations
-  per task.
+- Ceiling: ten helper invocations per task (`gate size` shows the size and its helpers).
 - Waivers are the only way past a keyed step you cannot do: ask, then
   `gate waive <key> "<the reason>"`; the report lists it.
-- Never hand-edit `.claude/gate/runs/**` but `ledger.md`.
-- Need the user mid-task? `AskUserQuestion`, or end with a last line `PAUSED: <need>`.
+- Never hand-edit `.claude/gate/runs/**` except `ledger.md`.
+- Need the user mid-task? `AskUserQuestion`, or a last line `PAUSED: <need>`.
 - No commits unless asked; the repo's CLAUDE.md wins over any playbook.

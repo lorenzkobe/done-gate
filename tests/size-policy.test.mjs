@@ -1578,7 +1578,7 @@ test("C1 refused: `gate blast` is an unknown verb and `gate note attention` is r
   // The refused note wrote nothing: ledger.md keeps Task and Plan and gains no section.
   const md = readFileSync(path.join(runDir(repo), "ledger.md"), "utf8");
   assert.ok(!/^##\s*Attention/im.test(md), `ledger.md grew an Attention section:\n${md}`);
-  assert.deepEqual(headings(md), ["Task", "Plan"], `ledger.md sections changed:\n${md}`);
+  assert.deepEqual(headings(md), ["Task", "Context", "Plan"], `ledger.md sections changed:\n${md}`);
 
   // The surviving sections still work.
   cli(repo, "note", ["task", "Remove a feature, for real. [inferred]"]);
@@ -1743,7 +1743,7 @@ function cleanClosingFixture(name, slug = "tidy") {
   cli(repo, "case", ["add", "spec covers the happy path", "--kind", "happy"]);
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:refused"]);
   cli(repo, "case", ["close", "C2", "--test", "tests/a.test.ts:happy"]);
-  cli(repo, "step", ["read", "done", "read it", "--evidence", "events#1"]);
+  cli(repo, "step", ["context", "done", "traced it", "--evidence", "events#1"]);
   cli(repo, "step", ["skeptic", "done", "no findings", "--evidence", "events#2"]);
   cli(repo, "step", ["implement", "done", "spec written", "--evidence", "docs/notes.md"]);
   cli(repo, "close");

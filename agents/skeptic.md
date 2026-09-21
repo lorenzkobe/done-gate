@@ -16,7 +16,8 @@ Your inputs are in the packet named in your prompt (a `brief-<role>-<n>.md` file
 3. **Cheaper shape.** A smaller change that meets the ask, or an existing helper the plan re-invents (name it with its path).
 4. **Performance note.** Is the plan's list of hot paths, data sizes and cost shape true of the code? A hot path it misses, a size it underestimates, or a cost shape the planned change cannot keep, each with `file:line`.
 5. **Side effects.** What else reads or writes the same data, route, component or table, that the plan does not mention.
-6. **The one question** the implementer should ask the user before building, if any.
+6. **What the trace missed.** A caller, a surface or a data path the packet's Context section does not name, or a research question it should have asked. Cite `file:line`.
+7. **The one question** the implementer should ask the user before building, if any.
 
 File shape:
 

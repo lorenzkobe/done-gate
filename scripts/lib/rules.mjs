@@ -129,6 +129,34 @@ export function parseRuling(text) {
   return out;
 }
 
+// The Context note's three parts, each a line starting with its name.
+export const CONTEXT_PARTS = ["Traced", "Related", "Research"];
+
+const POINTER = /(?<![\w/.-])((?:[\w.-]+\/)*[\w.-]+\.[a-z0-9]+):(\d+)\b/gi;
+
+export function contextPart(text, name) {
+  const m = new RegExp(`^\\s*${name}:\\s*([\\s\\S]*?)(?=^\\s*(?:${CONTEXT_PARTS.join("|")}):|$(?![\\s\\S]))`, "mi").exec(text);
+  return m ? m[1].trim() : null;
+}
+
+// Every file:line pointer in a text, with whether it names a file inside root: a pointer
+// that walks out of the repo (`../x.ts:1`) or names a directory does not resolve.
+export function tracedPointers(text, root) {
+  const out = [];
+  for (const m of String(text ?? "").matchAll(POINTER)) {
+    const abs = path.resolve(root, m[1]);
+    const inside = !path.relative(root, abs).startsWith("..") && !path.isAbsolute(path.relative(root, abs));
+    let exists = false;
+    try {
+      exists = inside && statSync(abs).isFile();
+    } catch {
+      exists = false;
+    }
+    out.push({ file: m[1], line: Number(m[2]), exists });
+  }
+  return out;
+}
+
 // Builds the "does this pointer resolve" predicate from gate state; dispute and resolve
 // evidence must point at something real.
 export function pointerResolver(state) {
@@ -209,8 +237,13 @@ function waived(ledger, key) {
   return (ledger.waivers ?? []).some((w) => w.key === key);
 }
 
-// Which of Plan and case table came after the first source edit of this task, if any:
-// { late: ["Plan", "case table"], path: "<first edited file>" } or { late: [], path: null }.
+// A ledger opened before the Context step existed is never asked for one.
+export function hasContextStep(ledger) {
+  return (ledger?.steps ?? []).some((s) => s.key === "context");
+}
+
+// Which of Context, Plan and case table came after the first source edit of this task, if
+// any: { late: ["Plan", "case table"], path: "<first edited file>" } or { late: [], path: null }.
 export function lateOrder(state) {
   const { config, ledger } = state;
   const none = { late: [], path: null };
@@ -219,6 +252,7 @@ export function lateOrder(state) {
   if (!firstEdit) return none;
   const firstCase = ledger.cases?.[0]?.seq ?? Infinity;
   const late = [];
+  if (hasContextStep(ledger) && !(ledger.contextSeq < firstEdit.seq)) late.push("Context");
   if (!(ledger.planSeq < firstEdit.seq)) late.push("Plan");
   if (!(firstCase < firstEdit.seq)) late.push("case table");
   return { late, path: firstEdit.path };
@@ -313,12 +347,13 @@ export function evaluate(state) {
     unmet.push({ rule: "R13", text: "the plugin's models.json (tier policy) changed since this ledger opened. Restore it, or get the user's waiver (`gate waive gate-config \"<reason>\"`)." });
   }
 
-  // R2: plan and case table must predate the first source edit this task. Blocks only while
-  // a Plan or a case is missing altogether; a late order is recorded (lateOrder) and shown in
-  // the report, since the model cannot travel back to write them earlier.
+  // R2: Context, plan and case table must predate the first source edit this task. Blocks only
+  // while one is missing altogether; a late order is recorded (lateOrder) and shown in the
+  // report, since the model cannot travel back to write them earlier.
   const { late, path: firstPath } = lateOrder(state);
   if (late.length) {
     const missing = [];
+    if (hasContextStep(ledger) && !ledger.contextSeq) missing.push("Context");
     if (!ledger.planSeq) missing.push("Plan");
     if (!ledger.cases?.length) missing.push("case table");
     if (missing.length) {

@@ -6,6 +6,7 @@ import { optionalSteps, tiered } from "./size.mjs";
 
 const VERB_FOR = {
   read: "read the affected code, then `gate step read done \"<what you saw>\" --evidence <file>`",
+  context: "understand first: trace the code the task touches (entry points, callers, data flow; `grep -a` for callers), list what depends on it, and research better ways when the problem is a known one (docs, context7, web); then `gate note context \"Traced: <file:line pointers> · Related: <what depends on it> · Research: <what you looked up, or none needed: why>\"` (each part on its own line)",
   repro: "reproduce on the real surface, then `gate step repro done \"<what failed>\" --evidence <ptr>`",
   rootcause: "find the root cause with runtime evidence, then `gate step rootcause done \"<cause>\" --evidence <file:line>`",
   skeptic: "`gate brief skeptic`, spawn done-gate:skeptic with the prompt it prints (it writes skeptic-<n>.md and replies with its Act-on list), then `gate huddle add skeptic --file skeptic-<n>.md`, answer each item, and `gate step skeptic done … --evidence skeptic-<n>.md`",
@@ -24,7 +25,14 @@ export function nextHint(ledger) {
   if (!ledger || isDone(ledger)) return "";
   if (ledger.status === "closing") return "next: `gate check`; when it prints clean, `gate report --brief` and paste it as your final message";
   if (!ledger.taskSeq) return "next: `gate note task \"<the user's ask, quoted, then your own words>\"`";
-  if (!ledger.planSeq) return "next: `gate note plan \"<approach, files, data plan>\" --files a.ts,b.ts`";
+  if (!ledger.planSeq) {
+    // the steps before {plan} (understand first: context; for a bugfix repro and root cause
+    // before it) come before the plan itself
+    const planAt = ledger.steps.findIndex((s) => s.key === "plan");
+    const before = ledger.steps.slice(0, planAt < 0 ? ledger.steps.length : planAt).find((s) => !s.state && s.key && s.key !== "read" && VERB_FOR[s.key]);
+    if (before) return `next: step ${before.n}: ${VERB_FOR[before.key]}`;
+    return "next: `gate note plan \"<approach, files, data plan>\" --files a.ts,b.ts`";
+  }
   if (tiered(ledger) && !ledger.cases.length) return "next: `gate case add \"<case>\" --kind happy|edge|refused|boundary|idempotent|reported-surface|performance`, one per row";
   const blank = ledger.steps.filter((s) => !s.state);
   const step = blank[0];

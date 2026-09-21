@@ -129,6 +129,7 @@ function header(state, role, round) {
   const out = [`# Brief: ${role} round ${round} — ${ledger.slug}`, ""];
   out.push("## Task", "", section(md, "Task") || "_not written_", "");
   out.push("## Plan", "", section(md, "Plan") || "_not written_", "");
+  out.push("## Context", "", section(md, "Context") || "_not written_", "");
   out.push("## Cases", "");
   if (ledger.playbook === "bugfix") {
     const reported = ledger.cases.find((c) => c.kind === "reported-surface");

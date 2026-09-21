@@ -117,6 +117,7 @@ test("C9 happy: one session end to end — session start, a blocked stop, open, 
 
   // ---- the task ------------------------------------------------------------
   sh(repo, ["note", "task", "Make a() return 2. [inferred]"]);
+  sh(repo, ["note", "context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   sh(repo, ["note", "plan", "One file, one constant.", "--files", "src/a.ts"]);
   sh(repo, ["case", "add", "a() returns 2", "--kind", "happy"]);
   sh(repo, ["case", "close", "C1", "--na", "covered by the existing fixture"]);

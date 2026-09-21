@@ -75,7 +75,7 @@ const TASK_TEXT = "Give helpers a generated packet. [inferred]";
 const PLAN_TEXT = "Touch one module and nothing else.";
 
 // The header sections every packet carries, in the order the spec lists them.
-const HEADER_SECTIONS = ["Task", "Plan", "Cases", "Tier", "Tests", "You may write"];
+const HEADER_SECTIONS = ["Task", "Plan", "Context", "Cases", "Tier", "Tests", "You may write"];
 
 // The requirements pin "the plan's files" as a section, not its exact wording: the skeptic
 // packet calls it `## Files`, the QA packet `## Files the implementer will touch`.

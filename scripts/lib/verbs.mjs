@@ -9,7 +9,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { isDraft, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver } from "./rules.mjs";
+import { isDraft, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers } from "./rules.mjs";
 import { buildState, readVerify, reviewFiles } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { readEvents } from "./events.mjs";
@@ -22,7 +22,7 @@ function writeReport(ctx, dir, ledger) {
 }
 
 // Steps whose evidence comes from a script or an agent: DONE or WAIVED only.
-export const EVIDENCED_KEYS = new Set(["verify", "verify-before", "driver", "review", "tests", "qa", "skeptic", "close"]);
+export const EVIDENCED_KEYS = new Set(["context", "verify", "verify-before", "driver", "review", "tests", "qa", "skeptic", "close"]);
 export const CASE_KINDS = ["happy", "edge", "refused", "boundary", "idempotent", "reported-surface", "performance"];
 export const ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter", "worker"];
 
@@ -80,13 +80,25 @@ function replaceSection(md, heading, body) {
   return md.replace(re, `$1\n${next}\n`);
 }
 
+// The Context note: what was traced (as file:line pointers), what is related, what was
+// researched or why nothing needed to be. Each part is a line starting with its name.
+const CONTEXT_USAGE = 'gate note context needs three parts, each a line starting with its name: "Traced: <entry points, callers, data flow as file:line pointers>", "Related: <surfaces, docs, tests, config that depend on it>", "Research: <what was looked up and where, or none needed: <why>>"';
+function checkContext(text, root) {
+  const missing = CONTEXT_PARTS.filter((name) => contextPart(text, name) === null);
+  if (missing.length) throw new UsageError(`${CONTEXT_USAGE} (missing: ${missing.join(", ")})`);
+  const pointers = tracedPointers(contextPart(text, "Traced"), root);
+  if (!pointers.length) throw new UsageError("Traced needs at least one file:line pointer into the repo (the entry point, a caller, a data path); prose alone is not a trace");
+  if (!pointers.some((p) => p.exists)) throw new UsageError(`Traced names no file that exists in the repo (${pointers.map((p) => `${p.file}:${p.line}`).join(", ")}); a file:line pointer must resolve`);
+}
+
 export const verbs = {
   note(ctx) {
     const [section, ...rest] = ctx.args;
-    if (!["task", "plan"].includes(section)) throw new UsageError('usage: gate note <task|plan> "<text>" (or - to read stdin)');
+    if (!["task", "context", "plan"].includes(section)) throw new UsageError('usage: gate note <task|context|plan> "<text>" (or - to read stdin)');
     const files = flag(rest, "--files");
     const text = readText(ctx, positional(rest).join(" ")).trim();
     if (!text) throw new UsageError("note: empty text");
+    if (section === "context") checkContext(text, ctx.root);
     let predicted = null;
     withLedger(ctx, (ledger, dir) => {
       const file = path.join(dir, "ledger.md");
@@ -94,6 +106,10 @@ export const verbs = {
       writeFileSync(file, replaceSection(readFileSync(file, "utf8"), heading, text));
       const seq = nextSeq();
       if (section === "task") ledger.taskSeq = seq;
+      if (section === "context") {
+        ledger.contextSeq = seq;
+        markStep(ledger, "context", { state: "DONE", evidence: "ledger.md#context", note: "Context written" });
+      }
       if (section === "plan") {
         ledger.planSeq = seq;
         if (ledger.taskSeq) markStep(ledger, "plan", { state: "DONE", evidence: "ledger.md#plan", note: "Task and Plan written" });

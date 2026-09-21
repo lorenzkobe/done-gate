@@ -250,6 +250,7 @@ test("C11 boundary: an edit logged before `gate open` blocks R2 only while the P
 
   // the Plan alone is not enough — the case table must exist too
   sh(repo, ["note", "task", "Make a() return 2. [inferred]"]);
+  sh(repo, ["note", "context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   sh(repo, ["note", "plan", "One file, one constant.", "--files", "src/a.ts"]);
   const planOnly = check(repo);
   assert.match(planOnly, /R2/, `R2 should still block while the case table is missing:\n${planOnly}`);
