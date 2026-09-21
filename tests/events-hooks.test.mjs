@@ -329,6 +329,14 @@ test("C1 refused: a plan naming 11 files predicts large and the reason names tha
   assert.match(reason, /gate brief worker/, reason);
 });
 
+test("a delegate waiver lets the lead edit source at predicted standard", () => {
+  const repo = openedWith("fence-c1-waived", { files: ["src/a.ts", "src/b.ts"] });
+  assert.equal(ledgerOf(repo).tier.predicted, "standard");
+  cli(repo, "waive", ["delegate", "user said so"]);
+
+  assert.equal(fence(repo, pre(repo, "Write", path.join(repo, "src/a.ts"))), null, "delegate waiver lifts the fence");
+});
+
 // ---------------------------------------------------------------------------
 // C2 — everything the fence must leave alone
 // ---------------------------------------------------------------------------

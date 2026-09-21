@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
-import { currentLedger, loadLedger, saveLedger } from "./ledger.mjs";
+import { currentLedger, isDone, loadLedger, saveLedger } from "./ledger.mjs";
 import { nextSeq } from "./events.mjs";
 import { sourceHash } from "./rules.mjs";
 import { loadSession } from "./session-state.mjs";
@@ -75,7 +75,7 @@ export function runCommand({ cmd, timeout }, cwd) {
 
 export async function runVerify(ctx, { stepKey = "verify" } = {}) {
   const current = currentLedger(ctx.stateDir, ctx.session);
-  if (!current || current.ledger.status === "closed") {
+  if (!current || isDone(current.ledger)) {
     throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
   }
   const config = loadConfig(ctx.root);

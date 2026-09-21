@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { readEvents } from "./events.mjs";
-import { currentLedger, saveLedger } from "./ledger.mjs";
+import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
 import { loadPolicy } from "./size.mjs";
 import { measure, reconcileTier, tiered } from "./size.mjs";
 import { implementationHash } from "./rules.mjs";
@@ -52,7 +52,7 @@ export function stampSourceChange(ledger, hash, events) {
 // its close marker. The session's cached tree is read for speed but never saved.
 export function stampNow(ctx) {
   const current = currentLedger(ctx.stateDir, ctx.session);
-  if (!current || current.ledger.status === "closed") return;
+  if (!current || isDone(current.ledger)) return;
   const config = loadConfig(ctx.root);
   const session = loadSession(ctx.stateDir, ctx.session);
   const now = snapshot(ctx.root, session?.lastTree ?? current.ledger.baseline);
@@ -69,7 +69,7 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
   } catch (error) {
     throw new LedgerParseError(`ledger.json unreadable: ${error.message}`);
   }
-  if (current && current.ledger.status === "closed") current = null;
+  if (current && isDone(current.ledger)) current = null;
 
   const baseline = current ? current.ledger.baseline : session.baseline;
   const cache = session.lastTree ?? baseline;

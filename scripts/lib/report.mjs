@@ -85,6 +85,9 @@ export function attentionLines(state, unmet) {
   for (const a of ledger.huddles.flatMap((h) => h.actOn).filter((x) => x.dispute)) out.push(`- disputed ${a.id}: ${a.dispute.why} [${a.dispute.evidence}] — ${a.dispute.verdict ?? "unanswered"}${a.dispute.reviewerReason ? `; reviewer: ${a.dispute.reviewerReason}` : ""}${a.dispute.arbiterReason ? `; arbiter: ${a.dispute.arbiterReason}` : ""}`);
   if (denies) out.push(`- ${denies} denied write(s) to gate evidence files (see events)`);
   if (handoffs) out.push(`- ${handoffs} lead edit(s) fenced off at this size and handed to a worker`);
+  const blocks = events.filter((e) => e.kind === "block" && e.seq > (ledger.openedSeq ?? 0)).length;
+  if (blocks) out.push(`- the gate blocked the turn ${blocks} time${blocks === 1 ? "" : "s"} (see the block events for the rules each time)`);
+  if (ledger.status === "abandoned") out.push(`- abandoned: ${ledger.abandonReason}`);
   if (ledger.overridden) out.push("- the gate was OVERRIDDEN; treat every claim above as unverified");
   const order = lateOrder(state);
   if (order.late.length) out.push(`- ${order.late.join(" and ")} written after the first source edit (${order.path})`);
@@ -136,6 +139,7 @@ export function renderReport(state, unmet) {
   const out = [];
 
   out.push(`# ${ledger.slug} — ${ledger.playbook} — ${ledger.status}`);
+  if (ledger.status === "abandoned") out.push(`\n**ABANDONED** at ${ledger.abandonedAt}: ${ledger.abandonReason}`);
   if (ledger.overridden) out.push(`\n**GATE OVERRIDDEN** at ${ledger.overridden.at} after ${ledger.overridden.blocks} identical blocks: ${ledger.overridden.unmet.map((u) => u.rule).join(", ")}`);
   const errLog = path.join(state.stateDir ?? path.resolve(dir, "..", ".."), "gate-error.log");
   const gateErrors = tailLines(errLog, 3);

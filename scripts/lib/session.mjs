@@ -38,9 +38,13 @@ export const verbs = {
     try {
       const { state, unmet } = assess(ctx, {});
       if (state.ledger) {
+        // a run opened by an earlier session may be stale: say so, and how to let it go
+        const inherited = state.ledger.sessions?.[0] !== ctx.session;
         parts.push(
           `\n<done-gate-status>\nOpen ledger: ${state.dir} (${state.ledger.playbook}, ${state.ledger.status}). ` +
-            `${unmet.length} unmet gate item(s). Run \`gate check\` before continuing.\n</done-gate-status>`,
+            `${unmet.length} unmet gate item(s). Run \`gate check\` before continuing.` +
+            (inherited ? ` This ledger was opened by another session on ${String(state.ledger.openedAt).slice(0, 10)}; if that work is over, \`gate abandon ${state.ledger.slug} "<reason>"\` lets it go.` : "") +
+            `\n</done-gate-status>`,
         );
       }
     } catch {

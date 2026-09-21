@@ -1,15 +1,25 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { nextSeq } from "./events.mjs";
-import { currentLedger, loadLedger, saveLedger } from "./ledger.mjs";
+import { currentLedger, findRun, isDone, loadLedger, saveLedger } from "./ledger.mjs";
 import { loadConfig } from "./config.mjs";
 import { loadPolicy } from "./size.mjs";
 import { applyPrediction, tiered } from "./size.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
+import { renderReport } from "./report.mjs";
 import { isDraft, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver } from "./rules.mjs";
-import { buildState } from "./assess.mjs";
+import { buildState, readVerify, reviewFiles } from "./assess.mjs";
+import { loadSession, saveSession } from "./session-state.mjs";
+import { readEvents } from "./events.mjs";
+
+// The report of a run that is no longer current: the same renderer `gate report` uses.
+function writeReport(ctx, dir, ledger) {
+  const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
+  const state = { ...buildState(ctx, {}), ledger, dir, verify: readVerify(dir), reviews: reviewFiles(dir), events, changed: ledger.changedAtClose ?? [], tier: ledger.tier ?? null, stateDir: ctx.stateDir };
+  writeFileSync(path.join(dir, "report.md"), renderReport(state, []));
+}
 
 // Steps whose evidence comes from a script or an agent: DONE or WAIVED only.
 export const EVIDENCED_KEYS = new Set(["verify", "verify-before", "driver", "review", "qa", "skeptic", "close"]);
@@ -35,7 +45,7 @@ export function positional(args) {
 
 function open(ctx) {
   const current = currentLedger(ctx.stateDir, ctx.session);
-  if (!current || current.ledger.status === "closed") {
+  if (!current || isDone(current.ledger)) {
     throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
   }
   return current;
@@ -363,6 +373,29 @@ export const verbs = {
     appendFileSync(file, `${new Date().toISOString()}\t${cells.map(clean).join("\t")}\n`);
     ctx.out("decision logged");
     printNext(ctx);
+  },
+
+  // The user gives up on a task: the ledger is marked abandoned with the reason, so it no
+  // longer attaches to later sessions or blocks their turns. Nothing is finalised: the
+  // baseline stays, so the next ledger still sees the changes this one left behind.
+  abandon(ctx) {
+    const [slug, ...rest] = positional(ctx.args);
+    const reason = rest.join(" ").trim();
+    if (!slug || !reason) throw new UsageError('usage: gate abandon <slug> "<reason>"');
+    const found = findRun(ctx.stateDir, slug);
+    if (!found) throw new UsageError(`no open run for slug "${slug}" (a closed or abandoned run cannot be abandoned)`);
+    const { dir, ledger } = found;
+    ledger.status = "abandoned";
+    ledger.abandonedAt = new Date().toISOString();
+    ledger.abandonReason = reason;
+    ledger.abandonedBy = ctx.session;
+    saveLedger(dir, ledger);
+    const name = path.basename(dir);
+    const session = loadSession(ctx.stateDir, ctx.session);
+    if (session) saveSession(ctx.stateDir, { ...session, current: session.current === name ? null : session.current, lastClosed: name });
+    writeReport(ctx, dir, ledger);
+    ctx.out(`${ledger.slug} abandoned — ${reason}`);
+    ctx.out(`report: ${path.join(dir, "report.md")}`);
   },
 
   close(ctx) {

@@ -138,8 +138,10 @@ export function decide(input, root, config = loadConfig(root), currentRun = null
   }
   const role = (r) => agentType === `done-gate:${r}` || agentType === r;
   // the lead delegates at size standard and above: source and tests belong to the worker and
-  // QA, and so does any other agent the lead might spawn instead of a worker
-  const size = !role("worker") && !role("qa") && ledger ? leadDelegates(ledger) : null;
+  // QA, and so does any other agent the lead might spawn instead of a worker. A "delegate"
+  // waiver (R16 honours the same key) lifts this fence too.
+  const delegateWaived = Boolean(ledger) && (ledger.waivers ?? []).some((w) => w.key === "delegate");
+  const size = !role("worker") && !role("qa") && ledger && !delegateWaived ? leadDelegates(ledger) : null;
   if (size) {
     const owned = paths.filter((p) => config.isSource(p));
     if (owned.length) {

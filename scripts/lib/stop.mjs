@@ -1,14 +1,16 @@
 import path from "node:path";
 import { assess, LedgerParseError } from "./assess.mjs";
 import { recordGateError } from "./context.mjs";
-import { nextSeq } from "./events.mjs";
+import { appendEvents, nextSeq } from "./events.mjs";
 import { loadLedger, saveLedger } from "./ledger.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 
 export const OVERRIDE_AFTER = 6;
 const PAUSE_RE = /(?:^|\n)\s*PAUSED:\s*(.+?)\s*$/;
 
-function block(ctx, reason) {
+// Every block is logged, so a turn that could not end can be diagnosed from the session's events.
+function block(ctx, reason, rules = []) {
+  appendEvents(ctx.stateDir, ctx.session, [{ seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, agent: null, agentType: null, kind: "block", rules }]);
   ctx.out({ decision: "block", reason, systemMessage: "done-gate blocked the stop; see reason." });
 }
 
@@ -24,14 +26,16 @@ function clearBlocks(ctx) {
   if (session?.blocks?.count) saveSession(ctx.stateDir, { ...session, blocks: { key: null, count: 0 } });
 }
 
-// A done-gate helper this session started since the last prompt and that has not stopped.
-// Bounded: a helper older than HELPER_MAX_MS is treated as gone, so a crashed or hung one
-// cannot let the turn end quietly forever.
+// An agent this session started since the user's last prompt and that has not stopped: a
+// done-gate helper or any other agent the lead spawned. A helper's hand-back arrives as a
+// prompt too (events.mjs tags it), and does not count as a new turn. Bounded: a start older
+// than HELPER_MAX_MS is treated as gone, so a crashed or hung agent cannot let the turn end
+// quietly forever.
 const HELPER_MAX_MS = 45 * 60 * 1000;
 function helperRunning(events, session, now = Date.now()) {
   const mine = events.filter((e) => e.session === session);
-  const lastPrompt = mine.filter((e) => e.kind === "prompt").pop()?.seq ?? 0;
-  const starts = mine.filter((e) => e.kind === "subagent-start" && e.seq > lastPrompt && String(e.agentType ?? "").startsWith("done-gate:"));
+  const lastPrompt = mine.filter((e) => e.kind === "prompt" && !e.handback).pop()?.seq ?? 0;
+  const starts = mine.filter((e) => e.kind === "subagent-start" && e.seq > lastPrompt);
   return starts.some((st) => now - Date.parse(st.ts ?? 0) < HELPER_MAX_MS && !mine.some((e) => e.kind === "subagent-stop" && e.agent === st.agent && e.seq > st.seq));
 }
 
@@ -120,6 +124,6 @@ export const verbs = {
       clearBlocks(ctx);
       return;
     }
-    block(ctx, renderReason(unmet, { ledgerOpen }));
+    block(ctx, renderReason(unmet, { ledgerOpen }), unmet.map((u) => u.rule));
   },
 };

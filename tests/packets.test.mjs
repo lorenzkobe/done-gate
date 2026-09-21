@@ -1158,12 +1158,13 @@ test("C6 happy: the Stop hook passes silently without finalising while a done-ga
   logHook(repo, { hook_event_name: "SubagentStop", agent_id: "A9", agent_type: "done-gate:reviewer", stop_hook_active: false });
   assert.equal(stopHook(repo)?.decision, "block", "the turn was let go after the helper stopped");
 
-  // the refused side: an agent that is not a done-gate helper never buys a quiet stop,
-  // and neither does a helper that started before the newest prompt
+  // any agent the lead spawned counts, not only done-gate roles (tests/stop-sees-helpers C4)
   logHook(repo, { hook_event_name: "UserPromptSubmit", user_message: "again" });
   logHook(repo, { hook_event_name: "SubagentStart", agent_id: "A7", agent_type: "general-purpose" });
-  assert.equal(stopHook(repo)?.decision, "block", "a general-purpose agent bought a quiet stop");
+  assert.equal(stopHook(repo), null, "a general-purpose agent still running did not buy a quiet stop");
+  logHook(repo, { hook_event_name: "SubagentStop", agent_id: "A7", agent_type: "general-purpose", stop_hook_active: false });
 
+  // the refused side: a helper that started before the newest real prompt is history
   logHook(repo, { hook_event_name: "SubagentStart", agent_id: "A8", agent_type: "done-gate:skeptic" });
   logHook(repo, { hook_event_name: "UserPromptSubmit", user_message: "new turn, the old helper is history" });
   assert.equal(stopHook(repo)?.decision, "block", "a helper started before the newest prompt bought a quiet stop");

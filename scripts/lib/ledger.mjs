@@ -26,6 +26,11 @@ export function runsDir(stateDir) {
   return path.join(stateDir, "runs");
 }
 
+// A ledger the gate no longer governs: closed with evidence, or abandoned by the user.
+export function isDone(ledger) {
+  return ledger?.status === "closed" || ledger?.status === "abandoned";
+}
+
 export function loadLedger(dir) {
   return JSON.parse(readFileSync(path.join(dir, "ledger.json"), "utf8").replace(/\r/g, ""));
 }
@@ -71,7 +76,7 @@ export function findRun(stateDir, slug) {
     .sort();
   for (const d of candidates.reverse()) {
     const ledger = loadLedger(d);
-    if (ledger.status !== "closed") return { dir: d, ledger };
+    if (!isDone(ledger)) return { dir: d, ledger };
   }
   return null;
 }
@@ -118,7 +123,11 @@ export function openLedger(ctx, slug, playbook) {
   if (!PLAYBOOKS.includes(playbook)) throw new UsageError(`unknown playbook "${playbook}" (have: ${PLAYBOOKS.join(", ")})`);
   const session = ensureSession(ctx.stateDir, ctx.root, ctx.session);
   const config = loadConfig(ctx.root);
-  const name = `${new Date().toISOString().slice(0, 10)}-${slugify(slug)}`;
+  // a closed or abandoned run with the same slug on the same day keeps its folder; the new
+  // run takes the next free name
+  const base = `${new Date().toISOString().slice(0, 10)}-${slugify(slug)}`;
+  let name = base;
+  for (let i = 2; existsSync(path.join(runsDir(ctx.stateDir), name)); i++) name = `${base}-${i}`;
   const dir = path.join(runsDir(ctx.stateDir), name);
   mkdirSync(dir, { recursive: true });
   const ledger = {
@@ -155,7 +164,7 @@ export function openLedger(ctx, slug, playbook) {
   return { dir, ledger };
 }
 
-// Every run whose ledger is still open or closing, newest first.
+// Every run whose ledger is still open or closing (not closed, not abandoned), newest first.
 export function openRuns(stateDir) {
   const dir = runsDir(stateDir);
   if (!existsSync(dir)) return [];
@@ -165,7 +174,7 @@ export function openRuns(stateDir) {
     .sort()
     .reverse()
     .map((d) => ({ dir: d, ledger: loadLedger(d) }))
-    .filter(({ ledger }) => ledger.status !== "closed");
+    .filter(({ ledger }) => !isDone(ledger));
 }
 
 export function currentLedger(stateDir, session) {
@@ -203,7 +212,7 @@ export const verbs = {
   },
   steps(ctx) {
     const current = currentLedger(ctx.stateDir, ctx.session);
-    if (!current || current.ledger.status === "closed") throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
+    if (!current || isDone(current.ledger)) throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
     ctx.out(`ledger: ${current.dir}`);
     ctx.out(`playbook: ${current.ledger.playbook} (${current.ledger.status})`);
     printStepLines(ctx, current.ledger.steps);

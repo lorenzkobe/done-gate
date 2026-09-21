@@ -48,7 +48,9 @@ delegate and report; at size small you also edit.
 - A helper's self-report is never evidence; only `gate verify`, hook events and the
   helper's own file count. A helper that stops with no file: SendMessage it once,
   "write <file> now"; never brief the next round without the file.
-- Waiting for a helper is a legal turn end: just end the turn; its hand-back wakes you.
+- Waiting for a helper (or any agent you spawned) is a legal turn end: just end the turn; its
+  hand-back wakes you. A run left open by an earlier session that is over: `gate abandon
+  <slug> "<reason>"`.
 - `gate size` shows the size and the helpers it requires; never pick helper models
   yourself. Ceiling: ten helper invocations per task.
 - Waivers are the only way past a keyed step you cannot do: ask, then

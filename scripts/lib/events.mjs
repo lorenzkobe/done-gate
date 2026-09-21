@@ -41,7 +41,11 @@ export function eventsFromHookInput(input, root) {
   if (event === "SubagentStart") return [{ ...b(), kind: "subagent-start", ...model }];
   if (event === "SubagentStop") return [{ ...b(), kind: "subagent-stop", ...model }];
   if (event === "UserPromptSubmit") {
-    return [{ ...b(), kind: "prompt", text: String(input.user_message ?? input.prompt ?? "").slice(0, TEXT_LIMIT) }];
+    const text = String(input.user_message ?? input.prompt ?? "");
+    // a helper's hand-back and the harness's task notification arrive as prompts too; they are
+    // tagged so the Stop hook does not mistake them for a new turn from the user
+    const handback = /^\s*<(?:agent-message|task-notification)\b/.test(text);
+    return [{ ...b(), kind: "prompt", text: text.slice(0, TEXT_LIMIT), ...(handback ? { handback: true } : {}) }];
   }
   if (event === "SessionStart") return [{ ...b(), kind: "session-start", source: input.session_start_source ?? null }];
   if (event !== "PostToolUse") return [];

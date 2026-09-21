@@ -169,9 +169,17 @@ with `gate waive <key> "…"`, and the report lists every waiver.
   refused with "write your draft first". A helper that runs out of turns still leaves a file.
   A draft left behind this way is not a finished round: `gate brief` re-briefs the same round
   and `gate huddle add` refuses to record it until a fresh helper rewrites it.
-- **Waiting for a helper is a legal turn end.** While a `done-gate:*` helper this session
-  spawned is still running, the Stop hook lets the turn end quietly (nothing is finalised);
-  the helper's hand-back wakes the lead.
+- **Waiting for a helper is a legal turn end.** While any agent this session spawned (a
+  `done-gate:*` helper, an Explore or Plan agent) is still running, the Stop hook lets the
+  turn end quietly (nothing is finalised); the agent's hand-back wakes the lead. A hand-back
+  arrives as a prompt, but it is not a new turn: helpers still running are still seen.
+- **Every block is logged.** When the Stop hook refuses to end the turn, a `block` event with
+  the unmet rule ids lands in the session's events, and the report counts them, so a turn
+  that could not end can be diagnosed afterwards.
+- **A stale ledger can be let go.** A ledger left open by an earlier session attaches to the
+  next session in the repo and says so; `gate abandon <slug> "<reason>"` marks it abandoned
+  (reason in its report) so it no longer blocks anything. Nothing is finalised: the changes it
+  left behind still count against the next ledger.
 - **The lead delegates at size standard and up.** With a ledger open and the task sized
   standard or large, the lead's own `Edit`/`Write` on source or tests is refused and it is
   told to brief a worker. A shell edit (`sed -i`, a heredoc) slips past this fence; the
@@ -215,6 +223,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `verify [--step verify-before]` | run the repo's verify commands, write `verify.json` |
 | `decide <phase> <decision> <why> <evidence> <result>` | append a decision-log row |
 | `brief <skeptic\|qa\|worker\|reviewer\|reviewer-2\|arbiter> [--round n] [--item H#.#]` | write the helper's packet and print its spawn prompt |
+| `abandon <slug> "<reason>"` | give a run up: marks it abandoned with the reason; it stops attaching to sessions and blocking turns |
 | `check` · `steps` · `size` · `report [--brief]` · `close` · `doctor` | unmet items only · every step · the report, short or full · finish · inspect config |
 
 ## Configuration

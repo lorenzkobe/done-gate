@@ -1,4 +1,4 @@
-import { currentLedger } from "./ledger.mjs";
+import { currentLedger, isDone } from "./ledger.mjs";
 import { optionalSteps, tiered } from "./size.mjs";
 
 // One line after every verb: what to do next and the exact verb. The skill no longer has
@@ -20,7 +20,7 @@ const VERB_FOR = {
 };
 
 export function nextHint(ledger) {
-  if (!ledger || ledger.status === "closed") return "";
+  if (!ledger || isDone(ledger)) return "";
   if (ledger.status === "closing") return "next: `gate check`; when it prints clean, `gate report --brief` and paste it as your final message";
   if (!ledger.taskSeq) return "next: `gate note task \"<the user's ask, quoted, then your own words>\"`";
   if (!ledger.planSeq) return "next: `gate note plan \"<approach, files, data plan>\" --files a.ts,b.ts`";
