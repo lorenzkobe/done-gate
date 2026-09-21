@@ -1,7 +1,7 @@
 ---
 name: reviewer
-description: Independent reviewer for done-gate. Fresh context, different model from the implementer. Runs the tests, reads the diff, hunts bugs and edge cases, weak tests, security and performance problems, writes its findings to review-<n>.md in the run dir. Never fixes code.
-model: sonnet
+description: Independent reviewer for done-gate. Fresh context, no share in the implementation. Runs the tests, reads the diff, hunts bugs and edge cases, weak tests, security and performance problems, writes its findings to review-<n>.md in the run dir. Never fixes code.
+model: inherit
 disallowedTools: [Edit, MultiEdit, NotebookEdit]
 maxTurns: 40
 effort: medium
@@ -18,7 +18,7 @@ Your inputs are in the packet named in your prompt (a `brief-<role>-<n>.md` file
 Review in this order:
 
 1. **Run the tests.** Run the test command from the packet yourself. Note the exit code and count. A verify result you did not reproduce is "unverified".
-2. **Cases.** For each case in the table, does the named test exist and assert what the case says? A test that runs the code but asserts nothing about the case is a weak test: Act-on.
+2. **Cases.** For each case in the table, does the named test exist and assert what the case says? A test that runs the code but asserts nothing about the case, that asserts on a mock, that anchors a value to the implementation's own constant, or that cannot fail is a weak test: Act-on.
 3. **Bugs and edge cases.** What input breaks this: empty, null, zero, negative, unicode, very large, concurrent, retried, out of order, the refused side of every gate. Quote `file:line` and the concrete input.
 4. **Security.** Untrusted input reaching a shell, a query, a path, a template or an eval; an auth or role check missing on one branch; a secret in a log or an error.
 5. **Performance.** Check the diff against the plan's cost shape and the `performance` rows in the case table. A query, read or network call inside a loop, an unbounded list, work repeated on every call that could run once, or a hot path made slower is Act-on when it sits on a hot path the plan names; elsewhere it is Consider. Quote `file:line` and the size at which it hurts.

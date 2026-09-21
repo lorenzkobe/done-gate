@@ -133,12 +133,19 @@ function opened(name, { playbook = "feature", files = {}, planFiles = PLAN_FILE,
   return repo;
 }
 
+// The same ledger at size large (eleven planned files): the only size QA and the worker are for.
+const PAD = Array.from({ length: 10 }, (_, i) => `src/lib/pad${i}.ts`);
+function openedLarge(name, opts = {}) {
+  const planFiles = [opts.planFiles ?? PLAN_FILE, ...PAD].join(",");
+  return opened(name, { ...opts, planFiles, files: { ...Object.fromEntries(PAD.map((f) => [f, "export const pad = 1;\n"])), ...(opts.files ?? {}) } });
+}
+
 // ---------------------------------------------------------------------------
 // C1
 // ---------------------------------------------------------------------------
 
 test("C1 happy: `gate brief <role>` writes brief-<role>-1.md in the run dir and prints the packet path and a one-sentence spawn prompt", () => {
-  const repo = opened("packets-c1");
+  const repo = openedLarge("packets-c1");
 
   for (const role of ["skeptic", "qa", "reviewer", "reviewer-2"]) {
     const r = cli(repo, "brief", [role]);
@@ -158,7 +165,7 @@ test("C1 happy: `gate brief <role>` writes brief-<role>-1.md in the run dir and 
 // ---------------------------------------------------------------------------
 
 test("C2 happy: every packet starts with Task, Plan, the case table, the tier block, the tests globs with the detected framework, and what the helper may write", () => {
-  const repo = opened("packets-c2");
+  const repo = openedLarge("packets-c2");
   // review-1.md exists so reviewer-2 has something to embed; it does not change the header.
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n\n_none_\n");
 
@@ -241,7 +248,7 @@ test("C4 refused: the QA packet contains no line starting with @@, + or -, lists
   //   src/a.test.ts       parent dir
   //   tests/a.test.ts     (makeRepo default) sibling tree, shallow
   //   tests/far/deep/y.test.ts  sibling tree, deep
-  const repo = opened("packets-c4", {
+  const repo = openedLarge("packets-c4", {
     files: {
       "src/lib/x.test.ts": "// nearest\ntest('x', () => {});\n",
       "src/a.test.ts": "// second\ntest('a', () => {});\n",
@@ -268,7 +275,7 @@ test("C4 refused: the QA packet contains no line starting with @@, + or -, lists
   assert.match(conv, /^\s*```/m, "the samples are not in fenced code blocks");
 
   // A bugfix ledger: the reported surface is the first test QA writes.
-  const bug = opened("packets-c4-bug", {
+  const bug = openedLarge("packets-c4-bug", {
     playbook: "bugfix",
     cases: [
       ["the crash the user reported on /venues", "reported-surface"],
@@ -558,7 +565,9 @@ test("C13 happy: the four agent files say their inputs are in the packet and no 
     // skeptic.md's frontmatter changes by design when it gains its own file (it needs Write
     // and a bigger turn budget); tests/skeptic-file.test.mjs C5 owns those lines.
     if (role !== "skeptic") {
-      assert.deepEqual(frontmatter(now), frontmatter(head(rel)), `${rel}: pinned frontmatter lines changed`);
+      // the model line is not pinned: every helper inherits the session's model now
+      const noModel = (lines) => lines.filter((l) => !/^\s*model:/.test(l));
+      assert.deepEqual(noModel(frontmatter(now)), noModel(frontmatter(head(rel))), `${rel}: pinned frontmatter lines changed`);
     }
     assert.ok(!now.includes("git diff"), `${rel} still names the literal phrase "git diff"`);
   }
@@ -567,7 +576,7 @@ test("C13 happy: the four agent files say their inputs are in the packet and no 
   const skepticFm = /^---\n([\s\S]*?)\n---\n/.exec(readFileSync(path.join(pluginRoot, "agents", "skeptic.md"), "utf8"))[1].split("\n");
   const fmLine = (key) => skepticFm.find((l) => l.split(":")[0].trim() === key);
   assert.ok(fmLine("name"), "agents/skeptic.md has no name in its frontmatter");
-  assert.match(fmLine("model") ?? "", /sonnet/, `agents/skeptic.md is no longer on sonnet: ${fmLine("model")}`);
+  assert.match(fmLine("model") ?? "", /inherit/, `agents/skeptic.md does not inherit the session's model: ${fmLine("model")}`);
   assert.ok(fmLine("effort"), "agents/skeptic.md has no effort in its frontmatter");
   const skepticDisallowed = fmLine("disallowedTools") ?? "";
   for (const tool of ["Edit", "MultiEdit", "NotebookEdit"]) {
@@ -739,7 +748,7 @@ test("C19 boundary: an untracked binary file is named in the reviewer diff and t
 // ---------------------------------------------------------------------------
 
 test("C20 refused: the QA packet's file rows are read from the task's baseline, so an edit made after the ledger opened never reaches QA", () => {
-  const repo = opened("packets-c20", { planFiles: `${PLAN_FILE},src/lib/z.ts` });
+  const repo = openedLarge("packets-c20", { planFiles: `${PLAN_FILE},src/lib/z.ts` });
 
   // The implementer's work, after the ledger opened: a new export in a file QA was told
   // about, and a file that did not exist at the baseline at all.

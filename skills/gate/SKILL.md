@@ -21,14 +21,15 @@ delegate and report; below large you also edit.
    sizes they see and the cost shape of the main operation (one pass, one query), or says
    "no hot path" in one line; a `performance` row names the size that matters and what must
    not happen at it.
-3. Follow each `next:` line. Helpers are spawned from packets: `gate brief <role>` prints
-   the prompt. Roles: `done-gate:skeptic` (writes `skeptic-<n>.md`), `done-gate:qa`
-   (blind tests under the tests globs), `done-gate:worker` (edits the files its packet
-   names, answers reviews in `worker-<n>.md`), `done-gate:reviewer` (writes
-   `review-<n>.md`), `done-gate:reviewer-2` (high-risk paths), `done-gate:arbiter`.
-4. Size small or standard: implement yourself, tests first; you hold the context. Size
-   large: never edit source; `gate brief worker` per piece and spawn `done-gate:worker`;
-   the fence refuses your own edits.
+3. Follow each `next:` line. Write the tests first, from the case table, red before green.
+   Helpers are spawned from packets: `gate brief <role>` prints the prompt. Roles:
+   `done-gate:skeptic` (writes `skeptic-<n>.md`), `done-gate:qa` (blind tests, size large
+   only), `done-gate:worker` (edits the files its packet names, answers reviews in
+   `worker-<n>.md`), `done-gate:reviewer` (writes `review-<n>.md`), `done-gate:reviewer-2`
+   (high-risk paths), `done-gate:arbiter`.
+4. Size small or standard: implement yourself; you hold the context. Size large: never
+   edit source; `gate brief worker` per piece and spawn `done-gate:worker`; the fence
+   refuses your own edits.
 5. Review: `gate brief reviewer`, spawn, `gate huddle add reviewer --file review-<n>.md`.
    Below large: fix and `gate huddle resolve H<k>.<i> --evidence <ptr>`. Large: `gate brief
    worker`, SendMessage the worker the review path, then `gate huddle reply --file
@@ -52,10 +53,10 @@ delegate and report; below large you also edit.
 - Waiting for a helper (or any agent you spawned) is a legal turn end: just end the turn; its
   hand-back wakes you. A run left open by an earlier session that is over: `gate abandon
   <slug> "<reason>"`.
-- `gate size` shows the size and the helpers it requires; never pick helper models
-  yourself. Ceiling: ten helper invocations per task.
+- `gate size` shows the size and the helpers it requires. Ceiling: ten helper invocations
+  per task.
 - Waivers are the only way past a keyed step you cannot do: ask, then
   `gate waive <key> "<the reason>"`; the report lists it.
-- Never hand-edit `.claude/gate/runs/**` except `ledger.md`.
+- Never hand-edit `.claude/gate/runs/**` but `ledger.md`.
 - Need the user mid-task? `AskUserQuestion`, or end with a last line `PAUSED: <need>`.
 - No commits unless asked; the repo's CLAUDE.md wins over any playbook.

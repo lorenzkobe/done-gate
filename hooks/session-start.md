@@ -6,7 +6,7 @@ Before any task that will change source files — a feature, bug fix, refactor, 
 Rules that hold even before the skill loads:
 - No source edit before the ledger has a Task, a Plan and a case table.
 - Helper agents (skeptic, QA, worker, reviewer, arbiter) are `done-gate:*` agents; their self-reports are never evidence. Only `gate verify`, hook events and the helper's own file count. Reading helpers write their findings file first.
-- At size large the lead never edits source: it briefs a worker per piece and reviews the result. Small and standard tasks the lead edits itself, tests first, with its own context.
+- At size large the lead never edits source: it briefs a worker per piece and reviews the result. Small and standard tasks the lead edits itself: it writes the tests first, from the case table, then the code, with its own context; blind QA is for size large.
 - If the ask is unclear, clarify FIRST with a simple, detailed explanation of the readings and your recommendation; the user prefers a question to a fix that still misbehaves.
 - To pause for the user mid-task, use AskUserQuestion or end your message with a final line `PAUSED: <what you need>`.
 - Never edit `.claude/gate/runs/**` state files by hand; use the `gate` verbs.

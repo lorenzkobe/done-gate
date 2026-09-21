@@ -149,9 +149,9 @@ function reviewerPass(repo, n) {
 test("C1 boundary: loadPolicy returns models.json's policy; missing keys fall back to defaults; a parse error falls back entirely without throwing", () => {
   const shipped = modelsJson().policy;
   const p = loadPolicy();
-  assert.deepEqual(p.tiers.small, { maxFiles: 1, maxLines: 40, requires: ["qa", "reviewer"] });
-  assert.deepEqual(p.tiers.standard, { maxFiles: 10, maxLines: 400, requires: ["skeptic", "qa", "reviewer"] });
-  assert.deepEqual(p.tiers.large.requires, ["skeptic", "qa", "reviewer", "reviewer:opus"]);
+  assert.deepEqual(p.tiers.small, { maxFiles: 1, maxLines: 40, requires: ["reviewer"] });
+  assert.deepEqual(p.tiers.standard, { maxFiles: 10, maxLines: 400, requires: ["skeptic", "reviewer"] });
+  assert.deepEqual(p.tiers.large.requires, ["skeptic", "qa", "worker", "reviewer", "reviewer-2"]);
   assert.deepEqual(p.forceStandard, ["ui", "schema", "highRisk"]);
   assert.equal(p.ceiling.helpersPerTask, 10);
   assert.deepEqual(p.tiers, shipped.tiers, "loadPolicy() must report what models.json actually says");
@@ -291,7 +291,7 @@ test("C5 happy: note plan --files src/a.ts predicts small, marks {skeptic} N/A w
   assert.deepEqual(l.tier.autoNa, ["skeptic"]);
   assert.equal(stepOf(l, "skeptic").state, "N/A");
   assert.equal(stepOf(l, "skeptic").note, "tier small (predicted)");
-  assert.equal(stepOf(l, "qa").state, null, "QA is never dropped");
+  assert.equal(stepOf(l, "tests").state, null, "the tests step is never dropped");
   assert.equal(stepOf(l, "review").state, null, "the reviewer is never dropped");
 });
 
@@ -485,11 +485,10 @@ test("C12 happy: gate size prints the measured and predicted tiers, files and li
   assert.match(out, /^.*requires:/m);
   assert.match(out, /auto-N\/A:/);
 
-  // The models come from models.json's roles, not from a constant in the scripts.
-  const roles = modelsJson().roles;
-  for (const role of ["skeptic", "qa", "reviewer"]) {
-    assert.match(out, new RegExp(`${role}[^\\n]*${roles[role]}`), `${role} → ${roles[role]}`);
-  }
+  // The required helpers come from models.json's tiers, named without a model.
+  const required = modelsJson().policy.tiers.standard.requires;
+  assert.match(out, new RegExp(`^requires: ${required.join(", ")}\\b`, "m"), out);
+  assert.doesNotMatch(out, /sonnet|opus/i, "gate size names a model");
 });
 
 // ---------------------------------------------------------------------------
@@ -553,20 +552,20 @@ test("C14 refused: a source edit made through a shell command after the reviewer
 // C16
 // ---------------------------------------------------------------------------
 
-test("C16 happy: models.json carries the policy object and no escalate/never/ceiling prose keys; roles carry the arbiter", () => {
+test("C16 happy: models.json carries the policy object and no escalate/never/ceiling prose keys, and no roles map", () => {
   const m = modelsJson();
 
-  assert.deepEqual(m.roles, { skeptic: "sonnet", qa: "opus", reviewer: "sonnet", "reviewer-2": "opus", arbiter: "opus", worker: "sonnet" });
+  assert.ok(!("roles" in m), "models.json still names models per role");
 
   assert.equal(typeof m.policy, "object");
   assert.deepEqual(Object.keys(m.policy).sort(), ["ceiling", "delegatesAt", "escalate", "forceStandard", "tiers"]);
   assert.equal(m.policy.delegatesAt, "large");
   assert.deepEqual(Object.keys(m.policy.tiers).sort(), ["large", "small", "standard"]);
-  assert.deepEqual(m.policy.tiers.small, { maxFiles: 1, maxLines: 40, requires: ["qa", "reviewer"] });
-  assert.deepEqual(m.policy.tiers.standard, { maxFiles: 10, maxLines: 400, requires: ["skeptic", "qa", "reviewer"] });
-  assert.deepEqual(m.policy.tiers.large, { requires: ["skeptic", "qa", "reviewer", "reviewer:opus"] });
+  assert.deepEqual(m.policy.tiers.small, { maxFiles: 1, maxLines: 40, requires: ["reviewer"] });
+  assert.deepEqual(m.policy.tiers.standard, { maxFiles: 10, maxLines: 400, requires: ["skeptic", "reviewer"] });
+  assert.deepEqual(m.policy.tiers.large, { requires: ["skeptic", "qa", "worker", "reviewer", "reviewer-2"] });
   assert.deepEqual(m.policy.forceStandard, ["ui", "schema", "highRisk"]);
-  assert.deepEqual(m.policy.escalate, { reviewerRound2: { model: "opus", whenActOnAtLeast: 2, orTier: "large" } });
+  assert.deepEqual(m.policy.escalate, { reviewerRound2: { whenActOnAtLeast: 2, orTier: "large" } });
   assert.deepEqual(m.policy.ceiling, { helpersPerTask: 10 });
 
   for (const key of ["escalate", "never", "ceiling"]) {
@@ -1122,7 +1121,7 @@ const lineStarting = (text, prefix) => lines(text).find((l) => l.startsWith(pref
 const POLICY = JSON.parse(readFileSync(path.join(pluginRoot, "models.json"), "utf8")).policy;
 const TIER_NAMES = Object.keys(POLICY.tiers); // small, standard, large
 const REQUIRES = (tier) => POLICY.tiers[tier].requires;
-const ESC = POLICY.escalate.reviewerRound2; // { model, whenActOnAtLeast, orTier }
+const ESC = POLICY.escalate.reviewerRound2; // { whenActOnAtLeast, orTier }
 const LARGE_FILES = POLICY.tiers.standard.maxFiles + 1; // 11: the first file count that is large
 const MODEL = "claude-opus-4";
 
@@ -1244,7 +1243,7 @@ test("C3 happy: the Tier block counts helpers spawned against the required list,
   assert.match(none, /^helpers: spawned 0 of\b/, none);
   for (const role of required) assert.ok(none.includes(role), `${role} is required for standard but is not named: ${none}`);
 
-  subagentStop(repo, "done-gate:qa");
+  subagentStop(repo, "done-gate:skeptic");
   subagentStop(repo, "reviewer"); // isRole accepts the bare role too
   subagentStop(repo, "general-purpose"); // not a gate helper: never counted
 
@@ -1257,32 +1256,32 @@ test("C3 happy: the Tier block counts helpers spawned against the required list,
 // C4
 // ---------------------------------------------------------------------------
 
-test("C4 edge: the round 2 model line is required by Act-on count or by a large tier, and names the recorded model", () => {
-  const round2 = (repo) => lineStarting(cli(repo, "report").stdout, "round 2 model:");
+test("C4 edge: the round 2 line is required by Act-on count or by a large tier, and says whether a second reviewer stop was recorded", () => {
+  const round2 = (repo) => lineStarting(cli(repo, "report").stdout, "round 2:");
 
   // one Act-on item, standard tier → below the threshold
   const one = standardTier("report-tier-c4-one");
   writeFileSync(path.join(runDir(one), "review-1.md"), "# Review 1\n\n## Act on\n- null venue crashes\n");
   cli(one, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
   cli(one, "huddle", ["acton", "H1", "null venue crashes"]);
-  assert.equal(round2(one), "round 2 model: not required");
+  assert.equal(round2(one), "round 2: not required");
 
   // the threshold from models.json, with nothing recorded
   const many = standardTier("report-tier-c4-many");
   writeFileSync(path.join(runDir(many), "review-1.md"), "# Review 1\n\n## Act on\n- one\n- two\n");
   cli(many, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
   for (let i = 0; i < ESC.whenActOnAtLeast; i++) cli(many, "huddle", ["acton", "H1", `finding ${i}`]);
-  assert.equal(round2(many), `round 2 model: ${ESC.model} required, recorded: unrecorded`);
+  assert.equal(round2(many), "round 2: required, not yet");
 
-  // the second reviewer ran and the harness said on which model
+  // the reviewer ran twice: the second stop is the second round
   subagentStop(many, "done-gate:reviewer");
   subagentStop(many, "done-gate:reviewer", { model: MODEL });
-  assert.equal(round2(many), `round 2 model: ${ESC.model} required, recorded: ${MODEL}`);
+  assert.equal(round2(many), "round 2: required, recorded");
 
   // tier large on its own is enough, with no Act-on items at all
   const big = largeTier("report-tier-c4-large");
   assert.equal(ESC.orTier, "large", "anchor: models.json escalate.reviewerRound2.orTier");
-  assert.equal(round2(big), `round 2 model: ${ESC.model} required, recorded: unrecorded`);
+  assert.equal(round2(big), "round 2: required, not yet");
 });
 
 // ---------------------------------------------------------------------------
@@ -1345,25 +1344,26 @@ test("C7 boundary: an untiered playbook prints no Tier block and no Size line", 
 // C9
 // ---------------------------------------------------------------------------
 
-test("C9 edge: at tier large the helpers line counts all four required helpers, the second reviewer standing for reviewer:opus", () => {
+test("C9 edge: at tier large the helpers line counts all five required helpers, and a reviewer-2 stop ticks the second reviewer", () => {
   const repo = largeTier("report-tier-c9");
   const required = REQUIRES("large");
-  assert.equal(required.length, 4, "anchor: models.json tiers.large.requires");
-  assert.ok(required.includes("reviewer:opus"), "anchor: models.json tiers.large.requires");
+  assert.equal(required.length, 5, "anchor: models.json tiers.large.requires");
+  assert.ok(required.includes("reviewer-2"), "anchor: models.json tiers.large.requires");
 
   subagentStop(repo, "done-gate:skeptic");
   subagentStop(repo, "done-gate:qa");
+  subagentStop(repo, "done-gate:worker");
   subagentStop(repo, "done-gate:reviewer");
 
-  const three = lineStarting(cli(repo, "report").stdout, "helpers:");
-  assert.match(three, /^helpers: spawned 3 of 4\b/, three);
-
-  subagentStop(repo, "done-gate:reviewer", { model: MODEL }); // the round-2 reviewer
-
   const four = lineStarting(cli(repo, "report").stdout, "helpers:");
-  assert.match(four, /^helpers: spawned 4 of 4 required\b/, four);
+  assert.match(four, /^helpers: spawned 4 of 5\b/, four);
+
+  subagentStop(repo, "done-gate:reviewer-2", { model: MODEL }); // the second reviewer
+
+  const five = lineStarting(cli(repo, "report").stdout, "helpers:");
+  assert.match(five, /^helpers: spawned 5 of 5 required\b/, five);
   for (const entry of required) {
-    assert.match(four, new RegExp(`${entry.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^,]*✓`), `${entry} is not ticked: ${four}`);
+    assert.match(five, new RegExp(`${entry}[^,]*✓`), `${entry} is not ticked: ${five}`);
   }
 });
 
@@ -1397,25 +1397,26 @@ test("C10 boundary: a closed ledger with no tier field at all reports a Tier blo
 // C11
 // ---------------------------------------------------------------------------
 
-test("C11 edge: a reviewer-2 stop satisfies reviewer:opus and records the round 2 model", () => {
+test("C11 edge: a reviewer-2 stop satisfies the second reviewer and records round 2", () => {
   const repo = largeTier("report-tier-c11");
   const required = REQUIRES("large");
-  assert.ok(required.includes("reviewer:opus"), "anchor: models.json tiers.large.requires");
+  assert.ok(required.includes("reviewer-2"), "anchor: models.json tiers.large.requires");
 
   subagentStop(repo, "done-gate:skeptic");
   subagentStop(repo, "done-gate:qa");
+  subagentStop(repo, "done-gate:worker");
   subagentStop(repo, "done-gate:reviewer");
   subagentStop(repo, "done-gate:reviewer-2", { model: MODEL });
 
   const report = cli(repo, "report").stdout;
 
   const helpers = lineStarting(report, "helpers:");
-  assert.match(helpers, /^helpers: spawned 4 of 4 required\b/, helpers);
+  assert.match(helpers, /^helpers: spawned 5 of 5 required\b/, helpers);
   for (const entry of required) {
-    assert.match(helpers, new RegExp(`${entry.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[^,]*✓`), `${entry} is not ticked: ${helpers}`);
+    assert.match(helpers, new RegExp(`${entry}[^,]*✓`), `${entry} is not ticked: ${helpers}`);
   }
 
-  assert.equal(lineStarting(report, "round 2 model:"), `round 2 model: ${ESC.model} required, recorded: ${MODEL}`);
+  assert.equal(lineStarting(report, "round 2:"), "round 2: required, recorded");
 });
 }
 

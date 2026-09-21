@@ -1,20 +1,11 @@
 {
-  "principle": "Spend tokens where they buy correctness, never where they don't. Defaults are the cheapest model that does the job well; escalation is by evidence, not by habit. Helpers never run on Fable.",
-  "roles": {
-    "skeptic": "sonnet",
-    "qa": "opus",
-    "reviewer": "sonnet",
-    "reviewer-2": "opus",
-    "arbiter": "opus",
-    "worker": "sonnet"
-  },
+  "principle": "Spend helpers where they buy correctness, never where they don't. Every helper runs on the session's own model; the size of the change, not a model name, decides who is spawned; escalation is by evidence, not by habit.",
   "policy": {
     "tiers": {
       "small": {
         "maxFiles": 1,
         "maxLines": 40,
         "requires": [
-          "qa",
           "reviewer"
         ]
       },
@@ -23,7 +14,6 @@
         "maxLines": 400,
         "requires": [
           "skeptic",
-          "qa",
           "reviewer"
         ]
       },
@@ -31,8 +21,9 @@
         "requires": [
           "skeptic",
           "qa",
+          "worker",
           "reviewer",
-          "reviewer:opus"
+          "reviewer-2"
         ]
       }
     },
@@ -43,7 +34,6 @@
     ],
     "escalate": {
       "reviewerRound2": {
-        "model": "opus",
         "whenActOnAtLeast": 2,
         "orTier": "large"
       }

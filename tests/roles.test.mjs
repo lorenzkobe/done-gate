@@ -83,15 +83,9 @@ const lineStarting = (text, prefix) => lines(text).find((l) => l.startsWith(pref
 const MODELS = JSON.parse(readFileSync(path.join(pluginRoot, "models.json"), "utf8"));
 const AGENTS_DIR = path.join(pluginRoot, "agents");
 
-// the six roles T5 asks for, spelled out rather than read back from the file under test
-const EXPECTED_ROLES = {
-  skeptic: "sonnet",
-  qa: "opus",
-  reviewer: "sonnet",
-  "reviewer-2": "opus",
-  arbiter: "opus",
-  worker: "sonnet",
-};
+// the six roles T5 asks for, spelled out rather than read back from the file under test;
+// every one runs on the session's own model (agents/*.md: model: inherit)
+const EXPECTED_ROLES = { skeptic: "inherit", qa: "inherit", reviewer: "inherit", "reviewer-2": "inherit", arbiter: "inherit", worker: "inherit" };
 const EXPECTED_CEILING = 10;
 const WORKER_MAX_TURNS = 60;
 
@@ -137,12 +131,12 @@ function largeTier(name) {
 // C1
 // ---------------------------------------------------------------------------
 
-test("C1 happy: models.json and DEFAULT_POLICY both name worker: sonnet and a ceiling of 10 helpers/task, and `gate size` prints that ceiling", () => {
-  assert.deepEqual(MODELS.roles, EXPECTED_ROLES, "models.json roles is not the six-role map T5 asks for");
+test("C1 happy: models.json and DEFAULT_POLICY name no model and a ceiling of 10 helpers/task, and `gate size` prints that ceiling", () => {
+  assert.ok(!("roles" in MODELS), "models.json still carries a roles map");
   assert.equal(MODELS.policy.ceiling.helpersPerTask, EXPECTED_CEILING, "models.json ceiling.helpersPerTask");
 
   // the fallback used when models.json cannot be read must say the same thing
-  assert.deepEqual(DEFAULT_POLICY.roles, EXPECTED_ROLES, "size.mjs DEFAULT_POLICY.roles drifted from models.json");
+  assert.ok(!("roles" in DEFAULT_POLICY), "size.mjs DEFAULT_POLICY still carries roles");
   assert.equal(
     DEFAULT_POLICY.ceiling.helpersPerTask,
     EXPECTED_CEILING,
@@ -232,9 +226,9 @@ test("C3 refused: `gate brief bogus` fails with a usage message listing every ro
 // ---------------------------------------------------------------------------
 
 test("C4 edge: every role in models.json has an agents/<role>.md whose model matches, worker runs 60 turns with no Edit ban, and the reading roles still ban Edit", () => {
-  for (const [role, model] of Object.entries(MODELS.roles)) {
+  for (const [role, model] of Object.entries(EXPECTED_ROLES)) {
     const file = path.join(AGENTS_DIR, `${role}.md`);
-    assert.ok(existsSync(file), `models.json names ${role} but agents/${role}.md does not exist`);
+    assert.ok(existsSync(file), `agents/${role}.md does not exist`);
     const md = readFileSync(file, "utf8");
     const fm = frontmatter(md);
     assert.ok(fm, `agents/${role}.md has no frontmatter`);
@@ -313,7 +307,7 @@ test("C5 happy: agents/reviewer.md and reviewer-2.md send the reviewer to the te
 test("C6 boundary: a worker stop is not a helper — the Tier block's helper count stays 0 until a required role stops", () => {
   const repo = standardTier("roles-c6");
   const required = MODELS.policy.tiers.standard.requires;
-  assert.deepEqual(required, ["skeptic", "qa", "reviewer"], "anchor: models.json policy.tiers.standard.requires");
+  assert.deepEqual(required, ["skeptic", "reviewer"], "anchor: models.json policy.tiers.standard.requires");
 
   const none = lineStarting(cli(repo, "report").stdout, "helpers:");
   assert.ok(none, "no helpers line in the Tier block");
@@ -330,10 +324,10 @@ test("C6 boundary: a worker stop is not a helper — the Tier block's helper cou
   );
 
   // the counter still works: a real helper moves it
-  subagentStop(repo, "done-gate:qa");
-  const afterQa = lineStarting(cli(repo, "report").stdout, "helpers:");
-  assert.match(afterQa, /^helpers: spawned 1 of /, afterQa);
-  assert.ok(afterQa.includes("qa ✓"), afterQa);
+  subagentStop(repo, "done-gate:skeptic");
+  const afterSkeptic = lineStarting(cli(repo, "report").stdout, "helpers:");
+  assert.match(afterSkeptic, /^helpers: spawned 1 of /, afterSkeptic);
+  assert.ok(afterSkeptic.includes("skeptic ✓"), afterSkeptic);
 });
 }
 

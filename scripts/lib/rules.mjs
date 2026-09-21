@@ -258,10 +258,11 @@ export function evaluate(state) {
       }
     }
 
-    if (!changed.some((p) => config.isTest(p)) && !waived(ledger, "qa")) {
+    // "qa" is the waiver key older ledgers carry for the same step
+    if (!changed.some((p) => config.isTest(p)) && !waived(ledger, "tests") && !waived(ledger, "qa")) {
       unmet.push({
         rule: "R7",
-        text: `source changed (${list(src)}) but no test file changed. Have QA write tests for the case table, or get the user's waiver (\`gate waive qa "<reason>"\`).`,
+        text: `source changed (${list(src)}) but no test file changed. Write the tests for the case table (QA writes them at size large), or get the user's waiver (\`gate waive tests "<reason>"\`).`,
       });
     }
   }

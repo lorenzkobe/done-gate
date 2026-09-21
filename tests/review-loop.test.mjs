@@ -564,9 +564,9 @@ test("C9 happy: the brief's review line reads n problems, k fixed, m overruled b
 // C10 — the policy gains the arbiter and one more helper
 // ---------------------------------------------------------------------------
 
-test("C10 happy: models.json has roles.arbiter opus and ceiling 10; the tier block prints the ceiling", () => {
+test("C10 happy: models.json names no model and a ceiling of 10; the tier block prints the ceiling", () => {
   const m = modelsJson();
-  assert.equal(m.roles.arbiter, "opus", `models.json roles: ${JSON.stringify(m.roles)}`);
+  assert.ok(!("roles" in m), `models.json still names models: ${JSON.stringify(m.roles)}`);
   assert.equal(m.policy.ceiling.helpersPerTask, 10, `models.json ceiling: ${JSON.stringify(m.policy.ceiling)}`);
 
   const repo = opened("rd-c10");
@@ -578,14 +578,14 @@ test("C10 happy: models.json has roles.arbiter opus and ceiling 10; the tier blo
 // C11 — the prose that ships with it
 // ---------------------------------------------------------------------------
 
-test("C11 boundary: agents/arbiter.md exists with opus, maxTurns 12 and a By turn 10 line; reviewer, reviewer-2 and skeptic files carry the Disputes instruction; SKILL.md mentions gate huddle dispute and stays under 4096 bytes; README lists R15", () => {
+test("C11 boundary: agents/arbiter.md exists with model inherit, maxTurns 12 and a By turn 10 line; reviewer, reviewer-2 and skeptic files carry the Disputes instruction; SKILL.md mentions gate huddle dispute and stays under 4096 bytes; README lists R15", () => {
   const file = path.join(AGENTS_DIR, "arbiter.md");
   assert.ok(existsSync(file), `${file} does not exist`);
   const md = readFileSync(file, "utf8");
   const fm = /^---\n([\s\S]*?)\n---\n/.exec(md);
   assert.ok(fm, "agents/arbiter.md has no frontmatter");
   assert.match(fm[1], /^name: arbiter$/m, `arbiter frontmatter:\n${fm[1]}`);
-  assert.match(fm[1], /^model: opus$/m, `arbiter frontmatter:\n${fm[1]}`);
+  assert.match(fm[1], /^model: inherit$/m, `arbiter frontmatter:\n${fm[1]}`);
   assert.match(fm[1], /^maxTurns: 12$/m, `arbiter frontmatter:\n${fm[1]}`);
   const body = md.replace(/^---\n[\s\S]*?\n---\n/, "");
   assert.ok(body.includes("By turn 10"), "agents/arbiter.md has maxTurns 12 but no \"By turn 10\" line");
@@ -1411,7 +1411,7 @@ function playbookKeys(playbook) {
 const hintOf = (stdout) => lines(stdout)[lines(stdout).length - 1] ?? "";
 
 // The step key a hint points at (same mapping tests/next-hints.test.mjs uses).
-const ROLE_STEP = { skeptic: "skeptic", qa: "qa", reviewer: "review", "reviewer-2": "review" };
+const ROLE_STEP = { skeptic: "skeptic", qa: "tests", reviewer: "review", "reviewer-2": "review" };
 function hintedKey(h) {
   const flagged = /--step ([a-z0-9-]+)/.exec(h);
   if (flagged) return flagged[1];

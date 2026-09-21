@@ -191,15 +191,18 @@ with `gate waive <key> "…"`, and the report lists every waiver.
 
 ## Cost
 
-The gate sizes each task from the real diff and spends helpers accordingly. Helpers never
-run on the most expensive tier.
+The gate sizes each task from the real diff and spends helpers accordingly. Every helper
+runs on the session's own model (`model: inherit`), so the plugin behaves the same whatever
+model the lead runs on; no policy file names one. Below size large the lead writes the
+tests itself, from the case table, before the code.
 
 | Tier | When | Helpers |
 | --- | --- | --- |
-| small | one source file, ≤ 40 lines, no UI, schema or high-risk path | QA (Opus), reviewer (Sonnet) |
-| standard | ≤ 10 files, ≤ 400 lines, or any UI, schema or high-risk file | skeptic (Sonnet), QA, reviewer |
-| large | more than that | skeptic, QA, reviewer with a second round on Opus |
-| any | a review finding the model disputes with evidence and the reviewer upholds | arbiter (Opus), rules once in writing |
+| small | one source file, ≤ 40 lines, no UI, schema or high-risk path | reviewer |
+| standard | ≤ 10 files, ≤ 400 lines, or any UI, schema or high-risk file | skeptic, reviewer |
+| large | more than that | skeptic, QA (blind tests), a worker per piece, reviewer, a second reviewer |
+| any | 2+ Act-on items in round 1 | a second reviewer round, same reviewer, fresh context |
+| any | a review finding the model disputes with evidence and the reviewer upholds | arbiter, rules once in writing |
 
 `gate note plan --files a.ts,b.ts` predicts the tier before the diff exists, so a small
 feature skips the design critique up front; if the diff then outgrows the prediction, the

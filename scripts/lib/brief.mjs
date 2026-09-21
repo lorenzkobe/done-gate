@@ -4,7 +4,7 @@ import path from "node:path";
 import { buildState } from "./assess.mjs";
 import { caseTable, verifyLines } from "./report.mjs";
 import { section } from "./ledger.mjs";
-import { effectiveTier, leadDelegates, renderTierBlock, tierOf } from "./size.mjs";
+import { leadDelegates, renderTierBlock, tierMax, tierOf } from "./size.mjs";
 import { gitTracked } from "./tree.mjs";
 import { ROLES, flag, positional } from "./verbs.mjs";
 import { isDraft } from "./rules.mjs";
@@ -264,9 +264,14 @@ export const verbs = {
     if (!state.ledger) throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
     // below the delegated size the lead implements with its own context; a worker packet
     // would hand that context away for nothing
-    if (role === "worker" && !leadDelegates(state.ledger, state.policy)) {
-      const eff = effectiveTier(state.policy, state.ledger, state.tier?.measured ?? null);
-      throw new UsageError(`size ${eff}: implement it yourself; the worker is for size ${state.policy.delegatesAt} (a plan naming more than ${state.policy.tiers.standard?.maxFiles ?? 10} files)`);
+    // a predicted size below policy.delegatesAt: no worker, no blind QA (a plan that named no
+    // files predicted nothing, and is not refused)
+    if ((role === "worker" || role === "qa") && tierOf(state.ledger).predicted !== null && !leadDelegates(state.ledger, state.policy)) {
+      const eff = tierMax(state.policy, tierOf(state.ledger).predicted, state.tier?.measured?.tier ?? null);
+      const at = `size ${state.policy.delegatesAt} (a plan naming more than ${state.policy.tiers.standard?.maxFiles ?? 10} files)`;
+      throw new UsageError(role === "worker"
+        ? `size ${eff}: implement it yourself; the worker is for ${at}`
+        : `size ${eff}: write the tests yourself from the case table, red first; blind QA is for ${at}`);
     }
     const rounds = state.ledger.huddles.filter((h) => h.role === role).length;
     const round = Number(flag(ctx.args, "--round")) || rounds + 1;

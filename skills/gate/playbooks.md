@@ -13,7 +13,7 @@ You own the design and the diff. Plan, build, verify, get reviewed.
 2. Write Task and Plan in ledger.md (`gate note task|plan`); include the data/cost plan when data is touched, and the performance plan: the hot paths touched, the data sizes they see, the cost shape of the main operation (one pass, one query), or "no hot path" in one line. {plan}
 3. Write the case table (`gate case add`): happy path, each edge, the refused side of every gate, boundaries, idempotency, the surface the user reported, and a performance row per hot path: the size that matters and what must not happen at it. {cases}
 4. Design huddle: spawn the skeptic on the plan, answer every finding, amend the plan (N/A at tier small). {skeptic}
-5. Spawn QA on the case table, blind to src; QA writes the tests under the tests globs. {qa}
+5. Write the tests from the case table before the code, one per case, and run them red; at size large spawn QA (blind to src) instead. {tests}
 6. Implement, keeping the diff to the plan; reconcile with QA's tests as you go: each disagreement ends as code-wrong, test-wrong, or ask-the-user. {implement}
 7. Run `gate verify` (lint, test, build) after the last edit. {verify}
 8. Drive the real surface with the project's /verify driver, phone viewport first for UI. {driver}
@@ -30,7 +30,7 @@ not a fix. "Inconclusive" or the wrong surface is not a pass.
 2. Root cause with runtime evidence: form hypotheses, rule them out, no belt-and-suspenders. {rootcause}
 3. Write Task and Plan in ledger.md (`gate note task|plan`); name the hot path the fix touches, the data sizes it sees and its cost shape, or "no hot path" in one line. {plan}
 4. Write the case table; row 1 is the repro, kind `reported-surface`; a performance row when the fix sits on a hot path. {cases}
-5. Spawn QA to write the failing test blind to the fix; quote the RED output. {qa}
+5. Write the failing test before the fix and quote the RED output; at size large spawn QA (blind to the fix) instead. {tests}
 6. Make the smallest fix the evidence justifies; quote the GREEN output for the same test. {implement}
 7. Run `gate verify` after the last edit. {verify}
 8. Drive the same surface again: the original repro now passes. {driver}
@@ -45,7 +45,7 @@ Behaviour-preserving. The tests that pin the behaviour exist BEFORE anything mov
 1. Read the code being moved and list every caller (use `grep -a`). {read}
 2. Write Task and Plan (`gate note task|plan`): what moves, what must not change, and the hot paths whose data sizes and cost shape must not grow, or "no hot path" in one line. {plan}
 3. Case table: the existing tests that pin current behaviour, plus the pins that are missing, and a performance row per hot path that moves. {cases}
-4. Spawn QA to add the missing pins BEFORE the move. {qa}
+4. Write the missing pins BEFORE the move and run them green on the current code (they must stay green after it); at size large spawn QA instead. {tests}
 5. Run `gate verify` on the unmoved code so the baseline is green. {verify-before}
 6. Make the move: no compat shims, no re-exports, names reflect the new shape. {implement}
 7. Run `gate verify` again after the last edit. {verify}

@@ -450,7 +450,7 @@ test("C5 the policy exports come from size.mjs and still read models.json", asyn
 
   const policy = loadPolicy(); // defaults to the plugin's own models.json
   assert.deepEqual(policy.tiers, models.policy.tiers, "loadPolicy must read models.json, not a frozen copy");
-  assert.deepEqual(policy.roles, { ...DEFAULT_POLICY.roles, ...models.roles });
+  assert.ok(!("roles" in policy) && !("roles" in DEFAULT_POLICY), "the policy names no model per role");
   assert.deepEqual(policy.forceStandard, models.policy.forceStandard);
   assert.match(policy.hash, /^[0-9a-f]{40}$/);
 
@@ -575,9 +575,9 @@ const PLAYBOOK_FILE = path.join(pluginRoot, "skills", "gate", "playbooks.md");
 
 // key lists exactly as the task states them; `null` is an unkeyed step
 const EXPECTED = {
-  feature: ["read", "plan", "cases", "skeptic", "qa", "implement", "verify", "driver", "schema", "review", "close"],
-  bugfix: ["repro", "rootcause", "plan", "cases", "qa", "implement", "verify", "driver", "schema", "review", "close"],
-  refactor: ["read", "plan", "cases", "qa", "verify-before", "implement", "verify", "driver", "review", "close"],
+  feature: ["read", "plan", "cases", "skeptic", "tests", "implement", "verify", "driver", "schema", "review", "close"],
+  bugfix: ["repro", "rootcause", "plan", "cases", "tests", "implement", "verify", "driver", "schema", "review", "close"],
+  refactor: ["read", "plan", "cases", "tests", "verify-before", "implement", "verify", "driver", "review", "close"],
   plan: ["read", "plan", "skeptic", "implement", "close"],
   investigation: [null, null],
 };
@@ -714,7 +714,7 @@ test("C5 edge: after the case table the hint names {read}/{repro}; the {implemen
 
   // walk the feature run to {implement}: {skeptic} is auto-N/A at tier small
   cli(feature, "step", ["read", "done", "read the card and its callers", "--evidence", "events#1"]);
-  const afterQa = hintOf(cli(feature, "step", ["qa", "done", "QA wrote the tests", "--evidence", "tests/a.test.ts"]).stdout);
+  const afterQa = hintOf(cli(feature, "step", ["tests", "done", "wrote the tests, red first", "--evidence", "tests/a.test.ts"]).stdout);
   assert.equal(stepOf(ledgerOf(feature), "skeptic").state, "N/A", "premise: tier small auto-N/As {skeptic}");
   assert.match(afterQa, /`gate step implement done/, `{implement} is the next blank step:\n${afterQa}`);
   assert.ok(!/reconcile/i.test(afterQa), `the {implement} hint must not mention reconcile:\n${afterQa}`);
@@ -760,7 +760,7 @@ test("C6 happy: `gate verify --step verify-before` still closes {verify-before} 
 test("C7 boundary: a ledger written under the old 14-step feature playbook still attaches, reports and closes", () => {
   // the feature playbook as it stood before this change, keys and all
   const OLD = [
-    "read", "plan", "cases", "skeptic", "qa", "implement", "reconcile",
+    "read", "plan", "cases", "skeptic", "tests", "implement", "reconcile",
     "verify", "driver", "schema", "cleanup", "review", "docs", "close",
   ];
   const repo = committed("playbooks-c7");
@@ -856,7 +856,7 @@ function playbookKeys(playbook) {
   });
 }
 
-const ROLES = Object.keys(JSON.parse(readFileSync(path.join(pluginRoot, "models.json"), "utf8")).roles);
+const ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter", "worker"]; // agents/*.md
 
 const SKILL_MD = path.join(pluginRoot, "skills", "gate", "SKILL.md");
 
@@ -925,24 +925,24 @@ test("C1 happy: a fresh feature ledger hints `gate note task`, then `gate note p
 // C2
 // ---------------------------------------------------------------------------
 
-test("C2 edge: after the case table the hint names `gate brief skeptic` at tier standard and `gate brief qa` at tier small", () => {
-  // {skeptic} is step 4 and {qa} step 5 of the feature playbook: at tier small {skeptic}
-  // is auto-N/A, so the first blank helper step becomes {qa}.
+test("C2 edge: after the case table the hint names `gate brief skeptic` at tier standard and the tests step at tier small", () => {
+  // {skeptic} is step 4 and {tests} step 5 of the feature playbook: at tier small {skeptic}
+  // is auto-N/A, so the first blank step becomes {tests}, which the lead does itself.
   const feature = playbookKeys("feature");
-  assert.ok(feature.indexOf("skeptic") < feature.indexOf("qa"), feature.join(","));
+  assert.ok(feature.indexOf("skeptic") < feature.indexOf("tests"), feature.join(","));
 
   const standard = opened("next-c2-standard", { planFiles: "src/a.ts,src/app/page.tsx" });
   cli(standard, "step", ["read", "done", "read the card and its callers", "--evidence", "events#1"]);
   const std = hint(standard, "case", ["add", "renders the badge", "--kind", "happy"]);
   assert.equal(stepOf(ledgerOf(standard), "skeptic").state, null, "premise: {skeptic} is still blank at tier standard");
   assert.match(std, /`gate brief skeptic/, std);
-  assert.ok(!/`gate brief qa/.test(std), `the skeptic is still blank, so qa must not be hinted yet:\n${std}`);
+  assert.ok(!/`gate step tests/.test(std), `the skeptic is still blank, so the tests step must not be hinted yet:\n${std}`);
 
   const small = opened("next-c2-small", { planFiles: "src/a.ts" });
   cli(small, "step", ["read", "done", "read the card and its callers", "--evidence", "events#1"]);
   const sml = hint(small, "case", ["add", "renders the badge", "--kind", "happy"]);
   assert.equal(stepOf(ledgerOf(small), "skeptic").state, "N/A", "premise: tier small auto-N/As {skeptic}");
-  assert.match(sml, /`gate brief qa/, sml);
+  assert.match(sml, /`gate step tests done/, sml);
   assert.ok(!/skeptic/.test(sml), `a step that is already N/A must never be hinted:\n${sml}`);
 });
 
@@ -950,17 +950,17 @@ test("C2 edge: after the case table the hint names `gate brief skeptic` at tier 
 // C3
 // ---------------------------------------------------------------------------
 
-test("C3 happy: once {qa} is closed the hint moves to the next blank step; a bugfix's first step hint is {repro}", () => {
+test("C3 happy: once {tests} is closed the hint moves to the next blank step; a bugfix's first step hint is {repro}", () => {
   const repo = opened("next-c3", { planFiles: "src/a.ts" }); // tier small: {skeptic} auto-N/A
   cli(repo, "step", ["read", "done", "read the card", "--evidence", "events#1"]);
   cli(repo, "case", ["add", "renders the badge", "--kind", "happy"]);
 
-  const afterQa = hint(repo, "step", ["qa", "done", "QA wrote the tests", "--evidence", "tests/a.test.ts"]);
+  const afterQa = hint(repo, "step", ["tests", "done", "wrote the tests, red first", "--evidence", "tests/a.test.ts"]);
   const feature = playbookKeys("feature");
   const next = feature
-    .slice(feature.indexOf("qa") + 1)
+    .slice(feature.indexOf("tests") + 1)
     .find((k) => stepOf(ledgerOf(repo), k).state === null);
-  assert.equal(next, "implement", "premise: {implement} is the next blank step after {qa} at tier small");
+  assert.equal(next, "implement", "premise: {implement} is the next blank step after {tests} at tier small");
   assert.match(afterQa, new RegExp("`gate step " + next + "\\b"), afterQa);
 
   // A bug fix's playbook opens with {repro}, so that is the first step the hint names.
@@ -1026,7 +1026,7 @@ test("C6 happy: every mutating verb's last line is the next: hint, and `gate che
     ["decide", ["plan", "kept the badge in the card", "one consumer", "events#3", "open"], {}],
     ["verify", [], {}],
     ["size", [], {}],
-    ["brief", ["qa"], {}],
+    ["brief", ["skeptic"], {}],
     ["close", [], {}],
   ];
 

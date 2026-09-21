@@ -10,36 +10,57 @@ import { printNext } from "./next.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-// Plugin-level policy: which helpers a task of a given size needs and on which model.
-// It lives in models.json, not in the repo's gate.json, so a plugin upgrade mid-task
-// never trips R13 (which hashes the repo config).
+// Plugin-level policy: which helpers a task of a given size needs. Helpers run on the
+// session's own model (agents/*.md say `model: inherit`), so no model is named here. It
+// lives in models.json, not in the repo's gate.json, so a plugin upgrade mid-task never
+// trips R13 (which hashes the repo config).
 export const DEFAULT_POLICY = Object.freeze({
-  roles: { skeptic: "sonnet", qa: "opus", reviewer: "sonnet", "reviewer-2": "opus", arbiter: "opus", worker: "sonnet" },
   tiers: {
-    small: { maxFiles: 1, maxLines: 40, requires: ["qa", "reviewer"] },
-    standard: { maxFiles: 10, maxLines: 400, requires: ["skeptic", "qa", "reviewer"] },
-    large: { requires: ["skeptic", "qa", "reviewer", "reviewer:opus"] },
+    small: { maxFiles: 1, maxLines: 40, requires: ["reviewer"] },
+    standard: { maxFiles: 10, maxLines: 400, requires: ["skeptic", "reviewer"] },
+    large: { requires: ["skeptic", "qa", "worker", "reviewer", "reviewer-2"] },
   },
   forceStandard: ["ui", "schema", "highRisk"],
-  escalate: { reviewerRound2: { model: "opus", whenActOnAtLeast: 2, orTier: "large" } },
+  // a second reviewer round: after this many Act-on items in round 1, or at this tier
+  escalate: { reviewerRound2: { whenActOnAtLeast: 2, orTier: "large" } },
   ceiling: { helpersPerTask: 10 },
   // the size at which the lead stops editing and briefs a worker per piece; below it the lead
   // implements with its own context
   delegatesAt: "large",
 });
 
+// A requires entry names a role. An older policy wrote "reviewer:opus" for the second review
+// round; that is the reviewer-2 role now. Any other "role:model" keeps its role.
+function normaliseRequires(list) {
+  const out = [];
+  for (const entry of Array.isArray(list) ? list : []) {
+    const [role, model] = String(entry).split(":");
+    const name = model && role === "reviewer" ? "reviewer-2" : role;
+    if (name && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
+function normaliseTiers(tiers) {
+  const out = {};
+  for (const [name, t] of Object.entries(tiers)) out[name] = { ...t, requires: normaliseRequires(t?.requires) };
+  return out;
+}
+
 function merge(raw) {
   const r = raw && typeof raw === "object" ? raw : {};
   const p = r.policy && typeof r.policy === "object" ? r.policy : {};
-  const tiers = p.tiers && typeof p.tiers === "object" && Object.keys(p.tiers).length ? p.tiers : DEFAULT_POLICY.tiers;
+  const tiers = p.tiers && typeof p.tiers === "object" && Object.keys(p.tiers).length ? normaliseTiers(p.tiers) : DEFAULT_POLICY.tiers;
+  const round2 = p.escalate && typeof p.escalate === "object" && p.escalate.reviewerRound2 && typeof p.escalate.reviewerRound2 === "object" ? p.escalate.reviewerRound2 : {};
   const resolved = {
-    roles: { ...DEFAULT_POLICY.roles, ...(r.roles && typeof r.roles === "object" ? r.roles : {}) },
     tiers,
     forceStandard: Array.isArray(p.forceStandard) ? p.forceStandard.map(String) : DEFAULT_POLICY.forceStandard,
-    escalate: { ...DEFAULT_POLICY.escalate, ...(p.escalate && typeof p.escalate === "object" ? p.escalate : {}) },
+    // the old `model` key is dropped: helpers inherit the session's model
+    escalate: { reviewerRound2: { ...DEFAULT_POLICY.escalate.reviewerRound2, ...round2, model: undefined } },
     ceiling: { ...DEFAULT_POLICY.ceiling, ...(p.ceiling && typeof p.ceiling === "object" ? p.ceiling : {}) },
     delegatesAt: typeof p.delegatesAt === "string" && p.delegatesAt ? p.delegatesAt : DEFAULT_POLICY.delegatesAt,
   };
+  delete resolved.escalate.reviewerRound2.model;
   // hashed like the repo config, so a mid-task edit to models.json is caught (R13)
   return { ...resolved, hash: createHash("sha1").update(JSON.stringify(resolved)).digest("hex") };
 }
@@ -284,12 +305,9 @@ export function renderTierBlock(ledger, policy, measured, { details = false } = 
     ? `measured ${measured.tier}: ${plural(measured.files, "file")}, ${plural(measured.lines, "line")}${measured.forced.length ? ` · forced: ${measured.forced.join(", ")}` : ""}`
     : "measured: not yet";
   out.push(`tier: ${eff} · ${predicted} · ${measuredText}`);
-  const helpers = requires(policy, eff).map((h) => {
-    const [role, model] = h.split(":");
-    return `${role} (${model ?? policy.roles[role] ?? "?"})`;
-  });
+  const helpers = requires(policy, eff);
   const esc = policy.escalate?.reviewerRound2;
-  const escText = esc ? ` · round 2 on ${esc.model} when ${esc.whenActOnAtLeast}+ Act-on or tier ${esc.orTier}` : "";
+  const escText = esc ? ` · round 2 (same reviewer, fresh context) when ${esc.whenActOnAtLeast}+ Act-on or tier ${esc.orTier}` : "";
   out.push(`requires: ${helpers.join(", ")}${escText} · ceiling ${policy.ceiling.helpersPerTask} helpers/task`);
   out.push(`auto-N/A: ${t.autoNa.length ? t.autoNa.map((k) => `{${k}}`).join(", ") : "none"}`);
   if (details && measured?.details?.length) {

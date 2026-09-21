@@ -169,19 +169,18 @@ test("R13: gate.json changed since the ledger opened blocks unless waived", () =
   assert.ok(!ids(clean({ ledger: { gateHash: "stale", waivers: [{ key: "gate-config", found: true }] } })).includes("R13"));
 });
 
-test("agent briefs exist with the fixed model table and the write fences described", async () => {
+test("agent briefs exist, every helper inherits the session's model, and the write fences are described", async () => {
   const { readFileSync, existsSync } = await import("node:fs");
   const path = (await import("node:path")).default;
   const { pluginRoot } = await import("./helpers.mjs");
   const models = JSON.parse(readFileSync(path.join(pluginRoot, "models.json"), "utf8"));
-  assert.deepEqual(models.roles, { skeptic: "sonnet", qa: "opus", reviewer: "sonnet", "reviewer-2": "opus", arbiter: "opus", worker: "sonnet" });
-  for (const [name, model] of Object.entries(models.roles)) {
+  assert.ok(!("roles" in models), "models.json names no models");
+  for (const name of ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter", "worker"]) {
     const file = path.join(pluginRoot, "agents", `${name}.md`);
     assert.ok(existsSync(file), file);
     const fm = readFileSync(file, "utf8").split("---")[1];
     assert.match(fm, new RegExp(`^name: ${name}$`, "m"));
-    assert.match(fm, new RegExp(`^model: ${model}$`, "m"));
-    assert.ok(!/fable/i.test(fm), "Fable is never a helper");
+    assert.match(fm, /^model: inherit$/m);
   }
 });
 }
@@ -288,7 +287,7 @@ test("C11 boundary: an edit logged before `gate open` blocks R2 only while the P
 const MODELS = JSON.parse(readFileSync(path.join(pluginRoot, "models.json"), "utf8"));
 const SMALL_MAX_FILES = MODELS.policy.tiers.small.maxFiles; // 1: one more file is standard
 const STANDARD_MAX_FILES = MODELS.policy.tiers.standard.maxFiles; // 10: one more file is large
-assert.ok(MODELS.roles.worker, "anchor: models.json roles.worker is the delegated editor");
+assert.ok(MODELS.policy.tiers.large.requires.includes("worker"), "anchor: models.json names the worker at large");
 assert.equal(MODELS.policy.delegatesAt, "large", "anchor: the lead delegates at large only");
 const WORKER = "done-gate:worker"; // the agent_type the Agent tool reports for that role
 

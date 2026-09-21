@@ -95,8 +95,8 @@ export function attentionLines(state, unmet) {
   return out;
 }
 
-// Whether the policy wants the second review round on the stronger model: the first
-// reviewer round returned enough Act-on items, or the task is large.
+// Whether the policy wants a second review round: the first reviewer round returned enough
+// Act-on items, or the task is large.
 function round2Required(state) {
   const esc = state.policy?.escalate?.reviewerRound2;
   if (!esc) return false;
@@ -111,25 +111,17 @@ export function tierBlock(state) {
   const measured = state.tier?.measured ?? tierOf(ledger).measured;
   const out = renderTierBlock(ledger, policy, measured);
   const eff = effectiveTier(policy, ledger, measured);
-  // "reviewer:opus" is a second review on the stronger model. It is satisfied either by the
-  // reviewer role stopping a second time (the same agent resumed on opus) or by a reviewer-2
-  // stop (the high-risk role, which always runs on opus), so both ways of running it count.
+  // the second review round is satisfied by the reviewer stopping a second time (the same
+  // agent resumed with a fresh packet) or by a reviewer-2 stop, so both ways of running it count
   const required = requires(policy, eff);
   // only this task's events: the session log spans every task the session worked on
   const opened = ledger.openedSeq ?? ledger.baseline?.seq ?? 0;
   const stops = events.filter((e) => e.kind === "subagent-stop" && e.seq > opened);
   const secondRound = () => stops.filter((e) => isRole(e.agentType, "reviewer"))[1] ?? stops.find((e) => isRole(e.agentType, "reviewer-2")) ?? null;
-  const ran = (entry) => {
-    const [role, model] = entry.split(":");
-    if (model) return Boolean(secondRound());
-    return stops.some((e) => isRole(e.agentType, role));
-  };
+  const ran = (role) => stops.some((e) => isRole(e.agentType, role));
   const done = required.filter(ran);
   out.push(`helpers: spawned ${done.length} of ${required.length} required (${required.map((r) => `${r}${ran(r) ? " ✓" : ""}`).join(", ")})`);
-  if (round2Required(state)) {
-    const second = secondRound();
-    out.push(`round 2 model: ${policy.escalate.reviewerRound2.model} required, recorded: ${second?.model ?? "unrecorded"}`);
-  } else out.push("round 2 model: not required");
+  out.push(round2Required(state) ? `round 2: required, ${secondRound() ? "recorded" : "not yet"}` : "round 2: not required");
   return out;
 }
 

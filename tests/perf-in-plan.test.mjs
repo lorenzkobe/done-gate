@@ -94,9 +94,9 @@ const KINDS_BEFORE = ["happy", "edge", "refused", "boundary", "idempotent", "rep
 const NEW_KIND = "performance";
 
 const PLAYBOOKS_BEFORE = {
-  feature: ["read", "plan", "cases", "skeptic", "qa", "implement", "verify", "driver", "schema", "review", "close"],
-  bugfix: ["repro", "rootcause", "plan", "cases", "qa", "implement", "verify", "driver", "schema", "review", "close"],
-  refactor: ["read", "plan", "cases", "qa", "verify-before", "implement", "verify", "driver", "review", "close"],
+  feature: ["read", "plan", "cases", "skeptic", "tests", "implement", "verify", "driver", "schema", "review", "close"],
+  bugfix: ["repro", "rootcause", "plan", "cases", "tests", "implement", "verify", "driver", "schema", "review", "close"],
+  refactor: ["read", "plan", "cases", "tests", "verify-before", "implement", "verify", "driver", "review", "close"],
   plan: ["read", "plan", "skeptic", "implement", "close"],
   investigation: [null, null],
 };

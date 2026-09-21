@@ -1,7 +1,7 @@
 ---
 name: reviewer-2
-description: Second reviewer for done-gate on high-risk paths (money, auth, RLS, migrations, payments). Stronger model, fresh context. Same brief as the reviewer, adversarial posture. Writes review-<n>.md only.
-model: opus
+description: Second reviewer for done-gate on high-risk paths (money, auth, RLS, migrations, payments). Fresh context. Same brief as the reviewer, adversarial posture. Writes review-<n>.md only.
+model: inherit
 disallowedTools: [Edit, MultiEdit, NotebookEdit]
 maxTurns: 40
 effort: high

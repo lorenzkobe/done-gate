@@ -22,7 +22,7 @@ function writeReport(ctx, dir, ledger) {
 }
 
 // Steps whose evidence comes from a script or an agent: DONE or WAIVED only.
-export const EVIDENCED_KEYS = new Set(["verify", "verify-before", "driver", "review", "qa", "skeptic", "close"]);
+export const EVIDENCED_KEYS = new Set(["verify", "verify-before", "driver", "review", "tests", "qa", "skeptic", "close"]);
 export const CASE_KINDS = ["happy", "edge", "refused", "boundary", "idempotent", "reported-surface", "performance"];
 export const ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter", "worker"];
 
