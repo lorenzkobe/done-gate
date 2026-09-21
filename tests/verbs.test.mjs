@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { evaluate, lateOrder } from "../scripts/lib/rules.mjs";
+import { nextHint } from "../scripts/lib/next.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 
 function cli(repo, verb, args = [], input = "") {
@@ -160,4 +161,32 @@ test("R8: blank steps and open cases block; R2: the Plan and case table must exi
   // late" is an empty `late` list, not a null path.
   assert.deepEqual(lateOrder(fine), { late: [], path: "src/a.ts" }, "a plan written before the first edit is not late");
   assert.deepEqual(lateOrder({ ...fine, events: [] }), { late: [], path: null }, "no source edit at all: nothing to be late against");
+});
+
+test("the verify hints tell the lead to run gate verify with a long Bash timeout, and why", () => {
+  const steps = (key) => [{ n: 1, key, text: key, state: null, note: null, evidence: null, seq: 1 }];
+  const base = { status: "open", playbook: "refactor", taskSeq: 1, contextSeq: 1, planSeq: 2, cases: [{ id: "C1", status: "closed" }], huddles: [], waivers: [] };
+  for (const key of ["verify", "verify-before"]) {
+    const h = nextHint({ ...base, steps: steps(key) });
+    assert.match(h, /gate verify/, h);
+    assert.match(h, /600000/, `${key}: the hint does not name the Bash timeout: ${h}`);
+    assert.match(h, /background/, `${key}: the hint does not offer the background run for long verifies: ${h}`);
+  }
+  {
+    const h = nextHint({ ...base, steps: steps("verify") });
+    assert.match(h, /minutes/, `the verify hint does not say why: ${h}`);
+  }
+});
+
+test("the three manifests agree on the version, gate --version prints it, and SKILL.md stays under its byte budget", () => {
+  const version = (rel) => JSON.parse(readFileSync(path.join(pluginRoot, rel), "utf8")).version;
+  const plugin = version(".claude-plugin/plugin.json");
+  assert.match(plugin, /^\d+\.\d+\.\d+$/, plugin);
+  assert.equal(version("package.json"), plugin, "package.json version drifted from plugin.json");
+  const marketplace = JSON.parse(readFileSync(path.join(pluginRoot, ".claude-plugin/marketplace.json"), "utf8"));
+  const entry = (marketplace.plugins ?? []).find((p) => p.name === "done-gate") ?? marketplace.plugins?.[0];
+  assert.equal(entry?.version, plugin, "marketplace.json version drifted from plugin.json");
+  const r = spawnSync(process.execPath, [gate, "--version"], { encoding: "utf8" });
+  assert.equal(r.stdout.trim(), plugin);
+  assert.ok(statSync(path.join(pluginRoot, "skills", "gate", "SKILL.md")).size < 4096, "SKILL.md is over 4096 bytes");
 });

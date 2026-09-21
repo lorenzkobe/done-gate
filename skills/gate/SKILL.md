@@ -36,9 +36,9 @@ delegate and report; below large you also edit.
    worker`, SendMessage the worker the review path, then `gate huddle reply --file
    worker-<n>.md` (fixed: closes, disagree: disputes). Repeat with the same reviewer
    (SendMessage it the next packet), at most three rounds; what is still disputed then goes
-   to `gate brief arbiter --item H<k>.<i>` and `done-gate:arbiter`. A finding you believe
-   wrong at small: `gate huddle dispute H<k>.<i> "<why>" --evidence <ptr>`, one round.
-6. `gate verify` after the last edit (only verify.json counts). Drive the real surface
+   to `gate brief arbiter --item H<k>.<i>` and `done-gate:arbiter`. Disagree:
+   `gate huddle dispute H<k>.<i> "<why>" --evidence <ptr>`, one round.
+6. `gate verify` after the last edit, Bash timeout 600000 ms (builds take minutes). Drive the real surface
    yourself when UI changed (R4); probe the real schema when schema changed (R6).
 7. `gate close`, `gate check`, then paste `gate report --brief` as your final message with
    at most two plain lines of your own before it; never "ledger", "huddle" or a rule number.
@@ -53,7 +53,7 @@ delegate and report; below large you also edit.
   hand-back wakes you. A run left open by an earlier session that is over: `gate abandon
   <slug> "<reason>"`.
 - Ceiling: ten helper invocations per task (`gate size` shows the size and its helpers).
-- Waivers are the only way past a keyed step you cannot do: ask, then
+- A keyed step you cannot do: ask the user, then
   `gate waive <key> "<the reason>"`; the report lists it.
 - Never hand-edit `.claude/gate/runs/**` except `ledger.md`.
 - Need the user mid-task? `AskUserQuestion`, or a last line `PAUSED: <need>`.
