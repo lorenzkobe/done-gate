@@ -35,7 +35,7 @@ delegate and report; below large you also edit.
    Below large: fix and `gate huddle resolve H<k>.<i> --evidence <ptr>`. Large: `gate brief
    worker`, SendMessage the worker the review path, then `gate huddle reply --file
    worker-<n>.md` (fixed: closes, disagree: disputes). Repeat with the same reviewer
-   (SendMessage it the next packet), at most three rounds; what is still disputed then goes
+   (SendMessage it the next packet) until a round is clean, three rounds at most; what is still disputed then goes
    to `gate brief arbiter --item H<k>.<i>` and `done-gate:arbiter`. Disagree:
    `gate huddle dispute H<k>.<i> "<why>" --evidence <ptr>`, one round.
 6. `gate verify` after the last edit, Bash timeout 600000 ms (builds take minutes). Drive the real surface

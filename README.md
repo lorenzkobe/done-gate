@@ -103,10 +103,10 @@ Both travel with the repo through git. The run state under `.claude/gate/` is lo
 gitignored automatically. A verify entry may say `"when": "source"`: it then runs only when
 a file that is not a test or a doc changed since the task opened, and is recorded as skipped
 otherwise (the short report says so). The `build` script from package.json gets that by
-default; lint, typecheck and test always run. If your build type-checks tests or builds a
-docs site, write `{ "cmd": "npm run build", "when": "always" }` to opt out. A build command
-written into gate.json by hand as a plain string runs always; give it `"when": "source"`
-yourself to get the skip.
+default, and so does an entry in gate.json with no `when` that is one build call and nothing
+else (`npm run build`, `pnpm build`, `yarn build`, `bun run build`); a compound command (`&&`, `;`, `|`) and
+lint, typecheck and test always run. If your build type-checks tests or builds a docs site,
+write `{ "cmd": "npm run build", "when": "always" }` to opt out.
 
 ## What you see
 
@@ -141,11 +141,11 @@ attempt to finish.
 | R2 | Context, Plan or case table was written after the first source edit |
 | R3 | `gate verify` is missing, red, or older than the last source edit |
 | R4 | UI files changed and the real surface wasn't driven afterwards |
-| R5 | no reviewer pass after the last edit, or an Act-on item is still open |
+| R5 | no reviewer pass after the last edit, or an Act-on item is still open. A round that came back clean, or the third, covers later edits to files it saw; a new file needs a new round |
 | R6 | schema files changed with no real-schema probe |
 | R7 | source changed and no test file changed |
 | R8 | any case or step is blank |
-| R9 | high-risk paths changed without the second reviewer |
+| R9 | high-risk paths changed without the second reviewer (same round rules as R5) |
 | R10 | a repo check failed (`claude-md-budget`, `migration-number`) |
 | R13 | `.claude/gate.json` or the plugin's `models.json` changed mid-task |
 | R15 | a helper's file lists more findings than the ledger recorded |

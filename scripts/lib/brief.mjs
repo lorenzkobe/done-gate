@@ -3,13 +3,14 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { buildState } from "./assess.mjs";
 import { caseTable, verifyLines } from "./report.mjs";
-import { section } from "./ledger.mjs";
+import { saveLedger, section } from "./ledger.mjs";
 import { leadDelegates, renderTierBlock, tierMax, tierOf } from "./size.mjs";
 import { gitTracked } from "./tree.mjs";
 import { ROLES, flag, positional } from "./verbs.mjs";
-import { isDraft } from "./rules.mjs";
+import { REVIEW_CAP, isDraft, reviewScope, unseenSince } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
+import { nextSeq } from "./events.mjs";
 
 // A packet is everything a helper needs, generated from gate state and the working tree.
 // The model authors none of it; the helper reads it instead of the ledger and the diff.
@@ -293,8 +294,14 @@ export const verbs = {
     };
     const secondsFiles = state.ledger.huddles.filter((h) => h.role === "reviewer-2" && h.file).length;
     const written = state.reviews.filter((f) => f.startsWith("review-") && !isDraftFile(f)).length - secondsFiles;
-    if (role === "reviewer" && Math.max(round, written + 1) > 3) {
-      throw new UsageError(`review round ${round}: three rounds is the cap. What is still disputed goes to the arbiter (\`gate brief arbiter --item H<k>.<i>\`, spawn done-gate:arbiter); what is still open is fixed and closed with \`gate huddle resolve\`.`);
+    // past the cap a round is briefed only for a file no round of this role saw, so the cap
+    // can never leave R5/R9 waiting on a round nobody may brief
+    const done = role === "reviewer" ? Math.max(round - 1, written) : role === "reviewer-2" ? secondsFiles : 0;
+    const unseen = unseenSince(state, role);
+    // a ledger from before seen sets keeps its old, uncapped second reviewer
+    const legacy = !state.ledger.seen;
+    if (done >= REVIEW_CAP && !(legacy && role === "reviewer-2") && !unseen?.length) {
+      throw new UsageError(`${role} round ${done + 1}: three rounds is the cap. What is still disputed goes to the arbiter (\`gate brief arbiter --item H<k>.<i>\`, spawn done-gate:arbiter); what is still open is fixed and closed with \`gate huddle resolve\`.`);
     }
     const numbers = (prefix) => state.reviews.filter((f) => f.startsWith(prefix)).map((f) => Number(/\d+/.exec(f)[0]));
     const next = (prefix) => {
@@ -313,6 +320,12 @@ export const verbs = {
       item = state.ledger.huddles.flatMap((h) => h.actOn).find((a) => a.id === aid);
       if (!item) throw new UsageError(`no act-on item ${aid}`);
       if (!item.dispute || item.dispute.verdict !== "upheld") throw new UsageError(`${aid} is not a disputed item the reviewer upheld; the arbiter only settles those`);
+    }
+    // what this round's reviewer is shown; the huddle for its file inherits it, and edits
+    // after a clean round are judged against it
+    if (role === "reviewer" || role === "reviewer-2") {
+      state.ledger.seen = { ...(state.ledger.seen ?? {}), [`review-${reviewN}.md`]: { files: reviewScope(state), seq: nextSeq() } };
+      saveLedger(state.dir, state.ledger);
     }
     const file = path.join(state.dir, `brief-${role}-${round}.md`);
     writeFileSync(file, renderPacket(state, role, { round, reviewN, skepticN, arbiterN, item }));

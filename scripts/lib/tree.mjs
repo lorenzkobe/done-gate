@@ -141,9 +141,38 @@ export function snapshot(root, previous = null) {
     files[rel] = { h: sha1(buf), s: st.size, m: st.mtimeMs, l: countLines(buf) };
     rehashed += 1;
   }
+  return { hash: treeHash(files), files, rehashed, at: new Date().toISOString() };
+}
+
+function treeHash(files) {
   const digest = createHash("sha1");
   for (const rel of Object.keys(files).sort()) digest.update(`${rel}\0${files[rel].h}\n`);
-  return { hash: digest.digest("hex"), files, rehashed, at: new Date().toISOString() };
+  return digest.digest("hex");
+}
+
+// The baseline a new task starts from: the session's, except that a file clean against HEAD
+// right now takes its current state. Work already committed (an earlier task in a long
+// session) is not this task's; an uncommitted or untracked edit made before open still is.
+// With no commit to compare against, the session's baseline stands.
+export function taskBaseline(root, base, dirty) {
+  if (!gitHead(root)) return base;
+  // git answers in top-level paths; a project root below it keeps the session's baseline
+  try {
+    if (git(root, ["rev-parse", "--show-prefix"]).trim()) return base;
+  } catch {
+    return base;
+  }
+  const now = snapshot(root, base);
+  const tracked = gitTracked(root);
+  const pending = new Set(dirty);
+  const files = { ...base.files };
+  for (const rel of new Set([...Object.keys(base.files), ...Object.keys(now.files)])) {
+    if (pending.has(rel)) continue;
+    if (rel in now.files && !tracked.has(rel)) continue; // untracked: made before open, still pending
+    if (rel in now.files) files[rel] = now.files[rel];
+    else delete files[rel]; // gone and not tracked: a committed deletion
+  }
+  return { hash: treeHash(files), files };
 }
 
 export function diffSnapshots(before, after) {

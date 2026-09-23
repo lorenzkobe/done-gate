@@ -77,7 +77,7 @@
                   "always",
                   "source"
                 ],
-                "description": "When the command runs: always (default), or only when a non-test, non-doc source file changed (build)."
+                "description": "When the command runs: always, or only when a non-test, non-doc source file changed (source). Default: source for a single npm/pnpm/yarn/bun build script call, always otherwise."
               }
             }
           }

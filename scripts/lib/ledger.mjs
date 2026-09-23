@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.mjs";
 import { nextSeq } from "./events.mjs";
 import { ensureSession, loadSession, updateSession } from "./session-state.mjs";
-import { gitHead, gitNumstat } from "./tree.mjs";
+import { gitHead, gitNumstat, taskBaseline } from "./tree.mjs";
 import { emptyTier } from "./size.mjs";
 // size.mjs imports assess.mjs, which imports this module: loadPolicy is only ever called at
 // verb time, never at module top level, or the cycle would hit a TDZ error.
@@ -134,6 +134,8 @@ export function openLedger(ctx, slug, playbook) {
   for (let i = 2; existsSync(path.join(runsDir(ctx.stateDir), name)); i++) name = `${base}-${i}`;
   const dir = path.join(runsDir(ctx.stateDir), name);
   mkdirSync(dir, { recursive: true });
+  const dirty = [...gitNumstat(ctx.root).keys()];
+  const start = taskBaseline(ctx.root, session.baseline, dirty);
   const ledger = {
     slug: slugify(slug),
     playbook,
@@ -145,10 +147,10 @@ export function openLedger(ctx, slug, playbook) {
     gateHash: config.hash,
     policyHash: loadPolicy().hash,
     // the freshness clock starts here, so the first real edit gets a real timestamp
-    lastSourceHash: implementationHash(session.baseline, config),
+    lastSourceHash: implementationHash(start, config),
     lastSourceChangeSeq: 0,
     // files already dirty vs HEAD now cannot be measured by git later; they get a line-count estimate
-    baseline: { hash: session.baseline.hash, files: session.baseline.files, seq: session.baselineSeq, head: gitHead(ctx.root), dirty: [...gitNumstat(ctx.root).keys()] },
+    baseline: { hash: start.hash, files: start.files, seq: session.baselineSeq, head: gitHead(ctx.root), dirty },
     tier: ["feature", "bugfix", "refactor"].includes(playbook) ? emptyTier() : null,
     planSeq: null,
     taskSeq: null,

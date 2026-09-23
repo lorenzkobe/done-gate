@@ -214,13 +214,13 @@ test("config: gate.json replaces the default arrays and normalises verify entrie
   const cfg = loadConfig(path.join(fixtures, "repo-with-config"));
   assert.equal(cfg.explicit, true);
   assert.deepEqual(cfg.source, ["src/**", "supabase/**", "tests/**", "package.json"]);
-  // `when` is part of every normalised entry. A hand-written gate.json entry is "always"
-  // unless it says otherwise — the "source" default belongs to the build command *derived*
-  // from package.json scripts, not to the words "npm run build" (verify-when.test.mjs C1).
+  // `when` is part of every normalised entry. A hand-written entry is "always" unless it says
+  // otherwise or is one build call and nothing else, which gets "source" like the build
+  // derived from package.json (faster-loop.test.mjs C9/C18).
   assert.deepEqual(cfg.verify, [
     { cmd: "npm run lint", timeout: DEFAULTS.verifyTimeout, when: "always" },
     { cmd: "npm run test", timeout: 900, when: "always" },
-    { cmd: "npm run build", timeout: DEFAULTS.verifyTimeout, when: "always" },
+    { cmd: "npm run build", timeout: DEFAULTS.verifyTimeout, when: "source" },
   ]);
   assert.deepEqual(cfg.checks, ["claude-md-budget", "migration-number"]);
   assert.equal(cfg.driver, "skill:verify");

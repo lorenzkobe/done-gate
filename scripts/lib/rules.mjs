@@ -226,9 +226,39 @@ export function lastEditSeq(state, config, ledger) {
   return Math.max(fromEvents, ledger.lastSourceChangeSeq ?? 0);
 }
 
+// Review rounds per reviewer role; past it a round is briefed only for a file no round saw.
+export const REVIEW_CAP = 3;
+
+// What a review round is judged against: the implementation files changed (tests excluded).
+export function reviewScope(state) {
+  return (state.changed ?? []).filter((p) => state.config.isSource(p) && !state.config.isTest(p));
+}
+
+// Files the latest recorded round of this role saw that nothing has outgrown, or null when a
+// file it never saw changed since (or the round predates seen sets).
+export function unseenSince(state, role) {
+  const rounds = (state.ledger.huddles ?? []).filter((h) => h.role === role && h.file);
+  const last = rounds[rounds.length - 1];
+  if (!last || !Array.isArray(last.files)) return null;
+  const seen = new Set(last.files);
+  return reviewScope(state).filter((p) => !seen.has(p));
+}
+
+// The loop ends without another round when the latest round came back clean, or was the last
+// the cap allows, and every implementation file changed now is one it saw: later edits only
+// polish what it reviewed. Its items must still be closed (openItems).
+function settled(state, role, huddles) {
+  const last = huddles[huddles.length - 1];
+  if (!last || (last.actOn.length && huddles.length < REVIEW_CAP)) return false;
+  // a helper of this role really ran for that round: it stopped after its brief was written
+  if (!(state.events ?? []).some((e) => e.kind === "subagent-stop" && isRole(e.agentType, role) && e.seq > (last.briefSeq ?? Infinity))) return false;
+  const unseen = unseenSince(state, role);
+  return unseen !== null && unseen.length === 0;
+}
+
 function reviewed(state, role, after) {
-  const stopped = (state.events ?? []).some((e) => e.kind === "subagent-stop" && isRole(e.agentType, role) && e.seq > after);
   const huddles = (state.ledger.huddles ?? []).filter((h) => h.role === role && h.file && (state.reviews ?? []).includes(h.file));
+  const stopped = (state.events ?? []).some((e) => e.kind === "subagent-stop" && isRole(e.agentType, role) && e.seq > after) || settled(state, role, huddles);
   const openItems = huddles.flatMap((h) => h.actOn.filter((a) => !a.closed));
   return { stopped, hasFile: huddles.length > 0, openItems };
 }

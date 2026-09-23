@@ -121,12 +121,19 @@ function defaultVerify(root) {
 
 const WHEN = new Set(["always", "source"]);
 
+// One package.json build script call and nothing else: `npm run build`, `pnpm build`. A
+// compound command (&&, ;, |), or a tool whose build also tests (gradle, make), runs always.
+const BUILD_ONLY = /^\s*(?:npm|pnpm|yarn|bun)(?:\s+run)?\s+build\s*$/;
+
+// An entry without `when` that only builds gets "source", the same default package.json's
+// build script gets; an explicit `when` always wins.
 function normaliseVerify(entries, fallbackTimeout) {
-  return (entries ?? []).map((entry) =>
-    typeof entry === "string"
-      ? { cmd: entry, timeout: fallbackTimeout, when: "always" }
-      : { cmd: String(entry.cmd), timeout: Number(entry.timeout ?? fallbackTimeout), when: WHEN.has(entry.when) ? entry.when : "always" },
-  );
+  return (entries ?? []).map((entry) => {
+    const e = typeof entry === "string" ? { cmd: entry } : entry;
+    const cmd = String(e.cmd);
+    const when = WHEN.has(e.when) ? e.when : BUILD_ONLY.test(cmd) ? "source" : "always";
+    return { cmd, timeout: Number(e.timeout ?? fallbackTimeout), when };
+  });
 }
 
 function arr(value, fallback) {
