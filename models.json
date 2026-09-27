@@ -46,6 +46,7 @@
     "ceiling": {
       "helpersPerTask": 10
     },
-    "delegatesAt": "large"
+    "delegatesAt": "large",
+    "reviewMaxLines": 400
   }
 }

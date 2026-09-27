@@ -28,6 +28,8 @@ export const DEFAULT_POLICY = Object.freeze({
   // the size at which the lead stops editing and briefs a worker per piece; below it the lead
   // implements with its own context
   delegatesAt: "large",
+  // the most source lines one review round may cover; a larger change is reviewed in pieces
+  reviewMaxLines: 400,
 });
 
 // A requires entry names a role. An older policy wrote "reviewer:opus" for the second review
@@ -60,6 +62,7 @@ function merge(raw) {
     escalate: { reviewerRound2: { ...DEFAULT_POLICY.escalate.reviewerRound2, ...round2, model: undefined } },
     ceiling: { ...DEFAULT_POLICY.ceiling, ...(p.ceiling && typeof p.ceiling === "object" ? p.ceiling : {}) },
     delegatesAt: typeof p.delegatesAt === "string" && p.delegatesAt ? p.delegatesAt : DEFAULT_POLICY.delegatesAt,
+    reviewMaxLines: Math.max(1, Number.isFinite(p.reviewMaxLines) ? p.reviewMaxLines : DEFAULT_POLICY.reviewMaxLines),
   };
   delete resolved.escalate.reviewerRound2.model;
   // hashed like the repo config, so a mid-task edit to models.json is caught (R13)
@@ -256,6 +259,13 @@ export function measure({ config, policy, diff, baseline, now, root }) {
   return { tier, files: paths.length, lines, forced, reasons, details };
 }
 
+// Source lines a set of files adds to the change, from the measurement's per-file rows; a
+// file the measurement has no row for counts its whole length now.
+export function pieceLines(measured, now, files) {
+  const rows = new Map((measured?.details ?? []).map((d) => [d.path, d.lines]));
+  return files.map((f) => ({ path: f, lines: rows.get(f) ?? now?.files?.[f]?.l ?? 0 }));
+}
+
 export function requiredSteps(policy, tier, ledger) {
   const roles = requires(policy, tier);
   return optionalSteps(ledger).filter((key) => roles.includes(STEP_ROLE[key]));
@@ -340,6 +350,7 @@ export function renderTierBlock(ledger, policy, measured, { details = false } = 
   const esc = policy.escalate?.reviewerRound2;
   const escText = esc ? ` · round 2 (same reviewer, fresh context) when ${esc.whenActOnAtLeast}+ Act-on or tier ${esc.orTier}` : "";
   out.push(`requires: ${helpers.length ? helpers.join(", ") : "none"}${escText} · ceiling ${policy.ceiling.helpersPerTask} helpers/task`);
+  out.push(`piece cap ${policy.reviewMaxLines} lines: a review round covers at most that many source lines (\`gate brief reviewer --files a,b\` for a piece)`);
   out.push(`auto-N/A: ${t.autoNa.length ? t.autoNa.map((k) => `{${k}}`).join(", ") : "none"}`);
   if (details && measured?.details?.length) {
     out.push(`files: ${measured.details.map((d) => `${d.path} ${d.lines}${d.estimate ? " (line-delta estimate)" : ""}`).join(" · ")}`);

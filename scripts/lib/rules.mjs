@@ -233,33 +233,54 @@ export function reviewScope(state) {
   return (state.changed ?? []).filter((p) => state.config.isSource(p) && !state.config.isTest(p));
 }
 
-// Files the latest recorded round of this role saw that nothing has outgrown, or null when a
-// file it never saw changed since (or the round predates seen sets).
-export function unseenSince(state, role) {
-  const rounds = (state.ledger.huddles ?? []).filter((h) => h.role === role && h.file);
-  const last = rounds[rounds.length - 1];
-  if (!last || !Array.isArray(last.files)) return null;
-  const seen = new Set(last.files);
-  return reviewScope(state).filter((p) => !seen.has(p));
+// A change is reviewed in pieces when it is large; each round records the files it saw. A
+// changed implementation file is covered when the last round of this role that saw it really
+// ran (the helper stopped after its brief) and came back clean, or was the last round the cap
+// allows, or had every item closed with no implementation edit since it stopped. Later edits
+// to a covered file only polish what was reviewed. Returns the files still uncovered, or null
+// for a ledger from before seen sets, which keeps the old rule.
+export function uncovered(state, role, after = lastEditSeq(state, state.config, state.ledger)) {
+  const rounds = (state.ledger.huddles ?? []).filter((h) => h.role === role && h.file && Array.isArray(h.files));
+  if (!rounds.length) return null;
+  const stops = (state.events ?? []).filter((e) => e.kind === "subagent-stop" && isRole(e.agentType, role));
+  // the three-round cap is counted per file: the rounds that saw it
+  const covered = (round, seenBy) => {
+    const stop = stops.find((e) => e.seq > (round.briefSeq ?? Infinity));
+    if (!stop) return false;
+    if (!round.actOn.length || seenBy >= REVIEW_CAP) return true;
+    return round.actOn.every((a) => a.closed) && after < stop.seq;
+  };
+  return reviewScope(state).filter((p) => {
+    const seeing = rounds.filter((h) => h.files.includes(p));
+    const last = seeing[seeing.length - 1];
+    return !last || !covered(last, seeing.length);
+  });
 }
 
-// The loop ends without another round when the latest round came back clean, or was the last
-// the cap allows, and every implementation file changed now is one it saw: later edits only
-// polish what it reviewed. Its items must still be closed (openItems).
-function settled(state, role, huddles) {
-  const last = huddles[huddles.length - 1];
-  if (!last || (last.actOn.length && huddles.length < REVIEW_CAP)) return false;
-  // a helper of this role really ran for that round: it stopped after its brief was written
-  if (!(state.events ?? []).some((e) => e.kind === "subagent-stop" && isRole(e.agentType, role) && e.seq > (last.briefSeq ?? Infinity))) return false;
-  const unseen = unseenSince(state, role);
-  return unseen !== null && unseen.length === 0;
+// The first piece of the uncovered files that fits the cap, so the command R5/R9 print can
+// be run as printed; a lone file over the cap is a piece of one.
+export function nextPiece(state, files) {
+  const cap = (state.policy ?? policyFor(state.ledger)).reviewMaxLines;
+  const rows = new Map((state.tier?.measured?.details ?? []).map((d) => [d.path, d.lines]));
+  const piece = [];
+  let lines = 0;
+  for (const f of files) {
+    const n = rows.get(f) ?? state.now?.files?.[f]?.l ?? 0;
+    if (piece.length && lines + n > cap) break;
+    piece.push(f);
+    lines += n;
+  }
+  return piece;
 }
 
 function reviewed(state, role, after) {
   const huddles = (state.ledger.huddles ?? []).filter((h) => h.role === role && h.file && (state.reviews ?? []).includes(h.file));
-  const stopped = (state.events ?? []).some((e) => e.kind === "subagent-stop" && isRole(e.agentType, role) && e.seq > after) || settled(state, role, huddles);
+  const pending = uncovered(state, role, after);
+  const stopped = pending === null
+    ? (state.events ?? []).some((e) => e.kind === "subagent-stop" && isRole(e.agentType, role) && e.seq > after)
+    : pending.length === 0;
   const openItems = huddles.flatMap((h) => h.actOn.filter((a) => !a.closed));
-  return { stopped, hasFile: huddles.length > 0, openItems };
+  return { stopped, hasFile: huddles.length > 0, openItems, pending: pending ?? [] };
 }
 
 // The command a `cmd:` driver names, or null for a skill driver or none.
@@ -368,7 +389,9 @@ export function evaluate(state) {
   if (src.length && needsReviewer && !waived(ledger, "review")) {
     const r = reviewed(state, "reviewer", after);
     if (!r.stopped || !r.hasFile) {
-      unmet.push({ rule: "R5", text: "no reviewer pass after the last edit. Spawn `done-gate:reviewer` (it writes review-<n>.md), then `gate huddle add reviewer --file review-<n>.md`." });
+      unmet.push({ rule: "R5", text: r.pending.length && r.hasFile
+        ? `no clean reviewer round yet for ${list(r.pending)}: \`gate brief reviewer --files ${nextPiece(state, r.pending).join(",")}\` (a piece of at most ${policy.reviewMaxLines} source lines), spawn \`done-gate:reviewer\`, then \`gate huddle add reviewer --file review-<n>.md\`.`
+        : "no reviewer pass after the last edit. Spawn `done-gate:reviewer` (it writes review-<n>.md), then `gate huddle add reviewer --file review-<n>.md`." });
     } else if (r.openItems.length) {
       unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map((a) => a.id).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.` });
     }
@@ -386,7 +409,9 @@ export function evaluate(state) {
   if (changed.some((p) => config.isHighRisk(p)) && !waived(ledger, "review-2")) {
     const r = reviewed(state, "reviewer-2", after);
     if (!r.stopped || !r.hasFile || r.openItems.length) {
-      unmet.push({ rule: "R9", text: `high-risk paths changed (${list(changed.filter((p) => config.isHighRisk(p)))}): a second review by \`done-gate:reviewer-2\` is required after the last edit, with its review2-<n>.md recorded via \`gate huddle add reviewer-2 --file ...\` and every Act-on item closed.` });
+      unmet.push({ rule: "R9", text: r.pending.length && r.hasFile
+        ? `high-risk paths changed: no clean reviewer-2 round yet for ${list(r.pending)}: \`gate brief reviewer-2 --files ${nextPiece(state, r.pending).join(",")}\`, spawn \`done-gate:reviewer-2\`, then \`gate huddle add reviewer-2 --file review2-<n>.md\`.`
+        : `high-risk paths changed (${list(changed.filter((p) => config.isHighRisk(p)))}): a second review by \`done-gate:reviewer-2\` is required after the last edit, with its review2-<n>.md recorded via \`gate huddle add reviewer-2 --file ...\` and every Act-on item closed.` });
     }
   }
 

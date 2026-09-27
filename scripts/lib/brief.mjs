@@ -4,10 +4,11 @@ import path from "node:path";
 import { buildState } from "./assess.mjs";
 import { caseTable, verifyLines } from "./report.mjs";
 import { saveLedger, section } from "./ledger.mjs";
-import { leadDelegates, renderTierBlock, tierMax, tierOf } from "./size.mjs";
+import { leadDelegates, pieceLines, renderTierBlock, tierMax, tierOf } from "./size.mjs";
 import { gitTracked } from "./tree.mjs";
 import { ROLES, flag, positional } from "./verbs.mjs";
-import { REVIEW_CAP, isDraft, reviewScope, unseenSince } from "./rules.mjs";
+import { toPosixRel } from "./paths.mjs";
+import { REVIEW_CAP, isDraft, isRole, reviewScope, uncovered } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { nextSeq } from "./events.mjs";
@@ -88,9 +89,8 @@ function syntheticAdd(root, rel) {
 // The reviewer's diff: every changed file (source, tests and docs alike; prompts and README
 // changes are reviewable too), from git against the commit that was HEAD when the task
 // opened, or a synthetic all-added block when git has no history for the file.
-export function unifiedDiff(state, { cap = DIFF_CAP } = {}) {
+export function unifiedDiff(state, { cap = DIFF_CAP, files = state.diff.changed } = {}) {
   const { diff, baseline, root } = state;
-  const files = diff.changed;
   const ref = baseline?.head ?? "HEAD";
   const dirty = new Set(baseline?.dirty ?? []);
   const tracked = gitTracked(root);
@@ -210,11 +210,11 @@ function testCommands(state) {
 
 // The diff is inlined while it is short; past the cap the helper gets the file list with line
 // counts and reads what it needs, instead of a packet it cannot hold.
-function diffOrFiles(state, heading = "Diff") {
-  const diff = unifiedDiff(state, { cap: Infinity });
+function diffOrFiles(state, heading = "Diff", files = state.changed ?? []) {
+  const diff = unifiedDiff(state, { cap: Infinity, files });
   const lines = diff.split("\n").length;
   if (lines <= DIFF_CAP) return [`## ${heading}`, "", diff, ""];
-  const changed = state.changed ?? [];
+  const changed = files;
   const kind = (p) => (state.config.isTest(p) ? "test" : state.config.isSource(p) ? "source" : "other");
   return [
     `## Changed files (diff too long to inline: ${lines} lines)`,
@@ -226,7 +226,7 @@ function diffOrFiles(state, heading = "Diff") {
   ];
 }
 
-export function renderPacket(state, role, { round, reviewN, skepticN = 1, arbiterN = 1, item = null }) {
+export function renderPacket(state, role, { round, reviewN, skepticN = 1, arbiterN = 1, item = null, piece = null }) {
   const out = header(state, role, round);
   out.push("## You may write", "", mayWrite(state, role, reviewN, skepticN, arbiterN), "");
   const files = planFiles(state.ledger);
@@ -257,7 +257,15 @@ export function renderPacket(state, role, { round, reviewN, skepticN = 1, arbite
       out.push("## Write your replies to", "", path.join(state.dir, `worker-${reviewN}.md`), "");
     }
   } else {
-    out.push(...diffOrFiles(state));
+    if (piece) {
+      const scope = reviewScope(state);
+      out.push("## Piece", "", `${piece.files.length} of ${scope.length} changed source file${scope.length === 1 ? "" : "s"}, ${plural(piece.lines, "line")}: ${piece.files.join(", ")}${piece.over ? ` (over the ${state.policy.reviewMaxLines}-line cap: one file cannot be split, so read it in passes and say in Noted where you stopped reading closely)` : ""}`, "");
+    }
+    // the piece's implementation files plus everything else that changed (tests, docs): those
+    // travel with every piece
+    const scopeSet = new Set(reviewScope(state));
+    const shown = piece ? (state.changed ?? []).filter((p) => piece.files.includes(p) || !scopeSet.has(p)) : state.changed ?? [];
+    out.push(...diffOrFiles(state, "Diff", shown));
     out.push("## Verify", "", ...verifyLines(state.verify, { tails: false }), "");
     out.push("## Test command", "", ...testCommands(state), "");
     out.push("", "## Write your findings to", "", path.join(state.dir, `${reviewPrefix(role)}-${reviewN}.md`), "");
@@ -273,9 +281,29 @@ export function renderPacket(state, role, { round, reviewN, skepticN = 1, arbite
 export const verbs = {
   brief(ctx) {
     const [role] = positional(ctx.args);
-    if (!ROLES.includes(role)) throw new UsageError(`usage: gate brief <${ROLES.join("|")}> [--round n]`);
+    if (!ROLES.includes(role)) throw new UsageError(`usage: gate brief <${ROLES.join("|")}> [--round n] [--files a,b]`);
     const state = buildState(ctx, {});
     if (!state.ledger) throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
+    const reviewing = role === "reviewer" || role === "reviewer-2";
+    // a review round covers a piece: --files names it, or the whole change when that fits
+    // the cap; past the cap the lead splits by file
+    let piece = null;
+    if (reviewing) {
+      const scope = reviewScope(state);
+      const named = flag(ctx.args, "--files");
+      const files = named ? [...new Set(named.split(",").map((f) => toPosixRel(ctx.root, f.trim())).filter(Boolean))] : scope;
+      const outside = files.filter((f) => !scope.includes(f));
+      if (outside.length) throw new UsageError(`--files: ${outside.join(", ")} is not a changed implementation file of this task (have: ${scope.join(", ") || "none"})`);
+      const rows = pieceLines(state.tier?.measured ?? null, state.now, files);
+      const lines = rows.reduce((n, r) => n + r.lines, 0);
+      const cap = state.policy.reviewMaxLines;
+      // one file cannot be split by file: alone it is always a piece, and the packet says so
+      if (lines > cap && files.length > 1) {
+        const listed = rows.map((r) => `${r.path} (${r.lines} lines)`).join(", ");
+        throw new UsageError(`${lines} source lines is more than one review round can read well (cap ${cap}). Review it in pieces: \`gate brief ${role} --files <some of: ${listed}>\`, each piece under ${cap} lines; a file counts as reviewed once a clean round saw it.`);
+      }
+      piece = { files, lines, over: lines > cap };
+    }
     // below the delegated size the lead implements with its own context; a worker packet
     // would hand that context away for nothing
     // a predicted size below policy.delegatesAt: no worker, no blind QA (a plan that named no
@@ -306,12 +334,19 @@ export const verbs = {
     const legacySeconds = state.ledger.huddles.filter((h) => h.role === "reviewer-2" && /^review-/.test(h.file ?? "")).length;
     const written = finished("review-") - legacySeconds;
     // past the cap a round is briefed only for a file no round of this role saw, so the cap
-    // can never leave R5/R9 waiting on a round nobody may brief
-    const done = role === "reviewer" ? Math.max(round - 1, written) : role === "reviewer-2" ? finished("review2-") + legacySeconds : 0;
-    const unseen = unseenSince(state, role);
+    // can never leave R5/R9 waiting on a round nobody may brief. With pieces the cap counts
+    // the rounds that saw the piece's files (finished files, recorded or not), as R5 does.
+    const seenRounds = Object.entries(state.ledger.seen ?? {}).filter(([f]) => f.startsWith(`${reviewPrefix(role)}-`) && state.reviews.includes(f) && !isDraftFile(f)).map(([, v]) => v.files ?? []);
+    const perFile = piece && state.ledger.seen ? Math.max(0, ...piece.files.map((f) => seenRounds.filter((files) => files.includes(f)).length)) : null;
+    const done = perFile ?? (role === "reviewer" ? Math.max(round - 1, written) : role === "reviewer-2" ? finished("review2-") + legacySeconds : 0);
+    const unseen = reviewing ? uncovered(state, role) : null;
     // a ledger from before seen sets keeps its old, uncapped second reviewer
     const legacy = !state.ledger.seen;
-    if (done >= REVIEW_CAP && !(legacy && role === "reviewer-2") && !unseen?.length) {
+    // past the cap a round is briefed only for a piece holding a file no round of this role saw
+    const seenByRole = new Set(state.ledger.huddles.filter((h) => h.role === role && Array.isArray(h.files)).flatMap((h) => h.files));
+    const neverSeen = unseen === null ? [] : reviewScope(state).filter((f) => !seenByRole.has(f));
+    const stillOpen = piece ? piece.files.some((f) => neverSeen.includes(f)) : neverSeen.length > 0;
+    if (done >= REVIEW_CAP && !(legacy && role === "reviewer-2") && !stillOpen) {
       throw new UsageError(`${role} round ${done + 1}: three rounds is the cap. What is still disputed goes to the arbiter (\`gate brief arbiter --item H<k>.<i>\`, spawn done-gate:arbiter); what is still open is fixed and closed with \`gate huddle resolve\`.`);
     }
     const numbers = (prefix) => state.reviews.filter((f) => f.startsWith(prefix)).map(fileNumber);
@@ -322,6 +357,25 @@ export const verbs = {
       return isDraftFile(`${prefix}${n}.md`) ? n : n + 1;
     };
     const reviewN = next(`${reviewPrefix(role)}-`);
+    // one round of a role at a time: a second piece briefed while the first reviewer is still
+    // running (its file a draft, no stop since its brief) would take the same number and
+    // overwrite what that round saw; a cut-off reviewer's draft is re-briefed as before
+    const draftName = `${reviewPrefix(role)}-${reviewN}.md`;
+    const briefedAt = state.ledger.seen?.[draftName]?.seq ?? Infinity;
+    const roleEvents = (state.events ?? []).filter((e) => isRole(e.agentType, role) && e.seq > briefedAt);
+    const started = roleEvents.find((e) => e.kind === "subagent-start");
+    const running = piece && isDraftFile(draftName) && Boolean(started) && !roleEvents.some((e) => e.kind === "subagent-stop" && e.seq > started.seq);
+    if (running) {
+      throw new UsageError(`${draftName} is still a draft and that ${role} has not stopped: wait for its hand-back (or SendMessage it "write ${draftName} now") before briefing the next piece; reviewer and reviewer-2 may run side by side, two rounds of one role may not.`);
+    }
+    // a packet already names another piece for this same file and nobody has run it yet: a
+    // second brief would swap the piece under it without a word
+    const prior = state.ledger.seen?.[draftName];
+    const samePiece = prior && piece && prior.files.length === piece.files.length && prior.files.every((f) => piece.files.includes(f));
+    const stoppedSince = prior && (state.events ?? []).some((e) => e.kind === "subagent-stop" && isRole(e.agentType, role) && e.seq > prior.seq);
+    if (prior && piece && !samePiece && !stoppedSince) {
+      throw new UsageError(`${draftName} is already briefed for ${prior.files.join(", ")} and that ${role} has not run: spawn it with the prompt from brief-${role}-${round}.md, or re-brief the same files; a different piece waits for its hand-back.`);
+    }
     const skepticN = next("skeptic-");
     const arbiterN = next("arbiter-");
     let item = null;
@@ -334,12 +388,12 @@ export const verbs = {
     }
     // what this round's reviewer is shown; the huddle for its file inherits it, and edits
     // after a clean round are judged against it
-    if (role === "reviewer" || role === "reviewer-2") {
-      state.ledger.seen = { ...(state.ledger.seen ?? {}), [`${reviewPrefix(role)}-${reviewN}.md`]: { files: reviewScope(state), seq: nextSeq() } };
+    if (piece) {
+      state.ledger.seen = { ...(state.ledger.seen ?? {}), [`${reviewPrefix(role)}-${reviewN}.md`]: { files: piece.files, seq: nextSeq() } };
       saveLedger(state.dir, state.ledger);
     }
     const file = path.join(state.dir, `brief-${role}-${round}.md`);
-    writeFileSync(file, renderPacket(state, role, { round, reviewN, skepticN, arbiterN, item }));
+    writeFileSync(file, renderPacket(state, role, { round, reviewN, skepticN, arbiterN, item, piece }));
     const own = { skeptic: `skeptic-${skepticN}.md`, arbiter: `arbiter-${arbiterN}.md`, reviewer: `review-${reviewN}.md`, "reviewer-2": `review2-${reviewN}.md`, worker: `worker-${reviewN}.md` }[role];
     ctx.out(`packet: ${file}`);
     ctx.out(`prompt: Read ${file} and follow your role brief.${own && role !== "worker" ? ` Your file is ${path.join(state.dir, own)}: write it first, then investigate and rewrite it.` : ""}`);

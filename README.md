@@ -141,7 +141,7 @@ attempt to finish.
 | R2 | Context, Plan or case table was written after the first source edit |
 | R3 | `gate verify` is missing, red, or older than the last source edit |
 | R4 | UI files changed and the real surface wasn't driven afterwards |
-| R5 | no reviewer pass after the last edit, or an Act-on item is still open; tier tiny needs no reviewer. A round that came back clean, or the third, covers later edits to files it saw; a new file needs a new round |
+| R5 | no reviewer pass after the last edit, or an Act-on item is still open; tier tiny needs no reviewer. A change past the piece cap (400 source lines) is reviewed in pieces, `gate brief reviewer --files a,b`; a file is covered once the last round that saw it came back clean (or was its third); a new or uncovered file needs a round |
 | R6 | schema files changed with no real-schema probe |
 | R7 | source changed and no test file changed |
 | R8 | any case or step is blank |
