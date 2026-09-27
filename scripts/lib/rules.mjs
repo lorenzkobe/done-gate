@@ -168,7 +168,7 @@ export function pointerResolver(state) {
       const seq = Number(ptr.slice(7));
       return (state.events ?? []).some((e) => e.seq === seq);
     }
-    if (/^(?:review|skeptic|arbiter)-\d+\.md$/.test(ptr)) return (state.reviews ?? []).includes(ptr);
+    if (/^(?:review2?|skeptic|arbiter)-\d+\.md$/.test(ptr)) return (state.reviews ?? []).includes(ptr);
     if (/^worker-\d+\.md$/.test(ptr)) return Boolean(state.dir) && existsSync(path.join(state.dir, ptr));
     if (/^decisions#\d+$/.test(ptr)) {
       // the row must exist: decisions.tsv has a header line, then one row per decision
@@ -367,7 +367,7 @@ export function evaluate(state) {
   if (changed.some((p) => config.isHighRisk(p)) && !waived(ledger, "review-2")) {
     const r = reviewed(state, "reviewer-2", after);
     if (!r.stopped || !r.hasFile || r.openItems.length) {
-      unmet.push({ rule: "R9", text: `high-risk paths changed (${list(changed.filter((p) => config.isHighRisk(p)))}): a second review by \`done-gate:reviewer-2\` is required after the last edit, with its review-<n>.md recorded via \`gate huddle add reviewer-2 --file ...\` and every Act-on item closed.` });
+      unmet.push({ rule: "R9", text: `high-risk paths changed (${list(changed.filter((p) => config.isHighRisk(p)))}): a second review by \`done-gate:reviewer-2\` is required after the last edit, with its review2-<n>.md recorded via \`gate huddle add reviewer-2 --file ...\` and every Act-on item closed.` });
     }
   }
 
@@ -437,7 +437,7 @@ export function evaluate(state) {
     // file: brief re-briefs the same round instead
     const full = state.dir ? path.join(state.dir, f) : null;
     if (full && existsSync(full) && isDraft(readFileSync(full, "utf8"))) continue;
-    const role = f.startsWith("review-") ? "reviewer" : f.startsWith("skeptic-") ? "skeptic" : "arbiter";
+    const role = f.startsWith("review2-") ? "reviewer-2" : f.startsWith("review-") ? "reviewer" : f.startsWith("skeptic-") ? "skeptic" : "arbiter";
     unmet.push({ rule: "R15", text: `${f} was written but never recorded. Run \`gate huddle add ${role} --file ${f}\`.` });
   }
 

@@ -78,7 +78,7 @@ Three things make this hard to game:
   upholds it in writing; an upheld one goes to a fresh arbiter on the stronger model that
   rules for one side. Every outcome is in the short report, and you can overrule.
 - **Helpers can't vouch for themselves.** QA may write only under the tests globs; the
-  reviewer may write only `review-<n>.md`; the skeptic writes nothing. Their replies are
+  reviewer may write only `review-<n>.md` (the second reviewer `review2-<n>.md`); the skeptic writes nothing. Their replies are
   never evidence; their files and the hook events are.
 
 ## Install

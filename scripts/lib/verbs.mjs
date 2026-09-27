@@ -189,11 +189,17 @@ export const verbs = {
       const file = flag(rest, "--file") ?? null;
       // every role whose evidence is a file must name it, or R15 could never count it, and the
       // file must be that role's own: a reviewer huddle cannot point at a skeptic file
-      const prefix = { arbiter: "arbiter", skeptic: "skeptic", worker: "worker" }[role] ?? "review";
+      const prefix = { arbiter: "arbiter", skeptic: "skeptic", worker: "worker", "reviewer-2": "review2" }[role] ?? "review";
       if (!file && role !== "qa") throw new UsageError(`gate huddle add ${role} needs --file <${prefix}-<n>.md>: the helper's own file is the evidence`);
-      if (file && !new RegExp(`^${prefix}-\\d+\\.md$`).test(file)) throw new UsageError(`gate huddle add ${role}: --file must be that role's own ${prefix}-<n>.md, not ${file}`);
       if (file) {
-        const { dir } = open(ctx);
+        const { dir, ledger } = open(ctx);
+        // a ledger from before the second reviewer had its own stream recorded it on
+        // review-<n>.md; one that ever briefed a reviewer-2 on review2-<n>.md is not that
+        const legacy = role === "reviewer-2" && !Object.keys(ledger.seen ?? {}).some((k) => k.startsWith("review2-"));
+        const ownFile = legacy ? /^review2?-\d+\.md$/ : new RegExp(`^${prefix}-\\d+\\.md$`);
+        if (!ownFile.test(file)) throw new UsageError(`gate huddle add ${role}: --file must be that role's own ${prefix}-<n>.md, not ${file}`);
+        const other = ledger.huddles.find((h) => h.file === file && h.role !== role);
+        if (other) throw new UsageError(`gate huddle add ${role}: ${file} is already recorded as ${other.id} (${other.role})`);
         const full = path.join(dir, file);
         // a draft left by a helper cut off mid-write: every bullet reads "unverified". The
         // round is unfinished, not done — record nothing and send the lead back to re-brief it.

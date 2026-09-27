@@ -67,10 +67,11 @@ function opened(name, { files = {}, planFiles = "src/a.ts" } = {}) {
 
 // One reviewer round: the helper stops, its file lands, the lead records it.
 function round(repo, role, n, actOn = []) {
-  cli(repo, "brief", [role]);
+  const out = cli(repo, "brief", [role]);
+  const own = /Your file is .*\/((?:review2?)-\d+\.md)/.exec(out)[1];
   stop(repo, role);
-  writeFileSync(path.join(runDir(repo), `review-${n}.md`), reviewFile(n, actOn));
-  cli(repo, "huddle", ["add", role, "--file", `review-${n}.md`]);
+  writeFileSync(path.join(runDir(repo), own), reviewFile(n, actOn));
+  cli(repo, "huddle", ["add", role, "--file", own]);
 }
 const closeAll = (repo) => {
   for (const h of ledgerOf(repo).huddles) for (const a of h.actOn) if (!a.closed) cli(repo, "huddle", ["resolve", a.id, "--evidence", "src/a.ts:1"]);

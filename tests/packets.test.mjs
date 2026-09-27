@@ -204,9 +204,10 @@ test("C2 happy: every packet starts with Task, Plan, the case table, the tier bl
     } else if (role === "qa") {
       for (const glob of TESTS_GLOBS) assert.ok(may.includes(glob), `qa may write: tests glob ${glob} missing:\n${may}`);
     } else {
-      const m = /(\S*review-(\d+)\.md)/.exec(may);
-      assert.ok(m, `${role} may write: no review-<n>.md named:\n${may}`);
-      assert.equal(m[1], path.join(runDir(repo), `review-${m[2]}.md`), `${role} may write: the review path is not absolute`);
+      const prefix = role === "reviewer-2" ? "review2" : "review";
+      const m = new RegExp(`(\\S*${prefix}-(\\d+)\\.md)`).exec(may);
+      assert.ok(m, `${role} may write: no ${prefix}-<n>.md named:\n${may}`);
+      assert.equal(m[1], path.join(runDir(repo), `${prefix}-${m[2]}.md`), `${role} may write: the review path is not absolute`);
     }
   }
 });
@@ -690,7 +691,7 @@ test("C17 refused: the fence denies Edit/Write to a packet file and Bash command
 // C18
 // ---------------------------------------------------------------------------
 
-test("C18 boundary: `gate brief reviewer-2` with no review-1.md still writes a packet that says review-1.md is missing", () => {
+test("C18 boundary: `gate brief reviewer-2` with no review-<n>.md still writes a packet that says no finished review exists yet", () => {
   const repo = opened("packets-c18");
   write(repo, PLAN_FILE, `${X_SRC}export const gamma = 3;\n`);
   assert.deepEqual(readdirSync(runDir(repo)).filter((f) => /^review-\d+\.md$/.test(f)), [], "the fixture already has a review file");
@@ -701,7 +702,7 @@ test("C18 boundary: `gate brief reviewer-2` with no review-1.md still writes a p
   assert.ok(existsSync(abs), `${abs} was not written`);
 
   const text = readFileSync(abs, "utf8");
-  assert.ok(text.includes("review-1.md not found"), `the packet does not say review-1.md is missing:\n${text.slice(-1500)}`);
+  assert.ok(text.includes("no finished review-<n>.md yet"), `the packet does not say no review exists yet:\n${text.slice(-1500)}`);
   assert.ok(section(text, "Diff").includes("diff --git"), "the reviewer body is missing even though review-1.md is absent");
 });
 
@@ -998,7 +999,7 @@ test("C3 edge: draft-first binds the skeptic, the arbiter and both reviewer role
   const src = path.join(repo, "src", "a.ts");
 
   // scripts/lib/verbs.mjs is the source of truth for a role's own-file prefix
-  const prefixOf = (role) => ({ arbiter: "arbiter", skeptic: "skeptic", worker: "worker" }[role] ?? "review");
+  const prefixOf = (role) => ({ arbiter: "arbiter", skeptic: "skeptic", worker: "worker", "reviewer-2": "review2" }[role] ?? "review");
   const agent = (role, i) => ({ agent_id: `A${i}`, agent_type: `done-gate:${role}` });
 
   // every role in the list gets a packet on disk; none has written its file yet
@@ -1228,7 +1229,7 @@ test("C8 happy: the prompt line gate brief prints names both the packet path and
   const repo = opened("budget-prompt-line");
   const dir = runDir(repo);
   // scripts/lib/verbs.mjs is the source of truth for a role's own-file prefix
-  const prefixOf = (role) => ({ arbiter: "arbiter", skeptic: "skeptic", worker: "worker" }[role] ?? "review");
+  const prefixOf = (role) => ({ arbiter: "arbiter", skeptic: "skeptic", worker: "worker", "reviewer-2": "review2" }[role] ?? "review");
 
   for (const role of ["skeptic", "reviewer"]) {
     const r = cli(repo, "brief", [role]);

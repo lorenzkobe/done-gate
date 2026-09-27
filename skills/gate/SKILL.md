@@ -26,7 +26,7 @@ has the table). You are the lead: you plan, size, delegate, report and, below la
    `gate brief <role>` prints each helper's prompt. Roles:
    `done-gate:skeptic` (writes `skeptic-<n>.md`), `done-gate:qa` (blind tests, large only),
    `done-gate:worker` (edits the files its packet names, answers reviews in `worker-<n>.md`),
-   `done-gate:reviewer` (writes `review-<n>.md`), `done-gate:reviewer-2` (high-risk paths),
+   `done-gate:reviewer` (writes `review-<n>.md`), `done-gate:reviewer-2` (high-risk, `review2-<n>.md`),
    `done-gate:arbiter`.
 4. Tiny, small, standard: implement yourself; you hold the context. No slop: no comment
    that restates code or narrates the change, no hedging name (helper, util, data2), no guard
@@ -50,9 +50,9 @@ has the table). You are the lead: you plan, size, delegate, report and, below la
 - A helper's self-report is never evidence; only `gate verify`, hook events and its own
   file count. One that stops with no file: SendMessage it once, "write <file> now"; never
   brief the next round without the file.
-- Waiting for a helper is a legal turn end; its hand-back wakes you. A run left
+- Waiting for a helper is a turn end; its hand-back wakes you. A run left
   open by a session that is over: `gate abandon <slug> "<reason>"`.
-- Ceiling: ten helper invocations per task (`gate size` shows them).
+- Ceiling: ten helpers per task (`gate size` shows them).
 - A keyed step you cannot do: ask the user, then `gate waive <key> "<reason>"`.
 - Never hand-edit `.claude/gate/runs/**` except `ledger.md`. No commits unless asked; the
   repo's CLAUDE.md wins over any playbook.

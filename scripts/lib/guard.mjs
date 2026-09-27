@@ -9,7 +9,7 @@ import { toPosixRel } from "./paths.mjs";
 // Files only the gate's own verbs may write. A model that could edit these could
 // forge its evidence, so the deny is unconditional and every attempt is logged.
 const EVIDENCE_FILES = new Set(["events.jsonl", "verify.json", "decisions.tsv", "ledger.json", "blocks.json", "state.json", "gate-error.log", "current-session"]);
-const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(events\.jsonl|verify\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json|current-session|brief-[a-z0-9-]+-\d+\.md|(?:review|skeptic|arbiter|worker)-\d+\.md)/;
+const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(events\.jsonl|verify\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json|current-session|brief-[a-z0-9-]+-\d+\.md|(?:review2?|skeptic|arbiter|worker)-\d+\.md)/;
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const HELPER_ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter"];
 // Shell forms that create or change files. Helpers may use them only on scratch paths
@@ -103,6 +103,10 @@ function isReviewFile(rel) {
   return /^\.claude\/gate\/runs\/[^/]+\/review-\d+\.md$/.test(rel);
 }
 
+function isReview2File(rel) {
+  return /^\.claude\/gate\/runs\/[^/]+\/review2-\d+\.md$/.test(rel);
+}
+
 function isSkepticFile(rel) {
   return /^\.claude\/gate\/runs\/[^/]+\/skeptic-\d+\.md$/.test(rel);
 }
@@ -122,20 +126,19 @@ function inCurrentRun(rel, current) {
 }
 
 // A reading helper (skeptic, reviewer, arbiter) owes a draft when the run dir holds more
-// packets for its role family than files it wrote. Until the draft exists it may only read
-// its packet and write its file, so a helper that runs out of turns always leaves a file.
-const OWN_FILE = { skeptic: "skeptic", reviewer: "review", "reviewer-2": "review", arbiter: "arbiter" };
+// packets for its role than files it wrote. Until the draft exists it may only read its
+// packet and write its file, so a helper that runs out of turns always leaves a file.
+const OWN_FILE = { skeptic: "skeptic", reviewer: "review", "reviewer-2": "review2", arbiter: "arbiter" };
 function draftOwed(roleName, root, currentRun) {
   const prefix = OWN_FILE[roleName];
   if (!prefix || !currentRun) return null;
   const dir = path.join(root, currentRun);
   if (!existsSync(dir)) return null;
   const names = readdirSync(dir);
-  const family = prefix === "review" ? ["reviewer", "reviewer-2"] : [roleName];
-  const packets = names.filter((f) => family.some((r) => new RegExp(`^brief-${r}-\\d+\\.md$`).test(f))).length;
+  const packets = names.filter((f) => new RegExp(`^brief-${roleName}-\\d+\\.md$`).test(f)).length;
   const files = names.filter((f) => new RegExp(`^${prefix}-\\d+\\.md$`).test(f));
   if (packets <= files.length) return null;
-  const n = (files.length ? Math.max(...files.map((f) => Number(/\d+/.exec(f)[0]))) : 0) + 1;
+  const n = (files.length ? Math.max(...files.map((f) => Number(/-(\d+)\.md$/.exec(f)[1]))) : 0) + 1;
   return `${currentRun}/${prefix}-${n}.md`;
 }
 
@@ -203,7 +206,7 @@ export function decide(input, root, config = loadConfig(root), currentRun = null
     return { deny: false };
   }
   // a helper's file is its evidence: nobody else writes it
-  const foreign = paths.filter((p) => isSkepticFile(p) || isArbiterFile(p) || (isReviewFile(p) && !(role("reviewer") || role("reviewer-2"))) || (isWorkerFile(p) && !role("worker")));
+  const foreign = paths.filter((p) => isSkepticFile(p) || isArbiterFile(p) || (isReviewFile(p) && !role("reviewer")) || (isReview2File(p) && !role("reviewer-2")) || (isWorkerFile(p) && !role("worker")));
   if (foreign.length) {
     return { deny: true, reason: `done-gate: ${foreign.join(", ")} is a helper's own evidence file and is written only by that helper.`, paths };
   }
@@ -220,9 +223,10 @@ export function decide(input, root, config = loadConfig(root), currentRun = null
     }
   }
   if (role("reviewer") || role("reviewer-2")) {
-    const outside = paths.filter((p) => !isReviewFile(p) || !inCurrentRun(p, currentRun));
+    const own = role("reviewer") ? isReviewFile : isReview2File;
+    const outside = paths.filter((p) => !own(p) || !inCurrentRun(p, currentRun));
     if (outside.length) {
-      return { deny: true, reason: `done-gate: the reviewer writes only its own review-<n>.md in the run dir; ${outside.join(", ")} is not that. Report findings, do not fix.`, paths };
+      return { deny: true, reason: `done-gate: the reviewer writes only its own ${OWN_FILE[role("reviewer") ? "reviewer" : "reviewer-2"]}-<n>.md in the run dir; ${outside.join(", ")} is not that. Report findings, do not fix.`, paths };
     }
   }
   return { deny: false };

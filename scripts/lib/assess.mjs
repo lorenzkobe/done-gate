@@ -17,10 +17,11 @@ export function readVerify(dir) {
   return JSON.parse(readFileSync(file, "utf8").replace(/\r/g, ""));
 }
 
-// The files helpers write for themselves: review-<n>.md and skeptic-<n>.md.
+// The files reading helpers write for themselves: review-<n>.md, review2-<n>.md,
+// skeptic-<n>.md and arbiter-<n>.md.
 export function reviewFiles(dir) {
   if (!existsSync(dir)) return [];
-  return readdirSync(dir).filter((f) => /^(?:review|skeptic|arbiter)-\d+\.md$/.test(f)).sort();
+  return readdirSync(dir).filter((f) => /^(?:review2?|skeptic|arbiter)-\d+\.md$/.test(f)).sort();
 }
 export const helperFiles = reviewFiles;
 

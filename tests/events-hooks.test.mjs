@@ -163,7 +163,8 @@ test("the reviewer may write only its own review-<n>.md inside the open task's r
 
   const rv = { agent_id: "A2", agent_type: "done-gate:reviewer" };
   assert.equal(fence(openInput("Write", path.join(dir, "review-1.md"), rv)), false);
-  assert.equal(fence(openInput("Write", path.join(dir, "review-2.md"), { ...rv, agent_type: "done-gate:reviewer-2" })), false);
+  assert.equal(fence(openInput("Write", path.join(dir, "review2-1.md"), { ...rv, agent_type: "done-gate:reviewer-2" })), false);
+  assert.equal(fence(openInput("Write", path.join(dir, "review-2.md"), { ...rv, agent_type: "done-gate:reviewer-2" })), true);
   assert.equal(fence(openInput("Edit", `${open}/src/a.ts`, rv)), true);
   assert.equal(fence(openInput("Write", path.join(dir, "ledger.md"), rv)), true);
   // another task's run dir is not this reviewer's to write
