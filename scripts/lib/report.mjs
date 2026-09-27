@@ -7,7 +7,7 @@ import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
 import { readEvents } from "./events.mjs";
 import { effectiveTier, policyFor, renderTierBlock, requires, tiered, tierOf } from "./size.mjs";
-import { isRole, lastEditSeq, hasContextStep, lateOrder, tracedPointers } from "./rules.mjs";
+import { drivenAfter, driverCommand, isRole, lastEditSeq, hasContextStep, lateOrder, tracedPointers } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 
 function tailLines(file, n) {
@@ -130,7 +130,7 @@ export function renderReport(state, unmet) {
   const md = ledgerMd(dir);
   const out = [];
 
-  out.push(`# ${ledger.slug} — ${ledger.playbook} — ${ledger.status}`);
+  out.push(`# ${ledger.slug} — ${ledger.playbook} — ${ledger.status} · done-gate ${ledger.version ?? "unknown"}`);
   if (ledger.status === "abandoned") out.push(`\n**ABANDONED** at ${ledger.abandonedAt}: ${ledger.abandonReason}`);
   if (ledger.overridden) out.push(`\n**GATE OVERRIDDEN** at ${ledger.overridden.at} after ${ledger.overridden.blocks} identical blocks: ${ledger.overridden.unmet.map((u) => u.rule).join(", ")}`);
   const errLog = path.join(state.stateDir ?? path.resolve(dir, "..", ".."), "gate-error.log");
@@ -313,13 +313,13 @@ function reviewLine2(ledger) {
 }
 
 function appLine(state) {
-  const { config, changed, events } = state;
+  const { config, changed } = state;
   const ui = changed.filter((p) => config.isUi(p));
   if (!ui.length) return "No screen change.";
   // the same clock R4 uses, so line 4 and the missing list can never disagree
-  const lastEdit = lastEditSeq(state, config, state.ledger);
-  const driven = events.some((e) => !e.agent && e.seq > lastEdit && (e.kind === "browser" || (e.kind === "skill" && e.skill === "verify")));
-  return driven ? "App driven after the last change." : "App not yet driven after the last change.";
+  const driven = drivenAfter(state, lastEditSeq(state, config, state.ledger));
+  if (!driven) return "App not yet driven after the last change.";
+  return driven.kind === "command" ? `App driven after the last change (${driverCommand(config)}).` : "App driven after the last change.";
 }
 
 // Free text written by helpers or the lead may carry the gate's own words; swap them for
@@ -392,7 +392,7 @@ export function renderBrief(state, unmet) {
   out.push(appLine(state));
   out.push(forYouLine(state, unmet));
   out.push("");
-  out.push(`Full report: ${path.join(dir, "report.md")}`);
+  out.push(`Full report: ${path.join(dir, "report.md")} · done-gate ${ledger.version ?? "unknown"}`);
   return `${out.join("\n")}\n`;
 }
 

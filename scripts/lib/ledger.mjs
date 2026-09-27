@@ -140,6 +140,7 @@ export function openLedger(ctx, slug, playbook) {
   const ledger = {
     slug: slugify(slug),
     playbook,
+    version: ctx.version ?? null,
     status: "open",
     openedAt: new Date().toISOString(),
     openedSeq: nextSeq(),

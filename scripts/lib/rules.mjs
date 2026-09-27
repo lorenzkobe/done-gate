@@ -268,6 +268,17 @@ export function driverCommand(config) {
   return m ? m[1].trim() : null;
 }
 
+// What drove the real surface after the last edit: a browser event, the /verify skill, or
+// a foreground run of the cmd: driver by the lead that did not fail (a background run
+// reports before it can fail). The driver run counts at `after` too, since a snapshot it
+// writes is what dates the mark; browser and skill events count only past it. Returns the
+// driving event or null; R4 and the report both read it, so they cannot disagree.
+export function drivenAfter(state, after) {
+  const driverCmd = driverCommand(state.config);
+  const ranDriver = (e) => driverCmd !== null && e.kind === "command" && !e.background && String(e.cmd ?? "").includes(driverCmd) && e.seq >= after && (e.exit == null || e.exit === 0);
+  return (state.events ?? []).find((e) => !e.agent && (ranDriver(e) || (e.seq > after && (e.kind === "browser" || (e.kind === "skill" && e.skill === "verify"))))) ?? null;
+}
+
 function waived(ledger, key) {
   return (ledger.waivers ?? []).some((w) => w.key === key);
 }
@@ -340,13 +351,8 @@ export function evaluate(state) {
 
   // R4: UI changed → the real surface was driven after the last edit
   if (changed.some((p) => config.isUi(p)) && !waived(ledger, "driver")) {
-    // a driver of the form cmd:<command> (a Playwright run) is driven by the lead running it;
-    // a run that itself writes a source file (a snapshot) is dated as the last change, so it
-    // counts at `after` too, not only past it
     const driverCmd = driverCommand(config);
-    const ranDriver = (e) => driverCmd !== null && e.kind === "command" && String(e.cmd ?? "").includes(driverCmd) && e.seq >= after;
-    const driven = (state.events ?? []).some((e) => !e.agent && (ranDriver(e) || (e.seq > after && (e.kind === "browser" || (e.kind === "skill" && e.skill === "verify")))));
-    if (!driven) {
+    if (!drivenAfter(state, after)) {
       unmet.push({ rule: "R4", text: driverCmd !== null
         ? `UI files changed but the real surface was not driven after the last edit. Run \`${driverCmd}\` (the driver in gate.json) yourself, or get the user's waiver (\`gate waive driver "<reason>"\`).`
         : config.driver

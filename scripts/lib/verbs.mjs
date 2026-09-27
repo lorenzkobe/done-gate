@@ -115,7 +115,8 @@ export const verbs = {
         markStep(ledger, "context", { state: "DONE", evidence: "ledger.md#context", note: "Context written" });
       }
       if (section === "plan") {
-        ledger.planSeq = seq;
+        // the first plan is what R2 dates; an amendment after the skeptic keeps that date
+        if (!ledger.planSeq) ledger.planSeq = seq;
         if (ledger.taskSeq) markStep(ledger, "plan", { state: "DONE", evidence: "ledger.md#plan", note: "Task and Plan written" });
         if ((files !== undefined || size !== undefined) && tiered(ledger)) {
           // paths outside the repo are dropped: they cannot be part of this task's diff

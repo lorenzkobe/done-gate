@@ -30,6 +30,13 @@ function editPaths(input, root) {
   return raw.map((p) => toPosixRel(root, p)).filter((p) => p !== null && p !== "");
 }
 
+function exitOf(response) {
+  if (!response || typeof response !== "object") return null;
+  if (response.interrupted === true) return 130;
+  const code = response.exitCode ?? response.exit_code;
+  return typeof code === "number" ? code : null;
+}
+
 // One hook payload → zero or more event records. Never throws on odd input.
 export function eventsFromHookInput(input, root) {
   if (!input || typeof input !== "object" || input.__unparseable) return [];
@@ -55,7 +62,9 @@ export function eventsFromHookInput(input, root) {
     return editPaths(input, root).map((p) => ({ ...b(), kind: "edit", tool, path: p }));
   }
   if (tool === "Bash") {
-    return [{ ...b(), kind: "command", tool, cmd: String(input.tool_input?.command ?? "").slice(0, TEXT_LIMIT) }];
+    // a background run reports at launch, before it can fail, so its exit is never known
+    const background = input.tool_input?.run_in_background === true;
+    return [{ ...b(), kind: "command", tool, cmd: String(input.tool_input?.command ?? "").slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...(background ? { background: true } : {}) }];
   }
   if (tool === "Agent" || tool === "Task") {
     return [{ ...b(), kind: "agent", tool, spawned: input.tool_input?.subagent_type ?? null }];

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { currentLedger, isDone, loadLedger, saveLedger } from "./ledger.mjs";
@@ -100,7 +100,10 @@ export async function runVerify(ctx, { stepKey = "verify" } = {}) {
     ctx.err(`  → ${result.timedOut ? "TIMED OUT" : `exit ${result.exit}`} in ${(result.ms / 1000).toFixed(1)}s`);
   }
   const record = { startedAt, finishedAt: new Date().toISOString(), sourceHash: sourceHash(snap, config), commands };
-  writeFileSync(path.join(current.dir, "verify.json"), JSON.stringify(record, null, 2));
+  // written whole: a Stop hook may read it while a background verify is still writing
+  const file = path.join(current.dir, "verify.json");
+  writeFileSync(`${file}.${process.pid}.tmp`, JSON.stringify(record, null, 2));
+  renameSync(`${file}.${process.pid}.tmp`, file);
 
   const red = commands.filter((c) => !c.skipped && (c.exit !== 0 || c.timedOut));
   const ledger = loadLedger(current.dir);

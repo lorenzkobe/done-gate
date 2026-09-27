@@ -32,8 +32,12 @@ app and surface) and these sections, no placeholders:
 
 - **Launch**: the exact start command, how to tell it is ready (a port answering, a log
   line), and teardown. Say whether a running instance can be reused.
-- **Doctor**: one read-only check that says "this instance is worth driving" (port owned by
-  us, right build, signed-in state).
+- **Seed**: the exact command that puts the data a drive needs in place (the fixture rows,
+  the signed-in user), and when to re-seed: after any database reset, which a fix round's
+  migration or `db:reset` does silently. A drive against empty data is not evidence.
+- **Doctor**: one read-only check that says "this instance is worth driving and seeded" (port
+  owned by us, right build, signed-in state, the fixture rows present); it refuses to drive an
+  unseeded instance and says to run Seed.
 - **Drive**: the recipe with this repo's real routes and selectors. For a web app: **open at
   a 360 px-wide viewport first**, then desktop; watch the console and network tabs, not
   only the screen, because a query that fails soft renders like an empty state.

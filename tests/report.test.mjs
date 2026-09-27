@@ -315,7 +315,7 @@ test("C5 happy: `gate report --brief` prints the short plain-language form", () 
     `no reviewer line:\n${out}`,
   );
 
-  assert.equal(all[all.length - 1], `Full report: ${path.join(runDir(repo), "report.md")}`);
+  assert.match(all[all.length - 1], new RegExp(`^Full report: ${path.join(runDir(repo), "report.md").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} · done-gate \\d`));
   assert.ok(all.length <= 14, `the brief is ${all.length} lines, expected 14 or fewer:\n${out}`);
 
   // the other half of the title: a gate the rules agree is clean
@@ -400,7 +400,7 @@ test("C9 edge: with no open ledger the brief renders the most recently closed ru
   const out = brief(repo);
   const all = lines(out);
   assert.equal(all[0], "shipped: done");
-  assert.equal(all[all.length - 1], `Full report: ${path.join(dir, "report.md")}`);
+  assert.match(all[all.length - 1], new RegExp(`^Full report: ${path.join(dir, "report.md").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} · done-gate \\d`));
 });
 
 // ---------------------------------------------------------------------------
@@ -814,7 +814,7 @@ test("C1 happy: a closed run with source changes, green checks, one review round
   const b = parsed(repo); // parse() pins the line count and the blank lines
 
   assert.equal(b.headline, "badge: done");
-  assert.equal(b.tail, `Full report: ${path.join(runDir(repo), "report.md")}`);
+  assert.match(b.tail, new RegExp(`^Full report: ${path.join(runDir(repo), "report.md").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} · done-gate \\d`));
 
   // 1. what changed: how many source files, the name, the size word
   assert.match(b.changed, /\b1\b/, `line 1 does not say how many source files changed: ${JSON.stringify(b.changed)}`);
