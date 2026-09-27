@@ -6,7 +6,7 @@ import { loadLedger, runsDir, section } from "./ledger.mjs";
 import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
 import { readEvents } from "./events.mjs";
-import { effectiveTier, loadPolicy, renderTierBlock, requires, tiered, tierOf } from "./size.mjs";
+import { effectiveTier, policyFor, renderTierBlock, requires, tiered, tierOf } from "./size.mjs";
 import { isRole, lastEditSeq, hasContextStep, lateOrder, tracedPointers } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 
@@ -409,7 +409,7 @@ export const verbs = {
       const dir = path.join(runsDir(ctx.stateDir), last);
       const ledger = loadLedger(dir);
       const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
-      state = { ...state, ledger, dir, verify: readVerify(dir), reviews: reviewFiles(dir), events, changed: ledger.changedAtClose ?? [], policy: state.policy ?? loadPolicy(), tier: ledger.tier ?? null };
+      state = { ...state, ledger, dir, verify: readVerify(dir), reviews: reviewFiles(dir), events, changed: ledger.changedAtClose ?? [], policy: policyFor(ledger), tier: ledger.tier ?? null };
       unmet = [];
     }
     const full = { ...state, stateDir: ctx.stateDir };

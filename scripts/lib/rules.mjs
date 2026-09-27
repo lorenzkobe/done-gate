@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { effectiveTier, leadDelegates, loadPolicy, requires } from "./size.mjs";
+import { effectiveTier, leadDelegates, policyFor, requires } from "./size.mjs";
 
 // Named repo checks, opted into via gate.json "checks". Each returns an unmet text or null.
 const CHECKS = {
@@ -262,6 +262,12 @@ function reviewed(state, role, after) {
   return { stopped, hasFile: huddles.length > 0, openItems };
 }
 
+// The command a `cmd:` driver names, or null for a skill driver or none.
+export function driverCommand(config) {
+  const m = /^cmd:\s*(\S.*)$/.exec(String(config.driver ?? ""));
+  return m ? m[1].trim() : null;
+}
+
 function waived(ledger, key) {
   return (ledger.waivers ?? []).some((w) => w.key === key);
 }
@@ -334,9 +340,16 @@ export function evaluate(state) {
 
   // R4: UI changed → the real surface was driven after the last edit
   if (changed.some((p) => config.isUi(p)) && !waived(ledger, "driver")) {
-    const driven = (state.events ?? []).some((e) => !e.agent && e.seq > after && (e.kind === "browser" || (e.kind === "skill" && e.skill === "verify")));
+    // a driver of the form cmd:<command> (a Playwright run) is driven by the lead running it;
+    // a run that itself writes a source file (a snapshot) is dated as the last change, so it
+    // counts at `after` too, not only past it
+    const driverCmd = driverCommand(config);
+    const ranDriver = (e) => driverCmd !== null && e.kind === "command" && String(e.cmd ?? "").includes(driverCmd) && e.seq >= after;
+    const driven = (state.events ?? []).some((e) => !e.agent && (ranDriver(e) || (e.seq > after && (e.kind === "browser" || (e.kind === "skill" && e.skill === "verify")))));
     if (!driven) {
-      unmet.push({ rule: "R4", text: config.driver
+      unmet.push({ rule: "R4", text: driverCmd !== null
+        ? `UI files changed but the real surface was not driven after the last edit. Run \`${driverCmd}\` (the driver in gate.json) yourself, or get the user's waiver (\`gate waive driver "<reason>"\`).`
+        : config.driver
         ? "UI files changed but the real surface was not driven after the last edit. Run the project's /verify driver (phone viewport first), or get the user's waiver (`gate waive driver \"<reason>\"`)."
         : "UI files changed and this repo has no /verify driver. Run `/done-gate:verify-setup` once to create it, drive the surface, or get the user's waiver (`gate waive driver \"<reason>\"`)." });
     }
@@ -344,7 +357,7 @@ export function evaluate(state) {
 
   // R5: source changed → an independent reviewer looked after the last edit and every Act-on
   // item is closed. A tier that requires no reviewer (tiny) is exempt.
-  const policy = state.policy ?? loadPolicy();
+  const policy = state.policy ?? policyFor(ledger);
   const needsReviewer = requires(policy, effectiveTier(policy, ledger, state.tier?.measured ?? null)).includes("reviewer");
   if (src.length && needsReviewer && !waived(ledger, "review")) {
     const r = reviewed(state, "reviewer", after);
@@ -371,11 +384,12 @@ export function evaluate(state) {
     }
   }
 
-  // R13: the gate's own config changed mid-task
-  if (ledger.gateHash && config.hash !== ledger.gateHash && !waived(ledger, "gate-config")) {
+  // R13: the gate's own config changed mid-task (a ledger from before hashed the file text)
+  if (ledger.gateHash && ![config.hash, config.legacyHash].includes(ledger.gateHash) && !waived(ledger, "gate-config")) {
     unmet.push({ rule: "R13", text: ".claude/gate.json changed since this ledger opened. Restore it, or get the user's waiver (`gate waive gate-config \"<reason>\"`)." });
   }
-  if (ledger.policyHash && state.policy?.hash && state.policy.hash !== ledger.policyHash && !waived(ledger, "gate-config")) {
+  // a ledger with a pinned policy is judged by it; only one from before pinning can go stale
+  if (!ledger.policy && ledger.policyHash && state.policy?.hash && state.policy.hash !== ledger.policyHash && !waived(ledger, "gate-config")) {
     unmet.push({ rule: "R13", text: "the plugin's models.json (tier policy) changed since this ledger opened. Restore it, or get the user's waiver (`gate waive gate-config \"<reason>\"`)." });
   }
 

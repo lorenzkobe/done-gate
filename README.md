@@ -249,6 +249,11 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 }
 ```
 
+`driver` may instead be `"cmd:npx playwright test"`: a run of that command by the lead after the
+last edit counts as driving the surface (R4). Setting or changing `driver` mid-task is not a
+config change (R13). A plan may declare its size, `gate note plan … --size large`, when the
+file count would under-predict it (one 500-line migration).
+
 ## Develop
 
 ```

@@ -76,6 +76,13 @@ export function loadPolicy(file = path.join(pluginRoot, "models.json")) {
   }
 }
 
+// The policy a task is judged by: the one pinned into its ledger at open, so a plugin
+// upgrade mid-task changes nothing for it; models.json for a ledger from before pinning.
+export function policyFor(ledger) {
+  // the pin is re-merged, so a field this version added is backfilled from the defaults
+  return ledger?.policy?.tiers ? merge({ policy: ledger.policy }) : loadPolicy();
+}
+
 export function tierOrder(policy) {
   return Object.keys(policy.tiers);
 }
@@ -149,7 +156,7 @@ export function delegatedTier(policy, tier) {
 // prediction and the last measurement decides, so a task that outgrows its prediction hands
 // its remaining edits to a worker; with neither known yet, the lead may edit (R2 already
 // demands a plan first). Returns that size, or null when the lead may edit.
-export function leadDelegates(ledger, policy = loadPolicy()) {
+export function leadDelegates(ledger, policy = policyFor(ledger)) {
   if (!tiered(ledger)) return null;
   const t = tierOf(ledger);
   const size = tierMax(policy, t.predicted, t.measured?.tier ?? null);
@@ -159,7 +166,7 @@ export function leadDelegates(ledger, policy = loadPolicy()) {
 // predicted stays null until `gate note plan --files` names the files; the measured diff
 // alone then decides, so a task that never predicts is judged by what it actually changed.
 export function emptyTier() {
-  return { predicted: null, predictedFiles: [], measured: null, autoNa: [], predictedSeq: null };
+  return { predicted: null, predictedFiles: [], declared: null, measured: null, autoNa: [], predictedSeq: null };
 }
 
 // A tier record from an older ledger, or a damaged one, is normalised rather than trusted.
@@ -170,6 +177,7 @@ export function tierOf(ledger) {
   return {
     predicted: typeof t.predicted === "string" ? t.predicted : null,
     predictedFiles: Array.isArray(t.predictedFiles) ? t.predictedFiles : [],
+    declared: typeof t.declared === "string" ? t.declared : null,
     measured: t.measured && typeof t.measured === "object" ? t.measured : null,
     autoNa: Array.isArray(t.autoNa) ? t.autoNa : [],
     predictedSeq: typeof t.predictedSeq === "number" ? t.predictedSeq : null,
@@ -257,13 +265,18 @@ function blank(step) {
   Object.assign(step, { state: null, note: null, evidence: null, seq: nextSeq() });
 }
 
-// Prediction from the files the plan names. Each optional step the predicted tier does not
-// require is marked N/A; one it requires that an earlier prediction dropped is given back.
-// A step closed by hand keeps its own note and is never touched.
-export function applyPrediction(ledger, policy, config, paths) {
+// Prediction from the files the plan names, raised to a size the plan declares (a one-file
+// 500-line migration is large by lines, which no file count can see). Each optional step
+// the predicted tier does not require is marked N/A; one it requires that an earlier
+// prediction dropped is given back. A step closed by hand keeps its own note and is never
+// touched.
+export function applyPrediction(ledger, policy, config, paths, declared = null) {
   if (!tiered(ledger)) return null;
   const tier = tierOf(ledger);
-  const pred = predictTier(policy, config, paths);
+  // a declaration outlives the plan note that made it: a later --files alone keeps it
+  tier.declared = declared ?? tier.declared;
+  const pred = { ...predictTier(policy, config, paths), declared: tier.declared };
+  if (tier.declared) pred.tier = tierMax(policy, pred.tier, tier.declared);
   const wasDelegated = delegatedTier(policy, tier.predicted);
   const delegated = delegatedTier(policy, pred.tier);
   tier.predicted = pred.tier;
@@ -318,7 +331,7 @@ export function renderTierBlock(ledger, policy, measured, { details = false } = 
   const t = tierOf(ledger);
   const eff = effectiveTier(policy, ledger, measured);
   const out = [];
-  const predicted = t.predicted ? `predicted ${t.predicted}${t.predictedFiles.length ? ` (${plural(t.predictedFiles.length, "file")})` : ""}` : "predicted: none (no --files)";
+  const predicted = t.predicted ? `predicted ${t.predicted}${t.predictedFiles.length ? ` (${plural(t.predictedFiles.length, "file")}${t.declared ? `, declared ${t.declared}` : ""})` : t.declared ? ` (declared)` : ""}` : "predicted: none (no --files)";
   const measuredText = measured
     ? `measured ${measured.tier}: ${plural(measured.files, "file")}, ${plural(measured.lines, "line")}${measured.forced.length ? ` · forced: ${measured.forced.join(", ")}` : ""}`
     : "measured: not yet";

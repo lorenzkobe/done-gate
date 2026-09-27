@@ -31,7 +31,7 @@ export function nextHint(ledger) {
     const planAt = ledger.steps.findIndex((s) => s.key === "plan");
     const before = ledger.steps.slice(0, planAt < 0 ? ledger.steps.length : planAt).find((s) => !s.state && s.key && s.key !== "read" && VERB_FOR[s.key]);
     if (before) return `next: step ${before.n}: ${VERB_FOR[before.key]}`;
-    return "next: `gate note plan \"<approach, files, data plan>\" --files a.ts,b.ts`";
+    return "next: `gate note plan \"<approach, files, data plan>\" --files a.ts,b.ts [--size large]`";
   }
   if (tiered(ledger) && !ledger.cases.length) return "next: `gate case add \"<case>\" --kind happy|edge|refused|boundary|idempotent|reported-surface|performance`, one per row";
   const blank = ledger.steps.filter((s) => !s.state);

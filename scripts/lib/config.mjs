@@ -165,19 +165,21 @@ export function loadConfig(root) {
     driver: typeof r.driver === "string" ? r.driver : DEFAULTS.driver,
     verify: normaliseVerify(r.verify ?? defaultVerify(root), DEFAULTS.verifyTimeout),
   };
-  // R13 asks whether what the gate runs changed mid-task: the repo's config text (or its
-  // absence) plus the verify command list it resolves to. A plugin upgrade that only
-  // reshapes entries (a new field) does not move it; removing the test script does.
-  const hash = createHash("sha1")
-    .update(existsSync(file) ? readFileSync(file, "utf8") : "defaults")
-    .update("\n")
-    .update(resolved.verify.map((v) => v.cmd).join("\n"))
-    .digest("hex");
+  // R13 asks whether what the gate runs changed mid-task: the repo's config (or its absence)
+  // plus the verify command list it resolves to. The driver key is left out: verify-setup
+  // adds it mid-task by design. A plugin upgrade that only reshapes entries (a new field)
+  // does not move it; removing the test script does. A ledger from before hashed the file
+  // text; legacyHash keeps it matching.
+  const verifyList = resolved.verify.map((v) => v.cmd).join("\n");
+  const { driver: _driver, ...judged } = r;
+  const hash = createHash("sha1").update(explicit ? JSON.stringify(judged) : "defaults").update("\n").update(verifyList).digest("hex");
+  const legacyHash = createHash("sha1").update(existsSync(file) ? readFileSync(file, "utf8") : "defaults").update("\n").update(verifyList).digest("hex");
   const opts = { ignoreCase: IGNORE_CASE };
   const not = (globs) => (p) => !matchAny(globs, p, opts);
   return {
     ...resolved,
     hash,
+    legacyHash,
     isSource: (p) =>
       matchAny(resolved.source, p, opts) &&
       not(resolved.sourceExclude)(p) &&

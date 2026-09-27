@@ -3,8 +3,7 @@ import path from "node:path";
 import { nextSeq } from "./events.mjs";
 import { currentLedger, findRun, isDone, loadLedger, saveLedger } from "./ledger.mjs";
 import { loadConfig } from "./config.mjs";
-import { loadPolicy } from "./size.mjs";
-import { applyPrediction, tiered } from "./size.mjs";
+import { applyPrediction, policyFor, tierOrder, tiered } from "./size.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
@@ -94,11 +93,16 @@ function checkContext(text, root) {
 export const verbs = {
   note(ctx) {
     const [section, ...rest] = ctx.args;
-    if (!["task", "context", "plan"].includes(section)) throw new UsageError('usage: gate note <task|context|plan> "<text>" (or - to read stdin)');
+    if (!["task", "context", "plan"].includes(section)) throw new UsageError('usage: gate note <task|context|plan> "<text>" [--files a,b] [--size <tier>] (or - to read stdin)');
     const files = flag(rest, "--files");
+    const size = flag(rest, "--size");
     const text = readText(ctx, positional(rest).join(" ")).trim();
     if (!text) throw new UsageError("note: empty text");
     if (section === "context") checkContext(text, ctx.root);
+    if (size !== undefined) {
+      const sizes = tierOrder(policyFor(open(ctx).ledger));
+      if (!sizes.includes(size)) throw new UsageError(`unknown size "${size}" (have: ${sizes.join(", ")})`);
+    }
     let predicted = null;
     withLedger(ctx, (ledger, dir) => {
       const file = path.join(dir, "ledger.md");
@@ -113,14 +117,14 @@ export const verbs = {
       if (section === "plan") {
         ledger.planSeq = seq;
         if (ledger.taskSeq) markStep(ledger, "plan", { state: "DONE", evidence: "ledger.md#plan", note: "Task and Plan written" });
-        if (files !== undefined && tiered(ledger)) {
+        if ((files !== undefined || size !== undefined) && tiered(ledger)) {
           // paths outside the repo are dropped: they cannot be part of this task's diff
-          const paths = files.split(",").map((f) => f.trim()).filter(Boolean).map((f) => toPosixRel(ctx.root, f)).filter((f) => f);
-          predicted = applyPrediction(ledger, loadPolicy(), loadConfig(ctx.root), paths);
+          const paths = (files ?? "").split(",").map((f) => f.trim()).filter(Boolean).map((f) => toPosixRel(ctx.root, f)).filter((f) => f);
+          predicted = applyPrediction(ledger, policyFor(ledger), loadConfig(ctx.root), paths, size ?? null);
         }
       }
     });
-    ctx.out(predicted ? `${section} noted · tier predicted ${predicted.tier} (${predicted.files} file${predicted.files === 1 ? "" : "s"}${predicted.forced.length ? `, forced by ${predicted.forced.join(", ")}` : ""})` : `${section} noted`);
+    ctx.out(predicted ? `${section} noted · tier predicted ${predicted.tier} (${predicted.files} file${predicted.files === 1 ? "" : "s"}${predicted.declared ? `, declared ${predicted.declared}` : ""}${predicted.forced.length ? `, forced by ${predicted.forced.join(", ")}` : ""})` : `${section} noted`);
     printNext(ctx);
   },
 

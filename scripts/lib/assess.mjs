@@ -3,8 +3,7 @@ import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { readEvents } from "./events.mjs";
 import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
-import { loadPolicy } from "./size.mjs";
-import { measure, reconcileTier, tiered } from "./size.mjs";
+import { measure, policyFor, reconcileTier, tiered } from "./size.mjs";
 import { implementationHash } from "./rules.mjs";
 import { nextSeq } from "./events.mjs";
 import { evaluate } from "./rules.mjs";
@@ -83,7 +82,7 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
 
   // Size and freshness bookkeeping. The ledger is written only on a state flip (a step
   // reopened, or the source hash moved), so a plain `gate check` leaves it byte-identical.
-  const policy = loadPolicy();
+  const policy = policyFor(current?.ledger);
   let tier = null;
   if (current) {
     let flipped = stampSourceChange(current.ledger, implementationHash(now, config), events);

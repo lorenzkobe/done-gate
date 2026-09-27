@@ -127,6 +127,7 @@ export function openLedger(ctx, slug, playbook) {
   if (!PLAYBOOKS.includes(playbook)) throw new UsageError(`unknown playbook "${playbook}" (have: ${PLAYBOOKS.join(", ")})`);
   const session = ensureSession(ctx.stateDir, ctx.root, ctx.session);
   const config = loadConfig(ctx.root);
+  const policy = loadPolicy();
   // a closed or abandoned run with the same slug on the same day keeps its folder; the new
   // run takes the next free name
   const base = `${new Date().toISOString().slice(0, 10)}-${slugify(slug)}`;
@@ -145,7 +146,9 @@ export function openLedger(ctx, slug, playbook) {
     closedAt: null,
     sessions: [ctx.session],
     gateHash: config.hash,
-    policyHash: loadPolicy().hash,
+    policyHash: policy.hash,
+    // pinned: a plugin upgrade mid-task changes nothing for this ledger
+    policy,
     // the freshness clock starts here, so the first real edit gets a real timestamp
     lastSourceHash: implementationHash(start, config),
     lastSourceChangeSeq: 0,
