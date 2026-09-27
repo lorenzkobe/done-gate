@@ -14,13 +14,52 @@ const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const HELPER_ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter"];
 // Shell forms that create or change files. Helpers may use them only on scratch paths
 // (tests/.tmp, /tmp, a scratchpad dir); git commands that change the repo are never theirs.
-const SHELL_WRITE = /(?:^|[;&|(]\s*|\s)(?:tee|rm|mv|cp|touch|mkdir|truncate|install|dd|tar)\s|\bsed\s+(?:-[a-zA-Z]*i|--in-place)|\bperl\s+-[a-zA-Z]*i|(?:^|[^<>])>{1,2}(?!&)/;
+const SHELL_WRITE = /(?:^|[;&|(]\s*|\s)(?:tee|rm|mv|cp|touch|mkdir|truncate|install|dd|tar)\s|\bsed\s+(?:-[a-zA-Z]*[iI]|--in-place)|\bperl\s+-[a-zA-Z]*i|(?:^|[^<>])>{1,2}(?!&)/;
 const GIT_WRITE = /\bgit\s+(?:add|commit|checkout|switch|reset|restore|stash|apply|am|merge|rebase|mv|rm|clean|push)\b/;
 // inline code handed to an interpreter can write anywhere and cannot be inspected; helpers
 // put such code in a scratch script instead, where the write shows as a path
 const INLINE_CODE = /\b(?:node|nodejs|deno|bun|python3?|perl|ruby|sh|bash|zsh)\s+(?:-[a-zA-Z]*[ecp]\b|--eval\b|--print\b)|\bphp\s+-r\b/;
 const SCRATCH = /(?:^|\/)(?:tests\/\.tmp|tmp|scratchpad)(?:\/|$)|^\/private\/tmp\//;
 const INLINE_WRITE = /\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|rename(?:Sync)?|unlink(?:Sync)?|rm(?:Sync)?|rmdir(?:Sync)?|mkdir(?:Sync)?|copyFile(?:Sync)?|truncate(?:Sync)?|createWriteStream|open\s*\([^)]*["'][wa][+]?["'])|os\.(?:remove|rename|unlink|makedirs|mkdir)|shutil\.|file_put_contents|fopen|fwrite|unlink/;
+
+// Programs that only read their arguments. A pipeline of these may look at evidence files.
+const READ_ONLY = new Set(["cat", "ls", "head", "tail", "grep", "egrep", "fgrep", "rg", "sed", "wc", "find", "diff", "stat", "file", "jq", "less", "more", "sort", "uniq", "cut", "tr", "column", "echo", "printf", "cd", "pwd", "test", "[", "true", "tree", "du", "date", "which", "type"]);
+// flags that turn a reader into a writer: sed -i or a w command, sort -o, tree -o, find -delete/-exec
+const WRITING_FLAG = {
+  // a w command sits at the start of a script or after an address (`/x/w f`, `1w f`, `$w f`)
+  // or as an s flag; "Write" inside a pattern follows a space (\u0001) and is text
+  sed: /^-[a-zA-Z]*[iI]|^--in-place|(?:^|[\u0002/\d$}])[wW](?=\S)/,
+  sort: /^-[a-zA-Z]*o|^--o|^--compress/,
+  tree: /^-o/,
+  find: /^-(?:delete|exec|execdir|ok|okdir|fprint|fls)/,
+  git: /^--output/,
+  rg: /^--pre/,
+};
+const GIT_READ = new Set(["show", "diff", "log", "status", "blame", "ls-files", "cat-file"]);
+
+// Every segment of the command starts with a read-only program, nothing is redirected to a
+// file, and no substitution hides a further command. `node …/gate.mjs` is the gate's own CLI.
+export function readsOnly(raw) {
+  const dropStreams = (s) => s.replace(/\d*>{1,2}\s*\/dev\/null/g, " ").replace(/\d>&\d/g, " ");
+  const stripped = dropStreams(String(raw).replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""'));
+  // a substitution runs inside double quotes too, so it is looked for in the raw text
+  if (/(?:^|[^<>])>{1,2}(?!&)/.test(stripped) || GIT_WRITE.test(stripped) || /\$\(|`/.test(String(raw))) return false;
+  // a quoted string is one token: its inner spaces (\u0001) and operators (\u0002) are not shell syntax
+  const tokens = dropStreams(String(raw).replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, (q) => q.slice(1, -1).replace(/\s/g, "\u0001").replace(/[|&;()\n]/g, "\u0002")));
+  return tokens.split(/\|\|?|&&?|;|\n|[()]/).every((segment) => {
+    const words = segment.trim().split(/\s+/).filter(Boolean);
+    while (words.length && (/^[A-Za-z_]\w*=/.test(words[0]) || words[0] === "rtk")) {
+      if (/^PATH=/.test(words[0])) return false; // a planted binary could stand in for cat
+      words.shift();
+    }
+    if (!words.length) return true;
+    const [program, ...args] = words;
+    if (program === "node") return /gate\.mjs$/.test(args[0] ?? "");
+    if (WRITING_FLAG[program] && args.some((a) => WRITING_FLAG[program].test(a))) return false;
+    if (program === "git") return GIT_READ.has(args[0] === "-C" ? args[2] : args[0]);
+    return READ_ONLY.has(program);
+  });
+}
 
 // Does a helper's shell write stay inside scratch space? Every path-looking token must be
 // scratch; for cp/mv only the destination (the last path) is a write.
@@ -118,8 +157,8 @@ export function decide(input, root, config = loadConfig(root), currentRun = null
 
   if (tool === "Bash") {
     const cmd = String(input.tool_input?.command ?? "");
-    if (EVIDENCE_IN_COMMAND.test(cmd)) {
-      return { deny: true, reason: "done-gate: that command touches gate evidence files (.claude/gate/...). Evidence is written only by `gate` verbs; read it with `gate check` or `gate report`.", paths: [] };
+    if (EVIDENCE_IN_COMMAND.test(cmd) && !readsOnly(cmd)) {
+      return { deny: true, reason: "done-gate: that command writes gate evidence files (.claude/gate/...). Evidence is written only by `gate` verbs; read it with cat, grep or `gate report`.", paths: [] };
     }
     // Helpers write only through the edit tools, where the role rules apply; a shell write
     // would bypass them. Pattern-based, so a helper that needs to write says so instead.
@@ -215,6 +254,7 @@ export const verbs = {
         delegate: verdict.delegate === true,
         tool: ctx.input?.tool_name ?? null,
         path: verdict.paths?.[0] ?? null,
+        ...(ctx.input?.tool_name === "Bash" ? { cmd: String(ctx.input.tool_input?.command ?? "").slice(0, 200) } : {}),
         reason: verdict.reason,
       },
     ]);

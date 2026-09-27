@@ -798,7 +798,7 @@ test("C18 refused: gate huddle resolve H1.1 --evidence nope-nothing is refused a
 // C19 — nobody edits a helper's file behind its back, not even the main session
 // ---------------------------------------------------------------------------
 
-test("C19 refused: a Bash command from the main session that touches a recorded review file is denied, whether it writes or only reads it, while the Read tool is not fenced", () => {
+test("C19 refused: a Bash command from the main session that writes a recorded review file is denied, while reading it is not", () => {
   const repo = opened("rd-c19");
   helperFile(repo, "review-1.md", reviewFile(1, "rd-c19", [FIND_1, FIND_2]));
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
@@ -810,7 +810,7 @@ test("C19 refused: a Bash command from the main session that touches a recorded 
   // No agent_type at all: this is the main session, the one that owns the diff.
   assert.equal(bash(`sed -i '' '/^- /d' ${rel}`), true, `the main session was allowed to strip findings: sed -i '' '/^- /d' ${rel}`);
   assert.equal(bash(`echo x >> ${rel}`), true, `the main session was allowed to append to the review file: echo x >> ${rel}`);
-  assert.equal(bash(`cat ${rel}`), true, `a shell command naming the review file was allowed: cat ${rel}`);
+  assert.equal(bash(`cat ${rel}`), false, `a read-only command naming the review file was denied: cat ${rel}`);
 
   // The rule is about the path, not the verb: an unrelated command is untouched.
   assert.equal(bash("grep -rn foo src"), false, "a command that names no helper file was denied");

@@ -127,10 +127,10 @@ test("evidence files under the run dir are denied for everyone, ledger.md stays 
   assert.equal(decide(input("Edit", `${repo}/.claude/gate/runs/x/ledger.md`), repo, cfg).deny, false);
 });
 
-test("a Bash command that names an evidence file is denied; ordinary commands pass", () => {
+test("a Bash command that writes an evidence file is denied; reads and ordinary commands pass", () => {
   const bash = (command) => ({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: repo, session_id: "S1" });
   assert.equal(decide(bash("echo x >> .claude/gate/runs/x/events.jsonl"), repo, cfg).deny, true);
-  assert.equal(decide(bash("cat .claude/gate/runs/x/verify.json"), repo, cfg).deny, true);
+  assert.equal(decide(bash("cat .claude/gate/runs/x/verify.json"), repo, cfg).deny, false);
   assert.equal(decide(bash("npm test"), repo, cfg).deny, false);
   assert.equal(decide(bash("node gate.mjs verify"), repo, cfg).deny, false);
 });

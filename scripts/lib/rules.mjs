@@ -56,28 +56,27 @@ function sectionLines(text, heading) {
   return (end ? rest.slice(0, end.index) : rest).split("\n");
 }
 
-const BULLET = /^\s*[-*]\s+(.*\S)\s*$/;
+const BULLET = /^(\s*)[-*]\s+(.*\S)\s*$/;
+// "none", "none. <prose>", "n/a", "nothing found", "nothing to act on": an empty section.
+// "None of the callers …" is a finding.
+const EMPTY = /^(?:none|n\/a)\s*(?:$|[.,;:!—–(-])|^(?:none|n\/a|nothing)\b[\s.,;:!-]*(?:found|to act on|here|so far)?[\s.]*$/i;
 
+// The bullets at the section's outermost indent; a deeper bullet is a sub-point of the
+// finding above it.
 function bullets(lines) {
-  const out = [];
-  for (const raw of lines) {
-    const m = BULLET.exec(raw);
-    if (!m) continue;
-    // "none", "none.", "none found", "nothing to act on": an empty section, not a finding
-    if (/^(?:none|n\/a|nothing)\b[\s.,;:!-]*(?:found|to act on|here|so far)?[\s.]*$/i.test(m[1].trim())) continue;
-    out.push(m[1].trim());
-  }
-  return out;
+  const found = lines.map((raw) => BULLET.exec(raw)).filter(Boolean).map((m) => ({ indent: m[1].length, text: m[2].trim() }));
+  const top = Math.min(...found.map((b) => b.indent));
+  return found.filter((b) => b.indent === top && !EMPTY.test(b.text)).map((b) => b.text);
 }
 
 // A helper cut off mid-write leaves its draft-first placeholder behind: every section reads
-// "- unverified". Shape-agnostic (no heading lookup), so it also catches an arbiter's
-// Ruling-only stub, which has no "## Act on" section at all. Built on bullets(), so a "- none"
-// placeholder (agents/reviewer.md's Dismissed section) is dropped the same way parseFindings
-// drops it, before the "every remaining bullet is unverified" check runs.
+// "- unverified", or "- <label>: unverified" in a verdict section. Shape-agnostic (no heading
+// lookup), so it also catches an arbiter's Ruling-only stub, which has no "## Act on" section
+// at all. Built on bullets(), so a "- none" placeholder (agents/reviewer.md's Dismissed
+// section) is dropped the same way parseFindings drops it.
 export function isDraft(text) {
   const found = bullets(String(text ?? "").replace(/\r/g, "").split("\n"));
-  return found.length > 0 && found.every((b) => /^unverified[\s.,;:!-]*$/i.test(b));
+  return found.length > 0 && found.every((b) => /^(?:[^:]{1,40}:\s*)?unverified[\s.,;:!-]*$/i.test(b));
 }
 
 // Every Act-on bullet of a helper file. "none" and a missing section are empty.
