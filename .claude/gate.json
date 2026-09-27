@@ -1,0 +1,4 @@
+{
+  "$schema": "../gate.schema.json",
+  "source": ["scripts/**", "skills/**", "agents/**", "hooks/**", "tests/**", "models.json", "gate.schema.json"]
+}
