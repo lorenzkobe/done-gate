@@ -124,6 +124,8 @@ test("C9 happy: one session end to end — session start, a blocked stop, open, 
 
   edit(repo, "Write", "tests/a.test.ts", "test('a', () => { /* returns 2 */ });\n");
   sh(repo, ["verify"]);
+  // the 19-line edit outgrew the predicted tiny: check measures it and gives {review} back
+  sh(repo, ["check"]);
 
   // ---- the reviewer pass ---------------------------------------------------
   hookVerb(repo, "log", {
@@ -138,7 +140,8 @@ test("C9 happy: one session end to end — session start, a blocked stop, open, 
   // ---- close every step the playbook left blank ----------------------------
   for (const step of ledgerOf(dir).steps) {
     if (step.state !== null || step.key === "close") continue;
-    const r = spawnSync(process.execPath, [gate, "step", step.key, "na", "not needed for a one-constant change"], {
+    const args = step.key === "review" ? ["step", "review", "done", "one clean round", "--evidence", "review-1.md"] : ["step", step.key, "na", "not needed for a one-constant change"];
+    const r = spawnSync(process.execPath, [gate, ...args], {
       input: "",
       encoding: "utf8",
       env: shellEnv(repo),

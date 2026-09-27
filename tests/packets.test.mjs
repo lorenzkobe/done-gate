@@ -499,7 +499,7 @@ test("C11 happy: the full report names the packet file under a huddle when it ex
 // ---------------------------------------------------------------------------
 
 test("C12 boundary: untracked or non-git files appear in the reviewer diff as all-added blocks; deleted files as a one-line note; a file dirty at open carries a note that pre-existing changes are included", () => {
-  const repo = committed("packets-c12", { [PLAN_FILE]: X_SRC });
+  const repo = committed("packets-c12", { [PLAN_FILE]: X_SRC, "src/a.ts": "export const a = 1;\n" });
   // Dirty before the ledger opens: git can no longer attribute these lines to this task.
   write(repo, "src/app/page.tsx", "export default () => null;\nconst pre = 1;\n");
 
@@ -629,7 +629,7 @@ test("C15 edge: a changed README.md appears in the reviewer packet's diff", () =
 // ---------------------------------------------------------------------------
 
 test("C16 boundary: a commit made mid-task does not shrink the reviewer diff or the measured size", () => {
-  const repo = opened("packets-c16");
+  const repo = opened("packets-c16", { files: { "src/a.ts": "export const a = 1;\n" } });
   const headAtOpen = git(repo, ["rev-parse", "HEAD"]).trim();
 
   const ledger = JSON.parse(readFileSync(path.join(runDir(repo), "ledger.json"), "utf8"));

@@ -466,7 +466,7 @@ test("C5 the policy exports come from size.mjs and still read models.json", asyn
   assert.equal(tierFor(policy, { files: maxFiles + 1, lines: maxLines }), "standard");
   assert.equal(tierFor(policy, { files: maxFiles, lines: maxLines + 1 }), "standard");
   assert.equal(tierFor(policy, { files: models.policy.tiers.standard.maxFiles + 1, lines: 0 }), "large");
-  assert.equal(tierFor(policy, {}), "small");
+  assert.equal(tierFor(policy, {}), "tiny");
   // a forced category lifts the answer to at least standard
   assert.equal(tierFor(policy, { files: 0, lines: 0, forced: ["ui"] }), "standard");
   assert.equal(tierFor(policy, { files: 999, lines: 0, forced: ["ui"] }), "large");
@@ -663,21 +663,21 @@ test("C3 happy: a fresh ledger.md has exactly the Task, Context and Plan section
 // C4 — the one optional step left
 // ---------------------------------------------------------------------------
 
-test("C4 edge: `note plan --files <one file>` marks only {skeptic} N/A on a feature; bugfix and refactor mark nothing", () => {
-  assert.equal(POLICY.tiers.small.maxFiles, 1, "premise: one file is tier small per models.json");
+test("C4 edge: `note plan --files <one file>` marks {skeptic} and {review} N/A on a feature; bugfix and refactor mark only {review}", () => {
+  assert.equal(POLICY.tiers.tiny.maxFiles, 1, "premise: one file is tier tiny per models.json");
 
   const feature = committed("playbooks-c4-feature");
   cli(feature, "open", ["badge", "feature"]);
   cli(feature, "note", ["task", "Add a badge. [inferred]"]);
   cli(feature, "note", ["plan", "One component.", "--files", "src/a.ts"]);
   const f = ledgerOf(feature);
-  assert.equal(f.tier.predicted, "small");
-  assert.deepEqual(f.tier.autoNa, ["skeptic"]);
+  assert.equal(f.tier.predicted, "tiny");
+  assert.deepEqual(f.tier.autoNa, ["skeptic", "review"]);
   assert.equal(stepOf(f, "skeptic").state, "N/A");
   assert.deepEqual(
     f.steps.filter((s) => s.state).map((s) => s.key),
-    ["plan", "skeptic"],
-    "only {plan} (just written) and {skeptic} (auto-N/A) are closed",
+    ["plan", "skeptic", "review"],
+    "only {plan} (just written), {skeptic} and {review} (auto-N/A) are closed",
   );
 
   for (const name of ["bugfix", "refactor"]) {
@@ -686,12 +686,12 @@ test("C4 edge: `note plan --files <one file>` marks only {skeptic} N/A on a feat
     cli(repo, "note", ["task", "Fix the badge. [inferred]"]);
     cli(repo, "note", ["plan", "One component.", "--files", "src/a.ts"]);
     const l = ledgerOf(repo);
-    assert.equal(l.tier.predicted, "small", name);
-    assert.deepEqual(l.tier.autoNa, [], `${name}: nothing is auto-N/A`);
+    assert.equal(l.tier.predicted, "tiny", name);
+    assert.deepEqual(l.tier.autoNa, ["review"], `${name}: only the review is auto-N/A`);
     assert.deepEqual(
       l.steps.filter((s) => s.state).map((s) => s.key),
-      ["plan"],
-      `${name}: only {plan} is closed`,
+      ["plan", "review"],
+      `${name}: only {plan} and the auto-N/A {review} are closed`,
     );
   }
 });

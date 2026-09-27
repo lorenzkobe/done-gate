@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { leadDelegates } from "./size.mjs";
+import { effectiveTier, leadDelegates, loadPolicy, requires } from "./size.mjs";
 
 // Named repo checks, opted into via gate.json "checks". Each returns an unmet text or null.
 const CHECKS = {
@@ -343,8 +343,11 @@ export function evaluate(state) {
     }
   }
 
-  // R5: source changed → an independent reviewer looked after the last edit and every Act-on item is closed
-  if (src.length && !waived(ledger, "review")) {
+  // R5: source changed → an independent reviewer looked after the last edit and every Act-on
+  // item is closed. A tier that requires no reviewer (tiny) is exempt.
+  const policy = state.policy ?? loadPolicy();
+  const needsReviewer = requires(policy, effectiveTier(policy, ledger, state.tier?.measured ?? null)).includes("reviewer");
+  if (src.length && needsReviewer && !waived(ledger, "review")) {
     const r = reviewed(state, "reviewer", after);
     if (!r.stopped || !r.hasFile) {
       unmet.push({ rule: "R5", text: "no reviewer pass after the last edit. Spawn `done-gate:reviewer` (it writes review-<n>.md), then `gate huddle add reviewer --file review-<n>.md`." });

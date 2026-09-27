@@ -16,7 +16,8 @@ export function makeRepo(name, files = {}) {
   const all = {
     ".gitignore": "node_modules/\nignored.txt\n",
     "package.json": JSON.stringify({ name, scripts: { lint: "true", test: "true", build: "true" } }),
-    "src/a.ts": "export const a = 1;\n",
+    // twenty lines, so a rewrite measures past tiny (15 lines) and the reviewer rules apply
+    "src/a.ts": Array.from({ length: 20 }, (_, i) => `export const a${i} = ${i};`).join("\n") + "\n",
     "src/app/page.tsx": "export default () => null;\n",
     "tests/a.test.ts": "test('a', () => {});\n",
     "docs/notes.md": "# notes\n",

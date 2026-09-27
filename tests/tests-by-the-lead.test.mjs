@@ -179,12 +179,12 @@ test("C5 edge: R7 names writing the tests and gate waive tests; a tests waiver s
 // ---------------------------------------------------------------------------
 
 test("C6 happy: gate size and the report print helpers without model names; the round 2 line is required by Act-on count or tier and recorded by a second reviewer or a reviewer-2 stop", () => {
-  const small = opened("tbl-c6-small", ["src/a.ts"]);
+  const small = opened("tbl-c6-small", ["src/a.ts", "src/b.ts"]);
   const size = cli(small, "size").stdout;
-  assert.match(lineStarting(size, "requires:"), /^requires: reviewer\b/, size);
+  assert.match(lineStarting(size, "requires:"), /^requires: skeptic, reviewer\b/, size);
   assert.doesNotMatch(size, MODEL_NAME, size);
   const report = cli(small, "report").stdout;
-  assert.match(lineStarting(report, "helpers:"), /spawned 0 of 1 required \(reviewer\)/, report);
+  assert.match(lineStarting(report, "helpers:"), /spawned 0 of 2 required \(skeptic, reviewer\)/, report);
   assert.equal(lineStarting(report, "round 2:"), "round 2: not required", report);
 
   // two Act-on items from round 1 require a second round

@@ -44,7 +44,7 @@ judgment out of the model and into hooks that can't be talked out of it.
    ├─ case table             ├─ must exist BEFORE the first source edit (R2)
    ├─ skeptic huddle        ─┘
    │
-   ├─ QA writes tests (blind to src)  ║  small, standard: you implement
+   ├─ QA writes tests (blind to src)  ║  tiny, small, standard: you implement
    │                                   ║  large: a worker per piece
    ├─ gate verify        ──► verify.json  (exit codes, tails, source hash)
    ├─ drive the real app ──► browser events logged by hooks
@@ -141,7 +141,7 @@ attempt to finish.
 | R2 | Context, Plan or case table was written after the first source edit |
 | R3 | `gate verify` is missing, red, or older than the last source edit |
 | R4 | UI files changed and the real surface wasn't driven afterwards |
-| R5 | no reviewer pass after the last edit, or an Act-on item is still open. A round that came back clean, or the third, covers later edits to files it saw; a new file needs a new round |
+| R5 | no reviewer pass after the last edit, or an Act-on item is still open; tier tiny needs no reviewer. A round that came back clean, or the third, covers later edits to files it saw; a new file needs a new round |
 | R6 | schema files changed with no real-schema probe |
 | R7 | source changed and no test file changed |
 | R8 | any case or step is blank |
@@ -198,6 +198,7 @@ tests itself, from the case table, before the code.
 
 | Tier | When | Helpers |
 | --- | --- | --- |
+| tiny | one source file, ≤ 15 lines, no UI, schema or high-risk path | none |
 | small | one source file, ≤ 40 lines, no UI, schema or high-risk path | reviewer |
 | standard | ≤ 10 files, ≤ 400 lines, or any UI, schema or high-risk file | skeptic, reviewer |
 | large | more than that | skeptic, QA (blind tests), a worker per piece, reviewer, a second reviewer |
@@ -205,8 +206,9 @@ tests itself, from the case table, before the code.
 | any | a review finding the model disputes with evidence and the reviewer upholds | arbiter, rules once in writing |
 
 `gate note plan --files a.ts,b.ts` predicts the tier before the diff exists, so a small
-feature skips the design critique up front; if the diff then outgrows the prediction, the
-step comes back and the gate says so. `gate size` prints the
+feature skips the design critique up front and a tiny one skips the reviewer too; if the diff
+then outgrows the prediction, the step comes back and the gate says so. Tiny is reached only
+by evidence: a plan naming exactly one source file, or a measurement with no estimated lines. `gate size` prints the
 numbers. The policy is in `models.json`. Hard ceiling: **ten helper invocations per task**,
 typically two or three. Always-on context cost is about 500 tokens; everything the hooks do
 is off-model.

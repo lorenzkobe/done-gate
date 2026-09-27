@@ -197,13 +197,15 @@ test("C2 boundary: tierFor: 1 file and 40 lines is small; 41 lines is standard; 
   const p = loadPolicy();
   const at = (files, lines, forced = []) => tierFor(p, { files, lines, forced });
 
+  assert.equal(at(1, 15), "tiny");
+  assert.equal(at(1, 16), "small");
   assert.equal(at(1, 40), "small");
   assert.equal(at(1, 41), "standard");
   assert.equal(at(2, 1), "standard");
   assert.equal(at(10, 400), "standard");
   assert.equal(at(11, 1), "large");
   assert.equal(at(1, 401), "large");
-  assert.equal(at(0, 0), "small", "an empty diff is the smallest tier");
+  assert.equal(at(0, 0), "tiny", "an empty diff is the smallest tier");
 });
 
 // ---------------------------------------------------------------------------
@@ -278,21 +280,21 @@ test("C4 happy: snapshot entries carry a line count l; a cached entry without l 
 // C5
 // ---------------------------------------------------------------------------
 
-test("C5 happy: note plan --files src/a.ts predicts small, marks {skeptic} N/A with note 'tier small (predicted)', fills autoNa, and prints the predicted tier", () => {
+test("C5 happy: note plan --files src/a.ts predicts tiny, marks {skeptic} and {review} N/A with note 'tier tiny (predicted)', fills autoNa, and prints the predicted tier", () => {
   const repo = committed("tier-c5");
   cli(repo, "open", ["badge", "feature"]);
   cli(repo, "note", ["task", "Add a badge. [inferred]"]);
   const r = cli(repo, "note", ["plan", "One component.", "--files", "src/a.ts"]);
-  assert.match(r.stdout, /tier predicted small \(1 file\)/);
+  assert.match(r.stdout, /tier predicted tiny \(1 file\)/);
 
   const l = ledgerOf(repo);
-  assert.equal(l.tier.predicted, "small");
+  assert.equal(l.tier.predicted, "tiny");
   assert.deepEqual(l.tier.predictedFiles, ["src/a.ts"]);
-  assert.deepEqual(l.tier.autoNa, ["skeptic"]);
+  assert.deepEqual(l.tier.autoNa, ["skeptic", "review"]);
   assert.equal(stepOf(l, "skeptic").state, "N/A");
-  assert.equal(stepOf(l, "skeptic").note, "tier small (predicted)");
+  assert.equal(stepOf(l, "skeptic").note, "tier tiny (predicted)");
   assert.equal(stepOf(l, "tests").state, null, "the tests step is never dropped");
-  assert.equal(stepOf(l, "review").state, null, "the reviewer is never dropped");
+  assert.equal(stepOf(l, "review").state, "N/A", "tiny needs no reviewer");
 });
 
 // ---------------------------------------------------------------------------
@@ -307,7 +309,7 @@ test("C6 edge: a second note plan --files with two files revises to standard: th
   cli(repo, "step", ["schema", "na", "no schema files touched"]);
 
   const first = ledgerOf(repo);
-  assert.equal(first.tier.predicted, "small");
+  assert.equal(first.tier.predicted, "tiny");
   assert.equal(stepOf(first, "skeptic").state, "N/A");
 
   const r = cli(repo, "note", ["plan", "Two components.", "--files", "src/a.ts,src/b.ts"]);
@@ -345,7 +347,7 @@ test("C7 boundary: a file dirty at gate open is measured by line-count delta (so
   assert.equal(row.lines, 2, "|6 - 4|, not the 3 added lines git diff HEAD would report");
   assert.equal(m.files, 1);
   assert.equal(m.lines, 2);
-  assert.equal(m.tier, "small");
+  assert.equal(m.tier, "small", "an estimate never lands on tiny");
 });
 
 // ---------------------------------------------------------------------------
@@ -353,7 +355,7 @@ test("C7 boundary: a file dirty at gate open is measured by line-count delta (so
 // ---------------------------------------------------------------------------
 
 test("C8 happy: a tracked file clean at open is measured by git numstat (source git); a content edit that keeps the line count counts 2", () => {
-  const repo = committed("tier-c8"); // src/a.ts is tracked and clean
+  const repo = committed("tier-c8", { "src/a.ts": "export const a = 1;\n" }); // src/a.ts is tracked and clean
   cli(repo, "open", ["clean", "feature"]);
   assert.ok(!ledgerOf(repo).baseline.dirty.includes("src/a.ts"));
 
@@ -367,7 +369,7 @@ test("C8 happy: a tracked file clean at open is measured by git numstat (source 
   assert.equal(row.lines, 2, "1 added + 1 deleted; the line-delta fallback would have said 1");
   assert.equal(m.files, 1);
   assert.equal(m.lines, 2);
-  assert.equal(m.tier, "small");
+  assert.equal(m.tier, "tiny");
 });
 
 // ---------------------------------------------------------------------------
@@ -411,7 +413,7 @@ test("C10 refused: growth from small to standard blanks the auto-N/A {skeptic}; 
   cli(repo, "step", ["skeptic", "na", "no design risk, tiny change"]);
 
   const predicted = ledgerOf(repo);
-  assert.equal(predicted.tier.predicted, "small");
+  assert.equal(predicted.tier.predicted, "tiny");
   assert.equal(stepOf(predicted, "skeptic").state, "N/A");
   assert.equal(stepOf(predicted, "skeptic").note, "no design risk, tiny change");
   const beforeGrowth = check(repo);
@@ -560,7 +562,8 @@ test("C16 happy: models.json carries the policy object and no escalate/never/cei
   assert.equal(typeof m.policy, "object");
   assert.deepEqual(Object.keys(m.policy).sort(), ["ceiling", "delegatesAt", "escalate", "forceStandard", "tiers"]);
   assert.equal(m.policy.delegatesAt, "large");
-  assert.deepEqual(Object.keys(m.policy.tiers).sort(), ["large", "small", "standard"]);
+  assert.deepEqual(Object.keys(m.policy.tiers), ["tiny", "small", "standard", "large"]);
+  assert.deepEqual(m.policy.tiers.tiny, { maxFiles: 1, maxLines: 15, requires: [] });
   assert.deepEqual(m.policy.tiers.small, { maxFiles: 1, maxLines: 40, requires: ["reviewer"] });
   assert.deepEqual(m.policy.tiers.standard, { maxFiles: 10, maxLines: 400, requires: ["skeptic", "reviewer"] });
   assert.deepEqual(m.policy.tiers.large, { requires: ["skeptic", "qa", "worker", "reviewer", "reviewer-2"] });
@@ -578,7 +581,7 @@ test("C16 happy: models.json carries the policy object and no escalate/never/cei
 // ---------------------------------------------------------------------------
 
 test("C17 boundary: measure ignores test files and docs when counting files and lines", () => {
-  const repo = committed("tier-c17");
+  const repo = committed("tier-c17", { "src/a.ts": "export const a = 1;\n" });
   cli(repo, "open", ["ignores", "feature"]);
   const baseline = baselineAt(repo, ledgerOf(repo).baseline.dirty);
 
@@ -590,7 +593,7 @@ test("C17 boundary: measure ignores test files and docs when counting files and 
   assert.deepEqual(m.details.map((d) => d.path), ["src/a.ts"]);
   assert.equal(m.files, 1);
   assert.equal(m.lines, 2);
-  assert.equal(m.tier, "small");
+  assert.equal(m.tier, "tiny");
   assert.equal(nLines(readFileSync(path.join(repo, "docs/notes.md"), "utf8")), 3, "the doc really did change");
 });
 
@@ -599,7 +602,7 @@ test("C17 boundary: measure ignores test files and docs when counting files and 
 // ---------------------------------------------------------------------------
 
 test("C18 boundary: a git repo with no commits measures changed files by line delta, never 0 lines", () => {
-  const repo = makeRepo("tier-c18"); // git init, nothing committed: HEAD does not exist
+  const repo = makeRepo("tier-c18", { "src/a.ts": "export const a = 1;\n" }); // git init, nothing committed: HEAD does not exist
   assert.equal(
     spawnSync("git", ["rev-parse", "--verify", "HEAD"], { cwd: repo, encoding: "utf8" }).status !== 0,
     true,
@@ -648,14 +651,14 @@ test("C19 edge: a waived {skeptic} stays WAIVED when the diff grows; nothing goe
 // C20
 // ---------------------------------------------------------------------------
 
-test("C20 refused: only the feature playbook auto-N/As at tier small; bugfix and refactor skip nothing", () => {
+test("C20 refused: the feature playbook may drop {skeptic} and {review}; bugfix and refactor only {review}", () => {
   // The source of truth for which steps a tier may drop, per playbook.
   assert.deepEqual(Object.keys(OPTIONAL_STEPS).sort(), ["bugfix", "feature", "refactor"]);
-  assert.deepEqual(OPTIONAL_STEPS.feature, ["skeptic"]);
-  assert.deepEqual(OPTIONAL_STEPS.bugfix, []);
-  assert.deepEqual(OPTIONAL_STEPS.refactor, []);
-  assert.deepEqual(optionalSteps({ playbook: "bugfix" }), []);
-  assert.deepEqual(optionalSteps({ playbook: "feature" }), ["skeptic"]);
+  assert.deepEqual(OPTIONAL_STEPS.feature, ["skeptic", "review"]);
+  assert.deepEqual(OPTIONAL_STEPS.bugfix, ["review"]);
+  assert.deepEqual(OPTIONAL_STEPS.refactor, ["review"]);
+  assert.deepEqual(optionalSteps({ playbook: "bugfix" }), ["review"]);
+  assert.deepEqual(optionalSteps({ playbook: "feature" }), ["skeptic", "review"]);
   assert.deepEqual(optionalSteps({ playbook: "plan" }), [], "the plan playbook is never tiered");
 
   for (const playbook of ["bugfix", "refactor"]) {
@@ -663,14 +666,12 @@ test("C20 refused: only the feature playbook auto-N/As at tier small; bugfix and
     cli(repo, "open", [`fix-${playbook}`, playbook]);
     cli(repo, "note", ["task", "One small change. [inferred]"]);
     const r = cli(repo, "note", ["plan", "One file.", "--files", "src/a.ts"]);
-    assert.match(r.stdout, /tier predicted small \(1 file\)/, playbook);
+    assert.match(r.stdout, /tier predicted tiny \(1 file\)/, playbook);
 
     const l = ledgerOf(repo);
-    assert.equal(l.tier.predicted, "small", playbook);
-    assert.deepEqual(l.tier.autoNa, [], `${playbook} drops no step`);
-    for (const step of l.steps) {
-      assert.notEqual(step.note, "tier small (predicted)", `${playbook}: ${step.key}`);
-    }
+    assert.equal(l.tier.predicted, "tiny", playbook);
+    assert.deepEqual(l.tier.autoNa, ["review"], `${playbook} drops only the review`);
+    assert.equal(stepOf(l, "skeptic"), undefined, `${playbook} has no skeptic step`);
   }
 });
 
@@ -800,7 +801,7 @@ test("C26 refused: note plan --files drops a path outside the repo and keeps the
 
   const l = ledgerOf(repo);
   assert.deepEqual(l.tier.predictedFiles, ["src/a.ts"]);
-  assert.equal(l.tier.predicted, "small", "one file survived, so the prediction is small");
+  assert.equal(l.tier.predicted, "tiny", "one file survived, so the prediction is tiny");
   assert.ok(
     !JSON.stringify(l).includes("/etc/hosts"),
     "no part of the ledger records a path outside the repo",
@@ -1220,14 +1221,14 @@ test("C2 happy: the full report's Tier block carries the predicted and measured 
   const size = withoutHint(cli(repo, "size").stdout).filter((l) => !l.startsWith("files:"));
   assert.deepEqual(block.slice(0, size.length), size, "the report's Tier block disagrees with `gate size`");
 
-  assert.ok(block[0].includes("predicted small (1 file)"), block[0]);
+  assert.ok(block[0].includes("predicted tiny (1 file)"), block[0]);
   assert.match(block[0], /measured standard: 3 files, \d+ lines/, block[0]);
   assert.ok(block[0].includes("forced: ui"), `a .tsx file forces the ui category:\n${block[0]}`);
-  assert.ok(block[0].startsWith("tier: standard"), `small predicted + standard measured is standard:\n${block[0]}`);
+  assert.ok(block[0].startsWith("tier: standard"), `tiny predicted + standard measured is standard:\n${block[0]}`);
 
   const keys = block.find((l) => l.startsWith("auto-N/A:"));
   assert.ok(keys, `no auto-N/A line:\n${block.join("\n")}`);
-  assert.ok(keys.includes("auto-N/A: {skeptic}"), keys);
+  assert.equal(keys, "auto-N/A: none", "both dropped steps came back with the growth");
 });
 
 // ---------------------------------------------------------------------------
@@ -1319,7 +1320,7 @@ test("C6 boundary: a closed ledger's report still shows the Tier block from the 
   const report = cli(repo, "report").stdout;
   const block = tierLines(report);
   assert.ok(block, `a closed run's report lost the Tier section:\n${report}`);
-  assert.equal(block[0], "tier: standard · predicted standard (2 files) · measured small: 0 files, 0 lines");
+  assert.equal(block[0], "tier: standard · predicted standard (2 files) · measured tiny: 0 files, 0 lines");
 });
 
 // ---------------------------------------------------------------------------
@@ -1594,11 +1595,11 @@ test("C2 happy: growth from small to standard blanks {skeptic} and `gate check` 
   cli(repo, "note", ["task", "One small change. [inferred]"]);
   cli(repo, "note", ["plan", "Touch one file.", "--files", "src/a.ts"]);
 
-  // A one-file prediction is small, so the optional {skeptic} is auto-N/A'd: R8's blank-step
+  // A one-file prediction is tiny, so the optional {skeptic} is auto-N/A'd: R8's blank-step
   // line must not name it yet.
   const predicted = ledgerOf(repo);
-  assert.equal(predicted.tier.predicted, "small");
-  assert.equal(stepOf(predicted, "skeptic").state, "N/A", "{skeptic} was not auto-N/A'd at small");
+  assert.equal(predicted.tier.predicted, "tiny");
+  assert.equal(stepOf(predicted, "skeptic").state, "N/A", "{skeptic} was not auto-N/A'd at tiny");
 
   const small = check(repo);
   assert.deepEqual(ruleLines(small, "R14"), [], `R14 still exists:\n${small}`);

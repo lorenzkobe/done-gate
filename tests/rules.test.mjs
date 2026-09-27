@@ -444,7 +444,7 @@ test("C1 refused: at predicted large, a lead edit event on src/a.ts after the pl
 test("C2 happy: at predicted small and standard, and on the untiered plan playbook, a lead edit event never produces R16", () => {
   const small = opened("rules-r16-c2-small");
   const predicted = notePlan(small, SMALL_FILES);
-  assert.match(predicted, /predicted small/, `${SMALL_FILES.length} file must predict small: ${predicted}`);
+  assert.match(predicted, /predicted tiny/, `${SMALL_FILES.length} file must predict tiny: ${predicted}`);
   write(small, "src/a.ts", "export const a = 2;\n");
   leadEdit(small, "src/a.ts");
   assert.equal(effectiveSize(small), "small", "nothing outgrew the prediction");

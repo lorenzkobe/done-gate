@@ -2,6 +2,11 @@
   "principle": "Spend helpers where they buy correctness, never where they don't. Every helper runs on the session's own model; the size of the change, not a model name, decides who is spawned; escalation is by evidence, not by habit.",
   "policy": {
     "tiers": {
+      "tiny": {
+        "maxFiles": 1,
+        "maxLines": 15,
+        "requires": []
+      },
       "small": {
         "maxFiles": 1,
         "maxLines": 40,

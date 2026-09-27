@@ -16,6 +16,7 @@ const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".
 // trips R13 (which hashes the repo config).
 export const DEFAULT_POLICY = Object.freeze({
   tiers: {
+    tiny: { maxFiles: 1, maxLines: 15, requires: [] },
     small: { maxFiles: 1, maxLines: 40, requires: ["reviewer"] },
     standard: { maxFiles: 10, maxLines: 400, requires: ["skeptic", "reviewer"] },
     large: { requires: ["skeptic", "qa", "worker", "reviewer", "reviewer-2"] },
@@ -89,6 +90,12 @@ export function tierMax(policy, a, b) {
   return ia >= ib ? a : b;
 }
 
+// A tier that needs no helper is reached only by evidence; anything weaker lands one tier up.
+function aboveLowest(policy, tier) {
+  const order = tierOrder(policy);
+  return tier === order[0] && order.length > 1 && !requires(policy, tier).length ? order[1] : tier;
+}
+
 export function requires(policy, tier) {
   return policy.tiers[tier]?.requires ?? [];
 }
@@ -111,16 +118,19 @@ export function tierFor(policy, { files = 0, lines = 0, forced = [] } = {}) {
   return tier;
 }
 
-// Steps a small task may skip, per playbook. Only the feature playbook has a design huddle;
-// bugfix and refactor have none, so tier small skips nothing there. Skipped steps come back
-// the moment the diff outgrows the tier.
-export const OPTIONAL_STEPS = { feature: ["skeptic"], bugfix: [], refactor: [] };
+// The steps a tier may drop, per playbook, and the helper role each one stands for: a step
+// is required exactly when its role is in the tier's requires. Only the feature playbook has
+// a design huddle; every tiered playbook has a review. A dropped step comes back the moment
+// the diff outgrows the tier.
+export const OPTIONAL_STEPS = { feature: ["skeptic", "review"], bugfix: ["review"], refactor: ["review"] };
+const STEP_ROLE = { skeptic: "skeptic", review: "reviewer" };
 const TIERED_PLAYBOOKS = new Set(Object.keys(OPTIONAL_STEPS));
 export function optionalSteps(ledgerOrPlaybook) {
   const playbook = typeof ledgerOrPlaybook === "string" ? ledgerOrPlaybook : ledgerOrPlaybook?.playbook;
   return OPTIONAL_STEPS[playbook] ?? [];
 }
-const AUTO_NOTE = "tier small (predicted)";
+const autoNote = (tier) => `tier ${tier} (predicted)`;
+const isAutoNote = (note) => /^tier \w+ \(predicted\)$/.test(note ?? "");
 
 export function tiered(ledger) {
   return Boolean(ledger) && TIERED_PLAYBOOKS.has(ledger.playbook);
@@ -180,10 +190,13 @@ function sized(config, paths) {
   return paths.filter((p) => config.isSource(p) && !config.isTest(p));
 }
 
+// A plan naming no source file says nothing about the size, so it never predicts the lowest tier.
 export function predictTier(policy, config, paths) {
   const files = sized(config, paths);
   const forced = forcedFor(config, policy, files);
-  return { tier: tierFor(policy, { files: files.length, lines: 0, forced }), files: files.length, forced };
+  let tier = tierFor(policy, { files: files.length, lines: 0, forced });
+  if (!files.length) tier = aboveLowest(policy, tier);
+  return { tier, files: files.length, forced };
 }
 
 // Lines changed per file. Git answers exactly for tracked files that were clean when the
@@ -219,8 +232,12 @@ export function measure({ config, policy, diff, baseline, now, root }) {
   }
   const lines = details.reduce((n, d) => n + d.lines, 0);
   const forced = forcedFor(config, policy, paths);
-  const tier = tierFor(policy, { files: paths.length, lines, forced });
+  let tier = tierFor(policy, { files: paths.length, lines, forced });
   const reasons = [];
+  if (details.some((d) => d.estimate) && aboveLowest(policy, tier) !== tier) {
+    reasons.push("estimated lines");
+    tier = aboveLowest(policy, tier);
+  }
   for (const name of Object.keys(policy.tiers)) {
     const t = policy.tiers[name];
     if (name === tier) break;
@@ -232,15 +249,17 @@ export function measure({ config, policy, diff, baseline, now, root }) {
 }
 
 export function requiredSteps(policy, tier, ledger) {
-  return requires(policy, tier).includes("skeptic") ? optionalSteps(ledger) : [];
+  const roles = requires(policy, tier);
+  return optionalSteps(ledger).filter((key) => roles.includes(STEP_ROLE[key]));
 }
 
 function blank(step) {
   Object.assign(step, { state: null, note: null, evidence: null, seq: nextSeq() });
 }
 
-// Prediction from the files the plan names. Small marks the optional steps N/A; a later,
-// larger prediction gives those (and only those) back.
+// Prediction from the files the plan names. Each optional step the predicted tier does not
+// require is marked N/A; one it requires that an earlier prediction dropped is given back.
+// A step closed by hand keeps its own note and is never touched.
 export function applyPrediction(ledger, policy, config, paths) {
   if (!tiered(ledger)) return null;
   const tier = tierOf(ledger);
@@ -253,20 +272,18 @@ export function applyPrediction(ledger, policy, config, paths) {
   // a later re-prediction never moves that mark forward and erases a standing finding
   if (delegated && (!wasDelegated || tier.predictedSeq === null)) tier.predictedSeq = nextSeq();
   if (!delegated) tier.predictedSeq = null;
-  if (pred.tier === "small") {
-    for (const key of optionalSteps(ledger)) {
-      const step = ledger.steps.find((s) => s.key === key);
-      if (step && step.state === null) {
-        Object.assign(step, { state: "N/A", note: AUTO_NOTE, evidence: null, seq: nextSeq() });
-        if (!tier.autoNa.includes(key)) tier.autoNa.push(key);
-      }
+  const required = requiredSteps(policy, pred.tier, ledger);
+  tier.autoNa = [];
+  for (const key of optionalSteps(ledger)) {
+    const step = ledger.steps.find((s) => s.key === key);
+    if (!step) continue;
+    const auto = step.state === "N/A" && isAutoNote(step.note);
+    if (required.includes(key)) {
+      if (auto) blank(step);
+    } else {
+      if (step.state === null) Object.assign(step, { state: "N/A", note: autoNote(pred.tier), evidence: null, seq: nextSeq() });
+      if (step.state === "N/A" && isAutoNote(step.note)) tier.autoNa.push(key);
     }
-  } else {
-    for (const key of tier.autoNa) {
-      const step = ledger.steps.find((s) => s.key === key);
-      if (step && step.state === "N/A" && step.note === AUTO_NOTE) blank(step);
-    }
-    tier.autoNa = [];
   }
   ledger.tier = tier;
   return { ...pred, tier: pred.tier };
@@ -291,6 +308,7 @@ export function reconcileTier(ledger, policy, measured) {
       reopened.push(key);
     }
   }
+  ledger.tier.autoNa = ledger.tier.autoNa.filter((key) => !reopened.includes(key));
   return reopened;
 }
 
@@ -308,7 +326,7 @@ export function renderTierBlock(ledger, policy, measured, { details = false } = 
   const helpers = requires(policy, eff);
   const esc = policy.escalate?.reviewerRound2;
   const escText = esc ? ` · round 2 (same reviewer, fresh context) when ${esc.whenActOnAtLeast}+ Act-on or tier ${esc.orTier}` : "";
-  out.push(`requires: ${helpers.join(", ")}${escText} · ceiling ${policy.ceiling.helpersPerTask} helpers/task`);
+  out.push(`requires: ${helpers.length ? helpers.join(", ") : "none"}${escText} · ceiling ${policy.ceiling.helpersPerTask} helpers/task`);
   out.push(`auto-N/A: ${t.autoNa.length ? t.autoNa.map((k) => `{${k}}`).join(", ") : "none"}`);
   if (details && measured?.details?.length) {
     out.push(`files: ${measured.details.map((d) => `${d.path} ${d.lines}${d.estimate ? " (line-delta estimate)" : ""}`).join(" · ")}`);

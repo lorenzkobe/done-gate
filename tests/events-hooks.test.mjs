@@ -339,8 +339,8 @@ test("a delegate waiver lets the lead edit source at predicted large", () => {
 
 test("C2 happy: the lead still edits source when the prediction is small, when the plan named no files, when no ledger is open, and on the un-tiered plan playbook", () => {
   const small = openedWith("fence-c2-small", { files: ["src/a.ts"] });
-  assert.equal(ledgerOf(small).tier.predicted, "small");
-  assert.equal(fence(small, pre(small, "Edit", path.join(small, "src/a.ts"))), null, "tier small");
+  assert.equal(ledgerOf(small).tier.predicted, "tiny");
+  assert.equal(fence(small, pre(small, "Edit", path.join(small, "src/a.ts"))), null, "tier tiny");
 
   const noFiles = openedWith("fence-c2-nofiles");
   assert.equal(ledgerOf(noFiles).tier.predicted, null, "no --files means no prediction");
@@ -441,7 +441,7 @@ test("C6 edge: a fenced lead edit is logged as a deny event and the report count
 
 test("C8 boundary: a plan that predicted small but has already grown to a measured large fences the lead's next source edit", () => {
   const repo = openedWith("fence-c8", { files: ["src/a.ts"] });
-  assert.equal(ledgerOf(repo).tier.predicted, "small", "the plan named one file");
+  assert.equal(ledgerOf(repo).tier.predicted, "tiny", "the plan named one file");
   assert.equal(fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts"))), null, "small and unmeasured: allowed");
 
   // the task grows past ten files; `gate check` is what writes the measured tier into the ledger

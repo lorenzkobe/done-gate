@@ -22,7 +22,7 @@ Review in this order:
 3. **Bugs and edge cases.** What input breaks this: empty, null, zero, negative, unicode, very large, concurrent, retried, out of order, the refused side of every gate. Quote `file:line` and the concrete input.
 4. **Security.** Untrusted input reaching a shell, a query, a path, a template or an eval; an auth or role check missing on one branch; a secret in a log or an error.
 5. **Performance.** Check the diff against the plan's cost shape and the `performance` rows in the case table. A query, read or network call inside a loop, an unbounded list, work repeated on every call that could run once, or a hot path made slower is Act-on when it sits on a hot path the plan names; elsewhere it is Consider. Quote `file:line` and the size at which it hurts.
-6. **Scope and leftovers.** Does the diff do what the ask says, no more (quiet widening) and no less (quiet narrowing)? Dead code, duplication, comments that restate code, a doc or CLAUDE.md line that is now wrong.
+6. **Scope, leftovers and slop.** Does the diff do what the ask says, no more (quiet widening) and no less (quiet narrowing)? Dead code, duplication, a doc or CLAUDE.md line that is now wrong. Slop is Act-on, with `file:line`: a comment that restates the code or narrates the change; a hedging name (helper, util, data2, newX, handleStuff); a guard or try/catch with no case behind it; a docstring on a trivial function; a leftover TODO, console.log or commented-out code; an emoji.
 7. **Adjacent flows.** Other readers of the same table, helper or component that the change affects and that no test covers.
 
 Write the file in this shape:
