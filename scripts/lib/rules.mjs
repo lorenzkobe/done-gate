@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { effectiveTier, leadDelegates, policyFor, requires } from "./size.mjs";
+import { changedUnits, fileDiff, gitTracked, sliceEnd } from "./tree.mjs";
 
 // Named repo checks, opted into via gate.json "checks". Each returns an unmet text or null.
 const CHECKS = {
@@ -233,41 +234,111 @@ export function reviewScope(state) {
   return (state.changed ?? []).filter((p) => state.config.isSource(p) && !state.config.isTest(p));
 }
 
-// A change is reviewed in pieces when it is large; each round records the files it saw. A
-// changed implementation file is covered when the last round of this role that saw it really
-// ran (the helper stopped after its brief) and came back clean, or was the last round the cap
-// allows, or had every item closed with no implementation edit since it stopped. Later edits
-// to a covered file only polish what was reviewed. Returns the files still uncovered, or null
-// for a ledger from before seen sets, which keeps the old rule.
+// A piece entry is a file, or a slice of one: "path" or "path:from-to" (new-file lines).
+export function parseEntry(entry) {
+  const m = /^(.*):(\d+)-(\d+)$/.exec(String(entry));
+  if (!m) return { path: String(entry), from: null, to: null };
+  const from = Number(m[2]);
+  const to = Number(m[3]);
+  if (from < 1 || to < from) return { path: m[1], from: null, to: null };
+  return { path: m[1], from, to };
+}
+export const pathOf = (entry) => parseEntry(entry).path;
+
+// The changed lines of one file as units (position + content key), read once per assess and
+// only when a piece or a range round asks for them.
+export function changedUnitsOf(state, rel) {
+  state.changedUnits ??= new Map();
+  if (!state.changedUnits.has(rel)) {
+    const tracked = (state.tracked ??= gitTracked(state.root)).has(rel);
+    const text = state.diff?.deleted?.includes(rel) ? "" : fileDiff(state.root, state.baseline?.head ?? "HEAD", rel, tracked);
+    state.changedUnits.set(rel, changedUnits(text));
+  }
+  return state.changedUnits.get(rel);
+}
+export const positionsOf = (units) => [...new Set(units.map((u) => u.pos))].sort((a, b) => a - b);
+
+// Uncovered positions folded into "path:from-to" spans along the file's changed positions;
+// every position uncovered is the bare path.
+function spans(rel, open, all) {
+  if (open.length === all.length) return [rel];
+  const out = [];
+  let start = null;
+  let prev = null;
+  for (const p of open) {
+    if (start !== null && all[all.indexOf(prev) + 1] !== p) {
+      out.push(`${rel}:${start}-${prev}`);
+      start = null;
+    }
+    if (start === null) start = p;
+    prev = p;
+  }
+  if (start !== null) out.push(`${rel}:${start}-${prev}`);
+  return out;
+}
+
+// A change is reviewed in pieces when it is large; each round records what it saw: whole
+// files, or slices of them as the content keys of the changed lines inside the range. A
+// changed line is covered when the last round of this role that saw it really ran (the
+// helper stopped after its brief) and came back clean, or was the last round the cap allows
+// for that file, or had every item closed with no implementation edit since it stopped. An
+// edit above a slice moves its lines but keeps them covered; an edit to a line uncovers that
+// line. Returns the entries still uncovered ("path" or "path:from-to"), or null for a ledger
+// from before seen sets, which keeps the old rule.
 export function uncovered(state, role, after = lastEditSeq(state, state.config, state.ledger)) {
   const rounds = (state.ledger.huddles ?? []).filter((h) => h.role === role && h.file && Array.isArray(h.files));
   if (!rounds.length) return null;
   const stops = (state.events ?? []).filter((e) => e.kind === "subagent-stop" && isRole(e.agentType, role));
-  // the three-round cap is counted per file: the rounds that saw it
   const covered = (round, seenBy) => {
     const stop = stops.find((e) => e.seq > (round.briefSeq ?? Infinity));
     if (!stop) return false;
     if (!round.actOn.length || seenBy >= REVIEW_CAP) return true;
     return round.actOn.every((a) => a.closed) && after < stop.seq;
   };
-  return reviewScope(state).filter((p) => {
-    const seeing = rounds.filter((h) => h.files.includes(p));
-    const last = seeing[seeing.length - 1];
-    return !last || !covered(last, seeing.length);
-  });
+  const out = [];
+  for (const rel of reviewScope(state)) {
+    const seeing = rounds.filter((h) => h.files.some((e) => pathOf(e) === rel));
+    if (!seeing.length) {
+      out.push(rel);
+      continue;
+    }
+    const whole = (h) => h.files.includes(rel);
+    if (seeing.every(whole)) {
+      // whole-file rounds only: the last one judges the file, no diff is read
+      if (!covered(seeing[seeing.length - 1], seeing.length)) out.push(rel);
+      continue;
+    }
+    const units = changedUnitsOf(state, rel);
+    const all = positionsOf(units);
+    // with slices the cap counts the rounds that saw this line, not the file
+    const saw = (h, u) => whole(h) || (h.units?.[rel] ?? []).includes(u.key);
+    const open = positionsOf(units.filter((u) => {
+      const rounds = seeing.filter((h) => saw(h, u));
+      const last = rounds[rounds.length - 1];
+      return !last || !covered(last, rounds.length);
+    }));
+    if (!units.length && !covered(seeing[seeing.length - 1], seeing.length)) out.push(rel);
+    else if (open.length) out.push(...spans(rel, open, all));
+  }
+  return out;
 }
 
-// The first piece of the uncovered files that fits the cap, so the command R5/R9 print can
-// be run as printed; a lone file over the cap is a piece of one.
-export function nextPiece(state, files) {
+// The first piece of the uncovered entries that fits the cap, so the command R5/R9 print can
+// be run as printed; an entry over the cap is sliced from its first uncovered line.
+export function nextPiece(state, entries) {
   const cap = (state.policy ?? policyFor(state.ledger)).reviewMaxLines;
-  const rows = new Map((state.tier?.measured?.details ?? []).map((d) => [d.path, d.lines]));
   const piece = [];
   let lines = 0;
-  for (const f of files) {
-    const n = rows.get(f) ?? state.now?.files?.[f]?.l ?? 0;
+  for (const entry of entries) {
+    const e = parseEntry(entry);
+    const units = changedUnitsOf(state, e.path).filter((u) => !e.from || (u.pos >= e.from && u.pos <= e.to));
+    const n = units.length || 1;
+    if (!piece.length && n > cap) {
+      piece.push(`${e.path}:${units[0].pos}-${sliceEnd(units, cap)}`);
+      break;
+    }
     if (piece.length && lines + n > cap) break;
-    piece.push(f);
+    piece.push(entry);
     lines += n;
   }
   return piece;

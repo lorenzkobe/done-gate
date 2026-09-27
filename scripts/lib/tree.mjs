@@ -189,3 +189,102 @@ export function diffSnapshots(before, after) {
   const changed = [...modified, ...added, ...deleted].sort();
   return { modified: modified.sort(), added: added.sort(), deleted: deleted.sort(), changed };
 }
+
+// One file's unified diff as hunks of tagged lines, each with the new-file line number it
+// sits at (a deletion sits at the line that follows it). The header lines before the first
+// hunk are kept for re-rendering.
+export function parseHunks(text) {
+  const lines = String(text ?? "").replace(/\r/g, "").split("\n");
+  const header = [];
+  const hunks = [];
+  let hunk = null;
+  for (const line of lines) {
+    const m = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (m) {
+      hunk = { header: line, pos: Number(m[1]), lines: [] };
+      hunks.push(hunk);
+      continue;
+    }
+    if (!hunk) {
+      header.push(line);
+      continue;
+    }
+    const tag = line[0];
+    if (tag === "+") hunk.lines.push({ tag, text: line, pos: hunk.pos++ });
+    else if (tag === "-") hunk.lines.push({ tag, text: line, pos: hunk.pos });
+    else if (tag === " " || line === "") hunk.lines.push({ tag: " ", text: line, pos: hunk.pos++ });
+    else hunk.lines.push({ tag: "\\", text: line, pos: hunk.pos });
+  }
+  return { header, hunks };
+}
+
+// Every changed line of a diff as a unit: its new-file position and a key made of its text
+// and the line before it, so a unit survives an edit above it (which moves its position) and
+// dies with an edit to it. A deletion is keyed on the text it removed.
+// Repeated line pairs get an occurrence ordinal, so a key is unique within the file.
+export function changedUnits(text) {
+  const out = [];
+  const seen = new Map();
+  for (const h of parseHunks(text).hunks) {
+    let prev = "";
+    for (const l of h.lines) {
+      if (l.tag === "+" || l.tag === "-") {
+        const base = createHash("sha1").update(`${l.tag}${l.text.slice(1)}\u0000${prev}`).digest("hex").slice(0, 12);
+        const n = (seen.get(base) ?? 0) + 1;
+        seen.set(base, n);
+        out.push({ pos: l.pos, key: n === 1 ? base : `${base}#${n}` });
+      }
+      if (l.tag !== "-") prev = l.text.slice(1);
+    }
+  }
+  return out;
+}
+
+// The last position a slice from the units' first position may reach and still hold at most
+// cap units; a first position that alone holds more is the slice (it cannot be narrowed).
+export function sliceEnd(units, cap) {
+  let to = units[0].pos;
+  let count = 0;
+  for (const u of units) {
+    if (u.pos !== to && count + 1 > cap) break;
+    if (u.pos !== to && units.filter((x) => x.pos === u.pos).length + count > cap) break;
+    to = u.pos;
+    count += 1;
+  }
+  return to;
+}
+
+// The part of a diff whose lines fall inside any of the ranges, hunk by hunk, re-headed
+// with the new-file span each slice covers.
+export function sliceDiff(text, ranges) {
+  const { header, hunks } = parseHunks(text);
+  const inside = (pos) => ranges.some(([from, to]) => pos >= from && pos <= to);
+  const out = [...header];
+  for (const h of hunks) {
+    const kept = h.lines.filter((l) => inside(l.pos));
+    if (!kept.some((l) => l.tag === "+" || l.tag === "-")) continue;
+    out.push(`@@ lines ${kept[0].pos}-${kept[kept.length - 1].pos} of the new file @@`);
+    out.push(...kept.map((l) => l.text));
+  }
+  return out.join("\n");
+}
+
+// The raw unified diff of one changed file against ref: git's for a tracked file, a
+// synthetic all-added block for one git never saw.
+export function fileDiff(root, ref, rel, tracked) {
+  if (tracked) {
+    try {
+      const text = git(root, ["diff", ref, "--", rel]).trim();
+      if (text) return text;
+    } catch {
+      // no ref or not a repo: fall through to the synthetic block
+    }
+  }
+  const abs = path.join(root, rel);
+  if (!existsSync(abs)) return "";
+  const buf = readFileSync(abs);
+  for (let i = 0; i < Math.min(buf.length, 8000); i++) if (buf[i] === 0) return `diff --git a/${rel} b/${rel}\nbinary file (${buf.length} bytes), contents not shown`;
+  const lines = buf.toString("utf8").replace(/\r/g, "").split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return [`diff --git a/${rel} b/${rel}`, "new file (no git history for this task)", "--- /dev/null", `+++ b/${rel}`, `@@ -0,0 +1,${lines.length} @@`, ...lines.map((l) => `+${l}`)].join("\n");
+}

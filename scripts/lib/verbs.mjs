@@ -222,7 +222,7 @@ export const verbs = {
           huddle = { id, role, round, file, summary: flag(rest, "--summary") ?? null, actOn: [], seq: nextSeq() };
           // set once, from the brief that named this file: a re-add never widens it
           const seen = ledger.seen?.[file];
-          if (Array.isArray(seen?.files)) Object.assign(huddle, { files: seen.files, briefSeq: seen.seq });
+          if (Array.isArray(seen?.files)) Object.assign(huddle, { files: seen.files, briefSeq: seen.seq, ...(seen.units ? { units: seen.units } : {}) });
           ledger.huddles.push(huddle);
         }
         const id = huddle.id;

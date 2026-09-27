@@ -334,8 +334,10 @@ test("C5 happy: the reviewer packet holds the unified diff of changed source and
 
 test("C6 boundary: a diff longer than 300 lines is not inlined; the packet lists the changed files with line counts instead", () => {
   const repo = opened("packets-c6");
-  const big = Array.from({ length: 3000 }, (_, i) => `export const n${i} = ${i};`).join("\n") + "\n";
+  // two new files of 200 lines: 400 changed lines, inside the piece cap, over the inline cap
+  const big = Array.from({ length: 200 }, (_, i) => `export const n${i} = ${i};`).join("\n") + "\n";
   write(repo, "src/big.ts", big);
+  write(repo, "src/big2.ts", big.replace(/n(\d+)/g, "m$1"));
 
   const { text } = packet(repo, "reviewer");
   assert.ok(!headings(text).includes("Diff"), `an oversized diff was inlined:\n${headings(text).join(", ")}`);
@@ -344,8 +346,8 @@ test("C6 boundary: a diff longer than 300 lines is not inlined; the packet lists
   assert.match(files, /\d+ lines/, `the heading does not say how long the diff is: ${files}`);
   const body = section(text, files);
   assert.ok(body.includes("src/big.ts"), `the changed file is not listed:\n${body}`);
-  assert.match(body, /src\/big\.ts \(source, 3000 lines now\)/, `no line count for src/big.ts:\n${body}`);
-  assert.ok(!text.includes("export const n2999 = 2999;"), "the oversized diff's tail was inlined anyway");
+  assert.match(body, /src\/big\.ts \(source, 200 lines now\)/, `no line count for src/big.ts:\n${body}`);
+  assert.ok(!text.includes("export const m199 = 199;"), "the oversized diff's tail was inlined anyway");
 
   // a short diff is still inlined
   const small = opened("packets-c6-small");

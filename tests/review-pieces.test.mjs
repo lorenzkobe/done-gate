@@ -49,10 +49,10 @@ function opened(name, config = {}) {
   return repo;
 }
 
-// a 750-line change: src/a.ts grows to 150 lines, src/b.ts to 600
+// a 450-line change: src/a.ts grows to 150 lines, src/b.ts to 300
 function bigChange(repo) {
   edit(repo, "src/a.ts", lines(150, "a"));
-  edit(repo, "src/b.ts", lines(600, "b"));
+  edit(repo, "src/b.ts", lines(300, "b"));
   edit(repo, "tests/a.test.ts", "test('a', () => {});\ntest('b', () => {});\n");
 }
 
@@ -68,12 +68,12 @@ function round(repo, role, files, actOn = []) {
 }
 const packetOf = (out) => readFileSync(out.split("\n").find((l) => l.startsWith("packet: ")).slice(8), "utf8");
 
-test("C1 a 750-line change refuses a whole-diff review, names the files with lines, and briefs a 150-line piece whose packet holds only that piece", () => {
+test("C1 a 450-line change refuses a whole-diff review, names the files with lines, and briefs a 150-line piece whose packet holds only that piece", () => {
   const repo = opened("rp-c1");
   bigChange(repo);
   const r = run(repo, "brief", ["reviewer"]);
-  assert.match(r.stderr, /source lines/);
-  assert.match(r.stderr, /src\/b\.ts \(6\d\d lines\)/);
+  assert.match(r.stderr, /changed lines/);
+  assert.match(r.stderr, /src\/b\.ts \(30\d lines\)/);
   assert.match(r.stderr, /--files/);
   const out = cli(repo, "brief", ["reviewer", "--files", "src/a.ts"]);
   const packet = packetOf(out);
@@ -85,14 +85,14 @@ test("C1 a 750-line change refuses a whole-diff review, names the files with lin
   assert.deepEqual(ledgerOf(repo).seen["review-1.md"].files, ["src/a.ts"]);
 });
 
-test("C2 --files naming a file outside the change, or a multi-file piece over the cap, is refused; one file alone is always a piece and the packet says it is over", () => {
+test("C2 --files naming a file outside the change, or a multi-file piece over the cap, is refused; one file over the cap is refused with its first slice", () => {
   const repo = opened("rp-c2");
   bigChange(repo);
   assert.match(run(repo, "brief", ["reviewer", "--files", "src/nope.ts"]).stderr, /src\/nope\.ts/);
   assert.match(run(repo, "brief", ["reviewer", "--files", "tests/a.test.ts"]).stderr, /tests\/a\.test\.ts/);
-  assert.match(run(repo, "brief", ["reviewer", "--files", "src/a.ts,src/b.ts"]).stderr, /\d{3} source lines is more than one review round can read well/);
-  const packet = packetOf(cli(repo, "brief", ["reviewer", "--files", "src/b.ts"]));
-  assert.match(packet, /## Piece\n\n1 of 2 changed source files, 6\d\d lines: src\/b\.ts \(over the 400-line cap/);
+  assert.match(run(repo, "brief", ["reviewer", "--files", "src/a.ts,src/b.ts"]).stderr, /\d{3} changed lines is more than one review round can read well/);
+  edit(repo, "src/b.ts", lines(600, "b"));
+  assert.match(run(repo, "brief", ["reviewer", "--files", "src/b.ts"]).stderr, /Slice it by line: `gate brief reviewer --files src\/b\.ts:\d+-\d+`/);
 });
 
 test("C3 two pieces reviewed clean in turn pass R5; with only the first done, R5 names the second piece and the --files command", () => {

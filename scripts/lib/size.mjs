@@ -259,13 +259,6 @@ export function measure({ config, policy, diff, baseline, now, root }) {
   return { tier, files: paths.length, lines, forced, reasons, details };
 }
 
-// Source lines a set of files adds to the change, from the measurement's per-file rows; a
-// file the measurement has no row for counts its whole length now.
-export function pieceLines(measured, now, files) {
-  const rows = new Map((measured?.details ?? []).map((d) => [d.path, d.lines]));
-  return files.map((f) => ({ path: f, lines: rows.get(f) ?? now?.files?.[f]?.l ?? 0 }));
-}
-
 export function requiredSteps(policy, tier, ledger) {
   const roles = requires(policy, tier);
   return optionalSteps(ledger).filter((key) => roles.includes(STEP_ROLE[key]));

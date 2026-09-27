@@ -1,14 +1,13 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { buildState } from "./assess.mjs";
 import { caseTable, verifyLines } from "./report.mjs";
 import { saveLedger, section } from "./ledger.mjs";
-import { leadDelegates, pieceLines, renderTierBlock, tierMax, tierOf } from "./size.mjs";
-import { gitTracked } from "./tree.mjs";
+import { leadDelegates, renderTierBlock, tierMax, tierOf } from "./size.mjs";
+import { fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs";
 import { ROLES, flag, positional } from "./verbs.mjs";
 import { toPosixRel } from "./paths.mjs";
-import { REVIEW_CAP, isDraft, isRole, reviewScope, uncovered } from "./rules.mjs";
+import { REVIEW_CAP, changedUnitsOf, isDraft, isRole, parseEntry, pathOf, reviewScope, uncovered } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { nextSeq } from "./events.mjs";
@@ -67,9 +66,6 @@ export function nearestTests(state, targets, max = 3) {
   return tests.map((t) => [score(t), t]).sort((a, b) => a[0] - b[0] || a[1].localeCompare(b[1])).slice(0, max).map(([, t]) => t);
 }
 
-function git(root, args) {
-  return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
-}
 
 function isBinary(buf) {
   const probe = buf.subarray(0, 8000);
@@ -77,19 +73,11 @@ function isBinary(buf) {
   return false;
 }
 
-function syntheticAdd(root, rel) {
-  const abs = path.join(root, rel);
-  const buf = readFileSync(abs);
-  if (isBinary(buf)) return `diff --git a/${rel} b/${rel}\nbinary file (${buf.length} bytes), contents not shown`;
-  const lines = buf.toString("utf8").replace(/\r/g, "").split("\n");
-  if (lines[lines.length - 1] === "") lines.pop();
-  return [`diff --git a/${rel} b/${rel}`, "new file (no git history for this task)", `--- /dev/null`, `+++ b/${rel}`, `@@ -0,0 +1,${lines.length} @@`, ...lines.map((l) => `+${l}`)].join("\n");
-}
-
 // The reviewer's diff: every changed file (source, tests and docs alike; prompts and README
 // changes are reviewable too), from git against the commit that was HEAD when the task
-// opened, or a synthetic all-added block when git has no history for the file.
-export function unifiedDiff(state, { cap = DIFF_CAP, files = state.diff.changed } = {}) {
+// opened, or a synthetic all-added block when git has no history for the file. A file with
+// ranges shows only the hunk lines inside them.
+export function unifiedDiff(state, { cap = DIFF_CAP, files = state.diff.changed, ranges = new Map() } = {}) {
   const { diff, baseline, root } = state;
   const ref = baseline?.head ?? "HEAD";
   const dirty = new Set(baseline?.dirty ?? []);
@@ -101,15 +89,8 @@ export function unifiedDiff(state, { cap = DIFF_CAP, files = state.diff.changed 
       blocks.push(`deleted: ${rel} (${typeof n === "number" ? plural(n, "line") : "? lines"})`);
       continue;
     }
-    let text = "";
-    if (tracked.has(rel)) {
-      try {
-        text = git(root, ["diff", ref, "--", rel]).trim();
-      } catch {
-        text = "";
-      }
-    }
-    if (!text) text = syntheticAdd(root, rel);
+    let text = fileDiff(root, ref, rel, tracked.has(rel));
+    if (ranges.has(rel)) text = `${sliceDiff(text, ranges.get(rel))}\n(only lines ${ranges.get(rel).map(([a, b]) => `${a}-${b}`).join(", ")} of ${rel}: read the code around them with the Read tool)`;
     if (dirty.has(rel)) text = `${text.split("\n")[0]}\n(unreliable for this task: the file was already modified when the task opened, so this diff mixes earlier changes with this task's and may hide a change that cancelled one out)\n${text.split("\n").slice(1).join("\n")}`;
     blocks.push(text);
   }
@@ -210,10 +191,11 @@ function testCommands(state) {
 
 // The diff is inlined while it is short; past the cap the helper gets the file list with line
 // counts and reads what it needs, instead of a packet it cannot hold.
-function diffOrFiles(state, heading = "Diff", files = state.changed ?? []) {
-  const diff = unifiedDiff(state, { cap: Infinity, files });
+function diffOrFiles(state, heading = "Diff", files = state.changed ?? [], ranges = new Map()) {
+  const diff = unifiedDiff(state, { cap: Infinity, files, ranges });
   const lines = diff.split("\n").length;
-  if (lines <= DIFF_CAP) return [`## ${heading}`, "", diff, ""];
+  // a sliced piece is already sized for one read: it is inlined whatever its length
+  if (lines <= DIFF_CAP || ranges.size) return [`## ${heading}`, "", diff, ""];
   const changed = files;
   const kind = (p) => (state.config.isTest(p) ? "test" : state.config.isSource(p) ? "source" : "other");
   return [
@@ -257,15 +239,18 @@ export function renderPacket(state, role, { round, reviewN, skepticN = 1, arbite
       out.push("## Write your replies to", "", path.join(state.dir, `worker-${reviewN}.md`), "");
     }
   } else {
+    const ranges = new Map();
     if (piece) {
       const scope = reviewScope(state);
-      out.push("## Piece", "", `${piece.files.length} of ${scope.length} changed source file${scope.length === 1 ? "" : "s"}, ${plural(piece.lines, "line")}: ${piece.files.join(", ")}${piece.over ? ` (over the ${state.policy.reviewMaxLines}-line cap: one file cannot be split, so read it in passes and say in Noted where you stopped reading closely)` : ""}`, "");
+      for (const e of piece.files.map(parseEntry)) if (e.from) ranges.set(e.path, [...(ranges.get(e.path) ?? []), [e.from, e.to]]);
+      out.push("## Piece", "", `${plural(piece.files.length, "piece")} of ${scope.length} changed source file${scope.length === 1 ? "" : "s"}, ${plural(piece.lines, "changed line")}: ${piece.files.join(", ")}${ranges.size ? " (a path:from-to entry is a slice of that file's diff by new-file line number; read the code around it with the Read tool)" : ""}`, "");
     }
     // the piece's implementation files plus everything else that changed (tests, docs): those
     // travel with every piece
     const scopeSet = new Set(reviewScope(state));
-    const shown = piece ? (state.changed ?? []).filter((p) => piece.files.includes(p) || !scopeSet.has(p)) : state.changed ?? [];
-    out.push(...diffOrFiles(state, "Diff", shown));
+    const paths = piece ? new Set(piece.files.map(pathOf)) : null;
+    const shown = piece ? (state.changed ?? []).filter((p) => paths.has(p) || !scopeSet.has(p)) : state.changed ?? [];
+    out.push(...diffOrFiles(state, "Diff", shown, ranges));
     out.push("## Verify", "", ...verifyLines(state.verify, { tails: false }), "");
     out.push("## Test command", "", ...testCommands(state), "");
     out.push("", "## Write your findings to", "", path.join(state.dir, `${reviewPrefix(role)}-${reviewN}.md`), "");
@@ -291,18 +276,38 @@ export const verbs = {
     if (reviewing) {
       const scope = reviewScope(state);
       const named = flag(ctx.args, "--files");
-      const files = named ? [...new Set(named.split(",").map((f) => toPosixRel(ctx.root, f.trim())).filter(Boolean))] : scope;
-      const outside = files.filter((f) => !scope.includes(f));
+      const entries = named ? [...new Set(named.split(",").map((t) => t.trim()).filter(Boolean))].map((t) => {
+        const e = parseEntry(t);
+        const rel = toPosixRel(ctx.root, e.path);
+        if (/:\S*$/.test(t) && !e.from) throw new UsageError(`--files: "${t}" is not a range; a slice reads path:from-to with 1 <= from <= to (line numbers of the new file)`);
+        return e.from ? `${rel}:${e.from}-${e.to}` : rel;
+      }) : scope;
+      const outside = entries.map(pathOf).filter((f) => !scope.includes(f));
       if (outside.length) throw new UsageError(`--files: ${outside.join(", ")} is not a changed implementation file of this task (have: ${scope.join(", ") || "none"})`);
-      const rows = pieceLines(state.tier?.measured ?? null, state.now, files);
-      const lines = rows.reduce((n, r) => n + r.lines, 0);
       const cap = state.policy.reviewMaxLines;
-      // one file cannot be split by file: alone it is always a piece, and the packet says so
-      if (lines > cap && files.length > 1) {
-        const listed = rows.map((r) => `${r.path} (${r.lines} lines)`).join(", ");
-        throw new UsageError(`${lines} source lines is more than one review round can read well (cap ${cap}). Review it in pieces: \`gate brief ${role} --files <some of: ${listed}>\`, each piece under ${cap} lines; a file counts as reviewed once a clean round saw it.`);
+      const rows = entries.map((entry) => {
+        const e = parseEntry(entry);
+        const units = changedUnitsOf(state, e.path).filter((u) => !e.from || (u.pos >= e.from && u.pos <= e.to));
+        return { entry, e, units, lines: units.length };
+      });
+      const lines = rows.reduce((n, r) => n + r.lines, 0);
+      // a range on one position (a block of deletions) cannot be narrowed: it is a piece as is
+      const floor = rows.length === 1 && rows[0].e.from !== null && rows[0].e.from === rows[0].e.to;
+      if (lines > cap && !floor) {
+        // the first slice of a file that fits the cap, from its first changed line
+        const firstSlice = (r) => `${r.e.path}:${r.units[0].pos}-${sliceEnd(r.units, cap)}`;
+        if (rows.length === 1) {
+          const r = rows[0];
+          throw new UsageError(`${r.entry} holds ${r.lines} changed lines, more than one review round can read well (cap ${cap}). ${r.e.from ? "Narrow the range" : "Slice it by line"}: \`gate brief ${role} --files ${firstSlice(r)}\`; a line counts as reviewed once a clean round saw it.`);
+        }
+        const listed = rows.map((r) => `${r.entry} (${r.lines} lines)`).join(", ");
+        throw new UsageError(`${lines} changed lines is more than one review round can read well (cap ${cap}). Review it in pieces: \`gate brief ${role} --files <some of: ${listed}>\`, each piece under ${cap} lines (a file over the cap is sliced as path:from-to); a line counts as reviewed once a clean round saw it.`);
       }
-      piece = { files, lines, over: lines > cap };
+      // a slice is remembered by the content keys of the lines it holds, so an edit above it
+      // moves them without losing them
+      const units = {};
+      for (const r of rows) if (r.e.from) units[r.e.path] = [...(units[r.e.path] ?? []), ...r.units.map((u) => u.key)];
+      piece = { files: entries, lines, units };
     }
     // below the delegated size the lead implements with its own context; a worker packet
     // would hand that context away for nothing
@@ -336,16 +341,25 @@ export const verbs = {
     // past the cap a round is briefed only for a file no round of this role saw, so the cap
     // can never leave R5/R9 waiting on a round nobody may brief. With pieces the cap counts
     // the rounds that saw the piece's files (finished files, recorded or not), as R5 does.
-    const seenRounds = Object.entries(state.ledger.seen ?? {}).filter(([f]) => f.startsWith(`${reviewPrefix(role)}-`) && state.reviews.includes(f) && !isDraftFile(f)).map(([, v]) => v.files ?? []);
-    const perFile = piece && state.ledger.seen ? Math.max(0, ...piece.files.map((f) => seenRounds.filter((files) => files.includes(f)).length)) : null;
+    const seenRounds = Object.entries(state.ledger.seen ?? {}).filter(([f]) => f.startsWith(`${reviewPrefix(role)}-`) && state.reviews.includes(f) && !isDraftFile(f)).map(([, v]) => v);
+    // a whole-file entry counts every round that saw the file; a slice counts the rounds that
+    // saw any of its lines (a whole-file round, or a slice sharing a line)
+    const sawEntry = (r, entry) => {
+      const e = parseEntry(entry);
+      if ((r.files ?? []).includes(e.path)) return true;
+      if (!e.from) return (r.files ?? []).some((x) => pathOf(x) === e.path);
+      const keys = new Set(changedUnitsOf(state, e.path).filter((u) => u.pos >= e.from && u.pos <= e.to).map((u) => u.key));
+      return (r.units?.[e.path] ?? []).some((k) => keys.has(k));
+    };
+    const perFile = piece && state.ledger.seen ? Math.max(0, ...piece.files.map((entry) => seenRounds.filter((r) => sawEntry(r, entry)).length)) : null;
     const done = perFile ?? (role === "reviewer" ? Math.max(round - 1, written) : role === "reviewer-2" ? finished("review2-") + legacySeconds : 0);
     const unseen = reviewing ? uncovered(state, role) : null;
     // a ledger from before seen sets keeps its old, uncapped second reviewer
     const legacy = !state.ledger.seen;
     // past the cap a round is briefed only for a piece holding a file no round of this role saw
-    const seenByRole = new Set(state.ledger.huddles.filter((h) => h.role === role && Array.isArray(h.files)).flatMap((h) => h.files));
+    const seenByRole = new Set(state.ledger.huddles.filter((h) => h.role === role && Array.isArray(h.files)).flatMap((h) => h.files.map(pathOf)));
     const neverSeen = unseen === null ? [] : reviewScope(state).filter((f) => !seenByRole.has(f));
-    const stillOpen = piece ? piece.files.some((f) => neverSeen.includes(f)) : neverSeen.length > 0;
+    const stillOpen = piece ? piece.files.map(pathOf).some((f) => neverSeen.includes(f)) : neverSeen.length > 0;
     if (done >= REVIEW_CAP && !(legacy && role === "reviewer-2") && !stillOpen) {
       throw new UsageError(`${role} round ${done + 1}: three rounds is the cap. What is still disputed goes to the arbiter (\`gate brief arbiter --item H<k>.<i>\`, spawn done-gate:arbiter); what is still open is fixed and closed with \`gate huddle resolve\`.`);
     }
@@ -389,7 +403,7 @@ export const verbs = {
     // what this round's reviewer is shown; the huddle for its file inherits it, and edits
     // after a clean round are judged against it
     if (piece) {
-      state.ledger.seen = { ...(state.ledger.seen ?? {}), [`${reviewPrefix(role)}-${reviewN}.md`]: { files: piece.files, seq: nextSeq() } };
+      state.ledger.seen = { ...(state.ledger.seen ?? {}), [`${reviewPrefix(role)}-${reviewN}.md`]: { files: piece.files, seq: nextSeq(), ...(Object.keys(piece.units).length ? { units: piece.units } : {}) } };
       saveLedger(state.dir, state.ledger);
     }
     const file = path.join(state.dir, `brief-${role}-${round}.md`);
