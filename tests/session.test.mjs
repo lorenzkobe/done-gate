@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { makeRepo, write, gate } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 
 // ===== from tests/session.test.mjs =====
@@ -69,6 +69,23 @@ test("report still renders the ledger that just closed", () => {
   run(repo, "stop", "S1", { last_assistant_message: "report" });
   const r = run(repo, "report", "S1");
   assert.match(r.stdout, /^# p — plan — closed/m);
+});
+
+test("a run an older plugin left closing is closed late at session start, gets a report, and is never attached", () => {
+  const repo = makeRepo("session-closing-legacy");
+  start(repo, "S1");
+  run(repo, "open", "S1", {}, ["old", "plan"]);
+  const dir = path.join(repo, ".claude", "gate", "runs", loadSession(path.join(repo, ".claude", "gate"), "S1").current);
+  const ledger = loadLedger(dir);
+  ledger.status = "closing";
+  writeFileSync(path.join(dir, "ledger.json"), JSON.stringify(ledger));
+  const ctx = JSON.parse(start(repo, "S2").stdout).hookSpecificOutput.additionalContext;
+  assert.ok(!/Open ledger/.test(ctx), `the closing run was attached:\n${ctx}`);
+  const closed = loadLedger(dir);
+  assert.equal(closed.status, "closed");
+  assert.equal(closed.closedLate, true);
+  assert.match(readFileSync(path.join(dir, "report.md"), "utf8"), /Closed late/);
+  assert.equal(loadSession(path.join(repo, ".claude", "gate"), "S2").current, null);
 });
 }
 

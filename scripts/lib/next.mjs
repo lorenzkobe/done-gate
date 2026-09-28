@@ -6,7 +6,7 @@ import { optionalSteps, tiered } from "./size.mjs";
 
 const VERB_FOR = {
   read: "read the affected code, then `gate step read done \"<what you saw>\" --evidence <file>`",
-  context: "understand first: trace the code the task touches (entry points, callers, data flow; `grep -a` for callers), list what depends on it, and research better ways when the problem is a known one (docs, context7, web); then `gate note context \"Traced: <file:line pointers> · Related: <what depends on it> · Research: <what you looked up, or none needed: why>\"` (each part on its own line)",
+  context: "understand first: trace the code the task touches (entry points, callers, data flow; `grep -a` for callers), list what depends on it, and research better ways when the problem is a known one (docs, context7, web); then `gate note context \"Traced: <file:line pointers> · Related: <what depends on it> · Research: <what you looked up, or none needed: why>\"` (the parts on one line with · between them, or one per line)",
   repro: "reproduce on the real surface, then `gate step repro done \"<what failed>\" --evidence <ptr>`",
   rootcause: "find the root cause with runtime evidence, then `gate step rootcause done \"<cause>\" --evidence <file:line>`",
   skeptic: "`gate brief skeptic`, spawn done-gate:skeptic with the prompt it prints (it writes skeptic-<n>.md and replies with its Act-on list) and write the tests from the case table in the same turn while it reads; then `gate huddle add skeptic --file skeptic-<n>.md`, answer each item (a new case gets a new test), and `gate step skeptic done … --evidence skeptic-<n>.md`",
@@ -23,7 +23,6 @@ const VERB_FOR = {
 
 export function nextHint(ledger) {
   if (!ledger || isDone(ledger)) return "";
-  if (ledger.status === "closing") return "next: `gate check`; when it prints clean, `gate report --brief` and paste it as your final message";
   if (!ledger.taskSeq) return "next: `gate note task \"<the user's ask, quoted, then your own words>\"`";
   if (!ledger.planSeq) {
     // the steps before {plan} (understand first: context; for a bugfix repro and root cause

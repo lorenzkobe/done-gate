@@ -204,7 +204,7 @@ test("C3 refused: `gate brief bogus` fails with a usage message listing every ro
   const before = readdirSync(runDir(repo));
 
   const bad = run(repo, "brief", ["bogus"]);
-  assert.equal(bad.status, 0, "the dispatcher must fail open");
+  assert.equal(bad.status, 1, "a usage mistake fails the command");
   assert.match(bad.stderr, /usage/i, `stderr carries no usage message:\n${bad.stderr}`);
   for (const role of Object.keys(EXPECTED_ROLES)) {
     assert.ok(bad.stderr.includes(role), `the usage message does not list ${role}:\n${bad.stderr}`);

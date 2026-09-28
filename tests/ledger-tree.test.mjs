@@ -276,7 +276,7 @@ const lines = (s) => s.split("\n").filter((l) => l.trim() !== "");
 
 test("C1 check.mjs is the home of both verbs", async () => {
   const { verbs } = await import("../scripts/lib/check.mjs");
-  assert.deepEqual(Object.keys(verbs).sort(), ["check", "doctor"]);
+  assert.deepEqual(Object.keys(verbs).sort(), ["check", "doctor", "help"]);
 });
 
 test("C1 doctor and check still run and keep their output shape", () => {
@@ -551,7 +551,7 @@ const lines = (s) => s.split("\n").filter((l) => l.trim() !== "");
 const hintOf = (stdout) => lines(stdout).at(-1) ?? "";
 const stateDir = (repo) => path.join(repo, ".claude", "gate");
 const runDir = (repo, session = "S1") =>
-  path.join(stateDir(repo), "runs", loadSession(stateDir(repo), session).current);
+  path.join(stateDir(repo), "runs", (({ current, lastClosed }) => current ?? lastClosed)(loadSession(stateDir(repo), session)));
 const ledgerFile = (repo, session = "S1") => path.join(runDir(repo, session), "ledger.json");
 const ledgerOf = (repo, session = "S1") => JSON.parse(readFileSync(ledgerFile(repo, session), "utf8"));
 const stepOf = (ledger, key) => ledger.steps.find((s) => s.key === key);
@@ -631,7 +631,7 @@ test("C1 happy: `gate open` copies in the new step list for each playbook — ke
 test("C2 refused: an unknown playbook is refused by name and lists the five playbooks; no run is created", () => {
   const repo = makeRepo("playbooks-c2");
   const r = run(repo, "open", ["chore-task", "chore"]);
-  assert.equal(r.status, 0, "the gate always fails open");
+  assert.equal(r.status, 1, "a usage mistake fails the command");
   assert.equal(r.stdout, "", `a refused open must print nothing on stdout:\n${r.stdout}`);
   assert.match(r.stderr, REFUSAL);
   assert.match(r.stderr, /unknown playbook "chore"/);
@@ -786,9 +786,10 @@ test("C7 boundary: a ledger written under the old 14-step feature playbook still
   assert.equal(lines(stepLines).filter((l) => /^\d+\. /.test(l)).length, OLD.length, "all 14 old steps are reported");
   assert.ok(existsSync(path.join(runDir(repo, "S2"), "report.md")));
 
+  for (const key of OLD) if (key !== "close") cli(repo, "step", [key, "na", "legacy fixture"], { session: "S2" });
   cli(repo, "close", [], { session: "S2" });
   const closed = ledgerOf(repo, "S2");
-  assert.equal(closed.status, "closing");
+  assert.equal(closed.status, "closed");
   assert.equal(stepOf(closed, "close").state, "DONE");
   assert.deepEqual(closed.steps.map((s) => s.key), OLD, "closing never rewrites the old step list");
 });
@@ -825,7 +826,7 @@ const lines = (s) => s.split("\n").filter((l) => l.trim() !== "");
 
 const stateDir = (repo) => path.join(repo, ".claude", "gate");
 const runDir = (repo, session = "S1") =>
-  path.join(stateDir(repo), "runs", loadSession(stateDir(repo), session).current);
+  path.join(stateDir(repo), "runs", (({ current, lastClosed }) => current ?? lastClosed)(loadSession(stateDir(repo), session)));
 const ledgerOf = (repo) => JSON.parse(readFileSync(path.join(runDir(repo), "ledger.json"), "utf8"));
 const stepOf = (ledger, key) => ledger.steps.find((s) => s.key === key);
 const errorLog = (repo) => path.join(stateDir(repo), "gate-error.log");
@@ -986,7 +987,7 @@ test("C3 happy: once {tests} is closed the hint moves to the next blank step; a 
 // C5
 // ---------------------------------------------------------------------------
 
-test("C5 boundary: open cases with every step closed hint `gate case close`, nothing left hints `gate close`, closing hints `gate check` and `gate report --brief`", () => {
+test("C5 boundary: open cases with every step closed hint `gate case close`, nothing left hints `gate close`, a close hints `gate report --brief`", () => {
   const repo = opened("next-c5", { planFiles: "src/a.ts,src/app/page.tsx" }); // standard: nothing auto-N/A
   cli(repo, "case", ["add", "renders the badge", "--kind", "happy"]);
 
@@ -1006,9 +1007,10 @@ test("C5 boundary: open cases with every step closed hint `gate case close`, not
   assert.match(afterCase, /`gate close/, `with nothing left the hint must be the close:\n${afterCase}`);
   assert.ok(!/`gate case close/.test(afterCase), afterCase);
 
+  // at standard the skeptic and review steps are required, so an N/A is reopened at the next assess
+  for (const key of ["skeptic", "review"]) cli(repo, "step", [key, "done", "fixture", "--evidence", "docs/notes.md"]);
   const afterClose = hint(repo, "close");
-  assert.equal(ledgerOf(repo).status, "closing", "premise: close sets status closing");
-  assert.match(afterClose, /`gate check`/, afterClose);
+  assert.equal(ledgerOf(repo).status, "closed", "close closes a clean run");
   assert.match(afterClose, /`gate report --brief`/, afterClose);
 });
 
@@ -1034,13 +1036,20 @@ test("C6 happy: every mutating verb's last line is the next: hint, and `gate che
     ["verify", [], {}],
     ["size", [], {}],
     ["brief", ["skeptic"], {}],
-    ["close", [], {}],
   ];
 
   for (const [verb, args, opts] of drive) {
     const h = hint(repo, verb, args, opts);
     assert.match(h, /^next: \S/, `\`gate ${verb}\`: ${h}`);
   }
+  // close is last because it ends the run; it closes only a clean one
+  const notClean = run(repo, "close");
+  assert.equal(notClean.status, 1, "an unclean close must fail the command");
+  assert.match(notClean.stdout, /R8/, `an unclean close prints what is unmet:\n${notClean.stdout}`);
+  for (const s of ledgerOf(repo).steps) if (!s.state && s.key !== "close") cli(repo, "step", [s.key, "na", "fixture"]);
+  cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:renders the badge"]);
+  const h = hint(repo, "close");
+  assert.match(h, /`gate report --brief`/, h);
 
   const chk = cli(repo, "check");
   assert.ok(
@@ -1058,7 +1067,7 @@ test("C7 refused: `gate note task \"\"` prints to stderr and leaves no gate-erro
   assert.ok(!existsSync(errorLog(repo)), "premise: no gate error has been logged yet");
 
   const r = run(repo, "note", ["task", ""]);
-  assert.equal(r.status, 0, "the dispatcher must fail open");
+  assert.equal(r.status, 1, "a usage mistake fails the command");
   assert.equal(r.stdout, "", `a usage mistake must print nothing on stdout:\n${r.stdout}`);
   assert.match(r.stderr, /empty text/i, `stderr does not name the mistake:\n${r.stderr}`);
   assert.ok(!/\n\s+at /.test(r.stderr), `a usage mistake must not print a stack:\n${r.stderr}`);
@@ -1078,14 +1087,14 @@ test("C7 refused: `gate note task \"\"` prints to stderr and leaves no gate-erro
 test("C8 refused: an unknown playbook, an unknown brief role and a verb with no open ledger print usage and write no gate-error.log", () => {
   const unknownPlaybook = committed("next-c8-playbook");
   const p = run(unknownPlaybook, "open", ["x", "nope"]);
-  assert.equal(p.status, 0);
+  assert.equal(p.status, 1);
   assert.equal(p.stdout, "", p.stdout);
   assert.match(p.stderr, /unknown playbook/i, p.stderr);
   assert.ok(!existsSync(errorLog(unknownPlaybook)), "an unknown playbook was recorded as a plugin failure");
 
   const badRole = opened("next-c8-role", { planFiles: "src/a.ts" });
   const b = run(badRole, "brief", ["nope"]);
-  assert.equal(b.status, 0);
+  assert.equal(b.status, 1);
   assert.equal(b.stdout, "", b.stdout);
   assert.match(b.stderr, /usage/i, b.stderr);
   for (const role of ROLES) {
@@ -1095,7 +1104,7 @@ test("C8 refused: an unknown playbook, an unknown brief role and a verb with no 
 
   const noLedger = committed("next-c8-noledger");
   const s = run(noLedger, "size");
-  assert.equal(s.status, 0);
+  assert.equal(s.status, 1);
   assert.equal(s.stdout, "", s.stdout);
   assert.match(s.stderr, /no open ledger/i, s.stderr);
   assert.ok(!existsSync(errorLog(noLedger)), "a missing ledger was recorded as a plugin failure");

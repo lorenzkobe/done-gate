@@ -49,7 +49,7 @@ function check(repo) {
 
 const stateDir = (repo) => path.join(repo, ".claude", "gate");
 const runDir = (repo, session = "S1") =>
-  path.join(stateDir(repo), "runs", loadSession(stateDir(repo), session).current);
+  path.join(stateDir(repo), "runs", (({ current, lastClosed }) => current ?? lastClosed)(loadSession(stateDir(repo), session)));
 const ledgerFile = (repo) => path.join(runDir(repo), "ledger.json");
 const ledgerOf = (repo) => JSON.parse(readFileSync(ledgerFile(repo), "utf8"));
 const stepOf = (ledger, key) => ledger.steps.find((s) => s.key === key);
@@ -1039,7 +1039,7 @@ function cli(repo, verb, args = [], opts = {}) {
 
 const stateDir = (repo) => path.join(repo, ".claude", "gate");
 const runDir = (repo, session = "S1") =>
-  path.join(stateDir(repo), "runs", loadSession(stateDir(repo), session).current);
+  path.join(stateDir(repo), "runs", (({ current, lastClosed }) => current ?? lastClosed)(loadSession(stateDir(repo), session)));
 const closedRunDir = (repo, session = "S1") =>
   path.join(stateDir(repo), "runs", loadSession(stateDir(repo), session).lastClosed);
 
@@ -1460,7 +1460,7 @@ function run(repo, verb, args = [], { input = "", session = "S1" } = {}) {
     encoding: "utf8",
     env: envFor(repo, session),
   });
-  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.status === 0 || REFUSAL.test(r.stderr), r.stderr);
   return r;
 }
 
@@ -1490,7 +1490,7 @@ function check(repo) {
 
 const stateDir = (repo) => path.join(repo, ".claude", "gate");
 const runDir = (repo, session = "S1") =>
-  path.join(stateDir(repo), "runs", loadSession(stateDir(repo), session).current);
+  path.join(stateDir(repo), "runs", (({ current, lastClosed }) => current ?? lastClosed)(loadSession(stateDir(repo), session)));
 const closedRunDir = (repo, session = "S1") =>
   path.join(stateDir(repo), "runs", loadSession(stateDir(repo), session).lastClosed);
 const ledgerFileOf = (dir) => path.join(dir, "ledger.json");
@@ -1727,7 +1727,7 @@ test("C3 boundary: an old ledger.json carrying blast rows, a {blast} step and ti
     if (!s.state && s.key !== "close") cli(repo, "step", [String(s.n), "na", "carried-over run, nothing to do"]);
   }
   const closed = cli(repo, "close");
-  assert.equal(ledgerOf(repo).status, "closing", `\`gate close\` did not close an old ledger:\n${closed.stdout}`);
+  assert.equal(ledgerOf(repo).status, "closed", `\`gate close\` did not close an old ledger:\n${closed.stdout}`);
 });
 
 // ---------------------------------------------------------------------------

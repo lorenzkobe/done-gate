@@ -256,3 +256,11 @@ test("C8 idempotent: a second gate note context appends under the same heading a
   assert.match(md, /Traced: src\/a\.ts:1[\s\S]*Traced: src\/app\/page\.tsx:1/);
   assert.ok(ledgerOf(repo).contextSeq > first, "contextSeq did not move to the newer note");
 });
+
+test("C9 happy: the three parts on one line, joined by ` · ` as the hint shows them, are accepted", () => {
+  const repo = opened("ctx-c9");
+  const r = cli(repo, "note", ["context", "Traced: src/a.ts:1 exports a, read by src/app/page.tsx:1 · Related: tests/a.test.ts pins a · Research: none needed: a local change"]);
+  assert.match(r.stdout, /context noted/);
+  assert.equal(ledgerOf(repo).steps.find((s) => s.key === "context").state, "DONE");
+  assert.match(ledgerMd(repo), /Traced: src\/a\.ts:1 exports a, read by src\/app\/page\.tsx:1 · Related:/);
+});

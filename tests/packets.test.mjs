@@ -378,11 +378,11 @@ test("C7 happy: the reviewer-2 packet embeds review-1.md", () => {
 // C8
 // ---------------------------------------------------------------------------
 
-test("C8 edge: round defaults to the role's huddle count plus one, --round overrides; the review number is one past the highest existing review-<n>.md", () => {
+test("C8 edge: a reviewer packet carries its review file's number, one past the highest existing or briefed review-<n>.md; --round is for the other roles", () => {
   const repo = opened("packets-c8");
   const dir = runDir(repo);
 
-  // No huddles yet: round 1, and with no review files the output path is review-1.md.
+  // No review files: review-1.md and packet 1.
   const first = packet(repo, "reviewer");
   assert.equal(first.path, briefFile(repo, "reviewer", 1));
   assert.ok(section(first.text, "Write your findings to").includes(path.join(dir, "review-1.md")), "first round does not write review-1.md");
@@ -391,22 +391,26 @@ test("C8 edge: round defaults to the role's huddle count plus one, --round overr
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
 
   const second = packet(repo, "reviewer");
-  assert.equal(second.path, briefFile(repo, "reviewer", 2), "round did not default to huddles + 1");
+  assert.equal(second.path, briefFile(repo, "reviewer", 2), "the packet number does not follow the review number");
   assert.ok(existsSync(briefFile(repo, "reviewer", 2)));
   assert.match(lines(second.text)[0], /^# Brief: reviewer round 2 /, "the title line does not carry round 2");
 
-  // A gap in the review files: the next number is one past the highest, not the count.
+  // packet 2 was never run: the same piece is re-briefed in place, even with a later file on disk
   writeFileSync(path.join(dir, "review-3.md"), "# Review 3\n");
+  assert.equal(packet(repo, "reviewer").path, briefFile(repo, "reviewer", 2), "an unrun packet for the same piece is re-briefed in place");
+
+  // once that round has its file, the next number is one past the highest, not the count
+  writeFileSync(path.join(dir, "review-2.md"), "# Review 2\n");
   const third = packet(repo, "reviewer");
+  assert.equal(third.path, briefFile(repo, "reviewer", 4), "packet and file numbers must agree");
   assert.ok(
     section(third.text, "Write your findings to").includes(path.join(dir, "review-4.md")),
     `expected review-4.md after review-1.md and review-3.md:\n${section(third.text, "Write your findings to")}`,
   );
 
-  // --round overrides the default (up to the three-round cap).
+  // --round does not move a reviewer's number: the file decides
   const forced = packet(repo, "reviewer", ["--round", "3"]);
-  assert.equal(forced.path, briefFile(repo, "reviewer", 3));
-  assert.ok(existsSync(briefFile(repo, "reviewer", 3)));
+  assert.equal(forced.path, briefFile(repo, "reviewer", 4));
 
   // Rounds are per role: the skeptic is still on round 1.
   assert.equal(packet(repo, "skeptic").path, briefFile(repo, "skeptic", 1));
@@ -456,7 +460,7 @@ test("C10 refused: an unknown role, and brief without an open ledger, fail with 
   const before = readdirSync(runDir(repo));
 
   const bad = run(repo, "brief", ["nope"]);
-  assert.equal(bad.status, 0, "the dispatcher must fail open");
+  assert.equal(bad.status, 1, "a usage mistake fails the command");
   assert.match(bad.stderr, /usage/i, `stderr does not carry a usage message:\n${bad.stderr}`);
   assert.ok(/skeptic/.test(bad.stderr) && /reviewer-2/.test(bad.stderr), `the usage message does not list the roles:\n${bad.stderr}`);
   assert.deepEqual(
@@ -466,13 +470,13 @@ test("C10 refused: an unknown role, and brief without an open ledger, fail with 
   );
 
   const none = run(repo, "brief", []);
-  assert.equal(none.status, 0);
+  assert.equal(none.status, 1);
   assert.match(none.stderr, /usage/i, `no role at all should print usage:\n${none.stderr}`);
 
   // No ledger has ever been opened in this repo.
   const bare = committed("packets-c10-noledger");
   const orphan = run(bare, "brief", ["qa"]);
-  assert.equal(orphan.status, 0);
+  assert.equal(orphan.status, 1);
   assert.match(orphan.stderr, /no open ledger/i, `stderr does not mention the missing ledger:\n${orphan.stderr}`);
   assert.ok(!existsSync(path.join(stateDir(bare), "runs")), "a run dir was created by a failing brief");
 });
@@ -661,8 +665,8 @@ test("C16 boundary: a commit made mid-task does not shrink the reviewer diff or 
 
 test("C17 refused: the fence denies Edit/Write to a packet file and Bash commands that name one", () => {
   const repo = opened("packets-c17");
-  cli(repo, "brief", ["qa"]);
-  const abs = briefFile(repo, "qa");
+  cli(repo, "brief", ["skeptic"]);
+  const abs = briefFile(repo, "skeptic");
   const rel = path.relative(repo, abs).split(path.sep).join("/");
 
   const fence = (payload) =>

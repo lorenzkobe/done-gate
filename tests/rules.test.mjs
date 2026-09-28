@@ -152,6 +152,19 @@ test("R9: a high-risk change needs the second reviewer too", () => {
   assert.ok(!ids(clean({ changed: ["src/a.ts", "tests/a.test.ts"], events: [edit, r1], reviews: ["review-1.md"], ledger: { huddles: [h1] } })).includes("R9"));
 });
 
+test("R9 names the open reviewer-2 item, as R5 does, instead of asking for another round", () => {
+  const changed = ["src/lib/payments/x.ts", "tests/a.test.ts"];
+  const edit = { seq: 10, kind: "edit", path: "src/lib/payments/x.ts", agent: null };
+  const r1 = { seq: 20, kind: "subagent-stop", agentType: "done-gate:reviewer" };
+  const r2 = { seq: 21, kind: "subagent-stop", agentType: "done-gate:reviewer-2" };
+  const h1 = { id: "H1", role: "reviewer", file: "review-1.md", actOn: [] };
+  const h2 = { id: "H2", role: "reviewer-2", file: "review-2.md", actOn: [{ id: "H2.1", text: "the open-bills read scans a year", closed: null }] };
+  const r9 = evaluate(clean({ changed, events: [edit, r1, r2], reviews: ["review-1.md", "review-2.md"], ledger: { huddles: [h1, h2] } })).find((u) => u.rule === "R9");
+  assert.ok(r9, "R9 must fire on an open item");
+  assert.match(r9.text, /still open: H2\.1/);
+  assert.doesNotMatch(r9.text, /required after the last edit/);
+});
+
 test("R10: migration-number requires CLAUDE.md's next number to be max+1 when a migration is added; claude-md-budget caps CLAUDE.md", () => {
   assert.ok(!ids(clean({ changed: ["src/a.ts", "tests/a.test.ts"] })).includes("R10"));
   write(repo, "supabase/migrations/0003_c.sql", "z");
@@ -662,7 +675,7 @@ function run(repo, verb, args = [], { input = "", session = "S1" } = {}) {
     encoding: "utf8",
     env: envFor(repo, session),
   });
-  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.status === 0 || REFUSAL.test(r.stderr), r.stderr);
   assert.ok(!/GATE ERROR/.test(`${r.stdout}${r.stderr}`), `${r.stdout}${r.stderr}`);
   return r;
 }

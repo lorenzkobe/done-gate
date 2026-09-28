@@ -80,6 +80,8 @@ test("C5 read-only commands on an evidence file pass the fence", () => {
     `sed -n '/^## You may write/,/^## Diff/p' .claude/gate/runs/2026-09-27-x/brief-reviewer-1.md`,
     `sed 's/ with / WITH /' ${EVIDENCE}`,
     `git -C ${repo} show HEAD:${EVIDENCE}`,
+    `cat $(ls ${EVIDENCE})`,
+    `perl -pe 's/a/b/' ${EVIDENCE}`,
   ]) {
     assert.equal(decide(bash(cmd), repo, cfg).deny, false, cmd);
   }
@@ -102,8 +104,7 @@ test("C6 commands that write an evidence path are still denied", () => {
     `find ${EVIDENCE} -delete`,
     `find ${EVIDENCE} -exec rm {} \\;`,
     `awk '{print > "${EVIDENCE}"}' src/a.ts`,
-    `perl -pe 's/a/b/' ${EVIDENCE}`,
-    `cat $(ls ${EVIDENCE})`,
+    `perl -pi -e 's/a/b/' ${EVIDENCE}`,
     `cat ${EVIDENCE} & rm ${EVIDENCE}`,
     `echo "$(rm ${EVIDENCE})"`,
     `echo "\`rm ${EVIDENCE}\`"`,
@@ -144,4 +145,72 @@ test("C8 a deny event records the Bash command, truncated to 200 chars", () => {
   const deny = events.find((e) => e.kind === "deny");
   assert.equal(deny.cmd.length, 200);
   assert.ok(long.startsWith(deny.cmd));
+});
+
+test("C9 an Act-on heading may carry a colon; a bullet opening with none or n/a is empty whatever follows; nothing alone or nothing found is empty; None of… and Nothing tests… are findings", () => {
+  const colon = "# Review 7 — x\n\n## Act on:\n- H2-7.1 Two comments describe the index mechanism wrongly. src/x.ts:36-38\n  - Why: the literal proves the predicate\n\n## Consider\n- x\n";
+  assert.deepEqual(parseFindings(colon).map((f) => f.text), ["H2-7.1 Two comments describe the index mechanism wrongly. src/x.ts:36-38"]);
+  assert.deepEqual(parseFindings("# Review\n\n## Act on: none\n\n## Consider\n- x\n"), []);
+  for (const b of ["none found for this piece (PaymentForm.tsx, TotalsBreakdown.tsx)", "none. I traced every money path the brief names.", "N/A", "nothing found for this piece", "Nothing.", "none"]) {
+    assert.deepEqual(parseFindings(`## Act on\n- ${b}\n`), [], b);
+  }
+  for (const b of ["None of the callers checks the result", "Nothing tests C4's gapless numbering"]) {
+    assert.equal(parseFindings(`## Act on\n- ${b}\n`).length, 1, b);
+  }
+});
+
+test("C10 the lead may quote an evidence path in a heredoc body and read one with inline code or inside $( ); writing one is still denied", () => {
+  const L = ".claude/gate/runs/2026-09-27-x/ledger.json";
+  for (const cmd of [
+    `cat >> .superpowers/report.md <<'EOF'\nSource: ${EVIDENCE}, citing ${L}\nEOF`,
+    `node -e 'const l=require("./${L}");for(const c of l.cases)console.log(c.id)'`,
+    `for r in a b; do echo "$r: $(grep -o '"status"' ${L} | head -1)"; done`,
+    `python3 -c 'import json;print(json.load(open("${L}"))["status"])'`,
+    `G=/tmp/g; $G huddle add reviewer --file review-2.md; cat > .superpowers/x.md <<'EOF'\nsee ${EVIDENCE}\nEOF`,
+  ]) {
+    assert.equal(decide(bash(cmd), repo, cfg).deny, false, cmd);
+  }
+  for (const cmd of [
+    `cat > ${L} <<'EOF'\n{}\nEOF`,
+    `node -e 'require("fs").writeFileSync("${L}","{}")'`,
+    `echo "$(rm ${L})"`,
+    `sh -c "echo x > ${L}"`,
+    `python3 - <<'EOF'\nopen("${L}","w").write("{}")\nEOF`,
+  ]) {
+    assert.equal(decide(bash(cmd), repo, cfg).deny, true, cmd);
+  }
+});
+
+test("C11 a helper's shell write is judged by its targets: scratch copies pass whatever the source, a cd into scratch and same-command variables resolve; repo writes, unknown targets and inline code that writes are denied", () => {
+  const reviewer = { agent_id: "A1", agent_type: "done-gate:reviewer" };
+  const S = "/private/tmp/claude-501/x/scratchpad";
+  for (const cmd of [
+    "git show cfa6af2:src/a.ts > /tmp/checkout.tsx && wc -l /tmp/checkout.tsx",
+    "cd tests/.tmp/rv4 && cp -R /repo/src ./src && cat > vitest.config.ts <<'EOF'\nexport default {}\nEOF",
+    `S=${S}; mkdir -p $S && sed -e "s#a#b#" src/a.ts > $S/a.ts`,
+    `S=${S}; rm -rf $S; mkdir -p $S; cd /repo && rsync -a --exclude node_modules --exclude .git src $S/`,
+    "S=/tmp/s; (npm test > $S/t3.log 2>&1; echo done)",
+    "sed -i '' 's/a/b/' /repo/tests/.tmp/rv4/src/api.ts",
+    "mkdir -p /tmp/claude-501/rv4 && ls /repo && cat /repo/vite*.config.* | head -60",
+    "npm test 2>&1 | tail -5",
+    "node -e 'console.log(require(\"fs\").readFileSync(\"src/a.ts\",\"utf8\").length)'",
+  ]) {
+    assert.equal(decide(bash(cmd, reviewer), repo, cfg).deny, false, cmd);
+  }
+  for (const cmd of [
+    "python3 - <<'EOF'\np='src/a.ts'\ns=open(p).read()\nopen(p,'w').write(s)\nEOF",
+    "echo x > src/out.txt",
+    "git checkout -- src/a.ts",
+    "bash -c 'echo hi > src/x'",
+    "(npm test > $S/t3.log 2>&1)",
+    "cd $R && cp a ./b",
+    "tar xzf x.tgz",
+    "sed -i '' 's/a/b/' src/api.ts",
+    "cat x | xargs rm",
+    "cp src/a.ts src/b.ts",
+  ]) {
+    const v = decide(bash(cmd, reviewer), repo, cfg);
+    assert.equal(v.deny, true, cmd);
+    assert.match(v.reason, /this command /, "the refusal says what the command writes");
+  }
 });

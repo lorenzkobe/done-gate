@@ -9,15 +9,31 @@ import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
 import { isDraft, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers } from "./rules.mjs";
-import { buildState, readVerify, reviewFiles } from "./assess.mjs";
+import { assess, buildState, readVerify, reviewFiles } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { readEvents } from "./events.mjs";
 
 // The report of a run that is no longer current: the same renderer `gate report` uses.
-function writeReport(ctx, dir, ledger) {
+export function writeReport(ctx, dir, ledger) {
   const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
   const state = { ...buildState(ctx, {}), ledger, dir, verify: readVerify(dir), reviews: reviewFiles(dir), events, changed: ledger.changedAtClose ?? [], tier: ledger.tier ?? null, stateDir: ctx.stateDir };
   writeFileSync(path.join(dir, "report.md"), renderReport(state, []));
+}
+
+// A clean run closes: the ledger records the tree it closed on, and the session's baseline
+// moves to that tree so the next task starts from zero changes.
+export function finalise(ctx, state) {
+  const ledger = loadLedger(state.dir);
+  ledger.status = "closed";
+  ledger.closedAt = new Date().toISOString();
+  ledger.closedTreeHash = state.now.hash;
+  ledger.changedAtClose = state.changed;
+  if (state.tier) ledger.tier = state.tier;
+  saveLedger(state.dir, ledger);
+  const session = loadSession(ctx.stateDir, ctx.session);
+  saveSession(ctx.stateDir, { ...session, current: null, lastClosed: path.basename(state.dir), baseline: { files: state.now.files, hash: state.now.hash }, baselineSeq: nextSeq() });
+  writeReport(ctx, state.dir, ledger);
+  return ledger;
 }
 
 // Steps whose evidence comes from a script or an agent: DONE or WAIVED only.
@@ -428,13 +444,21 @@ export const verbs = {
     ctx.out(`report: ${path.join(dir, "report.md")}`);
   },
 
+  // The run closes here and now, not at the next stop: a lead that opens the next task in
+  // the same turn would otherwise leave it half-closed. Not clean: nothing changes.
   close(ctx) {
-    withLedger(ctx, (ledger) => {
-      ledger.status = "closing";
-      ledger.closingSeq = nextSeq();
-      markStep(ledger, "close", { state: "DONE", evidence: "report.md", note: "closing" });
-    });
-    ctx.out("ledger closing — the stop gate finalises the close when it agrees the run is clean");
-    printNext(ctx);
+    withLedger(ctx, (ledger) => markStep(ledger, "close", { state: "DONE", evidence: "report.md", note: "closed" }));
+    const { state, unmet } = assess(ctx, {});
+    if (unmet.length) {
+      withLedger(ctx, (ledger) => {
+        const step = ledger.steps.find((s) => s.key === "close");
+        if (step?.note === "closed") Object.assign(step, { state: null, note: null, evidence: null, seq: null });
+      });
+      unmet.forEach((u, i) => ctx.out(`${i + 1}. ${u.rule} — ${u.text}`));
+      throw new UsageError(`not closed: ${unmet.length} unmet`);
+    }
+    const ledger = finalise(ctx, state);
+    ctx.out(`${ledger.slug} closed`);
+    ctx.out("next: `gate report --brief`, pasted as your final message");
   },
 };

@@ -174,7 +174,7 @@ export function openLedger(ctx, slug, playbook) {
   return { dir, ledger };
 }
 
-// Every run whose ledger is still open or closing (not closed, not abandoned), newest first.
+// Every run whose ledger is not closed or abandoned, newest first.
 export function openRuns(stateDir) {
   const dir = runsDir(stateDir);
   if (!existsSync(dir)) return [];

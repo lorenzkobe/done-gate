@@ -52,11 +52,11 @@ judgment out of the model and into hooks that can't be talked out of it.
    ├─ arbiter            ──► settles what is still disputed
    │
    ▼
- gate close · gate check · gate report
+ gate close: every rule met? ──yes──► ledger closed, report written
+                             └─no───► the unmet list, exit 1; keep working
    │
    ▼
- Stop hook: every rule met? ──yes──► turn ends, ledger closed
-                            └─no───► blocked with the unmet list; keep working
+ Stop hook: source changed and a rule unmet? ──► blocked with the list
 ```
 
 Three things make this hard to game:
@@ -145,7 +145,7 @@ attempt to finish.
 | R6 | schema files changed with no real-schema probe |
 | R7 | source changed and no test file changed |
 | R8 | any case or step is blank |
-| R9 | high-risk paths changed without the second reviewer (same round rules as R5) |
+| R9 | high-risk paths changed without the second reviewer (same round rules as R5; an open reviewer-2 item is named) |
 | R10 | a repo check failed (`claude-md-budget`, `migration-number`) |
 | R13 | `.claude/gate.json` or the plugin's `models.json` changed mid-task |
 | R15 | a helper's file lists more findings than the ledger recorded |
@@ -168,11 +168,28 @@ with `gate waive <key> "…"`, and the report lists every waiver.
   and write its own findings file until that file exists; every other read or shell call is
   refused with "write your draft first". A helper that runs out of turns still leaves a file.
   A draft left behind this way is not a finished round: `gate brief` re-briefs the same round
-  and `gate huddle add` refuses to record it until a fresh helper rewrites it.
+  and `gate huddle add` refuses to record it until a fresh helper rewrites it. Two reviewers
+  of one role may be out at once, on two pieces: each packet carries its own file number
+  (`brief-reviewer-2.md` asks for `review-2.md`), and a reviewer that has written its draft
+  is free while the other still owes its own.
+- **A helper's shell writes stay in scratch.** The fence reads where a command writes (a
+  redirect, `tee`, `cp`, `mv`, `rm`, `sed -i`, inline code that writes, a git write) and lets
+  it through when every target is under `tests/.tmp`, `/tmp` or a scratchpad; sources may be
+  anywhere, a `cd` and variables set in the same command count, and a heredoc body is text.
+  The lead's commands are refused only when they write an evidence file: quoting its path in
+  a heredoc or reading it with `node -e` is fine.
 - **Waiting for a helper is a legal turn end.** While any agent this session spawned (a
   `done-gate:*` helper, an Explore or Plan agent) is still running, the Stop hook lets the
-  turn end quietly (nothing is finalised); the agent's hand-back wakes the lead. A hand-back
-  arrives as a prompt, but it is not a new turn: helpers still running are still seen.
+  turn end quietly; the agent's hand-back wakes the lead. A hand-back, a task notification or
+  a message from another session arrives as a prompt, but it is not a new turn: helpers still
+  running are still seen.
+- **`gate close` closes.** It judges the run there and then: clean, the ledger is closed, the
+  session's baseline moves and report.md is written, so opening the next task in the same
+  turn is safe; not clean, it prints the unmet list, exits 1 and changes nothing. A run an
+  older plugin left "closing" is closed late at the next session start, never attached.
+- **A usage mistake fails the command.** A verb called wrongly (an empty note, an unknown
+  role, no open run) prints its usage on stderr and exits 1, so a `gate … && next` chain stops
+  there; hooks always exit 0. `gate help` lists the verbs.
 - **Every block is logged.** When the Stop hook refuses to end the turn, a `block` event with
   the unmet rule ids lands in the session's events, and the report counts them, so a turn
   that could not end can be diagnosed afterwards.
@@ -228,9 +245,9 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `waive <key> "<reason>"` | record a waiver; it shows in the report |
 | `verify [--step verify-before]` | run the repo's verify commands, write `verify.json` |
 | `decide <phase> <decision> <why> <evidence> <result>` | append a decision-log row |
-| `brief <skeptic\|qa\|worker\|reviewer\|reviewer-2\|arbiter> [--round n] [--item H#.#]` | write the helper's packet and print its spawn prompt |
+| `brief <skeptic\|qa\|worker\|reviewer\|reviewer-2\|arbiter> [--files a,b \| a.ts:1-400] [--item H#.#]` | write the helper's packet and print its spawn prompt; a reviewer's packet is numbered like its file |
 | `abandon <slug> "<reason>"` | give a run up: marks it abandoned with the reason; it stops attaching to sessions and blocking turns |
-| `check` · `steps` · `size` · `report [--brief]` · `close` · `doctor` | unmet items only · every step · the report, short or full · finish · inspect config |
+| `check` · `steps` · `size` · `report [--brief]` · `close` · `doctor` · `help` | unmet items only · every step · the report, short or full · close a clean run · inspect config · the verbs |
 
 ## Configuration
 

@@ -34,8 +34,8 @@ lead: plan, size, delegate, report; below large, edit.
    try/catch with no case behind it, no docstring on a trivial function, no TODO,
    console.log or commented-out code, no emoji. Large: never edit source; `gate brief worker`
    per piece, spawn `done-gate:worker`; the fence refuses yours.
-5. Review: `gate brief reviewer` (`--files a,b` per piece when the diff is past the 400-line
-   cap), spawn, `gate huddle add reviewer --file review-<n>.md`; high-risk paths: brief
+5. Review: `gate brief reviewer` (`--files a,b` per piece past the 400-line cap; pieces
+   run side by side), spawn, `gate huddle add reviewer --file review-<n>.md`; high-risk: brief
    reviewer-2 too and spawn both at once; `gate verify` may run in the background meanwhile.
    Below large: fix and `gate huddle resolve H<k>.<i> --evidence <ptr>`. Large: `gate brief
    worker`, SendMessage the worker the review path, then `gate huddle reply --file
@@ -43,8 +43,8 @@ lead: plan, size, delegate, report; below large, edit.
    `gate huddle dispute H<k>.<i> "<why>" --evidence <ptr>`, one round.
 6. `gate verify` after the last edit, Bash timeout 600000 ms. Drive the real UI when it
    changed (R4); probe the real schema when it changed (R6).
-7. `gate close`, `gate check`, then paste `gate report --brief` as your final message, at
-   most two plain lines before it; never "ledger", "huddle" or a rule number.
+7. `gate close`, then paste `gate report --brief` as your final message, at most two plain
+   lines before it; never "ledger", "huddle" or a rule number.
 
 ## Rules throughout
 
@@ -55,7 +55,7 @@ lead: plan, size, delegate, report; below large, edit.
 - Waiting for a helper is a turn end; its hand-back wakes you. A run a dead session left
   open: `gate abandon <slug> "<reason>"`.
 - Ceiling: ten helpers per task (`gate size`).
-- A step you cannot do: ask the user, then `gate waive <key> "<reason>"`.
+- A step you cannot do: ask the user, then `gate waive <key> "<why>"`.
 - Never hand-edit `.claude/gate/runs/**` except `ledger.md`. No commits unless asked; the
   repo's CLAUDE.md wins.
 - Need the user mid-task? `AskUserQuestion`, or a final line `PAUSED: <need>`.

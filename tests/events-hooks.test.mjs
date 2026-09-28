@@ -485,3 +485,9 @@ test("C7 idempotent: the tests/fixtures/stdin edit payloads still pass the fence
   assert.equal(fence(repo, asPreToolUse("bash")), null, "bash");
 });
 }
+
+test("a <cross-session-message> prompt from another session is tagged as a hand-back, so it is not a new turn", () => {
+  const ev = (text) => eventsFromHookInput({ hook_event_name: "UserPromptSubmit", session_id: "S1", prompt: text }, "/repo")[0];
+  assert.equal(ev('<cross-session-message from="uds:/tmp/cc-socks/42468.sock" f>after task 12 stop</cross-session-message>').handback, true);
+  assert.equal(ev("fix the badge").handback, undefined);
+});

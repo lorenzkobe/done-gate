@@ -125,6 +125,26 @@ test("C4 draft debts are per role: both packets out, the reviewer owes review-1.
   assert.equal(call("Write", "reviewer", `${current}/review-1.md`).deny, false);
 });
 
+test("C4b two reviewer packets out at once: each reviewer owes a number, and the one that wrote its draft is free while the other still owes its own", () => {
+  const repo = opened("r2s-c4b");
+  packet(repo, "reviewer");
+  hook(repo, { hook_event_name: "SubagentStart", agent_id: "A1", agent_type: "done-gate:reviewer" });
+  assert.match(packet(repo, "reviewer").stdout, /review-2\.md/, "the second packet takes the next number while the first reviewer runs");
+  const cfg = loadConfig(repo);
+  const current = runRel(repo);
+  const ledger = ledgerOf(repo);
+  const where = { stateDir: path.join(repo, ".claude", "gate"), session: "S1" };
+  const call = (tool, agent, rel) => decide({ hook_event_name: "PreToolUse", tool_name: tool, tool_input: { file_path: path.join(repo, rel) }, cwd: repo, session_id: "S1", agent_id: agent, agent_type: "done-gate:reviewer" }, repo, cfg, current, ledger, where);
+  assert.match(call("Read", "A1", "src/a.ts").reason, /review-1\.md or .*review-2\.md/);
+  assert.equal(call("Write", "A2", `${current}/review-2.md`).deny, false);
+  helperFile(repo, "review-1.md", "# Review 1\n\n## Act on\n- unverified\n");
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: path.join(repo, current, "review-1.md") }, agent_id: "A1", agent_type: "done-gate:reviewer" });
+  assert.equal(call("Read", "A1", "src/a.ts").deny, false, "A1 wrote its draft and may investigate");
+  const still = call("Read", "A2", "src/a.ts").reason;
+  assert.match(still, /review-2\.md/);
+  assert.doesNotMatch(still, /review-1\.md/, "A2 is not sent to A1's file");
+});
+
 test("C5 an unrecorded review2-1.md raises R15 naming reviewer-2, and the file resolves as evidence", () => {
   const repo = opened("r2s-c5");
   helperFile(repo, "review2-1.md", reviewFile(1, [FIND(1)]));
@@ -146,8 +166,8 @@ test("C6 three reviewer rounds are still the cap; review2 files do not count tow
   helperFile(repo, "review-9.md", reviewFile(9, []));
   cli(repo, "huddle", ["add", "reviewer-2", "--file", "review-9.md"]);
   const third = packet(repo, "reviewer");
-  assert.match(third.path, /brief-reviewer-3\.md$/);
   const own = /Your file is .*\/(review-\d+\.md)/.exec(third.stdout)[1];
+  assert.equal(third.path.split("/").pop(), `brief-reviewer-${/\d+/.exec(own)[0]}.md`, "packet and file numbers agree");
   helperFile(repo, own, reviewFile(3, [FIND(3)]));
   cli(repo, "huddle", ["add", "reviewer", "--file", own]);
   assert.match(run(repo, "brief", ["reviewer"]).stderr, /three rounds is the cap/);

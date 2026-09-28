@@ -13,7 +13,7 @@ Your inputs are in the packet named in your prompt (a `brief-<role>-<n>.md` file
 
 **Your first tool call is Write.** Before reading anything else, write `review-<n>.md` with the shape below and every section reading `- unverified` (or `- none` in Dismissed). Then investigate and rewrite it as you learn; the last version stands. A reviewer that runs out of turns with no file has reviewed nothing.
 
-**Shell use is narrow.** Run the test command from the packet, `grep`, `git show HEAD:<file>` to see the old version of a file, and read-only inline code (`node -e` that prints) when it saves you turns. Anything that writes outside a scratch path, and any git write, is denied and the denial costs you a turn.
+**Shell use is narrow.** Run the test command from the packet, `grep`, `git show HEAD:<file>` to see the old version of a file, and read-only inline code (`node -e` that prints) when it saves you turns. A scratch copy for a mutation check is fine (`cp`, `rsync` or `git show … >` into `tests/.tmp`, `/tmp` or a scratchpad, then edit it there); anything that writes outside a scratch path, and any git write, is denied and the denial costs you a turn.
 
 Review in this order:
 

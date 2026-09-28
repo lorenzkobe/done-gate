@@ -321,7 +321,6 @@ export const verbs = {
         : `size ${eff}: write the tests yourself from the case table, red first; blind QA is for ${at}`);
     }
     const rounds = state.ledger.huddles.filter((h) => h.role === role).length;
-    const round = Number(flag(ctx.args, "--round")) || rounds + 1;
     // a round whose earlier file never appeared is not a round: the helper is resumed and
     // told to write, not briefed again
     const missing = state.ledger.huddles.filter((h) => h.role === role && h.file && !existsSync(path.join(state.dir, h.file)));
@@ -334,6 +333,31 @@ export const verbs = {
       const full = path.join(state.dir, f);
       return existsSync(full) && isDraft(readFileSync(full, "utf8"));
     };
+    const numbers = (prefix) => state.reviews.filter((f) => f.startsWith(prefix)).map(fileNumber);
+    // a number is free again only when its round is over: a draft whose helper was cut off,
+    // or a packet nobody ran. A round still running keeps its number, so a second piece
+    // briefed meanwhile takes the next one and the two reviewers run side by side.
+    const runningSince = (seq) => {
+      const events = (state.events ?? []).filter((e) => isRole(e.agentType, role) && e.seq > seq);
+      const started = events.find((e) => e.kind === "subagent-start");
+      return Boolean(started) && !events.some((e) => e.kind === "subagent-stop" && e.seq > started.seq);
+    };
+    const next = (prefix) => {
+      const briefed = Object.keys(state.ledger.seen ?? {}).filter((f) => f.startsWith(prefix)).map(fileNumber);
+      const ns = [...new Set([...numbers(prefix), ...briefed])].sort((a, b) => b - a);
+      if (!ns.length) return 1;
+      const same = (f) => !piece || !f || (f.length === piece.files.length && f.every((x) => piece.files.includes(x)));
+      const reusable = (n) => {
+        const name = `${prefix}${n}.md`;
+        const seen = state.ledger.seen?.[name];
+        const unfinished = isDraftFile(name) || (Boolean(seen) && !state.reviews.includes(name));
+        return unfinished && same(seen?.files) && !runningSince(seen?.seq ?? Infinity);
+      };
+      return ns.find(reusable) ?? ns[0] + 1;
+    };
+    const reviewN = next(`${reviewPrefix(role)}-`);
+    // a reviewer's packet carries its file's number, so two packets out at once never collide
+    const round = reviewing ? reviewN : Number(flag(ctx.args, "--round")) || rounds + 1;
     const finished = (prefix) => state.reviews.filter((f) => f.startsWith(prefix) && !isDraftFile(f)).length;
     // a ledger from before the second stream recorded reviewer-2 rounds on review-<n>.md
     const legacySeconds = state.ledger.huddles.filter((h) => h.role === "reviewer-2" && /^review-/.test(h.file ?? "")).length;
@@ -352,7 +376,7 @@ export const verbs = {
       return (r.units?.[e.path] ?? []).some((k) => keys.has(k));
     };
     const perFile = piece && state.ledger.seen ? Math.max(0, ...piece.files.map((entry) => seenRounds.filter((r) => sawEntry(r, entry)).length)) : null;
-    const done = perFile ?? (role === "reviewer" ? Math.max(round - 1, written) : role === "reviewer-2" ? finished("review2-") + legacySeconds : 0);
+    const done = perFile ?? (role === "reviewer" ? Math.max(rounds, written) : role === "reviewer-2" ? finished("review2-") + legacySeconds : 0);
     const unseen = reviewing ? uncovered(state, role) : null;
     // a ledger from before seen sets keeps its old, uncapped second reviewer
     const legacy = !state.ledger.seen;
@@ -362,33 +386,6 @@ export const verbs = {
     const stillOpen = piece ? piece.files.map(pathOf).some((f) => neverSeen.includes(f)) : neverSeen.length > 0;
     if (done >= REVIEW_CAP && !(legacy && role === "reviewer-2") && !stillOpen) {
       throw new UsageError(`${role} round ${done + 1}: three rounds is the cap. What is still disputed goes to the arbiter (\`gate brief arbiter --item H<k>.<i>\`, spawn done-gate:arbiter); what is still open is fixed and closed with \`gate huddle resolve\`.`);
-    }
-    const numbers = (prefix) => state.reviews.filter((f) => f.startsWith(prefix)).map(fileNumber);
-    const next = (prefix) => {
-      const ns = numbers(prefix);
-      if (!ns.length) return 1;
-      const n = Math.max(...ns);
-      return isDraftFile(`${prefix}${n}.md`) ? n : n + 1;
-    };
-    const reviewN = next(`${reviewPrefix(role)}-`);
-    // one round of a role at a time: a second piece briefed while the first reviewer is still
-    // running (its file a draft, no stop since its brief) would take the same number and
-    // overwrite what that round saw; a cut-off reviewer's draft is re-briefed as before
-    const draftName = `${reviewPrefix(role)}-${reviewN}.md`;
-    const briefedAt = state.ledger.seen?.[draftName]?.seq ?? Infinity;
-    const roleEvents = (state.events ?? []).filter((e) => isRole(e.agentType, role) && e.seq > briefedAt);
-    const started = roleEvents.find((e) => e.kind === "subagent-start");
-    const running = piece && isDraftFile(draftName) && Boolean(started) && !roleEvents.some((e) => e.kind === "subagent-stop" && e.seq > started.seq);
-    if (running) {
-      throw new UsageError(`${draftName} is still a draft and that ${role} has not stopped: wait for its hand-back (or SendMessage it "write ${draftName} now") before briefing the next piece; reviewer and reviewer-2 may run side by side, two rounds of one role may not.`);
-    }
-    // a packet already names another piece for this same file and nobody has run it yet: a
-    // second brief would swap the piece under it without a word
-    const prior = state.ledger.seen?.[draftName];
-    const samePiece = prior && piece && prior.files.length === piece.files.length && prior.files.every((f) => piece.files.includes(f));
-    const stoppedSince = prior && (state.events ?? []).some((e) => e.kind === "subagent-stop" && isRole(e.agentType, role) && e.seq > prior.seq);
-    if (prior && piece && !samePiece && !stoppedSince) {
-      throw new UsageError(`${draftName} is already briefed for ${prior.files.join(", ")} and that ${role} has not run: spawn it with the prompt from brief-${role}-${round}.md, or re-brief the same files; a different piece waits for its hand-back.`);
     }
     const skepticN = next("skeptic-");
     const arbiterN = next("arbiter-");

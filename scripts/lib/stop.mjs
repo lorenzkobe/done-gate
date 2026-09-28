@@ -1,4 +1,3 @@
-import path from "node:path";
 import { assess, LedgerParseError } from "./assess.mjs";
 import { recordGateError } from "./context.mjs";
 import { appendEvents, nextSeq } from "./events.mjs";
@@ -37,20 +36,6 @@ function helperRunning(events, session, now = Date.now()) {
   const lastPrompt = mine.filter((e) => e.kind === "prompt" && !e.handback).pop()?.seq ?? 0;
   const starts = mine.filter((e) => e.kind === "subagent-start" && e.seq > lastPrompt);
   return starts.some((st) => now - Date.parse(st.ts ?? 0) < HELPER_MAX_MS && !mine.some((e) => e.kind === "subagent-stop" && e.agent === st.agent && e.seq > st.seq));
-}
-
-// The ledger closes only when the gate agrees it is clean; the session's baseline
-// moves to the current tree so the next task starts from zero changes.
-function finalise(ctx, state) {
-  const ledger = loadLedger(state.dir);
-  ledger.status = "closed";
-  ledger.closedAt = new Date().toISOString();
-  ledger.closedTreeHash = state.now.hash;
-  ledger.changedAtClose = state.changed;
-  if (state.tier) ledger.tier = state.tier;
-  saveLedger(state.dir, ledger);
-  const session = loadSession(ctx.stateDir, ctx.session);
-  saveSession(ctx.stateDir, { ...session, current: null, lastClosed: path.basename(state.dir), baseline: { files: state.now.files, hash: state.now.hash }, baselineSeq: nextSeq() });
 }
 
 function renderReason(unmet, { ledgerOpen }) {
@@ -108,7 +93,6 @@ export const verbs = {
 
     if (unmet.length === 0) {
       clearBlocks(ctx);
-      if (state.ledger?.status === "closing") finalise(ctx, state);
       return;
     }
 

@@ -97,7 +97,7 @@ test("`--step verify-before` targets the refactor playbook's baseline step inste
 test("verify without an open ledger explains what to do and writes nothing", () => {
   const repo = makeRepo("verify-noledger");
   const r = cli(repo, "verify");
-  assert.equal(r.status, 0);
+  assert.equal(r.status, 1);
   assert.match(r.stderr, /gate open/);
 });
 

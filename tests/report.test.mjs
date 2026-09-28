@@ -17,7 +17,7 @@ function cli(repo, verb, args = [], input = "") {
   assert.equal(r.status, 0, r.stderr);
   return r;
 }
-const runDir = (repo) => path.join(repo, ".claude", "gate", "runs", loadSession(path.join(repo, ".claude", "gate"), "S1").current);
+const runDir = (repo) => path.join(repo, ".claude", "gate", "runs", (({ current, lastClosed }) => current ?? lastClosed)(loadSession(path.join(repo, ".claude", "gate"), "S1")));
 
 test("report renders every section, the summary counts, and embeds the reviewer's file verbatim", () => {
   const repo = makeRepo("report-render");
@@ -82,7 +82,7 @@ function cli(repo, verb, args = [], opts = {}) {
 
 const stateDir = (repo) => path.join(repo, ".claude", "gate");
 const runDir = (repo, session = "S1") =>
-  path.join(repo, ".claude", "gate", "runs", loadSession(stateDir(repo), session).current);
+  path.join(repo, ".claude", "gate", "runs", (({ current, lastClosed }) => current ?? lastClosed)(loadSession(stateDir(repo), session)));
 const closedRunDir = (repo, session = "S1") =>
   path.join(repo, ".claude", "gate", "runs", loadSession(stateDir(repo), session).lastClosed);
 
@@ -176,7 +176,7 @@ function standardFixture(name, { gateJson = null } = {}) {
 
 // A ledger the gate agrees is clean: the plan playbook, every step closed, no
 // source touched, `gate close` run. Mirrors tests/verbs.test.mjs's close test.
-function cleanClosingFixture(name, slug = "tidy") {
+function cleanClosingFixture(name, slug = "tidy", before = () => {}) {
   const repo = makeRepo(name);
   cli(repo, "open", [slug, "plan"]);
   cli(repo, "note", ["task", "Write the spec. [inferred]"]);
@@ -189,6 +189,7 @@ function cleanClosingFixture(name, slug = "tidy") {
   cli(repo, "step", ["context", "done", "traced it", "--evidence", "events#1"]);
   cli(repo, "step", ["skeptic", "done", "no findings", "--evidence", "events#2"]);
   cli(repo, "step", ["implement", "done", "spec written", "--evidence", "docs/notes.md"]);
+  before(repo);
   cli(repo, "close");
   return repo;
 }
@@ -360,8 +361,7 @@ test("C7 boundary: the \"For you:\" line says nothing when nothing needs looking
     `nothing is waived, skipped, denied or overridden, yet:\n${quietOut}`,
   );
 
-  const flagged = cleanClosingFixture("brief-c7-waived", "flagged");
-  cli(flagged, "waive", ["context", "skip the phone pass this time, chrome is disconnected"]);
+  const flagged = cleanClosingFixture("brief-c7-waived", "flagged", (repo) => cli(repo, "waive", ["context", "skip the phone pass this time, chrome is disconnected"]));
   const flaggedOut = brief(flagged);
   assert.ok(flaggedOut.includes("For you: skipped with your OK"), `a waiver did not reach the For you line:\n${flaggedOut}`);
   assert.ok(
@@ -651,7 +651,7 @@ function cli(repo, verb, args = [], opts = {}) {
 const lines = (s) => s.split("\n").filter((l) => l.trim() !== "");
 const stateDir = (repo) => path.join(repo, ".claude", "gate");
 const runDir = (repo, session = "S1") =>
-  path.join(stateDir(repo), "runs", loadSession(stateDir(repo), session).current);
+  path.join(stateDir(repo), "runs", (({ current, lastClosed }) => current ?? lastClosed)(loadSession(stateDir(repo), session)));
 
 const git = (repo, args) => execFileSync("git", args, { cwd: repo, encoding: "utf8" });
 

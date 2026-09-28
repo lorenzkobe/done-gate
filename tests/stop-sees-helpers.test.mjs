@@ -25,7 +25,7 @@ function cli(repo, verb, args = [], opts = {}) {
 }
 function refused(repo, verb, args = [], opts = {}) {
   const r = run(repo, verb, args, opts);
-  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.status, 1, "a refusal fails the command");
   assert.ok(REFUSAL.test(r.stderr), `gate ${verb} ${args.join(" ")} was not refused:\n${r.stdout}${r.stderr}`);
   return r.stderr;
 }
@@ -115,6 +115,14 @@ test("C2 happy: a <task-notification> prompt does not hide a running helper", ()
   const handbacks = events.filter((e) => e.kind === "prompt" && e.handback === true);
   assert.equal(handbacks.length, 2, "both hand-back prompts are tagged");
   assert.ok(events.some((e) => e.kind === "prompt" && e.text === "go" && !e.handback), "a real prompt is not tagged");
+});
+
+test("C11 happy: a <cross-session-message> prompt landing after a helper started does not hide the running helper", () => {
+  const repo = blocked("ssh-c11-cross-session");
+  prompt(repo, "go");
+  start(repo, "A1", "done-gate:reviewer-2");
+  prompt(repo, '<cross-session-message from="uds:/tmp/cc-socks/42468.sock" f>status?</cross-session-message>');
+  assert.equal(stopHook(repo), null, "the turn was blocked while reviewer-2 was still running");
 });
 
 // ---------------------------------------------------------------------------

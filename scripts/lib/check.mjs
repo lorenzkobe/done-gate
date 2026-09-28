@@ -7,7 +7,26 @@ import { loadSession } from "./session-state.mjs";
 
 // Read-only verbs. `check` prints only what is still unmet; "clean" when nothing is.
 // `doctor` prints the plugin, config, session and ledger state for debugging.
+const HELP = `gate <verb>: node <plugin>/scripts/gate.mjs <verb>
+  open <slug> <feature|bugfix|refactor|plan|investigation>   start a run (or re-attach one with that slug)
+  attach <slug>                                             join an open run from another session
+  note task|context|plan "<text>" [--files a,b] [--size t]  write the ledger sections
+  case add "<case>" --kind <kind> · case close <id> --test <file:name> | --na "<why>"
+  step <n|key> done|skipped|na "<note>" [--evidence <ptr>]   close a playbook step
+  brief <skeptic|qa|worker|reviewer|reviewer-2|arbiter> [--files a,b | a.ts:1-400]   write a helper's packet
+  huddle add <role> --file <file> · huddle resolve <H#.#> --evidence <ptr> · huddle dispute · huddle reply --file worker-<n>.md
+  verify [--step verify-before]                             run the verify commands, write verify.json
+  check                                                     what is still unmet (clean when nothing)
+  close                                                     close the run when check is clean
+  report [--brief]                                          the run's report (paste --brief as the final message)
+  waive <key> "<why>" · decide <phase> <decision> <why> <evidence> <result> · abandon <slug> "<why>"
+  steps · size · doctor · help`;
+
 export const verbs = {
+  help(ctx) {
+    ctx.out(HELP);
+  },
+
   check(ctx) {
     const { unmet } = assess(ctx, {});
     if (unmet.length === 0) {

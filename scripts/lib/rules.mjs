@@ -49,7 +49,7 @@ export function runChecks({ config, root, changed }) {
 // answers to disputes, and an arbiter's ruling. Bullets only; prose is ignored.
 
 function sectionLines(text, heading) {
-  const re = new RegExp(`^## ${heading}\\s*$`, "m");
+  const re = new RegExp(`^## ${heading}\\s*:?[ \\t]*$`, "m");
   const m = re.exec(String(text ?? "").replace(/\r/g, ""));
   if (!m) return [];
   const rest = text.slice(m.index + m[0].length);
@@ -58,9 +58,10 @@ function sectionLines(text, heading) {
 }
 
 const BULLET = /^(\s*)[-*]\s+(.*\S)\s*$/;
-// "none", "none. <prose>", "n/a", "nothing found", "nothing to act on": an empty section.
-// "None of the callers …" is a finding.
-const EMPTY = /^(?:none|n\/a)\s*(?:$|[.,;:!—–(-])|^(?:none|n\/a|nothing)\b[\s.,;:!-]*(?:found|to act on|here|so far)?[\s.]*$/i;
+// A bullet that opens with "none" or "n/a" is an empty section, whatever follows ("none found
+// for this piece", "none. I traced …"); so is "nothing" alone or "nothing found". "None of the
+// callers …" and "Nothing tests …" are findings.
+const EMPTY = /^(?:none(?!\s+of\b)\b|n\/a\b|nothing\s*(?:$|[.,;:!—–(-])|nothing\s+(?:found|to act on|here|so far)\b)/i;
 
 // The bullets at the section's outermost indent; a deeper bullet is a sub-point of the
 // finding above it.
@@ -134,9 +135,10 @@ export const CONTEXT_PARTS = ["Traced", "Related", "Research"];
 
 const POINTER = /(?<![\w/.-])((?:[\w.-]+\/)*[\w.-]+\.[a-z0-9]+):(\d+)\b/gi;
 
+// A part starts at a line start or after whitespace ("Traced: … · Related: …" on one line).
 export function contextPart(text, name) {
-  const m = new RegExp(`^\\s*${name}:\\s*([\\s\\S]*?)(?=^\\s*(?:${CONTEXT_PARTS.join("|")}):|$(?![\\s\\S]))`, "mi").exec(text);
-  return m ? m[1].trim() : null;
+  const m = new RegExp(`(?:^|\\s)${name}:\\s*([\\s\\S]*?)(?=(?:^|\\s)(?:${CONTEXT_PARTS.join("|")}):|$(?![\\s\\S]))`, "mi").exec(text);
+  return m ? m[1].replace(/[\s·|]+$/, "").trim() : null;
 }
 
 // Every file:line pointer in a text, with whether it names a file inside root: a pointer
@@ -479,7 +481,9 @@ export function evaluate(state) {
   // R9: high-risk paths → a second reviewer on a stronger model
   if (changed.some((p) => config.isHighRisk(p)) && !waived(ledger, "review-2")) {
     const r = reviewed(state, "reviewer-2", after);
-    if (!r.stopped || !r.hasFile || r.openItems.length) {
+    if (r.stopped && r.hasFile && r.openItems.length) {
+      unmet.push({ rule: "R9", text: `reviewer-2 Act-on item(s) still open: ${r.openItems.map((a) => a.id).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.` });
+    } else if (!r.stopped || !r.hasFile) {
       unmet.push({ rule: "R9", text: r.pending.length && r.hasFile
         ? `high-risk paths changed: no clean reviewer-2 round yet for ${list(r.pending)}: \`gate brief reviewer-2 --files ${nextPiece(state, r.pending).join(",")}\`, spawn \`done-gate:reviewer-2\`, then \`gate huddle add reviewer-2 --file review2-<n>.md\`.`
         : `high-risk paths changed (${list(changed.filter((p) => config.isHighRisk(p)))}): a second review by \`done-gate:reviewer-2\` is required after the last edit, with its review2-<n>.md recorded via \`gate huddle add reviewer-2 --file ...\` and every Act-on item closed.` });

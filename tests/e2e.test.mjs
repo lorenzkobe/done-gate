@@ -16,7 +16,7 @@ const SESSION = "E1";
 const stateDir = (repo) => path.join(repo, ".claude", "gate");
 const markerOf = (repo) => path.join(stateDir(repo), "current-session");
 const sessionsOf = (repo) => path.join(stateDir(repo), "sessions");
-const runDir = (repo) => path.join(stateDir(repo), "runs", loadSession(stateDir(repo), SESSION).current);
+const runDir = (repo) => path.join(stateDir(repo), "runs", (({ current, lastClosed }) => current ?? lastClosed)(loadSession(stateDir(repo), SESSION)));
 const ledgerOf = (dir) => JSON.parse(readFileSync(path.join(dir, "ledger.json"), "utf8"));
 
 // The model's own shell: no DONE_GATE_SESSION, no CLAUDE_CODE_SESSION_ID. The runner's
@@ -74,7 +74,7 @@ function edit(repo, tool, rel, content) {
   write(repo, rel, content);
 }
 
-test("C9 happy: one session end to end — session start, a blocked stop, open, the task, close, and the finalising stop", () => {
+test("C9 happy: one session end to end — session start, a blocked stop, open, the task, close, and a silent stop", () => {
   const repo = makeRepo("e2e-session", {
     ".claude/gate.json": JSON.stringify({
       verify: [
@@ -152,7 +152,7 @@ test("C9 happy: one session end to end — session start, a blocked stop, open, 
   assert.deepEqual(stillBlank.map((s) => s.key), [], "no playbook step is left blank");
 
   sh(repo, ["close"]);
-  assert.equal(ledgerOf(dir).status, "closing");
+  assert.equal(ledgerOf(dir).status, "closed", "`gate close` closes a clean run itself");
 
   // ---- the late order is recorded, not blocked ----------------------------
   // src/a.ts was edited before the ledger existed, so the Plan and the case table were
@@ -170,9 +170,9 @@ test("C9 happy: one session end to end — session start, a blocked stop, open, 
     `the brief should say the plan came after the code:\n${brief}`,
   );
 
-  // ---- the finalising stop -------------------------------------------------
+  // ---- the stop after the close has nothing to do --------------------------
   const final = stop(repo);
-  assert.equal(final.stdout.trim(), "", `the finalising stop should allow the turn:\n${final.stdout}`);
+  assert.equal(final.stdout.trim(), "", `the stop after a close should allow the turn:\n${final.stdout}`);
   assert.equal(ledgerOf(dir).status, "closed");
   const closedState = loadSession(stateDir(repo), SESSION);
   assert.ok(closedState.lastClosed, "the session records the run it just closed");

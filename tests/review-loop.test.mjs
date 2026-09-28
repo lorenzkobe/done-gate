@@ -1210,21 +1210,7 @@ test("C5 refused: gate huddle reply with no --file, with a worker-<n>.md that is
 // C6 — three reviewer rounds, then the arbiter
 // ---------------------------------------------------------------------------
 
-test("C6 refused: gate brief reviewer --round 4, and a natural fourth round after three reviewer huddles, are refused and the message names gate brief arbiter; round 3 still writes its packet", () => {
-  // --- the round asked for explicitly ---
-  const explicit = reviewed("rl-c6");
-  const r = refused(explicit, "brief", ["reviewer", "--round", "4"]);
-  assert.ok(
-    r.stderr.includes("gate brief arbiter"),
-    `the refusal does not point at the arbiter: ${r.stderr}`,
-  );
-  assert.ok(!r.stdout.includes("packet: "), `a fourth-round reviewer packet was written anyway:\n${r.stdout}`);
-
-  // round 3 is still allowed
-  const third = cli(explicit, "brief", ["reviewer", "--round", "3"]);
-  assert.match(third.stdout, /^packet: .*brief-reviewer-3\.md$/m, `no round-3 packet:\n${third.stdout}`);
-
-  // --- the round the ledger arrives at by itself ---
+test("C6 refused: a fourth round after three reviewer huddles is refused and the message names gate brief arbiter", () => {
   const natural = opened("rl-c6-natural");
   for (const [n, find] of [[1, FIND_1], [2, FIND_2], [3, FIND_3]]) {
     helperFile(natural, `review-${n}.md`, reviewFile(n, "rl-c6-natural", [find]));

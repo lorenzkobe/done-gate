@@ -3,7 +3,8 @@ import path from "node:path";
 import { assess } from "./assess.mjs";
 import { ensureSession, loadSession } from "./session-state.mjs";
 import { recordGateError } from "./context.mjs";
-import { attachLedger, openRuns } from "./ledger.mjs";
+import { attachLedger, openRuns, saveLedger } from "./ledger.mjs";
+import { writeReport } from "./verbs.mjs";
 
 function mandate(ctx) {
   return readFileSync(path.join(ctx.pluginRoot, "hooks", "session-start.md"), "utf8");
@@ -26,10 +27,18 @@ export const verbs = {
       }
     }
     const parts = [mandate(ctx)];
+    // A run a plugin before 0.10 left "closing" (its lead ran `gate close`, and no stop came
+    // before the next task opened) is closed late here, never joined as if it were open.
     // A /clear, resume or compaction must not orphan a task: join the newest open run.
     try {
+      const runs = openRuns(ctx.stateDir);
+      for (const { dir, ledger } of runs.filter((r) => r.ledger.status === "closing")) {
+        Object.assign(ledger, { status: "closed", closedAt: new Date().toISOString(), closedLate: true, changedAtClose: ledger.changedAtClose ?? [] });
+        saveLedger(dir, ledger);
+        writeReport(ctx, dir, ledger);
+      }
       if (!loadSession(ctx.stateDir, ctx.session)?.current) {
-        const [newest] = openRuns(ctx.stateDir);
+        const [newest] = runs.filter((r) => r.ledger.status !== "closed");
         if (newest) attachLedger(ctx, newest.ledger.slug);
       }
     } catch {

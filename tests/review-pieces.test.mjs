@@ -151,18 +151,21 @@ test("C7 reviewer-2 takes --files the same way and R9 reads coverage the same wa
   assert.ok(!blocks(check(repo), "R9"), check(repo));
 });
 
-test("C2 a second piece for the same role is refused while the first reviewer's file is still a draft", () => {
+test("C2 a second piece for the same role is briefed while the first reviewer is still writing: it takes the next number, and the two run side by side", () => {
   const repo = opened("rp-c2b");
   bigChange(repo);
   cli(repo, "brief", ["reviewer", "--files", "src/a.ts"]);
   hook(repo, { hook_event_name: "SubagentStart", agent_id: "A-reviewer", agent_type: "done-gate:reviewer" });
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1 — x\n\n## Act on\n- unverified\n");
-  const r = run(repo, "brief", ["reviewer", "--files", "src/b.ts"]);
-  assert.match(r.stderr, /still a draft/);
+  const r = cli(repo, "brief", ["reviewer", "--files", "src/b.ts"]);
+  assert.match(r, /^packet: .*brief-reviewer-2\.md$/m, `the second piece did not get packet 2:\n${r}`);
+  assert.match(r, /Your file is .*review-2\.md/, `the second reviewer is not told review-2.md:\n${r}`);
   assert.deepEqual(ledgerOf(repo).seen["review-1.md"].files, ["src/a.ts"], "piece A's seen set is untouched");
+  assert.deepEqual(ledgerOf(repo).seen["review-2.md"].files, ["src/b.ts"]);
   assert.match(cli(repo, "brief", ["reviewer-2", "--files", "src/b.ts"]), /^packet: /m, "the other role may still run beside it");
   stop(repo, "reviewer");
-  assert.match(cli(repo, "brief", ["reviewer", "--files", "src/b.ts"]), /^packet: /m, "once that reviewer stopped, its draft is a cut-off round and the next piece may be briefed");
+  // once that reviewer stopped, its draft is a cut-off round and its number is re-briefed
+  assert.match(cli(repo, "brief", ["reviewer", "--files", "src/a.ts"]), /^packet: .*brief-reviewer-1\.md$/m);
 });
 
 test("C4 the three-round cap is counted per file: a fourth round on piece A is refused while piece B, never seen, can still be briefed", () => {
@@ -198,13 +201,14 @@ test("C4 three pieces, each with one fixed finding, never deadlock: the cap coun
   assert.match(cli(repo, "brief", ["reviewer", "--files", "src/a.ts"]), /^packet: /m, "a fourth round of the role is fine: piece A was seen once");
 });
 
-test("C2 briefing another piece before the first packet's reviewer ran is refused; the same piece may be re-briefed", () => {
+test("C2 another piece briefed before the first packet's reviewer ran takes the next number and leaves the first packet as it is; the same piece re-briefs in place", () => {
   const repo = opened("rp-c2c");
   bigChange(repo);
   cli(repo, "brief", ["reviewer", "--files", "src/a.ts"]);
-  assert.match(run(repo, "brief", ["reviewer", "--files", "src/b.ts"]).stderr, /already briefed for src\/a\.ts/);
+  assert.match(cli(repo, "brief", ["reviewer", "--files", "src/b.ts"]), /^packet: .*brief-reviewer-2\.md$/m);
   assert.deepEqual(ledgerOf(repo).seen["review-1.md"].files, ["src/a.ts"]);
-  assert.match(cli(repo, "brief", ["reviewer", "--files", "src/a.ts,src/a.ts"]), /^packet: /m);
+  assert.deepEqual(ledgerOf(repo).seen["review-2.md"].files, ["src/b.ts"]);
+  assert.match(cli(repo, "brief", ["reviewer", "--files", "src/a.ts,src/a.ts"]), /^packet: .*brief-reviewer-1\.md$/m);
   assert.deepEqual(ledgerOf(repo).seen["review-1.md"].files, ["src/a.ts"], "duplicates in --files are one file");
 });
 

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, write, gate, pluginRoot } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
@@ -17,7 +17,7 @@ function cli(repo, verb, args = [], input = "") {
   assert.equal(r.status, 0, r.stderr);
   return r;
 }
-const runDir = (repo) => path.join(repo, ".claude", "gate", "runs", loadSession(path.join(repo, ".claude", "gate"), "S1").current);
+const runDir = (repo) => path.join(repo, ".claude", "gate", "runs", (({ current, lastClosed }) => current ?? lastClosed)(loadSession(path.join(repo, ".claude", "gate"), "S1")));
 const ledgerOf = (repo) => loadLedger(runDir(repo));
 const opened = (name, playbook = "feature") => {
   const repo = makeRepo(name);
@@ -111,23 +111,18 @@ test("decide appends a sanitised TSV row", () => {
   assert.equal(cells[4], "'=events#3");
 });
 
-test("close sets status closing and marks the close step; the stop gate then finalises when clean", () => {
+test("close closes a clean run itself, marks the close step and clears the session's current run", () => {
   const repo = opened("verbs-close", "plan");
   cli(repo, "note", ["task", "t"]);
   cli(repo, "note", ["plan", "p"]);
   cli(repo, "step", ["context", "done", "traced it", "--evidence", "events#1"]);
   cli(repo, "step", ["skeptic", "done", "no findings", "--evidence", "events#2"]);
   cli(repo, "step", ["implement", "done", "spec written", "--evidence", "docs/spec.md"]);
-  cli(repo, "close");
-  assert.equal(ledgerOf(repo).status, "closing");
-  assert.equal(ledgerOf(repo).steps.find((s) => s.key === "close").state, "DONE");
   const dir = runDir(repo);
-  const r = spawnSync(process.execPath, [gate, "stop"], {
-    input: JSON.stringify({ session_id: "S1", cwd: repo, last_assistant_message: "report" }),
-    encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo },
-  });
-  assert.equal(r.stdout.trim(), "", r.stdout);
+  cli(repo, "close");
   assert.equal(loadLedger(dir).status, "closed");
+  assert.equal(loadLedger(dir).steps.find((s) => s.key === "close").state, "DONE");
+  assert.ok(existsSync(path.join(dir, "report.md")), "close writes the report");
   assert.equal(loadSession(path.join(repo, ".claude", "gate"), "S1").current, null);
 });
 
@@ -189,4 +184,17 @@ test("the three manifests agree on the version, gate --version prints it, and SK
   const r = spawnSync(process.execPath, [gate, "--version"], { encoding: "utf8" });
   assert.equal(r.stdout.trim(), plugin);
   assert.ok(statSync(path.join(pluginRoot, "skills", "gate", "SKILL.md")).size < 4096, "SKILL.md is over 4096 bytes");
+});
+
+test("close refuses an unclean run: exit 1, the unmet list on stdout, the run stays open and the close step is blank again", () => {
+  const repo = opened("verbs-close-unclean", "plan");
+  cli(repo, "note", ["task", "t"]);
+  cli(repo, "note", ["plan", "p"]);
+  const r = spawnSync(process.execPath, [gate, "close"], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" } });
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /R8/);
+  assert.match(r.stderr, /not closed: \d+ unmet/);
+  const l = ledgerOf(repo);
+  assert.equal(l.status, "open");
+  assert.equal(l.steps.find((s) => s.key === "close").state, null);
 });

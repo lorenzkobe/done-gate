@@ -132,6 +132,7 @@ export function renderReport(state, unmet) {
 
   out.push(`# ${ledger.slug} — ${ledger.playbook} — ${ledger.status} · done-gate ${ledger.version ?? "unknown"}`);
   if (ledger.status === "abandoned") out.push(`\n**ABANDONED** at ${ledger.abandonedAt}: ${ledger.abandonReason}`);
+  if (ledger.closedLate) out.push(`\n**Closed late** at ${ledger.closedAt}: \`gate close\` ran, and the next task opened before any stop could finalise it (done-gate before 0.10); what changed was not recorded.`);
   if (ledger.overridden) out.push(`\n**GATE OVERRIDDEN** at ${ledger.overridden.at} after ${ledger.overridden.blocks} identical blocks: ${ledger.overridden.unmet.map((u) => u.rule).join(", ")}`);
   const errLog = path.join(state.stateDir ?? path.resolve(dir, "..", ".."), "gate-error.log");
   const gateErrors = tailLines(errLog, 3);

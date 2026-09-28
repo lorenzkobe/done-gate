@@ -35,6 +35,7 @@ const VERBS = {
   size: { hook: false, load: () => import("./lib/size.mjs") },
   brief: { hook: false, load: () => import("./lib/brief.mjs") },
   doctor: { hook: false, load: () => import("./lib/check.mjs") },
+  help: { hook: false, load: () => import("./lib/check.mjs") },
 };
 
 // Only hook verbs, and the verbs that accept a "-" argument for a long text, have anything on
@@ -90,7 +91,8 @@ async function main() {
   }
   const entry = VERBS[verb];
   if (!entry) {
-    process.stderr.write(`done-gate: unknown verb "${verb ?? ""}"\n`);
+    process.stderr.write(`done-gate: unknown verb "${verb ?? ""}" (have: ${Object.keys(VERBS).filter((v) => !VERBS[v].hook).join(", ")}; \`gate help\` explains them)\n`);
+    process.exitCode = 1;
     return;
   }
   const mod = await entry.load();
@@ -110,5 +112,7 @@ try {
     }
   }
   process.stderr.write(`done-gate: ${error?.message ?? error}\n`);
+  // a verb the model called wrongly fails its shell command, so a `gate … && next` chain
+  // stops there; hooks always exit 0, or a bug of ours would wedge the session
+  if (error instanceof UsageError && !VERBS[process.argv[2]]?.hook) process.exitCode = 1;
 }
-process.exitCode = 0;

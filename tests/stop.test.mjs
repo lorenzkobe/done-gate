@@ -232,7 +232,7 @@ test("C5 edge: an unknown verb with a never-closing stdin pipe also exits prompt
   const repo = makeRepo("stdin-unknown");
   const r = await spawnOpenPipe(repo, ["no-such-verb"]);
   assert.equal(r.timedOut, false, `unknown verb did not exit within ${PROMPT_MS}ms with stdin held open`);
-  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.code, 1, r.stderr);
   assert.match(r.stderr, /unknown verb/);
 });
 
@@ -324,11 +324,19 @@ test("plugin.json and package.json versions agree", () => {
   assert.equal(market.plugins[0].version, pkg.version);
 });
 
-test("an unknown verb fails OPEN: exit 0, error on stderr, nothing on stdout", () => {
+test("an unknown verb exits 1 with the verb list on stderr and nothing on stdout", () => {
   const r = run(["no-such-verb"], "{}");
-  assert.equal(r.status, 0);
+  assert.equal(r.status, 1);
   assert.equal(r.stdout, "");
   assert.match(r.stderr, /unknown verb/);
+});
+
+test("`gate help` lists the verbs and exits 0; an unknown verb points at it", () => {
+  const r = run(["help"], "{}");
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /open <slug>/);
+  assert.match(r.stdout, /report \[--brief\]/);
+  assert.match(run(["status"], "{}").stderr, /gate help/);
 });
 
 test("a verb that throws fails OPEN: exit 0 and the stack lands in gate-error.log", () => {
