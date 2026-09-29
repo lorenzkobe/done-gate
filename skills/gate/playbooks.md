@@ -53,8 +53,9 @@ Behaviour-preserving. The tests that pin the behaviour exist BEFORE anything mov
 6. Make the move: no compat shims, no re-exports, names reflect the new shape, no slop. {implement}
 7. Run `gate verify` again after the last edit. {verify}
 8. Drive the real surface if UI files changed. {driver}
-9. Review: spawn the reviewer (it also checks for compat shims, re-exports, stale names, slop and docs); close every Act-on item (N/A at tiny). {review}
-10. `gate close`, then paste the report. {close}
+9. Real-schema probe when schema files changed. {schema}
+10. Review: spawn the reviewer (it also checks for compat shims, re-exports, stale names, slop and docs); close every Act-on item (N/A at tiny). {review}
+11. `gate close`, then paste the report. {close}
 
 ## plan
 
