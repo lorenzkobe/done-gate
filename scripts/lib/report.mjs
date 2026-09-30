@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { buildState } from "./assess.mjs";
-import { evaluate } from "./rules.mjs";
+import { buildState, readVerifyStarted } from "./assess.mjs";
+import { evaluate, unfinishedVerify } from "./rules.mjs";
 import { loadLedger, runsDir, section } from "./ledger.mjs";
 import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
@@ -44,7 +44,8 @@ export function caseTable(ledger) {
   return out;
 }
 
-export function verifyLines(verify, { tails = true } = {}) {
+export function verifyLines(verify, { tails = true, unfinished = null } = {}) {
+  if (unfinished) return [`_started at ${unfinished.startedAt}, ${unfinished.running ? "still running" : "never finished"}_`];
   if (!verify) return ["_not run_"];
   const out = [];
   for (const c of verify.commands) {
@@ -157,7 +158,7 @@ export function renderReport(state, unmet) {
   out.push(...actOnRows(ledger, dir, reviews));
 
   out.push("\n## Verify\n");
-  out.push(...verifyLines(verify));
+  out.push(...verifyLines(verify, { unfinished: unfinishedVerify(state) }));
   if (verify) out.push(`\nsource hash at verify: \`${verify.sourceHash.slice(0, 12)}\` · now: \`${state.now.hash.slice(0, 12)}\``);
 
   out.push("\n## Changed files\n");
@@ -410,7 +411,7 @@ export const verbs = {
       const dir = path.join(runsDir(ctx.stateDir), last);
       const ledger = loadLedger(dir);
       const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
-      state = { ...state, ledger, dir, verify: readVerify(dir), reviews: reviewFiles(dir), events, changed: ledger.changedAtClose ?? [], policy: policyFor(ledger), tier: ledger.tier ?? null };
+      state = { ...state, ledger, dir, verify: readVerify(dir), verifyStarted: readVerifyStarted(dir), reviews: reviewFiles(dir), events, changed: ledger.changedAtClose ?? [], policy: policyFor(ledger), tier: ledger.tier ?? null };
       unmet = [];
     }
     const full = { ...state, stateDir: ctx.stateDir };

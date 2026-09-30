@@ -203,6 +203,9 @@ function printStepLines(ctx, steps) {
 // `gate steps` shows all of them.
 function printOpen(ctx, dir, ledger) {
   ctx.out(`ledger: ${dir}`);
+  const config = loadConfig(ctx.root);
+  const cmds = config.verify.map((v) => v.cmd);
+  ctx.out(`verify: ${cmds.length ? `${cmds.join(" · ")} (${config.verifySource})` : "none — add verify commands to .claude/gate.json"}`);
   printStepLines(ctx, ledger.steps.filter((s) => s.key));
   printNext(ctx);
 }

@@ -399,6 +399,25 @@ export function drivenAfter(state, after) {
   return (state.events ?? []).find((e) => !e.agent && (ranDriver(e) || (e.seq > after && (e.kind === "browser" || (e.kind === "skill" && e.skill === "verify"))))) ?? null;
 }
 
+function processAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
+// A verify.started.json with no verify.json after it: the run is still going (its process
+// is alive) or the shell died under it. Null once verify.json landed.
+export function unfinishedVerify(state) {
+  const started = state.verifyStarted;
+  if (!started) return null;
+  if (state.verify && started.startedAt && String(state.verify.finishedAt ?? "") >= started.startedAt) return null;
+  return { startedAt: started.startedAt ?? "an unknown time", pid: started.pid ?? null, running: processAlive(started.pid) };
+}
+
 function waived(ledger, key) {
   return (ledger.waivers ?? []).some((w) => w.key === key);
 }
@@ -444,7 +463,12 @@ export function evaluate(state) {
   }
 
   if (src.length) {
-    if (!verify) {
+    const unfinished = unfinishedVerify(state);
+    if (unfinished) {
+      unmet.push({ rule: "R3", text: unfinished.running
+        ? `a \`gate verify\` started at ${unfinished.startedAt} is still running (pid ${unfinished.pid}); wait for it, do not start another. If that pid is not a verify of yours (a reboot reused it), \`gate verify\` again replaces it.`
+        : `a \`gate verify\` started at ${unfinished.startedAt} never finished (the shell that ran it died). Run \`gate verify\` again.` });
+    } else if (!verify) {
       unmet.push({ rule: "R3", text: "no verify.json for this run. Run `gate verify` after your last source edit." });
     } else {
       const red = (verify.commands ?? []).filter((c) => !c.skipped && (c.exit !== 0 || c.timedOut));

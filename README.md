@@ -139,7 +139,7 @@ attempt to finish.
 | --- | --- |
 | R1 | source changed and no ledger is open |
 | R2 | Context, Plan or case table was written after the first source edit |
-| R3 | `gate verify` is missing, red, or older than the last source edit |
+| R3 | `gate verify` is missing, red, older than the last source edit, still running, or started and never finished (the shell died under it) |
 | R4 | UI files changed and the real surface wasn't driven afterwards |
 | R5 | no reviewer pass after the last edit, or an Act-on item is still open; tier tiny needs no reviewer. A change past the piece cap (400 changed lines) is reviewed in pieces, `gate brief reviewer --files a,b`, and one big file in slices, `--files a.ts:1-400`; a line is covered once the last round that saw it came back clean (or was the file's third); new or uncovered lines need a round |
 | R6 | schema files changed with no real-schema probe |
@@ -193,8 +193,9 @@ with `gate waive <key> "…"`, and the report lists every waiver.
 - **Every block is logged.** When the Stop hook refuses to end the turn, a `block` event with
   the unmet rule ids lands in the session's events, and the report counts them, so a turn
   that could not end can be diagnosed afterwards.
-- **A stale ledger can be let go.** A ledger left open by an earlier session attaches to the
-  next session in the repo and says so; `gate abandon <slug> "<reason>"` marks it abandoned
+- **A stale ledger can be let go.** A ledger left open by an earlier session is joined again
+  after a /clear, resume or compaction; a new session is only told it is there, with
+  `gate attach <slug>` to continue it and `gate abandon <slug> "<reason>"` to mark it abandoned
   (reason in its report) so it no longer blocks anything. Nothing is finalised: the changes it
   left behind still count against the next ledger.
 - **The lead implements below size large.** It holds the context, so handing a piece to a

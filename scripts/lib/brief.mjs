@@ -7,7 +7,7 @@ import { leadDelegates, renderTierBlock, tierMax, tierOf } from "./size.mjs";
 import { fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs";
 import { ROLES, flag, positional } from "./verbs.mjs";
 import { toPosixRel } from "./paths.mjs";
-import { REVIEW_CAP, changedUnitsOf, isDraft, isRole, parseEntry, pathOf, reviewScope, uncovered } from "./rules.mjs";
+import { REVIEW_CAP, changedUnitsOf, isDraft, isRole, parseEntry, pathOf, reviewScope, uncovered, unfinishedVerify } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { nextSeq } from "./events.mjs";
@@ -251,7 +251,7 @@ export function renderPacket(state, role, { round, reviewN, skepticN = 1, arbite
     const paths = piece ? new Set(piece.files.map(pathOf)) : null;
     const shown = piece ? (state.changed ?? []).filter((p) => paths.has(p) || !scopeSet.has(p)) : state.changed ?? [];
     out.push(...diffOrFiles(state, "Diff", shown, ranges));
-    out.push("## Verify", "", ...verifyLines(state.verify, { tails: false }), "");
+    out.push("## Verify", "", ...verifyLines(state.verify, { tails: false, unfinished: unfinishedVerify(state) }), "");
     out.push("## Test command", "", ...testCommands(state), "");
     out.push("", "## Write your findings to", "", path.join(state.dir, `${reviewPrefix(role)}-${reviewN}.md`), "");
     if (role === "reviewer-2") {

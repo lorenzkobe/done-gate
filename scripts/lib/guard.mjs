@@ -8,8 +8,8 @@ import { toPosixRel } from "./paths.mjs";
 
 // Files only the gate's own verbs may write. A model that could edit these could
 // forge its evidence, so the deny is unconditional and every attempt is logged.
-const EVIDENCE_FILES = new Set(["events.jsonl", "verify.json", "decisions.tsv", "ledger.json", "blocks.json", "state.json", "gate-error.log", "current-session"]);
-const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(events\.jsonl|verify\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json|current-session|brief-[a-z0-9-]+-\d+\.md|(?:review2?|skeptic|arbiter|worker)-\d+\.md)/;
+const EVIDENCE_FILES = new Set(["events.jsonl", "verify.json", "verify.started.json", "decisions.tsv", "ledger.json", "blocks.json", "state.json", "gate-error.log", "current-session"]);
+const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(events\.jsonl|verify\.json|verify\.started\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json|current-session|brief-[a-z0-9-]+-\d+\.md|(?:review2?|skeptic|arbiter|worker)-\d+\.md)/;
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const HELPER_ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter"];
 // Shell analysis for the Bash fence. Two readers of one parse: `readsOnly` (may a command

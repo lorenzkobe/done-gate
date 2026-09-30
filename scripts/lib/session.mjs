@@ -29,7 +29,10 @@ export const verbs = {
     const parts = [mandate(ctx)];
     // A run a plugin before 0.10 left "closing" (its lead ran `gate close`, and no stop came
     // before the next task opened) is closed late here, never joined as if it were open.
-    // A /clear, resume or compaction must not orphan a task: join the newest open run.
+    // A /clear, resume or compaction must not orphan a task: join the newest open run. A
+    // new session is another task until it says otherwise: it is told the run is there.
+    const continuing = ["clear", "resume", "compact"].includes(ctx.input?.session_start_source);
+    let foreign = null;
     try {
       const runs = openRuns(ctx.stateDir);
       for (const { dir, ledger } of runs.filter((r) => r.ledger.status === "closing")) {
@@ -39,10 +42,14 @@ export const verbs = {
       }
       if (!loadSession(ctx.stateDir, ctx.session)?.current) {
         const [newest] = runs.filter((r) => r.ledger.status !== "closed");
-        if (newest) attachLedger(ctx, newest.ledger.slug);
+        if (newest && continuing) attachLedger(ctx, newest.ledger.slug);
+        else if (newest) foreign = newest.ledger;
       }
     } catch {
       // attach is a courtesy; the Stop gate will still say R1 if it matters
+    }
+    if (foreign) {
+      parts.push(`\n<done-gate-status>\nOpen run ${foreign.slug} (${foreign.playbook}) was left by another session on ${String(foreign.openedAt).slice(0, 10)} and is not joined. To continue it: \`gate attach ${foreign.slug}\`; if that work is over: \`gate abandon ${foreign.slug} "<reason>"\`. A new task opens its own run.\n</done-gate-status>`);
     }
     try {
       const { state, unmet } = assess(ctx, {});

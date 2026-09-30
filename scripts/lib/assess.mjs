@@ -16,6 +16,17 @@ export function readVerify(dir) {
   return JSON.parse(readFileSync(file, "utf8").replace(/\r/g, ""));
 }
 
+// The marker a running verify leaves; null once it finished.
+export function readVerifyStarted(dir) {
+  const file = path.join(dir, "verify.started.json");
+  if (!existsSync(file)) return null;
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return { startedAt: null };
+  }
+}
+
 // The files reading helpers write for themselves: review-<n>.md, review2-<n>.md,
 // skeptic-<n>.md and arbiter-<n>.md.
 export function reviewFiles(dir) {
@@ -121,6 +132,7 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
     tier,
     changed: diff.changed,
     verify,
+    verifyStarted: current ? readVerifyStarted(current.dir) : null,
     events,
     reviews: current ? reviewFiles(current.dir) : [],
     lastMessage,

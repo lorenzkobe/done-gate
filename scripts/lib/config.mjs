@@ -166,6 +166,7 @@ export function loadConfig(root) {
     slop: r.slop !== false,
     driver: typeof r.driver === "string" ? r.driver : DEFAULTS.driver,
     verify: normaliseVerify(r.verify ?? defaultVerify(root), DEFAULTS.verifyTimeout),
+    verifySource: Array.isArray(r.verify) ? ".claude/gate.json" : "package.json scripts",
   };
   // R13 asks whether what the gate runs changed mid-task: the repo's config (or its absence)
   // plus the verify command list it resolves to. The driver key is left out: verify-setup

@@ -238,11 +238,12 @@ test("C8 refused: gate abandon with no reason, an unknown slug, or a closed ledg
 // C9 happy — session-start says when the ledger it attached came from another session
 // ---------------------------------------------------------------------------
 
-test("C9 happy: a session that inherits a ledger opened by another session is told so and given the abandon hint", () => {
+test("C9 happy: a new session is told about a run another session left open, with the attach and abandon commands, and does not join it", () => {
   const repo = blocked("ssh-c9-inherited");
   const ctx = sessionStart(repo, "S2").hookSpecificOutput.additionalContext;
-  assert.match(ctx, /Open ledger/);
-  assert.match(ctx, /opened by another session/);
+  assert.match(ctx, /Open run ssh-c9-inherited/);
+  assert.match(ctx, /another session/);
+  assert.match(ctx, /gate attach ssh-c9-inherited/);
   assert.match(ctx, /gate abandon ssh-c9-inherited/);
   // the session that opened it is not told that
   const own = sessionStart(repo, "S1").hookSpecificOutput.additionalContext;

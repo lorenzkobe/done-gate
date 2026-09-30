@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { renameSync, writeFileSync } from "node:fs";
+import { renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { currentLedger, isDone, loadLedger, saveLedger } from "./ledger.mjs";
@@ -87,6 +87,9 @@ export async function runVerify(ctx, { stepKey = "verify" } = {}) {
   const changed = diffSnapshots(current.ledger.baseline, snap).changed;
   const implementationChanged = changed.some((p) => config.isSource(p) && !config.isTest(p) && !config.isDoc(p));
   const startedAt = new Date().toISOString();
+  // A run the shell dies under leaves this behind; R3 and the report then say so.
+  const started = path.join(current.dir, "verify.started.json");
+  writeFileSync(started, JSON.stringify({ startedAt, pid: process.pid, commands: config.verify.map((v) => v.cmd) }));
   const commands = [];
   for (const entry of config.verify) {
     if (entry.when === "source" && !implementationChanged) {
@@ -104,6 +107,7 @@ export async function runVerify(ctx, { stepKey = "verify" } = {}) {
   const file = path.join(current.dir, "verify.json");
   writeFileSync(`${file}.${process.pid}.tmp`, JSON.stringify(record, null, 2));
   renameSync(`${file}.${process.pid}.tmp`, file);
+  rmSync(started, { force: true });
 
   const red = commands.filter((c) => !c.skipped && (c.exit !== 0 || c.timedOut));
   const ledger = loadLedger(current.dir);

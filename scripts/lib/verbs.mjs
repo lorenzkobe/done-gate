@@ -9,14 +9,14 @@ import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
 import { isDraft, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers } from "./rules.mjs";
-import { assess, buildState, readVerify, reviewFiles } from "./assess.mjs";
+import { assess, buildState, readVerify, reviewFiles, readVerifyStarted } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { readEvents } from "./events.mjs";
 
 // The report of a run that is no longer current: the same renderer `gate report` uses.
 export function writeReport(ctx, dir, ledger) {
   const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
-  const state = { ...buildState(ctx, {}), ledger, dir, verify: readVerify(dir), reviews: reviewFiles(dir), events, changed: ledger.changedAtClose ?? [], tier: ledger.tier ?? null, stateDir: ctx.stateDir };
+  const state = { ...buildState(ctx, {}), ledger, dir, verify: readVerify(dir), verifyStarted: readVerifyStarted(dir), reviews: reviewFiles(dir), events, changed: ledger.changedAtClose ?? [], tier: ledger.tier ?? null, stateDir: ctx.stateDir };
   writeFileSync(path.join(dir, "report.md"), renderReport(state, []));
 }
 
@@ -297,7 +297,7 @@ export const verbs = {
       const why = words.join(" ");
       const evidence = flag(rest, "--evidence");
       if (!aid || !why || !evidence) throw new UsageError('usage: gate huddle dispute <H#.#> "<why the finding is wrong>" --evidence <pointer> (evidence is required)');
-      if (!pointerResolver(buildState(ctx, {}))(evidence)) throw new UsageError(`dispute evidence "${evidence}" does not resolve; point at a test (file:name), a file:line, verify.json, events#<seq> or a helper file`);
+      if (!pointerResolver(buildState(ctx, {}))(evidence)) throw new UsageError(`dispute evidence "${evidence}" does not resolve; point at a test (file:name), a file:line, ledger.md#<section>, verify.json, events#<seq> or a helper file`);
       withLedger(ctx, (ledger) => {
         const a = ledger.huddles.flatMap((h) => h.actOn).find((x) => x.id === aid);
         if (!a) throw new UsageError(`no act-on item ${aid}`);
@@ -331,7 +331,7 @@ export const verbs = {
       const [aid] = pos;
       const evidence = flag(rest, "--evidence");
       if (!aid || !evidence) throw new UsageError("usage: gate huddle resolve <H#.#> --evidence <pointer>");
-      if (!pointerResolver(buildState(ctx, {}))(evidence)) throw new UsageError(`resolve evidence "${evidence}" does not resolve; point at a test (file:name), a file:line, verify.json, events#<seq> or a helper file`);
+      if (!pointerResolver(buildState(ctx, {}))(evidence)) throw new UsageError(`resolve evidence "${evidence}" does not resolve; point at a test (file:name), a file:line, ledger.md#<section>, verify.json, events#<seq> or a helper file`);
       withLedger(ctx, (ledger) => {
         for (const h of ledger.huddles) {
           const item = h.actOn.find((a) => a.id === aid);
@@ -369,7 +369,7 @@ export const verbs = {
           if (a.closed) continue;
           // a fix is shown by a test, a source line, verify.json or an event, never by the
           // worker's own reply file or a packet
-          if (r.kind === "fixed" && (/^(?:worker|brief)-/.test(r.pointer) || !resolves(r.pointer))) throw new UsageError(`${r.id} fixed: pointer "${r.pointer}" does not resolve; point at a test (file:name), a file:line, verify.json or events#<seq>`);
+          if (r.kind === "fixed" && (/^(?:worker|brief)-/.test(r.pointer) || !resolves(r.pointer))) throw new UsageError(`${r.id} fixed: pointer "${r.pointer}" does not resolve; point at a test (file:name), a file:line, ledger.md#<section>, verify.json or events#<seq>`);
           if (r.kind === "disagree" && (!r.pointer || /^(?:worker|brief)-/.test(r.pointer) || !resolves(r.pointer))) throw new UsageError(`${r.id} disagree: needs a pointer that resolves after the reason (… — <ptr>), not the worker's own file`);
           if (r.kind === "disagree" && a.dispute) throw new UsageError(`${r.id} was already disputed once; one round is the limit${a.dispute.verdict?.startsWith("arbiter:") ? " and the arbiter has ruled" : ""}`);
         }
