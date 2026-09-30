@@ -75,7 +75,7 @@ test("misses C1-C4: a string with an apostrophe does not hide a trailing comment
     `const t = 'say "hi"'; # ------`,
     `const u = "it's // fine";`,
     `const v = 'say "#" here';`,
-    `const w = "a \\" quote // not a comment";`,
+    `const w = "a \\" quote // ===== X =====";`,
     "// 🇺🇸 locale",
     "// ⭐ favourite",
     "// ‼ read this",
