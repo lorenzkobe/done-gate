@@ -5,7 +5,7 @@ into the ledger. A step that does not apply is closed `N/A (reason)`, never dele
 Steps with a `{key}` have script or agent evidence and can only be `DONE` or `WAIVED`,
 never `SKIPPED`.
 
-No slop: no comment that restates the code or narrates the change; no hedging names (helper, util, data2, newX, handleStuff); no guard or try/catch with no case behind it; no docstring on a trivial function; no leftover TODO, console.log or commented-out code; no emojis. A comment says why, or it goes.
+No slop: no comment that restates the code or narrates the change; no hedging names (helper, util, data2, newX, handleStuff); no guard or try/catch with no case behind it; no docstring on a trivial function; no TODO that names no task, console.log or commented-out code; no emojis. Nor a comment that numbers the steps (`// Step 1`), labels a block (`// main logic`), echoes a signature (`@param price the price`) or marks an end (`} // end if`), nor a banner comment. A comment says why, in one line, two when the second carries a new fact, or it goes. Keep the comment that explains a business rule, a workaround, a concurrency or security constraint, or an API contract. `gate check` scans the diff for the greppable ones (R10).
 
 ## feature
 

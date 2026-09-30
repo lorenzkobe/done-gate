@@ -95,6 +95,10 @@
       },
       "description": "Named repo checks run at every Stop (R10)."
     },
+    "slop": {
+      "type": "boolean",
+      "description": "Scan the task's added lines for greppable slop (banner comments, step narration, empty labels, end markers, emoji, bare TODOs, @param echoes) at every Stop while a ledger is open; test files are not scanned (R10). Default: true. Change it between tasks; mid-task a false positive is waived with `gate waive slop`."
+    },
     "driver": {
       "type": [
         "string",

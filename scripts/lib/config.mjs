@@ -81,6 +81,7 @@ export const DEFAULTS = Object.freeze({
   docs: ["docs/**", "**/*.md"],
   highRisk: [],
   checks: [],
+  slop: true,
   driver: null,
   verifyTimeout: 600,
 });
@@ -162,6 +163,7 @@ export function loadConfig(root) {
     docs: arr(r.docs, DEFAULTS.docs),
     highRisk: arr(r.highRisk, DEFAULTS.highRisk),
     checks: arr(r.checks, DEFAULTS.checks),
+    slop: r.slop !== false,
     driver: typeof r.driver === "string" ? r.driver : DEFAULTS.driver,
     verify: normaliseVerify(r.verify ?? defaultVerify(root), DEFAULTS.verifyTimeout),
   };

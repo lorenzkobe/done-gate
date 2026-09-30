@@ -146,7 +146,7 @@ attempt to finish.
 | R7 | source changed and no test file changed |
 | R8 | any case or step is blank |
 | R9 | high-risk paths changed without the second reviewer (same round rules as R5; an open reviewer-2 item is named) |
-| R10 | a repo check failed (`claude-md-budget`, `migration-number`) |
+| R10 | a repo check failed: the slop scan found a banner comment, step narration, an empty label, an end marker, an emoji, a bare TODO or a `@param` that echoes its name on an added non-test line (`"slop": false` in gate.json turns it off between tasks; mid-task, `gate waive slop` clears a false positive), or an opted-in check (`claude-md-budget`, `migration-number`) |
 | R13 | `.claude/gate.json` or the plugin's `models.json` changed mid-task |
 | R15 | a helper's file lists more findings than the ledger recorded |
 | R16 | the lead edited source itself at size large (a worker's job); waivable with `gate waive delegate` |
@@ -262,6 +262,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
   "highRisk": ["src/lib/payments/**", "src/lib/auth/**", "supabase/migrations/**"],
   "verify":   ["npm run lint", { "cmd": "npm run test", "timeout": 1500 }, { "cmd": "npm run build", "when": "source" }],
   "checks":   ["claude-md-budget", "migration-number"],
+  "slop":     true,
   "driver":   "skill:verify"
 }
 ```

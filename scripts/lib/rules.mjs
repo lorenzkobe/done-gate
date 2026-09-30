@@ -3,9 +3,25 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { effectiveTier, leadDelegates, policyFor, requires } from "./size.mjs";
 import { changedUnits, fileDiff, gitTracked, sliceEnd } from "./tree.mjs";
+import { scanDiff } from "./slop.mjs";
 
-// Named repo checks, opted into via gate.json "checks". Each returns an unmet text or null.
+const SLOP_SHOWN = 12;
+
+// Named repo checks, opted into via gate.json "checks" (slop runs on every open ledger
+// unless gate.json says "slop": false; test files keep their separator style). Each
+// returns an unmet text or null.
 const CHECKS = {
+  slop: (state) => {
+    const { config, changed, diff } = state;
+    const hits = [];
+    for (const rel of changed) {
+      if (!config.isSource(rel) || config.isDoc(rel) || config.isTest(rel) || diff?.deleted?.includes(rel)) continue;
+      for (const h of scanDiff(diffTextOf(state, rel))) hits.push(`${rel}:${h.line} ${h.pattern} ${JSON.stringify(h.text)}`);
+    }
+    if (!hits.length) return null;
+    const rest = hits.length - SLOP_SHOWN;
+    return `${hits.length} slop line${hits.length === 1 ? "" : "s"} in this task's diff: ${hits.slice(0, SLOP_SHOWN).join(", ")}${rest > 0 ? `, and ${rest} more` : ""}. Fix them (a comment says why, or it goes), or for a true false positive get the user's waiver (\`gate waive slop "<reason>"\`).`;
+  },
   "claude-md-budget": ({ root, changed }) => {
     const file = path.join(root, "CLAUDE.md");
     if (!existsSync(file)) return null;
@@ -27,16 +43,19 @@ const CHECKS = {
   },
 };
 
-export function runChecks({ config, root, changed }) {
+export function runChecks(state) {
+  const { config, ledger } = state;
   const out = [];
-  for (const name of config.checks ?? []) {
+  const names = new Set(config.checks ?? []);
+  if (config.slop !== false && ledger && !waived(ledger, "slop")) names.add("slop");
+  for (const name of names) {
     const fn = CHECKS[name];
     if (!fn) {
       out.push(`unknown check "${name}" in gate.json (have: ${Object.keys(CHECKS).join(", ")})`);
       continue;
     }
     try {
-      const text = fn({ root, changed });
+      const text = fn(state);
       if (text) out.push(`${name}: ${text}`);
     } catch (error) {
       out.push(`${name} could not run: ${error.message}`);
@@ -247,15 +266,22 @@ export function parseEntry(entry) {
 }
 export const pathOf = (entry) => parseEntry(entry).path;
 
-// The changed lines of one file as units (position + content key), read once per assess and
-// only when a piece or a range round asks for them.
+// One file's diff for this task, read once per assess: the slop check and the piece
+// bookkeeping below share it.
+export function diffTextOf(state, rel) {
+  state.diffText ??= new Map();
+  if (!state.diffText.has(rel)) {
+    const tracked = (state.tracked ??= gitTracked(state.root)).has(rel);
+    state.diffText.set(rel, state.diff?.deleted?.includes(rel) ? "" : fileDiff(state.root, state.baseline?.head ?? "HEAD", rel, tracked));
+  }
+  return state.diffText.get(rel);
+}
+
+// The changed lines of one file as units (position + content key), only when a piece or a
+// range round asks for them.
 export function changedUnitsOf(state, rel) {
   state.changedUnits ??= new Map();
-  if (!state.changedUnits.has(rel)) {
-    const tracked = (state.tracked ??= gitTracked(state.root)).has(rel);
-    const text = state.diff?.deleted?.includes(rel) ? "" : fileDiff(state.root, state.baseline?.head ?? "HEAD", rel, tracked);
-    state.changedUnits.set(rel, changedUnits(text));
-  }
+  if (!state.changedUnits.has(rel)) state.changedUnits.set(rel, changedUnits(diffTextOf(state, rel)));
   return state.changedUnits.get(rel);
 }
 export const positionsOf = (units) => [...new Set(units.map((u) => u.pos))].sort((a, b) => a - b);
@@ -404,7 +430,7 @@ export function evaluate(state) {
   const unmet = [];
   const src = changed.filter((p) => config.isSource(p));
 
-  const checkFailures = runChecks({ config, root: state.root, changed });
+  const checkFailures = runChecks(state);
   for (const text of checkFailures) unmet.push({ rule: "R10", text });
 
   if (!ledger) {
