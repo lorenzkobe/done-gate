@@ -363,7 +363,7 @@ test("C7 boundary: the \"For you:\" line says nothing when nothing needs looking
     `nothing is waived, skipped, denied or overridden, yet:\n${quietOut}`,
   );
 
-  const flagged = cleanClosingFixture("brief-c7-waived", "flagged", (repo) => cli(repo, "waive", ["context", "skip the phone pass this time, chrome is disconnected"]));
+  const flagged = cleanClosingFixture("brief-c7-waived", "flagged", (repo) => cli(repo, "waive", ["driver", "skip the phone pass this time, chrome is disconnected"]));
   const flaggedOut = brief(flagged);
   assert.ok(flaggedOut.includes("For you: skipped with your OK"), `a waiver did not reach the For you line:\n${flaggedOut}`);
   assert.ok(
@@ -758,7 +758,8 @@ function closeEveryStep(repo) {
     writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
     cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
   }
-  for (const key of keys) cli(repo, "step", [key, "done", `did ${key}`, "--evidence", "docs/notes.md"]);
+  // {close} is closed by `gate close`, never by hand
+  for (const key of keys.filter((k) => k !== "close")) cli(repo, "step", [key, "done", `did ${key}`, "--evidence", "docs/notes.md"]);
 }
 
 // An opened feature run whose plan and case table predate the first source edit.
@@ -923,8 +924,8 @@ test("C4 edge: an open run with unmet rules has the not-finished headline and sa
 const WAIVER_REASON = "chrome is disconnected on this machine";
 const PAUSE_TEXT = "need the production API key from you";
 
-// A run carrying all three of the things line 5 is for: a waiver with its reason, a
-// dispute nobody has answered, and a pause.
+// A run carrying the two things line 5 is for (a waiver with its reason, a dispute nobody
+// has answered) and a pause, which only the full report lists.
 function attentionRun(name, slug = name) {
   const repo = opened(name, slug);
   cli(repo, "waive", ["driver", WAIVER_REASON]);
@@ -936,18 +937,18 @@ function attentionRun(name, slug = name) {
   return repo;
 }
 
-test("C5 happy: a waiver, an unanswered dispute and a pause are all listed on line 5", () => {
+test("C5 happy: a waiver and an unanswered dispute are listed on line 5; a pause is not", () => {
   const repo = attentionRun("brief-t9-c5", "flagged");
   const b = parsed(repo);
 
   assert.match(b.forYou, /^For you:/, `line 5 does not start with "For you:": ${JSON.stringify(b.forYou)}`);
-  assert.ok(!/nothing/i.test(b.forYou), `three things need the user, yet line 5 says nothing: ${JSON.stringify(b.forYou)}`);
+  assert.ok(!/nothing/i.test(b.forYou), `two things need the user, yet line 5 says nothing: ${JSON.stringify(b.forYou)}`);
   assert.ok(
     b.forYou.includes(WAIVER_REASON),
     `line 5 drops the waiver's reason: ${JSON.stringify(b.forYou)}`,
   );
   assert.match(b.forYou, /disput|disagree/i, `line 5 does not mention the open dispute: ${JSON.stringify(b.forYou)}`);
-  assert.match(b.forYou, /paus/i, `line 5 does not mention the pause: ${JSON.stringify(b.forYou)}`);
+  assert.doesNotMatch(b.forYou, /paus/i, `line 5 lists the pause, which belongs to the full report: ${JSON.stringify(b.forYou)}`);
 });
 
 // ---------------------------------------------------------------------------

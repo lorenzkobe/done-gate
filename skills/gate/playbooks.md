@@ -75,3 +75,5 @@ Read-only. No ledger is required because nothing changes; the gate stays silent.
 
 1. Read the code and, where it is cheap, run it: an answer from running code outranks one from reading it.
 2. End with a recommendation, not a survey of options.
+
+A security or exposure finding cites the deployed state or the handler code; one read off a config file alone is labelled "from config, unverified".

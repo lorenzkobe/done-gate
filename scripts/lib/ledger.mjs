@@ -139,10 +139,12 @@ export function attachLedger(ctx, slug) {
   const found = findRun(ctx.stateDir, slug);
   if (!found) throw new UsageError(`no run for slug "${slug}" — use \`gate open ${slug} <playbook>\``);
   const { dir, ledger } = found;
-  if (!ledger.sessions.includes(ctx.session)) {
-    ledger.sessions.push(ctx.session);
-    saveLedger(dir, ledger);
-  }
+  // a session that attaches again has a fresh context: its step hints start over in full
+  const hinted = ledger.hinted?.[ctx.session];
+  if (hinted) delete ledger.hinted[ctx.session];
+  const joins = !ledger.sessions.includes(ctx.session);
+  if (joins) ledger.sessions.push(ctx.session);
+  if (joins || hinted) saveLedger(dir, ledger);
   ensureSession(ctx.stateDir, ctx.root, ctx.session);
   updateSession(ctx.stateDir, ctx.session, { current: path.basename(dir) });
   return { dir, ledger };
@@ -234,6 +236,7 @@ function printOpen(ctx, dir, ledger) {
   const config = loadConfig(ctx.root);
   const cmds = config.verify.map((v) => v.cmd);
   ctx.out(`verify: ${cmds.length ? `${cmds.join(" · ")} (${config.verifySource})` : "none — add verify commands to .claude/gate.json"}`);
+  if (ledger.verifyAdded?.length) ctx.out(`verify added by this run: ${ledger.verifyAdded.join(" · ")}`);
   printStepLines(ctx, ledger.steps.filter((s) => s.key));
   printNext(ctx);
 }

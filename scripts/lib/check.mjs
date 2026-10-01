@@ -11,11 +11,13 @@ const HELP = `gate <verb>: node <plugin>/scripts/gate.mjs <verb>
   open <slug> <feature|bugfix|refactor|plan|investigation>   start a run (or re-attach one with that slug)
   attach <slug>                                             join an open run from another session
   note task|context|plan "<text>" [--files a,b] [--size t]  write the ledger sections
-  case add "<case>" --kind <kind> · case close <id> --test <file:name> | --na "<why>"
-  step <n|key> done|skipped|na "<note>" [--evidence <ptr>]   close a playbook step
+  case add "<case>" --kind <kind> · case add --batch <file> (one <kind><TAB><case> per line) · case amend <id> "<case>" · case close <id> --test <file:name> | --na "<why>"
+  step <n|key> done|skipped|na "<note>" [--evidence <ptr>]   close a playbook step (the close step: gate close)
+  next                                                      the next step in full (verbs print it short after the first time)
   brief <skeptic|qa|worker|reviewer|reviewer-2|arbiter> [--files a,b | a.ts:1-400]   write a helper's packet
   huddle add <role> --file <file> · huddle resolve <H#.#> --evidence <ptr> · huddle dispute · huddle reply --file worker-<n>.md
   verify [--step verify-before]                             run the verify commands, write verify.json
+  verify --add "<cmd>" · verify --drop "<cmd>"              add a verify command for this run, or drop one this run added
   check                                                     what is still unmet (clean when nothing)
   close                                                     close the run when check is clean
   report [--brief]                                          the run's report (paste --brief as the final message)
@@ -59,6 +61,7 @@ export const verbs = {
       ctx.out(`ledger: UNREADABLE — ${error.message}`);
     }
     ctx.out(`ledger: ${current ? `${current.dir} (${current.ledger.playbook}, ${current.ledger.status})` : "none"}`);
+    if (current?.ledger.verifyAdded?.length) ctx.out(`  verify added by this run: ${current.ledger.verifyAdded.join(" · ")}`);
     const open = openRuns(ctx.stateDir);
     if (open.length) ctx.out(`open runs: ${open.map((r) => path.basename(r.dir)).join(", ")}`);
     const errLog = path.join(ctx.stateDir, "gate-error.log");

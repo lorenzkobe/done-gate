@@ -141,8 +141,9 @@ test("C3 happy: feature, refactor and plan open with {context}; bugfix has it as
 // ---------------------------------------------------------------------------
 
 test("C4 happy: after the task the hint is the context step; after the context it is the plan", () => {
-  const repo = opened("ctx-c4");
-  const afterTask = lastLine(cli(repo, "note", ["task", "Again. [inferred]"]).stdout);
+  // the first time the context step is hinted: the full text
+  const repo = opened("ctx-c4", { task: false });
+  const afterTask = lastLine(cli(repo, "note", ["task", "Do the thing. [inferred]"]).stdout);
   assert.match(afterTask, /gate note context/, afterTask);
   for (const word of ["Traced", "Related", "Research"]) assert.match(afterTask, new RegExp(word), afterTask);
   const afterContext = lastLine(cli(repo, "note", ["context", CONTEXT]).stdout);

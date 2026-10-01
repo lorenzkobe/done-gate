@@ -1,15 +1,16 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { currentLedger } from "./ledger.mjs";
 import { leadDelegates } from "./size.mjs";
 import { appendEvents, nextSeq, readEvents } from "./events.mjs";
 import { toPosixRel } from "./paths.mjs";
+import { ancestorPids, pidsDir } from "./context.mjs";
 
 // Files only the gate's own verbs may write. A model that could edit these could
 // forge its evidence, so the deny is unconditional and every attempt is logged.
 const EVIDENCE_FILES = new Set(["events.jsonl", "verify.json", "verify.started.json", "decisions.tsv", "ledger.json", "blocks.json", "state.json", "gate-error.log", "current-session"]);
-const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(events\.jsonl|verify\.json|verify\.started\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json|current-session|brief-[a-z0-9-]+-\d+\.md|(?:review2?|skeptic|arbiter|worker)-\d+\.md|runs\/[^/\s]+\/base(?![\w.-]))/;
+const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(events\.jsonl|verify\.json|verify\.started\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json|current-session|pids\/\d+|brief-[a-z0-9-]+-\d+\.md|(?:review2?|skeptic|arbiter|worker)-\d+\.md|runs\/[^/\s]+\/base(?![\w.-]))/;
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const HELPER_ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter"];
 // Shell analysis for the Bash fence. Two readers of one parse: `readsOnly` (may a command
@@ -353,7 +354,7 @@ const BASE_COPY = /^\.claude\/gate\/runs\/[^/]+\/base(?![\w.-])/;
 
 function isEvidence(rel) {
   if (!rel.startsWith(".claude/gate/")) return false;
-  if (rel.startsWith(".claude/gate/sessions/")) return true;
+  if (rel.startsWith(".claude/gate/sessions/") || rel.startsWith(".claude/gate/pids/")) return true;
   if (PACKET.test(rel)) return true; // a helper's packet is written by `gate brief` only
   if (BASE_COPY.test(rel)) return true;
   return EVIDENCE_FILES.has(rel.split("/").pop());
@@ -503,6 +504,37 @@ export function decide(input, root, config = loadConfig(root), currentRun = null
   return { deny: false };
 }
 
+// gate.mjs as the script node runs: `node "<plugin>/scripts/gate.mjs" <verb>`, not a path that
+// is only read (`cat scripts/gate.mjs`) or a longer name (gate.mjs.bak).
+const GATE_CALL = /\bnode\s+(?:"(?:[^"]*\/)?gate\.mjs"|'(?:[^']*\/)?gate\.mjs'|(?:[^\s"']*\/)?gate\.mjs)(?=[\s;&|)]|$)/;
+
+function processGone(pid) {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return error.code === "ESRCH";
+  }
+}
+
+// A harness that sets no session id in the shell leaves the lead's verb without one: the fence
+// has the real id and leaves it under its ancestor pids. DONE_GATE_SESSION is inherited by the verb.
+function recordSessionPids(ctx) {
+  const input = ctx.input;
+  if (process.env.DONE_GATE_SESSION) return;
+  if (!input?.session_id || input.agent_id || input.tool_name !== "Bash") return;
+  if (!GATE_CALL.test(withoutHeredocs(String(input.tool_input?.command ?? "")))) return;
+  try {
+    const dir = pidsDir(ctx.stateDir);
+    mkdirSync(dir, { recursive: true });
+    // a dead process's file would name its session to whichever process gets the number next
+    for (const name of readdirSync(dir)) if (processGone(Number(name))) rmSync(path.join(dir, name), { force: true });
+    for (const pid of ancestorPids()) writeFileSync(path.join(dir, String(pid)), input.session_id);
+  } catch {
+    // a courtesy: the verb falls back to the current-session marker
+  }
+}
+
 export const verbs = {
   fence(ctx) {
     let currentRun = null;
@@ -517,7 +549,10 @@ export const verbs = {
       // unreadable state: fall back to the role rules alone
     }
     const verdict = decide(ctx.input, ctx.root, undefined, currentRun, ledger, { stateDir: ctx.stateDir, session: ctx.session });
-    if (!verdict.deny) return;
+    if (!verdict.deny) {
+      recordSessionPids(ctx);
+      return;
+    }
     appendEvents(ctx.stateDir, ctx.session, [
       {
         seq: nextSeq(),

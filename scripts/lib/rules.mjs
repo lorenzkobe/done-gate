@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { effectiveTier, leadDelegates, policyFor, requires } from "./size.mjs";
 import { baseCopy, changedUnits, fileDiff, gitTracked, hasReindent, indentMatters, sliceEnd } from "./tree.mjs";
@@ -208,8 +209,20 @@ export function pointerResolver(state) {
       const rows = readFileSync(file, "utf8").split("\n").filter((l) => l.trim()).length - 1;
       return Number(ptr.slice(10)) >= 1 && Number(ptr.slice(10)) <= rows;
     }
-    const file = ptr.split(":")[0];
-    return [state.dir, state.root].filter(Boolean).some((base) => existsSync(path.join(base, file)));
+    // a file only: a directory or an empty path proves nothing. A plan kept outside the repo
+    // is named by its absolute or ~ path.
+    const named = ptr.split(":")[0];
+    if (!named) return false;
+    const file = named.startsWith("~/") ? path.join(homedir(), named.slice(2)) : named;
+    const candidates = path.isAbsolute(file) ? [file] : [state.dir, state.root].filter(Boolean).map((base) => path.join(base, file));
+    return candidates.some((full) => {
+      try {
+        return statSync(full).isFile();
+      } catch {
+        // prose given as a pointer (a name too long, a NUL byte) is not a file either
+        return false;
+      }
+    });
   };
 }
 
@@ -498,6 +511,12 @@ export function unfinishedFile(full) {
   return isDraft(text) || isPartial(text);
 }
 
+// Every waiver key a rule reads, with the rule it clears. "qa" is the key older ledgers
+// carry for tests.
+export const WAIVERS = { delegate: "R16", driver: "R4", review: "R5", "review-2": "R9", schema: "R6", tests: "R7", qa: "R7", slop: "R10", "gate-config": "R13" };
+
+const orWaive = (key) => ` Or get the user's waiver (\`gate waive ${key} "<reason>"\`).`;
+
 function waived(ledger, key) {
   return (ledger.waivers ?? []).some((w) => w.key === key);
 }
@@ -561,7 +580,14 @@ export function evaluate(state) {
         unmet.push({ rule: "R3", text: "verify.json is stale: source changed after the last `gate verify`. Run it again." });
       }
     }
-
+  }
+  // a command the run added is owed a result, whether or not source changed
+  const ran = new Set((verify?.commands ?? []).map((c) => c.cmd));
+  const pending = (ledger.verifyAdded ?? []).filter((cmd) => !ran.has(cmd));
+  if (pending.length && !unmet.some((u) => u.rule === "R3")) {
+    unmet.push({ rule: "R3", text: `added verify command ${pending.map((c) => `\`${c}\``).join(", ")} has not run: \`gate verify\`` });
+  }
+  if (src.length) {
     // "qa" is the waiver key older ledgers carry for the same step
     if (!changed.some((p) => config.isTest(p)) && !waived(ledger, "tests") && !waived(ledger, "qa")) {
       unmet.push({
@@ -593,10 +619,10 @@ export function evaluate(state) {
     const r = reviewed(state, "reviewer", after);
     if (!r.stopped || !r.hasFile) {
       unmet.push({ rule: "R5", text: r.pending.length && r.hasFile
-        ? `no clean reviewer round yet for ${list(r.pending)}: \`gate brief reviewer --files ${nextPiece(state, r.pending).join(",")}\` (a piece of at most ${policy.reviewMaxLines} source lines), spawn \`done-gate:reviewer\`, then \`gate huddle add reviewer --file review-<n>.md\`.`
-        : "no reviewer pass after the last edit. Spawn `done-gate:reviewer` (it writes review-<n>.md), then `gate huddle add reviewer --file review-<n>.md`." });
+        ? `no clean reviewer round yet for ${list(r.pending)}: \`gate brief reviewer --files ${nextPiece(state, r.pending).join(",")}\` (a piece of at most ${policy.reviewMaxLines} source lines), spawn \`done-gate:reviewer\`, then \`gate huddle add reviewer --file review-<n>.md\`.${orWaive("review")}`
+        : `no reviewer pass after the last edit. Spawn \`done-gate:reviewer\` (it writes review-<n>.md), then \`gate huddle add reviewer --file review-<n>.md\`.${orWaive("review")}` });
     } else if (r.openItems.length) {
-      unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map((a) => a.id).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.` });
+      unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map((a) => a.id).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${orWaive("review")}` });
     }
   }
 
@@ -604,7 +630,7 @@ export function evaluate(state) {
   if (changed.some((p) => config.isSchema(p)) && !waived(ledger, "schema")) {
     const step = (ledger.steps ?? []).find((s) => s.key === "schema");
     if (!step || step.state !== "DONE" || !step.evidence) {
-      unmet.push({ rule: "R6", text: "schema files changed: run the new/changed reader once against the real database (hit the endpoint in dev, or run the query) and close the schema step with `gate step schema done \"<what you ran>\" --evidence <pointer>`. N/A is not allowed here." });
+      unmet.push({ rule: "R6", text: `schema files changed: run the new/changed reader once against the real database (hit the endpoint in dev, or run the query) and close the schema step with \`gate step schema done "<what you ran>" --evidence <pointer>\`. N/A is not allowed here.${orWaive("schema")}` });
     }
   }
 
@@ -612,11 +638,11 @@ export function evaluate(state) {
   if (changed.some((p) => config.isHighRisk(p)) && !waived(ledger, "review-2")) {
     const r = reviewed(state, "reviewer-2", after);
     if (r.stopped && r.hasFile && r.openItems.length) {
-      unmet.push({ rule: "R9", text: `reviewer-2 Act-on item(s) still open: ${r.openItems.map((a) => a.id).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.` });
+      unmet.push({ rule: "R9", text: `reviewer-2 Act-on item(s) still open: ${r.openItems.map((a) => a.id).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${orWaive("review-2")}` });
     } else if (!r.stopped || !r.hasFile) {
       unmet.push({ rule: "R9", text: r.pending.length && r.hasFile
-        ? `high-risk paths changed: no clean reviewer-2 round yet for ${list(r.pending)}: \`gate brief reviewer-2 --files ${nextPiece(state, r.pending).join(",")}\`, spawn \`done-gate:reviewer-2\`, then \`gate huddle add reviewer-2 --file review2-<n>.md\`.`
-        : `high-risk paths changed (${list(changed.filter((p) => config.isHighRisk(p)))}): a second review by \`done-gate:reviewer-2\` is required after the last edit, with its review2-<n>.md recorded via \`gate huddle add reviewer-2 --file ...\` and every Act-on item closed.` });
+        ? `high-risk paths changed: no clean reviewer-2 round yet for ${list(r.pending)}: \`gate brief reviewer-2 --files ${nextPiece(state, r.pending).join(",")}\`, spawn \`done-gate:reviewer-2\`, then \`gate huddle add reviewer-2 --file review2-<n>.md\`.${orWaive("review-2")}`
+        : `high-risk paths changed (${list(changed.filter((p) => config.isHighRisk(p)))}): a second review by \`done-gate:reviewer-2\` is required after the last edit, with its review2-<n>.md recorded via \`gate huddle add reviewer-2 --file ...\` and every Act-on item closed.${orWaive("review-2")}` });
     }
   }
 
@@ -647,7 +673,12 @@ export function evaluate(state) {
   const openCases = (ledger.cases ?? []).filter((c) => caseOpen(c, after));
   if (openCases.length) unmet.push({ rule: "R8", text: `case(s) not closed: ${openCases.map((c) => c.id).join(", ")}. \`gate case close <id> --test <file:name>\` or \`--na <reason>\`${openCases.some((c) => c.kind === "click") ? "; a click case: click the control in the real app after the last edit, then `gate case close <id> --click`" : ""}.` });
   const blankSteps = (ledger.steps ?? []).filter((s) => !s.state);
-  if (blankSteps.length) unmet.push({ rule: "R8", text: `step(s) blank: ${blankSteps.map((s) => `${s.n}${s.key ? ` {${s.key}}` : ""}`).join(", ")}. Close each with \`gate step <n|key> done|skipped|na "<note>"\`.` });
+  if (blankSteps.length) {
+    const how = [];
+    if (blankSteps.some((s) => s.key !== "close")) how.push('Close each with `gate step <n|key> done|skipped|na "<note>"`.');
+    if (blankSteps.some((s) => s.key === "close")) how.push("{close} is closed by `gate close`, once nothing else is unmet.");
+    unmet.push({ rule: "R8", text: `step(s) blank: ${blankSteps.map((s) => `${s.n}${s.key ? ` {${s.key}}` : ""}`).join(", ")}. ${how.join(" ")}` });
+  }
 
   // R16: at a size where the lead delegates, the lead's own source edits after the plan are a
   // worker's job. The fence stops the edit tools; this catches what slipped past it.
@@ -657,14 +688,14 @@ export function evaluate(state) {
     // the lead's own edit-tool calls, or those of any agent that is not a worker
     const own = (state.events ?? []).filter((e) => implementationEdit(e, config) && !isRole(e.agentType, "worker") && e.seq > since);
     if (own.length) {
-      unmet.push({ rule: "R16", text: `the lead edited ${list([...new Set(own.map((e) => e.path))])} at size ${delegated}; hand that piece to a worker (\`gate brief worker\`, spawn done-gate:worker) and let it own the file from here.` });
+      unmet.push({ rule: "R16", text: `the lead edited ${list([...new Set(own.map((e) => e.path))])} at size ${delegated}; hand that piece to a worker (\`gate brief worker\`, spawn done-gate:worker) and let it own the file from here.${orWaive("delegate")}` });
     }
     // source changed with no edit-tool event to explain it: a shell edit, unless the last
     // shell command was a worker's, whose shell edits are its own business
     const shell = (ledger.unexplainedChanges ?? []).filter((c) => c.seq > since && !isRole(c.agentType, "worker"));
     if (shell.length) {
       const last = shell[shell.length - 1];
-      unmet.push({ rule: "R16", text: `source changed with no worker edit behind it (${last.cmd ? `after \`${String(last.cmd).slice(0, 60)}\`` : "a shell edit"}) at size ${delegated}; at this size only workers edit source. Hand the piece to a worker (\`gate brief worker\`).` });
+      unmet.push({ rule: "R16", text: `source changed with no worker edit behind it (${last.cmd ? `after \`${String(last.cmd).slice(0, 60)}\`` : "a shell edit"}) at size ${delegated}; at this size only workers edit source. Hand the piece to a worker (\`gate brief worker\`).${orWaive("delegate")}` });
     }
   }
 

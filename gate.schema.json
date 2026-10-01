@@ -105,6 +105,10 @@
         "null"
       ],
       "description": "\"skill:verify\" once /done-gate:verify-setup has generated .claude/skills/verify/, or \"cmd:<command>\" (e.g. \"cmd:npx playwright test\") when a command run by the lead drives the surface; null otherwise. Changing this key mid-task is not a config change."
+    },
+    "helperNote": {
+      "type": "string",
+      "description": "A standing note for every helper, printed in each packet under \"## Standing note\" (e.g. \"Never run two test runs at once: they share tests/.tmp\"). Changing it mid-task is a config change (R13)."
     }
   }
 }

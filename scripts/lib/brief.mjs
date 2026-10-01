@@ -121,6 +121,7 @@ function header(state, role, round) {
   out.push(...caseTable(ledger, lastEditSeq(state, state.config, ledger)), "");
   out.push("## Tier", "", ...renderTierBlock(ledger, state.policy, state.tier?.measured ?? null), "");
   out.push("## Tests", "", `globs: ${state.config.tests.join(", ")}`, `framework: ${detectFramework(state.root)}`, "");
+  if (state.config.helperNote) out.push("## Standing note", "", state.config.helperNote, "");
   return out;
 }
 
@@ -260,6 +261,13 @@ export function renderPacket(state, role, { round, n, item = null, piece = null,
     const paths = piece ? new Set(piece.files.map(pathOf)) : null;
     const shown = piece ? (state.changed ?? []).filter((p) => paths.has(p) || !scopeSet.has(p)) : state.changed ?? [];
     out.push(...diffOrFiles(state, "Diff", shown, ranges));
+    const closers = new Map();
+    for (const c of state.ledger.cases) if (c.status === "closed" && c.test) closers.set(c.test, [...(closers.get(c.test) ?? []), c.id]);
+    const sharedTests = [...closers].filter(([, ids]) => ids.length > 1);
+    if (sharedTests.length) {
+      out.push("## Shared tests", "", "Each of these tests closes more than one case. Check that it can fail for each case on its own; a case it cannot fail for is not covered.", "");
+      out.push(...sharedTests.map(([ptr, ids]) => `- ${ptr} closes ${ids.join(", ")}`), "");
+    }
     out.push("## Verify", "", ...verifyLines(state.verify, { tails: false, unfinished: unfinishedVerify(state) }), "");
     out.push("## Test command", "", ...testCommands(state), "");
     out.push("", "## Write your findings to", "", path.join(state.dir, `${reviewPrefix(role)}-${n}.md`), "");

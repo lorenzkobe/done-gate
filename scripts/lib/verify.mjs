@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
-import { renameSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { loadConfig } from "./config.mjs";
+import { DEFAULTS, loadConfig } from "./config.mjs";
 import { currentLedger, isDone, loadLedger, saveLedger } from "./ledger.mjs";
 import { nextSeq } from "./events.mjs";
-import { sourceHash } from "./rules.mjs";
+import { implementationHash, sourceHash } from "./rules.mjs";
 import { loadSession } from "./session-state.mjs";
 import { diffSnapshots, snapshot } from "./tree.mjs";
 import { UsageError } from "./context.mjs";
@@ -73,38 +73,82 @@ export function runCommand({ cmd, timeout }, cwd) {
   });
 }
 
+// Per command text, the implementation hash at its last green run in this ledger; carried
+// through every verify.json so a skipped run does not forget it.
+function lastGreen(file) {
+  try {
+    return JSON.parse(readFileSync(file, "utf8")).greenAt ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function changeAdded(ctx, flag, cmd) {
+  const current = currentLedger(ctx.stateDir, ctx.session);
+  if (!current || isDone(current.ledger)) throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
+  cmd = cmd?.trim();
+  if (!cmd) throw new UsageError(`usage: gate verify ${flag} "<command>"`);
+  const { ledger } = current;
+  const added = ledger.verifyAdded ?? [];
+  const inConfig = loadConfig(ctx.root).verify.some((v) => v.cmd === cmd);
+  if (flag === "--add") {
+    if (inConfig) throw new UsageError(`\`${cmd}\` is already a verify command of the repo config`);
+    if (!added.includes(cmd)) ledger.verifyAdded = [...added, cmd];
+    ledger.verifyDropped = (ledger.verifyDropped ?? []).filter((c) => c !== cmd);
+    ctx.out(`verify command added for this run: ${cmd} — it runs after the config commands, and the run cannot close until \`gate verify\` has run it`);
+  } else {
+    if (inConfig) throw new UsageError(`\`${cmd}\` comes from the repo config; --drop removes only a command this run added`);
+    if (!added.includes(cmd)) throw new UsageError(`\`${cmd}\` was not added by this run${added.length ? `; added: ${added.join(" · ")}` : ""}`);
+    ledger.verifyAdded = added.filter((c) => c !== cmd);
+    ledger.verifyDropped = [...(ledger.verifyDropped ?? []), cmd];
+    ctx.out(`verify command dropped: ${cmd}`);
+  }
+  saveLedger(current.dir, ledger);
+}
+
 export async function runVerify(ctx, { stepKey = "verify" } = {}) {
   const current = currentLedger(ctx.stateDir, ctx.session);
   if (!current || isDone(current.ledger)) {
     throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
   }
   const config = loadConfig(ctx.root);
-  if (config.verify.length === 0) throw new UsageError("nothing to verify: no verify commands in .claude/gate.json and no lint/test/build scripts in package.json");
+  const entries = [...config.verify, ...(current.ledger.verifyAdded ?? []).map((cmd) => ({ cmd, timeout: DEFAULTS.verifyTimeout, when: "always" }))];
+  if (entries.length === 0) throw new UsageError("nothing to verify: no verify commands in .claude/gate.json, no lint/test/build scripts in package.json and none added with `gate verify --add`");
 
   const session = loadSession(ctx.stateDir, ctx.session);
   const snap = snapshot(ctx.root, session?.lastTree ?? current.ledger.baseline);
   // a "source" command (the build, by default) only runs when the implementation changed
   const changed = diffSnapshots(current.ledger.baseline, snap).changed;
   const implementationChanged = changed.some((p) => config.isSource(p) && !config.isTest(p) && !config.isDoc(p));
+  // a "source" command last green on this same implementation has nothing new to judge
+  const implementation = implementationHash(snap, config);
+  const file = path.join(current.dir, "verify.json");
+  const greenAt = lastGreen(file);
   const startedAt = new Date().toISOString();
   // A run the shell dies under leaves this behind; R3 and the report then say so.
   const started = path.join(current.dir, "verify.started.json");
-  writeFileSync(started, JSON.stringify({ startedAt, pid: process.pid, commands: config.verify.map((v) => v.cmd) }));
+  writeFileSync(started, JSON.stringify({ startedAt, pid: process.pid, commands: entries.map((v) => v.cmd) }));
   const commands = [];
-  for (const entry of config.verify) {
+  for (const entry of entries) {
     if (entry.when === "source" && !implementationChanged) {
       ctx.err(`verify: ${entry.cmd} skipped (no implementation change)`);
       commands.push({ cmd: entry.cmd, skipped: "no implementation change (tests or docs only)", ms: 0 });
       continue;
     }
+    if (entry.when === "source" && greenAt[entry.cmd] === implementation) {
+      ctx.err(`verify: ${entry.cmd} skipped (green on this implementation already)`);
+      commands.push({ cmd: entry.cmd, skipped: "only tests or docs changed since it was last green", ms: 0 });
+      continue;
+    }
     ctx.err(`verify: ${entry.cmd} (timeout ${entry.timeout}s)`);
     const result = await runCommand(entry, ctx.root);
     commands.push(result);
+    if (result.exit === 0 && !result.timedOut) greenAt[entry.cmd] = implementation;
+    else delete greenAt[entry.cmd];
     ctx.err(`  → ${result.timedOut ? "TIMED OUT" : `exit ${result.exit}`} in ${(result.ms / 1000).toFixed(1)}s`);
   }
-  const record = { startedAt, finishedAt: new Date().toISOString(), sourceHash: sourceHash(snap, config), commands };
+  const record = { startedAt, finishedAt: new Date().toISOString(), sourceHash: sourceHash(snap, config), greenAt, commands };
   // written whole: a Stop hook may read it while a background verify is still writing
-  const file = path.join(current.dir, "verify.json");
   writeFileSync(`${file}.${process.pid}.tmp`, JSON.stringify(record, null, 2));
   renameSync(`${file}.${process.pid}.tmp`, file);
   rmSync(started, { force: true });
@@ -121,6 +165,12 @@ export async function runVerify(ctx, { stepKey = "verify" } = {}) {
 
 export const verbs = {
   async verify(ctx) {
+    const flag = ["--add", "--drop"].find((f) => ctx.args.includes(f));
+    if (flag) {
+      changeAdded(ctx, flag, ctx.args[ctx.args.indexOf(flag) + 1]);
+      printNext(ctx);
+      return;
+    }
     const stepIdx = ctx.args.indexOf("--step");
     const stepKey = stepIdx >= 0 ? ctx.args[stepIdx + 1] : "verify";
     const { record, red } = await runVerify(ctx, { stepKey });

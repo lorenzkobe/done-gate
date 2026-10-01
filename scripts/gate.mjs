@@ -32,6 +32,7 @@ const VERBS = {
   check: { hook: false, load: () => import("./lib/check.mjs") },
   report: { hook: false, load: () => import("./lib/report.mjs") },
   steps: { hook: false, load: () => import("./lib/ledger.mjs") },
+  next: { hook: false, load: () => import("./lib/next.mjs") },
   size: { hook: false, load: () => import("./lib/size.mjs") },
   brief: { hook: false, load: () => import("./lib/brief.mjs") },
   doctor: { hook: false, load: () => import("./lib/check.mjs") },

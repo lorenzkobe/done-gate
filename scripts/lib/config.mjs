@@ -165,6 +165,7 @@ export function loadConfig(root) {
     checks: arr(r.checks, DEFAULTS.checks),
     slop: r.slop !== false,
     driver: typeof r.driver === "string" ? r.driver : DEFAULTS.driver,
+    helperNote: typeof r.helperNote === "string" && r.helperNote.trim() ? r.helperNote.trim() : null,
     verify: normaliseVerify(r.verify ?? defaultVerify(root), DEFAULTS.verifyTimeout),
     verifySource: Array.isArray(r.verify) ? ".claude/gate.json" : "package.json scripts",
   };

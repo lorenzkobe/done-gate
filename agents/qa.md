@@ -14,6 +14,7 @@ For each case:
 - Write one focused test named after the case. Assert on real behaviour with literal expected values; never assert on a mock.
 - Anchor every boundary value to its source of truth: a column name to the migration, an enum value to its definition, a route to the file tree, a status string to the type union. Never to the implementation's own constants.
 - Test the refused side as carefully as the permitted side.
+- Rows for a real table come from a fixture, an export or the code that writes them, so they have the shape real rows have. Name every hand-made row in your reply.
 - For a bug fix, the first test is the reported reproduction; run it and quote the failing output trimmed to the assertion diff.
 
 Reply with: a table `case id → test file:test name`, the cases you could not cover and why, and any disagreement between the requirements and what the existing code does. Report; do not fix the implementation.

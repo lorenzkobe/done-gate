@@ -3,7 +3,7 @@ import path from "node:path";
 import { assess } from "./assess.mjs";
 import { ensureSession, loadSession } from "./session-state.mjs";
 import { recordGateError } from "./context.mjs";
-import { attachLedger, openRuns, saveLedger } from "./ledger.mjs";
+import { attachLedger, currentLedger, openRuns, saveLedger } from "./ledger.mjs";
 import { writeReport } from "./verbs.mjs";
 
 function mandate(ctx) {
@@ -44,6 +44,12 @@ export const verbs = {
         const [newest] = runs.filter((r) => r.ledger.status !== "closed");
         if (newest && continuing) attachLedger(ctx, newest.ledger.slug);
         else if (newest) foreign = newest.ledger;
+      }
+      // a cleared, resumed or compacted context no longer holds the step texts it was shown
+      const current = continuing ? currentLedger(ctx.stateDir, ctx.session) : null;
+      if (current?.ledger.hinted?.[ctx.session]) {
+        delete current.ledger.hinted[ctx.session];
+        saveLedger(current.dir, current.ledger);
       }
     } catch {
       // attach is a courtesy; the Stop gate will still say R1 if it matters

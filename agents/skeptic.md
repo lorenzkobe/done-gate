@@ -11,7 +11,7 @@ You are the skeptic in a design huddle. Write your findings to the `skeptic-<n>.
 
 Your inputs are in the packet named in your prompt (a `brief-<role>-<n>.md` file in the run dir). Do not re-derive them: do not diff the repository yourself and do not read the ledger. Read the source files the packet points at when you need context. The packet holds the ask, the Plan, the case table and the files the plan intends to touch, with their exported symbols as starting points. Read the code those paths name. Then answer, in this order, each as a short list (empty is a valid answer, say "none"):
 
-1. **Premise.** What the plan assumes about existing code that might be false. Cite `file:line` for each.
+1. **Premise.** What the plan assumes about existing code that might be false. Cite `file:line` for each. Each claim the plan makes about real data (names, rows, config values, ids) must cite the code that writes it or a read-only query that shows it; one that cites neither is Act on.
 2. **Missing cases.** Cases the table lacks: the refused side of a gate, an empty or null input, a boundary (midnight, timezone, first/last page), a retry or double-submit, a concurrent writer, a second caller of the same helper. Every link, button or tab the plan adds or changes needs its own click case (kind `click`): loading the page does not show that the control works.
 3. **Cheaper shape.** A smaller change that meets the ask, or an existing helper the plan re-invents (name it with its path).
 4. **Performance note.** Is the plan's list of hot paths, data sizes and cost shape true of the code? A hot path it misses, a size it underestimates, or a cost shape the planned change cannot keep, each with `file:line`.

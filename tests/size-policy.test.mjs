@@ -1174,7 +1174,8 @@ function closedTieredFixture(name, slug = "shipped") {
   const steps = loadLedger(runDir(repo)).steps;
   writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
   cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
-  for (const s of steps) if (!s.state) cli(repo, "step", [String(s.n), "done", "nothing changed under source", "--evidence", "events#1"]);
+  // {close} is closed by `gate close`, never by hand
+  for (const s of steps) if (!s.state && s.key !== "close") cli(repo, "step", [String(s.n), "done", "nothing changed under source", "--evidence", "events#1"]);
   cli(repo, "close");
   return repo;
 }

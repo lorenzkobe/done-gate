@@ -8,7 +8,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { briefOf, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers } from "./rules.mjs";
+import { briefOf, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, WAIVERS } from "./rules.mjs";
 import { assess, buildState, readVerify, reviewFiles, readVerifyStarted } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { readEvents } from "./events.mjs";
@@ -40,6 +40,15 @@ export function finalise(ctx, state) {
 export const EVIDENCED_KEYS = new Set(["context", "verify", "verify-before", "driver", "review", "tests", "qa", "skeptic", "close"]);
 export const CASE_KINDS = ["happy", "edge", "refused", "boundary", "idempotent", "reported-surface", "performance", "click"];
 export const ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter", "worker"];
+// Step keys whose rule has no waiver: waiving the step would leave that rule blocking.
+const NO_WAIVER = {
+  verify: "Run `gate verify`",
+  "verify-before": "Run `gate verify --step verify-before`",
+  context: 'Write it with `gate note context "Traced: … · Related: … · Research: …"`',
+  close: "Run `gate close`",
+};
+// The helper that R16 names is a worker; the key that waives R16 is delegate.
+const NEAR_MISS = { worker: "delegate" };
 
 export function flag(args, name) {
   const i = args.indexOf(name);
@@ -161,6 +170,38 @@ export const verbs = {
   case(ctx) {
     const [action, ...rest] = ctx.args;
     const pos = positional(rest);
+    const batch = flag(rest, "--batch");
+    if (action === "add" && batch !== undefined) {
+      if (!batch || !existsSync(batch)) throw new UsageError(`gate case add --batch: no file "${batch ?? ""}"; one case per line as <kind><TAB><text>`);
+      let content;
+      try {
+        content = readFileSync(batch, "utf8");
+      } catch (error) {
+        throw new UsageError(`gate case add --batch: cannot read "${batch}" (${error.code}); name a file with one case per line as <kind><TAB><text>`);
+      }
+      const lines = content.split("\n").map((l, i) => ({ n: i + 1, line: l.replace(/\r$/, "") })).filter((l) => l.line.trim());
+      // every line is checked before any case is added: a bad line adds nothing
+      const rows = lines.map(({ n, line }) => {
+        const tab = line.indexOf("\t");
+        const kind = tab < 0 ? "" : line.slice(0, tab).trim();
+        const text = tab < 0 ? "" : line.slice(tab + 1).trim();
+        if (!CASE_KINDS.includes(kind) || !text) throw new UsageError(`${batch} line ${n}: expected <kind><TAB><text> with kind one of ${CASE_KINDS.join(", ")}; nothing was added`);
+        return { kind, text };
+      });
+      if (!rows.length) throw new UsageError(`${batch} holds no case; one per line as <kind><TAB><text>`);
+      const ids = withLedger(ctx, (ledger) => {
+        const ids = rows.map(({ kind, text }) => {
+          const id = `C${ledger.cases.length + 1}`;
+          ledger.cases.push({ id, case: text, kind, test: null, na: null, status: "open", seq: nextSeq() });
+          return id;
+        });
+        markStep(ledger, "cases", { state: "DONE", evidence: "ledger.json#cases", note: "case table written" });
+        return ids;
+      });
+      ctx.out(`${ids.length} case${ids.length === 1 ? "" : "s"} added: ${ids.join(", ")}`);
+      printNext(ctx);
+      return;
+    }
     if (action === "add") {
       const text = pos.join(" ");
       const kind = flag(rest, "--kind") ?? "happy";
@@ -173,7 +214,7 @@ export const verbs = {
         return id;
       });
       ctx.out(`${id} added (${kind})`);
-    printNext(ctx);
+      printNext(ctx);
       return;
     }
     if (action === "close") {
@@ -186,9 +227,11 @@ export const verbs = {
       if (kind === "click" && testPtr) throw new UsageError(`${id} is a click case: a test does not close it. Click the control in the real app after the last edit, then \`gate case close ${id} --click\` (or \`--na "<reason>"\`).`);
       if (byClick && kind && kind !== "click") throw new UsageError(`${id} is a ${kind} case: --click closes a click case only`);
       const state = byClick && !na ? buildState(ctx, {}) : null;
+      let shared = [];
       const taken = withLedger(ctx, (ledger) => {
         const row = ledger.cases.find((c) => c.id === id);
         if (!row) throw new UsageError(`no case ${id}`);
+        if (testPtr) shared = ledger.cases.filter((c) => c.id !== id && c.status === "closed" && c.test === testPtr).map((c) => c.id);
         let event = null;
         if (state) {
           // one event closes one case: two controls need two clicks
@@ -201,10 +244,28 @@ export const verbs = {
       });
       const what = taken?.kind === "command" ? `\`${taken.cmd}\`` : [taken?.action, taken?.target, taken?.url, taken?.actions?.map((a) => [a.action, a.target].filter(Boolean).join(" ")).join(", ")].filter(Boolean).join(" ");
       ctx.out(taken ? `${id} closed by ${what} (events#${taken.seq})` : `${id} closed`);
-    printNext(ctx);
+      if (shared.length) ctx.out(`note: ${testPtr} also closes ${shared.join(", ")}; the reviewer is asked whether it can fail for each case on its own`);
+      printNext(ctx);
       return;
     }
-    throw new UsageError("usage: gate case add|close ...");
+    if (action === "amend") {
+      const [id, ...words] = pos;
+      const text = words.join(" ").trim();
+      if (!id || !text) throw new UsageError('usage: gate case amend <id> "<the corrected case>"');
+      withLedger(ctx, (ledger) => {
+        const row = ledger.cases.find((c) => c.id === id);
+        if (!row) throw new UsageError(`no case ${id}`);
+        // seq stays: the case table is dated by when the case was first written (R2)
+        row.history = [...(row.history ?? []), { text: row.case, seq: nextSeq() }];
+        Object.assign(row, { case: text, test: null, na: null, status: "open" });
+        delete row.event;
+        delete row.closedSeq;
+      });
+      ctx.out(`${id} amended and open again; the report keeps the earlier text`);
+      printNext(ctx);
+      return;
+    }
+    throw new UsageError("usage: gate case add|amend|close ...");
   },
 
   step(ctx) {
@@ -217,8 +278,9 @@ export const verbs = {
     withLedger(ctx, (ledger, dir) => {
       const step = ledger.steps.find((s) => s.key === ref || String(s.n) === ref);
       if (!step) throw new UsageError(`no step "${ref}"`);
+      if (step.key === "close") throw new UsageError("step {close} is closed by `gate close`, which closes the run once `gate check` is clean; run `gate close`");
       if (state === "SKIPPED" && step.key && EVIDENCED_KEYS.has(step.key)) {
-        throw new UsageError(`step {${step.key}} has script/agent evidence and cannot be SKIPPED — do it, or get the user's waiver with \`gate waive ${step.key} "<reason>"\``);
+        throw new UsageError(`step {${step.key}} has script/agent evidence and cannot be SKIPPED — ${Object.hasOwn(NO_WAIVER, step.key) ? `it has no waiver either. ${NO_WAIVER[step.key]}.` : `do it, or get the user's waiver with \`gate waive ${step.key} "<reason>"\``}`);
       }
       if (state === "DONE" && !evidence) throw new UsageError("DONE needs --evidence <pointer> (events#seq, verify.json, review-<n>.md, decisions#n, or a file path)");
       if (state !== "DONE" && !note) throw new UsageError(`${state} needs a reason`);
@@ -370,7 +432,7 @@ export const verbs = {
         return id;
       });
       ctx.out(`${id} recorded`);
-    printNext(ctx);
+      printNext(ctx);
       return;
     }
     if (action === "resolve") {
@@ -390,7 +452,7 @@ export const verbs = {
         throw new UsageError(`no act-on item ${aid}`);
       });
       ctx.out(`${aid} resolved`);
-    printNext(ctx);
+      printNext(ctx);
       return;
     }
     if (action === "reply") {
@@ -440,15 +502,28 @@ export const verbs = {
   },
 
   waive(ctx) {
-    const [key, ...words] = ctx.args;
+    const [named, ...words] = ctx.args;
     const reason = words.join(" ").trim();
-    if (!key || !reason) throw new UsageError('usage: gate waive <stepKey|R#> "<why, with the user\'s OK>"');
-    withLedger(ctx, (ledger) => {
-      ledger.waivers.push({ key, reason, seq: nextSeq() });
+    if (!named || !reason) throw new UsageError('usage: gate waive <key|stepKey|R#> "<why, with the user\'s OK>"');
+    const byRule = /^R\d+$/.test(named);
+    const key = byRule ? Object.keys(WAIVERS).find((k) => WAIVERS[k] === named) : named;
+    const valid = `valid keys: ${Object.keys(WAIVERS).filter((k) => k !== "qa").map((k) => `${k} (${WAIVERS[k]})`).join(", ")}`;
+    if (byRule && !key) throw new UsageError(`${named} has no waiver: do what \`gate check\` says for it. ${valid}`);
+    if (Object.hasOwn(NO_WAIVER, key)) throw new UsageError(`${key} cannot be waived: a rule with no waiver would still block behind the step. ${NO_WAIVER[key]}.`);
+    const clears = withLedger(ctx, (ledger) => {
       const step = ledger.steps.find((s) => s.key === key);
+      const rule = Object.hasOwn(WAIVERS, key) ? WAIVERS[key] : null;
+      if (!rule && !step) {
+        const stepKeys = ledger.steps.map((s) => s.key).filter((k) => k && EVIDENCED_KEYS.has(k) && !Object.hasOwn(NO_WAIVER, k) && !Object.hasOwn(WAIVERS, k));
+        throw new UsageError(`unknown waiver key "${key}"${Object.hasOwn(NEAR_MISS, key) ? `: for ${key} the key is ${NEAR_MISS[key]} (\`gate waive ${NEAR_MISS[key]} "<reason>"\`)` : ""}. ${valid}${stepKeys.length ? `; step keys of this run: ${stepKeys.join(", ")}` : ""}`);
+      }
+      // a step with no script or agent evidence is closed by hand; a waiver there would clear nothing a rule reads
+      if (!rule && !EVIDENCED_KEYS.has(key)) throw new UsageError(`step {${key}} has no waiver: close it with \`gate step ${key} done|skipped|na "<note>"\`. ${valid}`);
+      ledger.waivers.push({ key, reason, seq: nextSeq() });
       if (step) Object.assign(step, { state: "WAIVED", note: reason, evidence: null, seq: nextSeq() });
+      return [rule, step ? `step {${key}}` : null].filter(Boolean).join(" and ");
     });
-    ctx.out(`waived ${key} — the report will show the reason`);
+    ctx.out(`waived ${key} (clears ${clears}) — the report will show the reason`);
     printNext(ctx);
   },
 

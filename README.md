@@ -105,7 +105,10 @@ otherwise (the short report says so). The `build` script from package.json gets 
 default, and so does an entry in gate.json with no `when` that is one build call and nothing
 else (`npm run build`, `pnpm build`, `yarn build`, `bun run build`); a compound command (`&&`, `;`, `|`) and
 lint, typecheck and test always run. If your build type-checks tests or builds a docs site,
-write `{ "cmd": "npm run build", "when": "always" }` to opt out.
+write `{ "cmd": "npm run build", "when": "always" }` to opt out. A `"source"` command that was
+green is also skipped while only tests or docs changed since: `verify.json` keeps, per
+command, the hash of the non-test source at its last green run, and the next edit to a
+non-test source file runs it again. A command that was red always runs.
 
 ## What you see
 
@@ -124,7 +127,9 @@ For you: skipped with your OK: chrome is disconnected, no phone pass this time.
 Full report: .claude/gate/runs/2026-09-14-venue-badge/report.md
 ```
 
-The five lines are always there ("For you: nothing." when there is nothing). A `Caveats:` line
+The five lines are always there ("For you: nothing." when there is nothing). `For you` keeps
+to what needs you: waivers, disputes and unmet rules; pauses and blocked writes are in the
+full report only. A `Caveats:` line
 follows them when the lead recorded what it could not show (`gate note caveat "the phone
 viewport was not driven"`); the full report lists the same under Caveats. The full report on disk has every case with its
 test, each step with its evidence, the reviewer's own file, the check output, the decision log and the changed files; `gate report` prints it
@@ -140,12 +145,12 @@ attempt to finish.
 | --- | --- |
 | R1 | source changed and no ledger is open |
 | R2 | Context, Plan or case table was written after the first source edit |
-| R3 | `gate verify` is missing, red, older than the last source edit, still running, or started and never finished (the shell died under it) |
+| R3 | `gate verify` is missing, red, older than the last source edit, still running, or started and never finished (the shell died under it); or a command added with `gate verify --add` has not run yet |
 | R4 | UI files changed and the real surface wasn't driven afterwards |
 | R5 | no reviewer pass after the last edit, or an Act-on item is still open; tier tiny needs no reviewer. A change past the piece cap (400 changed lines) is reviewed in pieces, `gate brief reviewer --files a,b`, and one big file in slices, `--files a.ts:1-400`; a line is covered once the last round that saw it came back clean (or was the file's third); new or uncovered lines need a round |
 | R6 | schema files changed with no real-schema probe |
 | R7 | source changed and no test file changed |
-| R8 | any case or step is blank, or a click case's click is older than the last source edit |
+| R8 | any case or step is blank, or a click case's click is older than the last source edit; the close step is closed by `gate close`, never by `gate step close …` |
 | R9 | high-risk paths changed without the second reviewer (same round rules as R5; an open reviewer-2 item is named) |
 | R10 | a repo check failed: the slop scan found a banner comment, step narration, an empty label, an end marker, an emoji, a bare TODO or a `@param` that echoes its name on an added non-test line (`"slop": false` in gate.json turns it off between tasks; mid-task, `gate waive slop` clears a false positive), or an opted-in check (`claude-md-budget`, `migration-number`) |
 | R13 | `.claude/gate.json` or the plugin's `models.json` changed mid-task |
@@ -153,7 +158,14 @@ attempt to finish.
 | R16 | the lead edited source itself at size large (a worker's job); waivable with `gate waive delegate` |
 
 Waivers are the only way past a keyed step: the user OKs it, Claude records the reason
-with `gate waive <key> "…"`, and the report lists every waiver.
+with `gate waive <key> "…"`, and the report lists every waiver. The keys: `driver` (R4),
+`review` (R5), `schema` (R6), `tests` (R7), `review-2` (R9), `slop` (R10), `gate-config`
+(R13), `delegate` (R16), or the key of a step whose waiving clears something. A rule number
+is taken for its key (`gate waive R16` records `delegate`). Any other key is refused with the
+valid ones listed (`worker` is pointed at `delegate`), and so are `verify`, `verify-before`,
+`context`, `close` and a rule with no waiver (R3): the message says what to run instead.
+`gate waive` prints what the key clears, and the unmet text of R5, R6, R9 and R16 names its
+key.
 
 ## Guarantees, and their edges
 
@@ -235,6 +247,22 @@ with `gate waive <key> "…"`, and the report lists every waiver.
   predicted below large into it gets a note from the log hook with the measured size and
   `gate brief worker`; the fence refuses the lead's edits from the next gate verb on. Once
   per run.
+- **A verb finds its own session.** Where the shell has no `CLAUDE_CODE_SESSION_ID`, the
+  fence, which always has the real id, writes it to `.claude/gate/pids/<pid>` for its own
+  ancestor processes (up to four levels, never pid 1) when the lead's Bash command runs
+  `gate.mjs`, after removing the files of processes that are gone. With `DONE_GATE_SESSION` set
+  nothing is written (the verb inherits it); `CLAUDE_CODE_SESSION_ID` in the hook's
+  environment does not stop the write, since the shell may not have it. A verb with no id on stdin or in the environment walks its own ancestors,
+  nearest first, and takes the first pid file it finds, then falls back to the
+  `current-session` marker. Two sessions in one repo no longer read each other's run.
+- **One test for two cases is said.** `gate case close --test` prints a note when the same
+  pointer already closes another case, and the reviewer's packet lists every test that
+  closes two or more under "Shared tests", so the reviewer checks it can fail for each.
+- **A case can be corrected.** `gate case amend C2 "<text>"` keeps the old text in the case's
+  history and opens the case again; the report marks it amended. Amending is not writing the
+  case table late (R2).
+- **A pointer may leave the repo.** An evidence pointer to an existing file by absolute path,
+  `~` or `../` resolves (a plan kept outside the repo); a directory or an empty path does not.
 - **What it cannot know.** Whether a test asserts the right thing. It makes that visible
   instead: case → test mapping and the reviewer's own file, so a human can check them in
   two minutes.
@@ -273,12 +301,14 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | --- | --- |
 | `open <slug> <feature\|bugfix\|refactor\|plan\|investigation>` | start a ledger with the playbook's steps |
 | `note task\|context\|plan "…"` · `note plan "…" --files a,b` · `note caveat "…"` | write the prose sections (stamps the order for R2); Context is Traced (file:line pointers), Related, Research; `--files` predicts the size; a caveat is something the run could not show, printed in both reports |
-| `case add "…" --kind <kind>` · `case close C1 --test file:name \| --click \| --na "…"` | the case table; kinds: happy, edge, refused, boundary, idempotent, reported-surface, performance, click; `--click` closes a click case with the lead's newest click after the last edit and prints it |
-| `step <key\|n> done\|skipped\|na "…" [--evidence ptr]` | close a playbook step |
+| `case add "…" --kind <kind>` · `case add --batch <file>` · `case amend C1 "…"` · `case close C1 --test file:name \| --click \| --na "…"` | the case table; kinds: happy, edge, refused, boundary, idempotent, reported-surface, performance, click; `--batch` reads one case per line as `<kind><TAB><text>`, adds all or none and prints one `next:` line; `amend` replaces a case's text and reopens it; `--click` closes a click case with the lead's newest click after the last edit and prints it |
+| `step <key\|n> done\|skipped\|na "…" [--evidence ptr]` | close a playbook step (not the close step: `gate close` does that) |
+| `next` | the full `next:` hint; after a verb it is printed in full the first time a step is hinted and in a short form afterwards, and in full again once a session joins the run (clear, resume, compact, `gate attach`) |
 | `huddle add <role> --file review-1.md` · `acton` · `resolve` · `dispute` | reviewer rounds and Act-on items; `add` prints each recorded id with its finding |
 | `huddle reply --file worker-<n>.md` | record a worker's answers: `fixed:` closes an item, `disagree:` disputes it; an unknown id fails and lists the open ones. Worker reply files are their own stream, numbered like their packet (`brief-worker-2.md` asks for `worker-2.md`) |
-| `waive <key> "<reason>"` | record a waiver; it shows in the report |
+| `waive <key\|R<n>> "<reason>"` | record a waiver and print what it clears; it shows in the report |
 | `verify [--step verify-before]` | run the repo's verify commands, write `verify.json` |
+| `verify --add "<cmd>"` · `verify --drop "<cmd>"` | add a verify command for this run only, or remove one this run added; nothing runs. Added commands run after the config ones at every `gate verify`, with the default timeout, also when the config has none. They live on the ledger, not in gate.json (R13 stays quiet), and `gate doctor` and the report list them as added by this run. An added command that has not run blocks the close (R3); a dropped one stays in the report as dropped by this run |
 | `decide <phase> <decision> <why> <evidence> <result>` | append a decision-log row |
 | `brief <skeptic\|qa\|worker\|reviewer\|reviewer-2\|arbiter> [--files a,b \| a.ts:1-400] [--item H#.#]` | write the helper's packet and print its spawn prompt; a packet is numbered like the file it names; a worker's `--files` are the files it owns |
 | `abandon <slug> "<reason>"` | give a run up: marks it abandoned with the reason; it stops attaching to sessions and blocking turns |
@@ -298,14 +328,24 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
   "verify":   ["npm run lint", { "cmd": "npm run test", "timeout": 1500 }, { "cmd": "npm run build", "when": "source" }],
   "checks":   ["claude-md-budget", "migration-number"],
   "slop":     true,
-  "driver":   "skill:verify"
+  "driver":   "skill:verify",
+  "helperNote": "Never run two test runs at once: they share tests/.tmp."
 }
 ```
 
 `driver` may instead be `"cmd:npx playwright test"`: a foreground run of that command by the lead
 after the last edit, with exit 0, counts as driving the surface (R4). Setting or changing `driver` mid-task is not a
 config change (R13). A plan may declare its size, `gate note plan … --size large`, when the
-file count would under-predict it (one 500-line migration).
+file count would under-predict it (one 500-line migration). `helperNote` is printed in every
+helper's packet under "Standing note"; changing it mid-task is a config change (R13).
+
+The helper prompts hold four standing rules: the skeptic wants every claim the plan makes
+about real data (names, rows, config values, ids) to cite the code that writes it or a
+read-only query; QA takes rows for real tables from fixtures, exports or the writing code and
+names hand-made rows in its reply; the reviewer checks a named audience against the real
+callers; an investigation labels a security or exposure finding "from config, unverified"
+unless it cites the deployed state or the handler code. An API change is driven by calling
+the endpoint.
 
 ## Develop
 

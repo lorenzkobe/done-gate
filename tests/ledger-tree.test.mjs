@@ -707,14 +707,17 @@ test("C5 edge: after the case table the hint names {context}/{repro}; the {imple
   cli(feature, "open", ["badge", "feature"]);
   cli(feature, "note", ["task", "Add a badge. [inferred]"]);
   cli(feature, "note", ["plan", "One component.", "--files", "src/a.ts"]);
-  const afterCases = hintOf(cli(feature, "case", ["add", "renders the badge", "--kind", "happy"]).stdout);
+  // a step hinted before comes back in its short form; `gate next` prints the full text
+  cli(feature, "case", ["add", "renders the badge", "--kind", "happy"]);
+  const afterCases = hintOf(cli(feature, "next").stdout);
   assert.match(afterCases, /`gate note context/, `the first blank feature step is {context}:\n${afterCases}`);
 
   const bugfix = committed("playbooks-c5-bugfix");
   cli(bugfix, "open", ["badge", "bugfix"]);
   cli(bugfix, "note", ["task", "Badge is missing. [inferred]"]);
   cli(bugfix, "note", ["plan", "One component.", "--files", "src/a.ts"]);
-  const afterBugCases = hintOf(cli(bugfix, "case", ["add", "the badge is missing", "--kind", "reported-surface"]).stdout);
+  cli(bugfix, "case", ["add", "the badge is missing", "--kind", "reported-surface"]);
+  const afterBugCases = hintOf(cli(bugfix, "next").stdout);
   assert.match(afterBugCases, /`gate step repro done/, `the first blank bugfix step is {repro}:\n${afterBugCases}`);
 
   // walk the feature run to {implement}: {skeptic} is auto-N/A at tier small
@@ -877,7 +880,8 @@ function hint(repo, verb, args = [], opts = {}) {
   const h = hintOf(r.stdout);
   assert.match(h, /^next: /, `\`gate ${verb}\` did not end with a next: line:\n${r.stdout}`);
   assert.match(h, /`gate\s+[a-z][^`]*`/, `the hint carries no backticked gate verb:\n${h}`);
-  return h;
+  // a step hinted before comes back in its short form; `gate next` prints the full text
+  return h.includes("`gate next`") ? hintOf(cli(repo, "next", [], opts).stdout) : h;
 }
 
 // The step key a hint points at: `gate step <key>` directly, or `gate brief <role>` where

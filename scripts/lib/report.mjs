@@ -148,6 +148,8 @@ export function renderReport(state, unmet) {
 
   out.push("\n## Case table\n");
   out.push(...caseTable(ledger, after));
+  const amended = ledger.cases.filter((c) => c.history?.length);
+  if (amended.length) out.push("", ...amended.map((c) => `${c.id} amended; was: ${c.history.map((h) => `"${cell(h.text)}"`).join(", then ")}`));
 
   out.push("\n## Steps\n");
   for (const s of ledger.steps) {
@@ -160,6 +162,8 @@ export function renderReport(state, unmet) {
 
   out.push("\n## Verify\n");
   out.push(...verifyLines(verify, { unfinished: unfinishedVerify(state) }));
+  if (ledger.verifyAdded?.length) out.push(`\nadded by this run: ${ledger.verifyAdded.map((c) => `\`${c}\``).join(" · ")}`);
+  if (ledger.verifyDropped?.length) out.push(`\ndropped by this run: ${ledger.verifyDropped.map((c) => `\`${c}\``).join(" · ")}`);
   if (verify) out.push(`\nsource hash at verify: \`${verify.sourceHash.slice(0, 12)}\` · now: \`${state.now.hash.slice(0, 12)}\``);
 
   out.push("\n## Changed files\n");
@@ -352,8 +356,9 @@ function plain(text) {
 
 const FOR_YOU_MAX = 6;
 
+// Waivers and decisions only: pauses and blocked writes stay in the full report.
 function forYouLine(state, unmet) {
-  const { ledger, events } = state;
+  const { ledger } = state;
   const items = [];
   for (const w of ledger.waivers) items.push(`skipped with your OK: ${plain(w.reason ?? w.quote)}`);
   for (const a of ledger.huddles.flatMap((h) => h.actOn)) {
@@ -366,9 +371,6 @@ function forYouLine(state, unmet) {
     else if (v !== "withdrawn") items.push(`"${text}": disputed, waiting for the reviewer's answer`);
   }
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) items.push(`skipped: ${plain(s.text)} (${plain(s.note)})`);
-  for (const p of ledger.pauses ?? []) items.push(`paused for: ${plain(p.text)}`);
-  const denies = events.filter((e) => e.kind === "deny" && !e.delegate).length;
-  if (denies) items.push(`${plural(denies, "blocked write")} to check files`);
   if (ledger.overridden) items.push("I could not satisfy the checks and ended anyway; treat everything above as unverified");
   if (ledger.steps.some((s) => s.key === "context" && s.state === null)) items.push("no context was written: what was traced, what depends on it, what was researched");
   const order = lateOrder(state);
