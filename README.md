@@ -392,7 +392,7 @@ the endpoint.
 ## Develop
 
 ```
-npm test           # the plugin's own suite (node --test), 87 tests
+npm test           # the plugin's own suite (node --test)
 npm run reinstall  # refresh the user-scope install from this tree; restart the session
 ```
 
