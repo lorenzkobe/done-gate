@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { IGNORE_CASE } from "./paths.mjs";
+import { IGNORE_CASE, repoPath } from "./paths.mjs";
 
 // Dependency-free glob matcher over root-relative POSIX paths.
 // Supports **, *, ?, and {a,b} alternation. Everything else is literal.
@@ -145,7 +145,18 @@ export function configPath(root) {
   return path.join(root, ".claude", "gate.json");
 }
 
-export function loadConfig(root) {
+// A declared repo's broken gate.json is named by its path: the reader sits in another repo.
+export function repoConfig(dir) {
+  try {
+    return loadConfig(dir);
+  } catch (error) {
+    throw new Error(`${configPath(dir)}: ${error.message}`);
+  }
+}
+
+// With declared repos the path predicates dispatch on the prefix: a repo's file is judged by
+// its own gate.json when it has one, else by the main globs on its repo-relative path.
+export function loadConfig(root, repos = []) {
   const file = configPath(root);
   let raw = null;
   if (existsSync(file)) {
@@ -180,10 +191,7 @@ export function loadConfig(root) {
   const legacyHash = createHash("sha1").update(existsSync(file) ? readFileSync(file, "utf8") : "defaults").update("\n").update(verifyList).digest("hex");
   const opts = { ignoreCase: IGNORE_CASE };
   const not = (globs) => (p) => !matchAny(globs, p, opts);
-  return {
-    ...resolved,
-    hash,
-    legacyHash,
+  const main = {
     isSource: (p) =>
       matchAny(resolved.source, p, opts) &&
       not(resolved.sourceExclude)(p) &&
@@ -194,4 +202,12 @@ export function loadConfig(root) {
     isDoc: (p) => matchAny(resolved.docs, p, opts),
     isHighRisk: (p) => matchAny(resolved.highRisk, p, opts),
   };
+  if (!repos.length) return { ...resolved, hash, legacyHash, ...main };
+  // each repo's config is loaded once; its verify list and hash are read from here too
+  const own = repos.map((repo) => ({ ...repo, missing: !existsSync(repo.root), config: repoConfig(repo.root) }));
+  const dispatch = (name) => (p) => {
+    const at = repoPath(root, p, repos);
+    return (own[at.index]?.config.explicit ? own[at.index].config : main)[name](at.rel);
+  };
+  return { ...resolved, hash, legacyHash, repos: own, ...Object.fromEntries(Object.keys(main).map((name) => [name, dispatch(name)])) };
 }

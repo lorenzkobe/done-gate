@@ -11,6 +11,7 @@ import { renderReport } from "./report.mjs";
 import { briefOf, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, WAIVERS } from "./rules.mjs";
 import { assess, buildState, readVerify, reviewFiles, readVerifyStarted } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
+import { withoutRepos } from "./tree.mjs";
 import { readEvents } from "./events.mjs";
 
 // The report of a run that is no longer current: the same renderer `gate report` uses.
@@ -31,7 +32,9 @@ export function finalise(ctx, state) {
   if (state.tier) ledger.tier = state.tier;
   saveLedger(state.dir, ledger);
   const session = loadSession(ctx.stateDir, ctx.session);
-  saveSession(ctx.stateDir, { ...session, current: null, lastClosed: path.basename(state.dir), baseline: { files: state.now.files, hash: state.now.hash }, baselineSeq: nextSeq() });
+  // a declared repo's files end with the run: session state holds main-root keys only
+  const main = withoutRepos(state.now, state.repos);
+  saveSession(ctx.stateDir, { ...session, current: null, lastClosed: path.basename(state.dir), baseline: main, lastTree: main, baselineSeq: nextSeq() });
   writeReport(ctx, state.dir, ledger);
   return ledger;
 }
@@ -109,13 +112,15 @@ function replaceSection(md, heading, body) {
 // The Context note: what was traced (as file:line pointers), what is related, what was
 // researched or why nothing needed to be. Each part is a line starting with its name.
 const CONTEXT_USAGE = 'gate note context needs three parts, each a line starting with its name: "Traced: <entry points, callers, data flow as file:line pointers>", "Related: <surfaces, docs, tests, config that depend on it>", "Research: <what was looked up and where, or none needed: <why>>"';
-function checkContext(text, root) {
+function checkContext(text, root, repos) {
   const missing = CONTEXT_PARTS.filter((name) => contextPart(text, name) === null);
   if (missing.length) throw new UsageError(`${CONTEXT_USAGE} (missing: ${missing.join(", ")})`);
-  const pointers = tracedPointers(contextPart(text, "Traced"), root);
+  const pointers = tracedPointers(contextPart(text, "Traced"), root, repos);
   if (!pointers.length) throw new UsageError("Traced needs at least one file:line pointer into the repo (the entry point, a caller, a data path); prose alone is not a trace");
   if (!pointers.some((p) => p.exists)) throw new UsageError(`Traced names no file that exists in the repo (${pointers.map((p) => `${p.file}:${p.line}`).join(", ")}); a file:line pointer must resolve`);
 }
+
+export const outsideRepos = (given) => `"${given}" is outside this repo and every declared repo: declare its repo with \`gate repo add <dir>\`, then name the file again`;
 
 export const verbs = {
   note(ctx) {
@@ -136,7 +141,10 @@ export const verbs = {
       printNext(ctx);
       return;
     }
-    if (section === "context") checkContext(text, ctx.root);
+    if (section === "context") checkContext(text, ctx.root, ctx.repos);
+    const named = section === "plan" ? (files ?? "").split(",").map((f) => f.trim()).filter(Boolean) : [];
+    const outside = named.filter((f) => toPosixRel(ctx.root, f, ctx.repos) === null);
+    if (outside.length && outside.length === named.length) throw new UsageError(`--files: ${outsideRepos(outside.join(", "))}`);
     if (size !== undefined) {
       const sizes = tierOrder(policyFor(open(ctx).ledger));
       if (!sizes.includes(size)) throw new UsageError(`unknown size "${size}" (have: ${sizes.join(", ")})`);
@@ -157,13 +165,14 @@ export const verbs = {
         if (!ledger.planSeq) ledger.planSeq = seq;
         if (ledger.taskSeq) markStep(ledger, "plan", { state: "DONE", evidence: "ledger.md#plan", note: "Task and Plan written" });
         if ((files !== undefined || size !== undefined) && tiered(ledger)) {
-          // paths outside the repo are dropped: they cannot be part of this task's diff
-          const paths = (files ?? "").split(",").map((f) => f.trim()).filter(Boolean).map((f) => toPosixRel(ctx.root, f)).filter((f) => f);
-          predicted = applyPrediction(ledger, policyFor(ledger), loadConfig(ctx.root), paths, size ?? null);
+          // a path outside the main root and every declared repo cannot be part of this task's diff
+          const paths = named.map((f) => toPosixRel(ctx.root, f, ledger.repos)).filter((f) => f);
+          predicted = applyPrediction(ledger, policyFor(ledger), loadConfig(ctx.root, ledger.repos), paths, size ?? null);
         }
       }
     });
     ctx.out(predicted ? `${section} noted · tier predicted ${predicted.tier} (${predicted.files} file${predicted.files === 1 ? "" : "s"}${predicted.declared ? `, declared ${predicted.declared}` : ""}${predicted.forced.length ? `, forced by ${predicted.forced.join(", ")}` : ""})` : `${section} noted`);
+    if (outside.length) ctx.out(`not counted: ${outsideRepos(outside.join(", "))}`);
     printNext(ctx);
   },
 
@@ -524,6 +533,8 @@ export const verbs = {
       return [rule, step ? `step {${key}}` : null].filter(Boolean).join(" and ");
     });
     ctx.out(`waived ${key} (clears ${clears}) — the report will show the reason`);
+    const gone = key === "gate-config" ? ctx.repos.filter((r) => !existsSync(r.root)).map((r) => r.prefix) : [];
+    if (gone.length) ctx.out(`not cleared: the R13 line for the declared repo ${gone.join(", ")}, whose directory is gone; restore it or abandon the run`);
     printNext(ctx);
   },
 
@@ -559,7 +570,8 @@ export const verbs = {
     saveLedger(dir, ledger);
     const name = path.basename(dir);
     const session = loadSession(ctx.stateDir, ctx.session);
-    if (session) saveSession(ctx.stateDir, { ...session, current: session.current === name ? null : session.current, lastClosed: name });
+    const lastTree = session?.lastTree && ledger.repos?.length ? { lastTree: withoutRepos(session.lastTree, ledger.repos) } : {};
+    if (session) saveSession(ctx.stateDir, { ...session, ...lastTree, current: session.current === name ? null : session.current, lastClosed: name });
     writeReport(ctx, dir, ledger);
     ctx.out(`${ledger.slug} abandoned — ${reason}`);
     ctx.out(`report: ${path.join(dir, "report.md")}`);

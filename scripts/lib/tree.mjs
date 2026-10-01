@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { IGNORE_CASE } from "./paths.mjs";
+import { IGNORE_CASE, repoPath } from "./paths.mjs";
 
 // Never part of a snapshot: the gate's own state, dependencies, VCS internals.
 const SKIP_PREFIXES = [".claude/gate/", "node_modules/", ".git/"];
@@ -83,13 +83,27 @@ export function gitHead(root) {
   }
 }
 
-// Tracked files, or an empty set when git cannot answer (no repo, no commits).
-export function gitTracked(root) {
+// The root of the git work tree a directory is in, or null when it is in none.
+export function gitTop(dir) {
   try {
-    return new Set(git(root, ["ls-files", "-z"]).split("\0").filter(Boolean));
+    return git(dir, ["rev-parse", "--show-toplevel"]).trim() || null;
   } catch {
-    return new Set();
+    return null;
   }
+}
+
+// Tracked files, a declared repo's under its prefix; nothing for a root where git cannot
+// answer (no repo, no commits, a directory that is gone).
+export function gitTracked(root, repos = []) {
+  const out = new Set();
+  for (const { dir, key } of [{ dir: root, key: "" }, ...repos.map((r) => ({ dir: r.root, key: `${r.prefix}/` }))]) {
+    try {
+      for (const f of git(dir, ["ls-files", "-z"]).split("\0")) if (f) out.add(`${key}${f}`);
+    } catch {
+      // this root adds nothing
+    }
+  }
+  return out;
 }
 
 // Paths that differ between two commits, a rename as both its paths; empty when git cannot answer.
@@ -101,6 +115,22 @@ export function gitChanged(root, from, to) {
   }
 }
 
+const DIFFERS_CHUNK = 500;
+
+// The paths among `rels` whose working copy differs from a commit; null when git cannot answer.
+export function gitDiffers(dir, ref, rels) {
+  try {
+    const out = new Set();
+    // in chunks, so thousands of paths never outgrow one command line
+    for (let i = 0; i < rels.length; i += DIFFERS_CHUNK) {
+      for (const f of git(dir, ["diff", "--name-only", "--no-renames", "-z", ref, "--", ...rels.slice(i, i + DIFFERS_CHUNK)]).split("\0")) if (f) out.add(f);
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
 // Files where indentation is meaning: a whitespace-only change to one is a real change.
 const INDENTED = /\.(?:py|pyi|ya?ml|pug|haml|sass|styl|coffee|nim|mk)$|(?:^|\/)Makefile$/;
 export const indentMatters = (rel) => INDENTED.test(rel);
@@ -108,34 +138,54 @@ export const indentMatters = (rel) => INDENTED.test(rel);
 // Added/deleted line counts of uncommitted changes vs HEAD, keyed by the current path;
 // empty when git cannot answer. NUL-separated output, so quoted or odd filenames survive,
 // and renames arrive as one row with `from` set (a pure move is 0 lines).
-export function gitNumstat(root, paths = [], ref = "HEAD", { ignoreWhitespace = false } = {}) {
+export function gitNumstat(root, paths = [], ref = "HEAD", { ignoreWhitespace = false, repos = [], heads = {} } = {}) {
   const out = new Map();
-  try {
-    const raw = git(root, ["diff", "--numstat", "-z", "-M", ...(ignoreWhitespace ? ["-w"] : []), ref, "--", ...paths]);
-    const parts = raw.split("\0");
-    for (let i = 0; i < parts.length; i++) {
-      const m = /^(\S+)\t(\S+)\t(.*)$/.exec(parts[i]);
-      if (!m) continue;
-      const binary = m[1] === "-" || m[2] === "-";
-      const row = { added: binary ? 0 : Number(m[1]), deleted: binary ? 0 : Number(m[2]), binary, from: null };
-      if (m[3] === "") {
-        // rename: the path field is empty and the next two parts are old and new path
-        row.from = parts[i + 1];
-        out.set(parts[i + 2], row);
-        i += 2;
-      } else out.set(m[3], row);
+  const groups = new Map([[-1, { dir: root, key: "", ref, rels: repos.length ? [] : paths }]]);
+  // a declared repo's paths are asked of its own git against its own ref (heads[prefix], else
+  // HEAD) and come back under their prefix: one process per repo named
+  for (const p of repos.length ? paths : []) {
+    const at = repoPath(root, p, repos);
+    if (!groups.has(at.index)) groups.set(at.index, { dir: at.repoRoot, key: `${at.prefix}/`, ref: heads?.[at.prefix] ?? "HEAD", rels: [] });
+    groups.get(at.index).rels.push(at.rel);
+  }
+  for (const g of groups.values()) {
+    // no path asks git about the whole tree: right for a call that named none, wrong for the
+    // main group when every named path is in a declared repo
+    if (paths.length && !g.rels.length) continue;
+    try {
+      const raw = git(g.dir, ["diff", "--numstat", "-z", "-M", ...(ignoreWhitespace ? ["-w"] : []), g.ref, "--", ...g.rels]);
+      const parts = raw.split("\0");
+      for (let i = 0; i < parts.length; i++) {
+        const m = /^(\S+)\t(\S+)\t(.*)$/.exec(parts[i]);
+        if (!m) continue;
+        const binary = m[1] === "-" || m[2] === "-";
+        const row = { added: binary ? 0 : Number(m[1]), deleted: binary ? 0 : Number(m[2]), binary, from: null };
+        if (m[3] === "") {
+          // rename: the path field is empty and the next two parts are old and new path
+          row.from = `${g.key}${parts[i + 1]}`;
+          out.set(`${g.key}${parts[i + 2]}`, row);
+          i += 2;
+        } else out.set(`${g.key}${m[3]}`, row);
+      }
+    } catch {
+      // no HEAD (fresh repo) or not a git repo: callers fall back to line-count deltas
     }
-  } catch {
-    // no HEAD (fresh repo) or not a git repo: callers fall back to line-count deltas
   }
   return out;
 }
 
-// The copy `gate open` kept of a file already modified then (base/<rel>.base, a name no
-// test or lint glob picks up), or null: baseline.based does not list it or the copy is gone.
-export function baseCopy(dir, baseline, rel) {
+// Where the copy of a file already modified at open is kept: base/<rel>.base (a name no test
+// or lint glob picks up), a declared repo's file under base/@<its index>/.
+export function baseCopyPath(dir, rel, repos = []) {
+  const at = repoPath(null, rel, repos);
+  return path.join(dir, "base", ...(at.index < 0 ? [] : [`@${at.index}`]), `${at.rel}.base`);
+}
+
+// The copy `gate open` kept of a file already modified then, or null: baseline.based does
+// not list it or the copy is gone.
+export function baseCopy(dir, baseline, rel, repos = []) {
   if (!dir || !baseline?.based?.includes(rel)) return null;
-  const copy = path.join(dir, "base", `${rel}.base`);
+  const copy = baseCopyPath(dir, rel, repos);
   return existsSync(copy) ? copy : null;
 }
 
@@ -151,19 +201,29 @@ function gitNoIndex(root, args) {
 
 // Lines added plus deleted between a base copy and the file now. --no-index prints its row
 // in rename form (copy => file), so only the two counts are read; no row is no difference.
-export function copyNumstat(root, copy, rel, { ignoreWhitespace = false } = {}) {
-  const m = /^(\d+)\t(\d+)\t/.exec(gitNoIndex(root, ["--numstat", ...(ignoreWhitespace ? ["-w"] : []), "--", copy, path.join(root, rel)]));
+export function copyNumstat(root, copy, rel, { ignoreWhitespace = false, repos = [] } = {}) {
+  const at = repoPath(root, rel, repos);
+  const m = /^(\d+)\t(\d+)\t/.exec(gitNoIndex(at.repoRoot, ["--numstat", ...(ignoreWhitespace ? ["-w"] : []), "--", copy, path.join(at.repoRoot, at.rel)]));
   return m ? Number(m[1]) + Number(m[2]) : 0;
 }
 
 // {hash, files: {rel: {h, s, m, l}}, rehashed}. Content-hashed; size+mtime only decide
 // whether a previous snapshot's hash can be reused, so a touch never counts as a change.
 // `l` is the line count, kept so the tier can be estimated without a second read.
-export function snapshot(root, previous = null) {
+export function snapshot(root, previous = null, repos = []) {
   const files = {};
+  let rehashed = addFiles(files, root, "", previous);
+  // a declared repo's files sit under its prefix, each repo listed once; a directory that is gone adds nothing
+  for (const repo of repos) rehashed += addFiles(files, repo.root, `${repo.prefix}/`, previous);
+  return { hash: treeHash(files), files, rehashed, at: new Date().toISOString() };
+}
+
+function addFiles(files, dir, key, previous) {
+  if (key && !existsSync(dir)) return 0;
   let rehashed = 0;
-  for (const rel of listFiles(root)) {
-    const abs = path.join(root, rel);
+  for (const name of listFiles(dir)) {
+    const rel = `${key}${name}`;
+    const abs = path.join(dir, name);
     let st;
     try {
       st = statSync(abs);
@@ -179,7 +239,50 @@ export function snapshot(root, previous = null) {
     files[rel] = { h: sha1(buf), s: st.size, m: st.mtimeMs, l: countLines(buf) };
     rehashed += 1;
   }
-  return { hash: treeHash(files), files, rehashed, at: new Date().toISOString() };
+  return rehashed;
+}
+
+// A tree with the declared repos' files added as they are now: what a repo declared at
+// `gate open` starts from.
+export function withRepos(tree, repos) {
+  if (!repos.length) return tree;
+  const files = { ...tree.files };
+  for (const repo of repos) addFiles(files, repo.root, `${repo.prefix}/`, null);
+  return { hash: treeHash(files), files };
+}
+
+// A tree without the files of the given repos: session state holds main-root keys only.
+export function withoutRepos(tree, repos = []) {
+  if (!repos.length) return { files: tree.files, hash: tree.hash };
+  const files = {};
+  for (const rel of Object.keys(tree.files)) if (repoPath(null, rel, repos).index < 0) files[rel] = tree.files[rel];
+  return { files, hash: treeHash(files) };
+}
+
+// A baseline with one repo's files as its HEAD has them: a tracked file that differs gets a placeholder
+// (h "HEAD", its HEAD line count), an untracked one only a place in untrackedAtHead. Throws when git cannot compare.
+export function withRepoAtHead(baseline, repo, now) {
+  const key = `${repo.prefix}/`;
+  // with no commit yet nothing was there before the run: staged or not, every file counts whole
+  const head = gitHead(repo.root);
+  const tracked = head ? gitTracked(repo.root) : new Set();
+  const dirty = new Map();
+  if (head) {
+    for (const part of git(repo.root, ["diff", "--numstat", "-z", "--no-renames", "HEAD"]).split("\0")) {
+      const m = /^(\S+)\t(\S+)\t(.+)$/.exec(part);
+      // a path no snapshot lists would stay "deleted" for the whole run
+      if (m && !skip(m[3])) dirty.set(m[3], m[1] === "-" ? null : Number(m[2]) - Number(m[1]));
+    }
+  }
+  const files = { ...baseline.files };
+  for (const [rel, delta] of dirty) files[`${key}${rel}`] = { h: "HEAD", s: -1, m: 0, l: delta === null ? null : (now.files[`${key}${rel}`]?.l ?? 0) + delta };
+  const untracked = [];
+  for (const rel of Object.keys(now.files)) {
+    if (!rel.startsWith(key) || dirty.has(rel.slice(key.length))) continue;
+    if (tracked.has(rel.slice(key.length))) files[rel] = now.files[rel];
+    else untracked.push(rel);
+  }
+  return { ...baseline, files, hash: treeHash(files), untrackedAtHead: [...(baseline.untrackedAtHead ?? []), ...untracked] };
 }
 
 function treeHash(files) {
@@ -317,19 +420,22 @@ export function sliceDiff(text, ranges) {
 }
 
 // The raw unified diff of one changed file: against its base copy (headed with the repo path),
-// else git's against ref for a tracked file, else a synthetic all-added block.
-export function fileDiff(root, ref, rel, tracked, { base = null, ignoreWhitespace = false } = {}) {
-  const abs = path.join(root, rel);
+// else git's against ref (heads[prefix] in a declared repo), else a synthetic all-added block.
+export function fileDiff(root, ref, rel, tracked, { base = null, ignoreWhitespace = false, repos = [], heads = {} } = {}) {
+  const at = repoPath(root, rel, repos);
+  const abs = path.join(at.repoRoot, at.rel);
   const w = ignoreWhitespace ? ["-w"] : [];
   if (base) {
     if (!existsSync(abs)) return "";
-    const lines = gitNoIndex(root, [...w, "--", base, abs]).trim().split("\n");
+    const lines = gitNoIndex(at.repoRoot, [...w, "--", base, abs]).trim().split("\n");
     const first = lines.findIndex((l) => l.startsWith("@@"));
     return first < 0 ? "" : [`diff --git a/${rel} b/${rel}`, `--- a/${rel}`, `+++ b/${rel}`, ...lines.slice(first)].join("\n");
   }
   if (tracked) {
     try {
-      const text = git(root, ["diff", ...w, ref, "--", rel]).trim();
+      const text = at.index < 0
+        ? git(root, ["diff", ...w, ref, "--", rel]).trim()
+        : git(at.repoRoot, ["diff", ...w, `--src-prefix=a/${at.prefix}/`, `--dst-prefix=b/${at.prefix}/`, heads?.[at.prefix] ?? "HEAD", "--", at.rel]).trim();
       if (text || ignoreWhitespace) return text;
     } catch {
       // no ref or not a repo: fall through to the synthetic block

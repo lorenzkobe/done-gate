@@ -20,6 +20,7 @@ const VERBS = {
   stop: { hook: true, load: () => import("./lib/stop.mjs") },
   open: { hook: false, load: () => import("./lib/ledger.mjs") },
   attach: { hook: false, load: () => import("./lib/ledger.mjs") },
+  repo: { hook: false, load: () => import("./lib/ledger.mjs") },
   note: { hook: false, load: () => import("./lib/verbs.mjs") },
   case: { hook: false, load: () => import("./lib/verbs.mjs") },
   step: { hook: false, load: () => import("./lib/verbs.mjs") },

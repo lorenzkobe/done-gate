@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync, appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig } from "./config.mjs";
+import { loadConfig, repoConfig } from "./config.mjs";
 import { nextSeq } from "./events.mjs";
-import { ensureSession, loadSession, updateSession } from "./session-state.mjs";
-import { gitHead, gitNumstat, gitTracked, taskBaseline } from "./tree.mjs";
+import { repoPath } from "./paths.mjs";
+import { ensureSession, loadSession, saveSession, updateSession } from "./session-state.mjs";
+import { baseCopyPath, diffSnapshots, gitHead, gitNumstat, gitTop, gitTracked, snapshot, taskBaseline, withRepoAtHead, withRepos, withoutRepos } from "./tree.mjs";
 import { emptyTier } from "./size.mjs";
 // size.mjs imports assess.mjs, which imports this module: loadPolicy is only ever called at
 // verb time, never at module top level, or the cycle would hit a TDZ error.
@@ -93,22 +94,25 @@ function ensureGitignore(root) {
 const BASED_MAX_FILES = 200;
 const BASED_MAX_BYTES = 1024 * 1024;
 
-// Copies each source file already modified or untracked at open to <run>/base/<rel>.base, so its
-// diff starts at open; only text whose content is what the task baseline holds qualifies.
-function copyBases(root, dir, start, dirty, config) {
-  if (!gitHead(root)) return [];
-  const tracked = gitTracked(root);
+// Copies each source file already modified or untracked at open to its base copy in the run
+// dir, so its diff starts at open; only text whose content is what the task baseline holds qualifies.
+function copyBases(root, dir, start, dirty, config, repos, head, heads) {
+  if (!head && !repos.length) return [];
+  const tracked = gitTracked(root, repos);
   const untracked = Object.keys(start.files).filter((rel) => !tracked.has(rel)).sort();
   const based = [];
   for (const rel of [...dirty, ...untracked]) {
     if (based.length === BASED_MAX_FILES) break;
     const entry = start.files[rel];
     if (!entry || entry.l === null || entry.s > BASED_MAX_BYTES || !config.isSource(rel)) continue;
-    const abs = path.join(root, rel);
+    const at = repoPath(root, rel, repos);
+    // in a root with no commit every file is untracked: nothing there is copied
+    if (!(at.index < 0 ? head : heads[at.prefix])) continue;
+    const abs = path.join(at.repoRoot, at.rel);
     if (!existsSync(abs) || statSync(abs).size !== entry.s) continue;
     const buf = readFileSync(abs);
     if (createHash("sha1").update(buf).digest("hex") !== entry.h) continue;
-    const copy = path.join(dir, "base", `${rel}.base`);
+    const copy = baseCopyPath(dir, rel, repos);
     mkdirSync(path.dirname(copy), { recursive: true });
     writeFileSync(copy, buf);
     based.push(rel);
@@ -150,12 +154,91 @@ export function attachLedger(ctx, slug) {
   return { dir, ledger };
 }
 
-export function openLedger(ctx, slug, playbook) {
+// One directory is one repo whatever its spelling: symlinks resolved, and the letter case the
+// volume stores (plain realpathSync keeps the case it was given on macOS).
+const realDir = realpathSync.native;
+
+// The real path of a directory named as a further repo; a relative one is read from the main
+// root, as --files paths are.
+function repoDir(ctx, given) {
+  const abs = path.resolve(ctx.root, given);
+  if (!existsSync(abs)) throw new UsageError(`repo ${given}: no such directory (${abs})`);
+  if (!statSync(abs).isDirectory()) throw new UsageError(`repo ${given}: not a directory`);
+  return realDir(abs);
+}
+
+const within = (outer, inner) => inner.startsWith(`${outer}${path.sep}`);
+
+// A further repo is a git work tree root of its own, apart from the main root and from every
+// repo the run already declared. gateHash is its config as declared, for R13.
+function declarable(ctx, given, declared) {
+  const dir = repoDir(ctx, given);
+  const main = realDir(ctx.root);
+  if (dir === main || within(main, dir)) throw new UsageError(`repo ${given}: it is inside this repo, whose files are part of the run already`);
+  if (within(dir, main)) throw new UsageError(`repo ${given}: it contains this repo`);
+  const top = gitTop(dir);
+  if (!top || realDir(top) !== dir) throw new UsageError(`repo ${given}: not the root of a git work tree${top ? ` (that is ${top})` : ""}`);
+  for (const r of declared) {
+    if (r.root === dir) throw new UsageError(`repo ${given}: already declared as ${r.prefix}`);
+    if (within(r.root, dir) || within(dir, r.root)) throw new UsageError(`repo ${given}: it ${within(r.root, dir) ? "is inside" : "contains"} the declared repo ${r.prefix}`);
+  }
+  let gateHash;
+  try {
+    gateHash = repoConfig(dir).hash;
+  } catch (error) {
+    throw new UsageError(`repo ${given}: ${error.message}`);
+  }
+  return { prefix: path.relative(main, dir).split(path.sep).join("/"), root: dir, gateHash };
+}
+
+// A repo declared on a run already open is measured from its HEAD: the run may have edited
+// there while its edit events were still dropped, so every uncommitted change counts as the run's.
+function declareLate(ctx, dir, ledger, declared) {
+  const repo = { ...declared, fromHead: true };
+  const repos = [...(ledger.repos ?? []), repo];
+  const config = loadConfig(ctx.root, repos);
+  const session = loadSession(ctx.stateDir, ctx.session);
+  const now = snapshot(ctx.root, session?.lastTree ?? ledger.baseline, repos);
+  // a source change not stamped yet keeps its own stamp: the hash moves only from a settled state
+  const settled = implementationHash(withoutRepos(now, [repo]), config) === ledger.lastSourceHash;
+  let baseline;
+  try {
+    baseline = withRepoAtHead(ledger.baseline, repo, now);
+  } catch (error) {
+    throw new UsageError(`repo ${repo.prefix}: git could not compare it with its HEAD, so it is not declared (${String(error.message).split("\n")[0]})`);
+  }
+  ledger.repos = repos;
+  ledger.baseline = baseline;
+  ledger.baseline.heads = { ...ledger.baseline.heads, [repo.prefix]: gitHead(repo.root) };
+  if (settled) {
+    ledger.lastSourceHash = implementationHash(now, config);
+    const key = `${repo.prefix}/`;
+    // what the repo already holds dates from now: a review or verify from before never saw it
+    if (diffSnapshots(ledger.baseline, now).changed.some((p) => p.startsWith(key) && config.isSource(p) && !config.isTest(p))) ledger.lastSourceChangeSeq = nextSeq();
+  }
+  saveLedger(dir, ledger);
+  if (session) saveSession(ctx.stateDir, { ...session, lastTree: { files: now.files, hash: now.hash } });
+  return repo;
+}
+
+export function openLedger(ctx, slug, playbook, repoPaths = []) {
   const existing = findRun(ctx.stateDir, slug);
-  if (existing) return attachLedger(ctx, slug);
+  if (existing) {
+    // attaching again with the same command is not an error: a repo the run has is left as it
+    // is. Every path is checked before the session attaches, so a refusal changes nothing.
+    const declared = existing.ledger.repos ?? [];
+    const has = (given) => declared.some((r) => r.root === repoDir(ctx, given));
+    const fresh = [];
+    for (const given of repoPaths) if (!has(given)) fresh.push(declarable(ctx, given, [...declared, ...fresh]));
+    const found = attachLedger(ctx, slug);
+    for (const repo of fresh) declareLate(ctx, found.dir, found.ledger, repo);
+    return found;
+  }
   if (!PLAYBOOKS.includes(playbook)) throw new UsageError(`unknown playbook "${playbook}" (have: ${PLAYBOOKS.join(", ")})`);
+  const repos = [];
+  for (const given of repoPaths) repos.push(declarable(ctx, given, repos));
   const session = ensureSession(ctx.stateDir, ctx.root, ctx.session);
-  const config = loadConfig(ctx.root);
+  const config = loadConfig(ctx.root, repos);
   const policy = loadPolicy();
   // a closed or abandoned run with the same slug on the same day keeps its folder; the new
   // run takes the next free name
@@ -164,8 +247,11 @@ export function openLedger(ctx, slug, playbook) {
   for (let i = 2; existsSync(path.join(runsDir(ctx.stateDir), name)); i++) name = `${base}-${i}`;
   const dir = path.join(runsDir(ctx.stateDir), name);
   mkdirSync(dir, { recursive: true });
-  const dirty = [...gitNumstat(ctx.root).keys()];
-  const start = taskBaseline(ctx.root, session.baseline, dirty);
+  const head = gitHead(ctx.root);
+  const heads = Object.fromEntries(repos.map((r) => [r.prefix, gitHead(r.root)]));
+  const dirty = [...gitNumstat(ctx.root).keys(), ...repos.flatMap((r) => [...gitNumstat(r.root).keys()].map((rel) => `${r.prefix}/${rel}`))];
+  // a repo declared here starts as it is now: what it held before the run is not the run's
+  const start = withRepos(taskBaseline(ctx.root, session.baseline, dirty), repos);
   const ledger = {
     slug: slugify(slug),
     playbook,
@@ -175,6 +261,7 @@ export function openLedger(ctx, slug, playbook) {
     openedSeq: nextSeq(),
     closedAt: null,
     sessions: [ctx.session],
+    ...(repos.length ? { repos } : {}),
     gateHash: config.hash,
     policyHash: policy.hash,
     // pinned: a plugin upgrade mid-task changes nothing for this ledger
@@ -184,7 +271,7 @@ export function openLedger(ctx, slug, playbook) {
     lastSourceChangeSeq: 0,
     // files already dirty vs HEAD now cannot be measured by git against HEAD later: the ones
     // in based are diffed against their copy from open, the rest get a line-count estimate
-    baseline: { hash: start.hash, files: start.files, seq: session.baselineSeq, head: gitHead(ctx.root), dirty, based: copyBases(ctx.root, dir, start, dirty, config) },
+    baseline: { hash: start.hash, files: start.files, seq: session.baselineSeq, head, ...(repos.length ? { heads } : {}), dirty, based: copyBases(ctx.root, dir, start, dirty, config, repos, head, heads) },
     tier: ["feature", "bugfix", "refactor"].includes(playbook) ? emptyTier() : null,
     planSeq: null,
     taskSeq: null,
@@ -200,7 +287,9 @@ export function openLedger(ctx, slug, playbook) {
     template().replace("{{slug}}", ledger.slug).replace("{{playbook}}", playbook).replace("{{opened}}", ledger.openedAt),
   );
   ensureGitignore(ctx.root);
-  updateSession(ctx.stateDir, ctx.session, { current: name });
+  // the hook's snapshot reuses hashes from lastTree: without the repos' entries there it would
+  // read every file of a declared repo on each tool call until the first gate verb
+  updateSession(ctx.stateDir, ctx.session, { current: name, ...(repos.length ? { lastTree: { files: start.files, hash: start.hash } } : {}) });
   return { dir, ledger };
 }
 
@@ -229,13 +318,22 @@ function printStepLines(ctx, steps) {
   for (const s of steps) ctx.out(`${String(s.n).padStart(2)}. [${s.state ?? "    "}] ${s.text}${s.key ? `  {${s.key}}` : ""}`);
 }
 
+function printRepo(ctx, repo) {
+  ctx.out(`repo: ${repo.prefix} (${repo.root}) · ${repo.fromHead ? "measured from its HEAD: every uncommitted change and untracked file there counts as this run's" : "measured from when the run opened"}`);
+}
+
 // `open` and `attach` show only the keyed steps (the ones with script or agent evidence);
 // `gate steps` shows all of them.
 function printOpen(ctx, dir, ledger) {
   ctx.out(`ledger: ${dir}`);
-  const config = loadConfig(ctx.root);
+  for (const repo of ledger.repos ?? []) printRepo(ctx, repo);
+  const config = loadConfig(ctx.root, ledger.repos);
   const cmds = config.verify.map((v) => v.cmd);
   ctx.out(`verify: ${cmds.length ? `${cmds.join(" · ")} (${config.verifySource})` : "none — add verify commands to .claude/gate.json"}`);
+  for (const repo of config.repos ?? []) {
+    const own = repo.config.verify.map((v) => v.cmd);
+    ctx.out(`verify in ${repo.prefix}: ${own.length ? `${own.join(" · ")} (its ${repo.config.verifySource})` : "none"}`);
+  }
   if (ledger.verifyAdded?.length) ctx.out(`verify added by this run: ${ledger.verifyAdded.join(" · ")}`);
   printStepLines(ctx, ledger.steps.filter((s) => s.key));
   printNext(ctx);
@@ -243,10 +341,28 @@ function printOpen(ctx, dir, ledger) {
 
 export const verbs = {
   open(ctx) {
-    const [slug, playbook] = ctx.args;
-    if (!slug) throw new UsageError("usage: gate open <slug> <feature|bugfix|refactor|plan|investigation>");
-    const { dir, ledger } = openLedger(ctx, slug, playbook ?? "feature");
+    const rest = [];
+    const repos = [];
+    for (let i = 0; i < ctx.args.length; i++) {
+      const arg = ctx.args[i];
+      const named = arg.startsWith("--repo=") ? arg.slice(7) : arg === "--repo" ? ctx.args[++i] : null;
+      if (named) repos.push(named);
+      else if (arg === "--repo" || arg.startsWith("--repo=")) throw new UsageError("--repo needs a path: gate open <slug> <playbook> --repo ../other");
+      // an ignored flag would open the run without what it asked for
+      else if (arg.startsWith("--")) throw new UsageError(`gate open: unknown option ${arg} (have: --repo <path>)`);
+      else rest.push(arg);
+    }
+    const [slug, playbook] = rest;
+    if (!slug) throw new UsageError("usage: gate open <slug> <feature|bugfix|refactor|plan|investigation> [--repo <path>]");
+    const { dir, ledger } = openLedger(ctx, slug, playbook ?? "feature", repos);
     printOpen(ctx, dir, ledger);
+  },
+  repo(ctx) {
+    const [action, given] = ctx.args;
+    if (action !== "add" || !given) throw new UsageError("usage: gate repo add <path>");
+    const current = currentLedger(ctx.stateDir, ctx.session);
+    if (!current || isDone(current.ledger)) throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
+    printRepo(ctx, declareLate(ctx, current.dir, current.ledger, declarable(ctx, given, current.ledger.repos ?? [])));
   },
   attach(ctx) {
     const [slug] = ctx.args;

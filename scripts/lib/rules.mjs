@@ -5,7 +5,7 @@ import path from "node:path";
 import { effectiveTier, leadDelegates, policyFor, requires } from "./size.mjs";
 import { baseCopy, changedUnits, fileDiff, gitTracked, hasReindent, indentMatters, sliceEnd } from "./tree.mjs";
 import { scanDiff } from "./slop.mjs";
-import { toPosixRel } from "./paths.mjs";
+import { repoPath, toPosixRel } from "./paths.mjs";
 
 const SLOP_SHOWN = 12;
 
@@ -170,16 +170,17 @@ export function contextPart(text, name) {
   return m ? m[1].replace(/[\s·|]+$/, "").trim() : null;
 }
 
-// Every file:line pointer in a text, with whether it names a file inside root: a pointer
-// that walks out of the repo (`../x.ts:1`) or names a directory does not resolve.
-export function tracedPointers(text, root) {
+// Every file:line pointer in a text, with whether it names a file inside root or a declared
+// repo: a pointer that walks out of them (`../x.ts:1`) or names a directory does not resolve.
+export function tracedPointers(text, root, repos = []) {
   const out = [];
   for (const m of String(text ?? "").matchAll(POINTER)) {
-    const abs = path.resolve(root, m[1]);
-    const inside = !path.relative(root, abs).startsWith("..") && !path.isAbsolute(path.relative(root, abs));
+    const rel = toPosixRel(root, m[1], repos);
+    // a declared repo's stored root is its real path, which the prefix may reach through a symlink
+    const at = rel === null ? null : repoPath(root, rel, repos);
     let exists = false;
     try {
-      exists = inside && statSync(abs).isFile();
+      exists = at !== null && statSync(path.join(at.repoRoot, at.rel)).isFile();
     } catch {
       exists = false;
     }
@@ -215,6 +216,9 @@ export function pointerResolver(state) {
     if (!named) return false;
     const file = named.startsWith("~/") ? path.join(homedir(), named.slice(2)) : named;
     const candidates = path.isAbsolute(file) ? [file] : [state.dir, state.root].filter(Boolean).map((base) => path.join(base, file));
+    // a declared repo's stored root is its real path, which the prefix may reach through a symlink
+    const at = repoPath(state.root, file, state.repos ?? []);
+    if (at.index >= 0) candidates.push(path.join(at.repoRoot, at.rel));
     return candidates.some((full) => {
       try {
         return statSync(full).isFile();
@@ -317,8 +321,9 @@ export function parseEntry(entry) {
 export const pathOf = (entry) => parseEntry(entry).path;
 
 function taskDiff(state, rel, { ignoreWhitespace = false } = {}) {
-  const tracked = (state.tracked ??= gitTracked(state.root)).has(rel);
-  return fileDiff(state.root, state.baseline?.head ?? "HEAD", rel, tracked, { base: baseCopy(state.dir, state.baseline, rel), ignoreWhitespace });
+  const repos = state.repos ?? [];
+  const tracked = (state.tracked ??= gitTracked(state.root, repos)).has(rel);
+  return fileDiff(state.root, state.baseline?.head ?? "HEAD", rel, tracked, { base: baseCopy(state.dir, state.baseline, rel, repos), ignoreWhitespace, repos, heads: state.baseline?.heads });
 }
 
 // One file's diff for this task (from open, for a file with a base copy), read once per
@@ -496,6 +501,10 @@ function processAlive(pid) {
   }
 }
 
+// A verify command's identity: the same text in a declared repo is another command.
+export const verifyKey = (c) => (c.repo ? `${c.repo}\n${c.cmd}` : c.cmd);
+export const verifyWhere = (c) => (c.repo ? ` (in ${c.repo})` : "");
+
 // A verify.started.json with no verify.json after it: the run is still going (its process
 // is alive) or the shell died under it. Null once verify.json landed.
 export function unfinishedVerify(state) {
@@ -574,7 +583,7 @@ export function evaluate(state) {
       if (red.length) {
         unmet.push({
           rule: "R3",
-          text: `verify is red: ${red.map((c) => `\`${c.cmd}\` ${c.timedOut ? "timed out" : `exit ${c.exit}`}`).join("; ")}. Fix, then run \`gate verify\` again.`,
+          text: `verify is red: ${red.map((c) => `\`${c.cmd}\`${verifyWhere(c)} ${c.timedOut ? "timed out" : `exit ${c.exit}`}`).join("; ")}. Fix, then run \`gate verify\` again.`,
         });
       } else if (verify.sourceHash !== sourceHash(now, config)) {
         unmet.push({ rule: "R3", text: "verify.json is stale: source changed after the last `gate verify`. Run it again." });
@@ -582,7 +591,7 @@ export function evaluate(state) {
     }
   }
   // a command the run added is owed a result, whether or not source changed
-  const ran = new Set((verify?.commands ?? []).map((c) => c.cmd));
+  const ran = new Set((verify?.commands ?? []).map(verifyKey));
   const pending = (ledger.verifyAdded ?? []).filter((cmd) => !ran.has(cmd));
   if (pending.length && !unmet.some((u) => u.rule === "R3")) {
     unmet.push({ rule: "R3", text: `added verify command ${pending.map((c) => `\`${c}\``).join(", ")} has not run: \`gate verify\`` });
@@ -649,6 +658,13 @@ export function evaluate(state) {
   // R13: the gate's own config changed mid-task (a ledger from before hashed the file text)
   if (ledger.gateHash && ![config.hash, config.legacyHash].includes(ledger.gateHash) && !waived(ledger, "gate-config")) {
     unmet.push({ rule: "R13", text: ".claude/gate.json changed since this ledger opened. Restore it, or get the user's waiver (`gate waive gate-config \"<reason>\"`)." });
+  }
+  for (const repo of config.repos ?? []) {
+    if (repo.missing) {
+      unmet.push({ rule: "R13", text: `the declared repo ${repo.prefix} is gone (${repo.root} is no directory): its files read as deleted. Restore the directory, or give the run up with \`gate abandon ${ledger.slug} "<reason>"\`; no waiver clears this.` });
+    } else if (repo.config.hash !== repo.gateHash && !waived(ledger, "gate-config")) {
+      unmet.push({ rule: "R13", text: `.claude/gate.json or the verify commands of the declared repo ${repo.prefix} changed since it was declared. Restore them, or get the user's waiver (\`gate waive gate-config "<reason>"\`).` });
+    }
   }
   // a ledger with a pinned policy is judged by it; only one from before pinning can go stale
   if (!ledger.policy && ledger.policyHash && state.policy?.hash && state.policy.hash !== ledger.policyHash && !waived(ledger, "gate-config")) {

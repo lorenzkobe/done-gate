@@ -27,10 +27,10 @@ function base(input) {
   };
 }
 
-function editPaths(input, root) {
+function editPaths(input, root, repos) {
   const ti = input.tool_input ?? {};
   const raw = input.tool_name === "MultiEdit" ? (ti.edits ?? []).map((e) => e?.file_path) : [ti.file_path ?? ti.notebook_path];
-  return raw.map((p) => toPosixRel(root, p)).filter((p) => p !== null && p !== "");
+  return raw.map((p) => toPosixRel(root, p, repos)).filter((p) => p !== null && p !== "");
 }
 
 function exitOf(response) {
@@ -41,7 +41,7 @@ function exitOf(response) {
 }
 
 // One hook payload → zero or more event records. Never throws on odd input.
-export function eventsFromHookInput(input, root) {
+export function eventsFromHookInput(input, root, repos = []) {
   if (!input || typeof input !== "object" || input.__unparseable) return [];
   const event = input.hook_event_name;
   const b = () => base(input);
@@ -63,7 +63,7 @@ export function eventsFromHookInput(input, root) {
 
   const tool = input.tool_name ?? "";
   if (EDIT_TOOLS.has(tool)) {
-    return editPaths(input, root).map((p) => ({ ...b(), kind: "edit", tool, path: p }));
+    return editPaths(input, root, repos).map((p) => ({ ...b(), kind: "edit", tool, path: p }));
   }
   if (tool === "Bash") {
     // a background run reports at launch, before it can fail, so its exit is never known
@@ -134,7 +134,7 @@ const WRITING_TOOLS = new Set([...EDIT_TOOLS, "Bash"]);
 
 export const verbs = {
   async log(ctx) {
-    const events = eventsFromHookInput(ctx.input, ctx.root);
+    const events = eventsFromHookInput(ctx.input, ctx.root, () => ctx.repos);
     appendEvents(ctx.stateDir, ctx.session, events);
     // Right after a tool that can change files, record whether the implementation moved,
     // so the freshness clock for R4/R5 points at the tool call that made the change.

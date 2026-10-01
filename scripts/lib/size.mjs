@@ -6,6 +6,7 @@ import { nextSeq } from "./events.mjs";
 import { baseCopy, copyNumstat, gitNumstat, gitTracked, indentMatters } from "./tree.mjs";
 import { buildState } from "./assess.mjs";
 import { UsageError } from "./context.mjs";
+import { repoPath } from "./paths.mjs";
 import { printNext } from "./next.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -211,26 +212,31 @@ export function predictTier(policy, config, paths) {
 
 // Exact for tracked files clean at open (git) and files with a base copy; anything else is a
 // line-count delta flagged as an estimate. Whitespace-only lines count only where indentation is meaning.
-export function measure({ config, policy, diff, baseline, now, root, dir = null, quick = false }) {
+export function measure({ config, policy, diff, baseline, now, root, dir = null, quick = false, repos = [] }) {
   const paths = sized(config, diff.changed);
   const dirty = new Set(baseline?.dirty ?? []);
   // quick is the edit hook's shape: one git process, no ls-files, no base copy read
-  const copies = new Map(quick ? [] : paths.map((p) => [p, baseCopy(dir, baseline, p)]).filter(([, copy]) => copy));
-  const tracked = quick ? null : gitTracked(root);
+  const copies = new Map(quick ? [] : paths.map((p) => [p, baseCopy(dir, baseline, p, repos)]).filter(([, copy]) => copy));
+  const tracked = quick ? null : gitTracked(root, repos);
   const exact = paths.filter((p) => !dirty.has(p) && !copies.has(p) && (quick || tracked.has(p) || diff.deleted.includes(p)));
   const indented = quick ? [] : exact.filter(indentMatters);
   const plain = quick ? exact : exact.filter((p) => !indentMatters(p));
   const ref = baseline?.head ?? "HEAD";
+  const heads = baseline?.heads;
   const numstat = new Map([
-    ...(plain.length ? gitNumstat(root, plain, ref, { ignoreWhitespace: true }) : []),
-    ...(indented.length ? gitNumstat(root, indented, ref) : []),
+    ...(plain.length ? gitNumstat(root, plain, ref, { ignoreWhitespace: true, repos, heads }) : []),
+    ...(indented.length ? gitNumstat(root, indented, ref, { repos, heads }) : []),
   ]);
+  const headOf = (p) => {
+    const at = repoPath(root, p, repos);
+    return at.index < 0 ? baseline?.head : heads?.[at.prefix];
+  };
   const renamedAway = new Set([...numstat.values()].map((r) => r.from).filter(Boolean));
   const details = [];
   for (const p of paths) {
     if (copies.has(p)) {
       // deleted after open: every line of the copy went
-      const lines = diff.deleted.includes(p) ? (baseline.files[p]?.l ?? 0) : copyNumstat(root, copies.get(p), p, { ignoreWhitespace: !indentMatters(p) });
+      const lines = diff.deleted.includes(p) ? (baseline.files[p]?.l ?? 0) : copyNumstat(root, copies.get(p), p, { ignoreWhitespace: !indentMatters(p), repos });
       details.push({ path: p, lines, source: "copy", estimate: false });
       continue;
     }
@@ -245,7 +251,7 @@ export function measure({ config, policy, diff, baseline, now, root, dir = null,
       continue;
     }
     // git was asked about this file and, whitespace ignored, found nothing changed
-    if (!row && !quick && baseline?.head && tracked.has(p) && !dirty.has(p) && !indentMatters(p)) {
+    if (!row && !quick && headOf(p) && tracked.has(p) && !dirty.has(p) && !indentMatters(p)) {
       details.push({ path: p, lines: 0, source: "git", estimate: false });
       continue;
     }

@@ -7,7 +7,7 @@ import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
 import { readEvents } from "./events.mjs";
 import { effectiveTier, policyFor, renderTierBlock, requires, tiered, tierOf } from "./size.mjs";
-import { clickStale, drivenAfter, driverCommand, isRole, lastEditSeq, hasContextStep, lateOrder, tracedPointers } from "./rules.mjs";
+import { clickStale, drivenAfter, driverCommand, isRole, lastEditSeq, hasContextStep, lateOrder, tracedPointers, verifyWhere } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 
 function tailLines(file, n) {
@@ -50,10 +50,10 @@ export function verifyLines(verify, { tails = true, unfinished = null } = {}) {
   const out = [];
   for (const c of verify.commands) {
     if (c.skipped) {
-      out.push(`- – \`${c.cmd}\` — skipped: ${c.skipped}`);
+      out.push(`- – \`${c.cmd}\`${verifyWhere(c)} — skipped: ${c.skipped}`);
       continue;
     }
-    out.push(`- ${c.exit === 0 && !c.timedOut ? "✓" : "✗"} \`${c.cmd}\` — ${c.timedOut ? "timed out" : `exit ${c.exit}`}, ${(c.ms / 1000).toFixed(1)}s`);
+    out.push(`- ${c.exit === 0 && !c.timedOut ? "✓" : "✗"} \`${c.cmd}\`${verifyWhere(c)} — ${c.timedOut ? "timed out" : `exit ${c.exit}`}, ${(c.ms / 1000).toFixed(1)}s`);
     if (tails && (c.exit !== 0 || c.timedOut)) out.push(`\n\`\`\`\n${c.tail.split("\n").slice(-12).join("\n")}\n\`\`\``);
   }
   return out;
@@ -141,6 +141,7 @@ export function renderReport(state, unmet) {
 
   const after = lastEditSeq(state, config, ledger);
   out.push(`\n${summaryLine(ledger, events, unmet, after)}`);
+  if (ledger.repos?.length) out.push(`\nFurther repos in this run: ${ledger.repos.map((r) => r.prefix).join(", ")}`);
 
   out.push(`\n## Task\n\n${section(md, "Task") || "_not written_"}`);
   out.push(`\n## Plan\n\n${section(md, "Plan") || "_not written_"}`);
@@ -231,8 +232,9 @@ function checksLine(verify) {
   const bad = [];
   const skipped = [];
   for (const c of verify.commands) {
-    if (c.skipped) skipped.push(plainCommand(c.cmd));
-    else (c.exit === 0 && !c.timedOut ? ok : bad).push(plainCommand(c.cmd));
+    const name = `${plainCommand(c.cmd)}${verifyWhere(c)}`;
+    if (c.skipped) skipped.push(name);
+    else (c.exit === 0 && !c.timedOut ? ok : bad).push(name);
   }
   const parts = [];
   if (ok.length) parts.push(`${ok.join(", ")} green`);
@@ -283,7 +285,7 @@ const PLAIN_RULES = {
 function contextSummary(state) {
   const ctx = section(ledgerMd(state.dir), "Context");
   if (!ctx || !hasContextStep(state.ledger)) return "";
-  const pointers = tracedPointers(ctx, state.root).length;
+  const pointers = tracedPointers(ctx, state.root, state.repos).length;
   const research = /^\s*Research:\s*(.*)$/mi.exec(ctx)?.[1]?.trim() ?? "";
   const researched = /^none needed/i.test(research) ? "research not needed" : research ? "research noted" : "no research line";
   return ` Understood first: ${plural(pointers, "pointer")} traced, ${researched}.`;

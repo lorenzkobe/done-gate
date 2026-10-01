@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+// ledger.mjs imports this module back: both sides only call each other inside functions
+import { currentLedger, isDone } from "./ledger.mjs";
 
 // A mistake in how a verb was called: bad arguments, empty text, no open ledger. Reported on
 // stderr and never logged as a gate error, so the GATE ERROR stamp means a real failure.
@@ -65,6 +67,14 @@ function readSessionPid(stateDir) {
 export function resolveContext({ input, args, pluginRoot, version }) {
   const root = projectRootFrom(input);
   const stateDir = stateDirFor(root);
+  const session =
+    input?.session_id ??
+    (process.env.DONE_GATE_SESSION || undefined) ??
+    (process.env.CLAUDE_CODE_SESSION_ID || undefined) ??
+    readSessionPid(stateDir) ??
+    readSessionMarker(stateDir) ??
+    null;
+  let repos = null;
   return {
     input,
     args,
@@ -72,13 +82,18 @@ export function resolveContext({ input, args, pluginRoot, version }) {
     version,
     root,
     stateDir,
-    session:
-      input?.session_id ??
-      (process.env.DONE_GATE_SESSION || undefined) ??
-      (process.env.CLAUDE_CODE_SESSION_ID || undefined) ??
-      readSessionPid(stateDir) ??
-      readSessionMarker(stateDir) ??
-      null,
+    session,
+    // the further repos the session's open run declared; the ledger is read on first use only
+    get repos() {
+      if (repos) return repos;
+      try {
+        const current = session ? currentLedger(stateDir, session) : null;
+        repos = current && !isDone(current.ledger) ? (current.ledger.repos ?? []) : [];
+      } catch {
+        repos = []; // unreadable state: the hooks fall back to the main root alone
+      }
+      return repos;
+    },
     out: (value) => process.stdout.write(`${typeof value === "string" ? value : JSON.stringify(value)}\n`),
     err: (text) => process.stderr.write(`${text}\n`),
   };

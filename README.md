@@ -263,6 +263,8 @@ key.
   case table late (R2).
 - **A pointer may leave the repo.** An evidence pointer to an existing file by absolute path,
   `~` or `../` resolves (a plan kept outside the repo); a directory or an empty path does not.
+- **A run can span repos.** See [Working across repos](#working-across-repos). A run with no
+  further repo costs and behaves as before.
 - **What it cannot know.** Whether a test asserts the right thing. It makes that visible
   instead: case → test mapping and the reviewer's own file, so a human can check them in
   two minutes.
@@ -299,7 +301,8 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 
 | Verb | Does |
 | --- | --- |
-| `open <slug> <feature\|bugfix\|refactor\|plan\|investigation>` | start a ledger with the playbook's steps |
+| `open <slug> <feature\|bugfix\|refactor\|plan\|investigation> [--repo <path>]` | start a ledger with the playbook's steps; `--repo` (repeatable, anywhere among the arguments) adds a further git repo to the run; on a slug whose run is open it joins that run and declares the repo late |
+| `repo add <path>` | add a further git repo to the open run, measured from its HEAD |
 | `note task\|context\|plan "…"` · `note plan "…" --files a,b` · `note caveat "…"` | write the prose sections (stamps the order for R2); Context is Traced (file:line pointers), Related, Research; `--files` predicts the size; a caveat is something the run could not show, printed in both reports |
 | `case add "…" --kind <kind>` · `case add --batch <file>` · `case amend C1 "…"` · `case close C1 --test file:name \| --click \| --na "…"` | the case table; kinds: happy, edge, refused, boundary, idempotent, reported-surface, performance, click; `--batch` reads one case per line as `<kind><TAB><text>`, adds all or none and prints one `next:` line; `amend` replaces a case's text and reopens it; `--click` closes a click case with the lead's newest click after the last edit and prints it |
 | `step <key\|n> done\|skipped\|na "…" [--evidence ptr]` | close a playbook step (not the close step: `gate close` does that) |
@@ -307,12 +310,51 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `huddle add <role> --file review-1.md` · `acton` · `resolve` · `dispute` | reviewer rounds and Act-on items; `add` prints each recorded id with its finding |
 | `huddle reply --file worker-<n>.md` | record a worker's answers: `fixed:` closes an item, `disagree:` disputes it; an unknown id fails and lists the open ones. Worker reply files are their own stream, numbered like their packet (`brief-worker-2.md` asks for `worker-2.md`) |
 | `waive <key\|R<n>> "<reason>"` | record a waiver and print what it clears; it shows in the report |
-| `verify [--step verify-before]` | run the repo's verify commands, write `verify.json` |
+| `verify [--step verify-before]` | run the repo's verify commands, then each declared repo's in its own directory, write `verify.json` |
 | `verify --add "<cmd>"` · `verify --drop "<cmd>"` | add a verify command for this run only, or remove one this run added; nothing runs. Added commands run after the config ones at every `gate verify`, with the default timeout, also when the config has none. They live on the ledger, not in gate.json (R13 stays quiet), and `gate doctor` and the report list them as added by this run. An added command that has not run blocks the close (R3); a dropped one stays in the report as dropped by this run |
 | `decide <phase> <decision> <why> <evidence> <result>` | append a decision-log row |
 | `brief <skeptic\|qa\|worker\|reviewer\|reviewer-2\|arbiter> [--files a,b \| a.ts:1-400] [--item H#.#]` | write the helper's packet and print its spawn prompt; a packet is numbered like the file it names; a worker's `--files` are the files it owns |
 | `abandon <slug> "<reason>"` | give a run up: marks it abandoned with the reason; it stops attaching to sessions and blocking turns |
 | `check` · `steps` · `size` · `report [--brief]` · `close` · `doctor` · `help` | unmet items only · every step · the report, short or full · close a clean run · inspect config · the verbs |
+
+## Working across repos
+
+A change that spans two checkouts is one run. Open it in the main repo and name the other:
+
+```
+gate open report-totals feature --repo ../reports-serverless
+gate repo add ../shared-types        # later in the run
+```
+
+The path must be an existing directory outside the main repo that is the root of a git work
+tree, not nested in or containing another declared repo. A relative path is read from the
+main root, whatever the shell's directory. `gate open`, `gate attach` and
+`gate doctor` print the declared repos.
+
+- **One path namespace.** A file of a declared repo is named by its path from the main root:
+  `../reports-serverless/src/a.py`. That is the path in `note plan --files`,
+  `brief worker|reviewer --files`, Traced pointers, evidence pointers, `gate size`, the
+  reviewer's diff, the slop scan, the fence and the report. Edits there are recorded like
+  any other; edits in a repo nobody declared are still ignored, and a Traced pointer into
+  one does not count. `--files` naming a file in a repo nobody declared says so and names
+  `gate repo add`.
+- **What each declaration measures from.** A repo named at `gate open` on a new run starts
+  as it is: what it already held, committed or not, is not this run's (modified and
+  untracked source files are copied aside under the run's `base/` and diffed against the
+  copy). A repo added later, with `gate repo add` or `gate open --repo` on a run already
+  open, is measured from its HEAD: the run may have edited there before the gate was
+  looking, so every uncommitted change to a tracked file and every untracked file counts
+  as this run's. More is reviewed, never less; the command's output says so.
+- **Its own config.** A declared repo with a `.claude/gate.json` is classified by its own
+  globs; without one, the main repo's globs read its repo-relative path. Its verify
+  commands (its gate.json, else its package.json scripts) run in its directory after the
+  main ones. The same command text in two repos is two commands: each has its own row in
+  `verify.json` (`repo: "<prefix>"`), and a `when: "source"` command runs when the
+  implementation of its own repo changed.
+- **R13 covers it.** Changing a declared repo's gate.json or verify command list mid-run
+  blocks like the main one (`gate waive gate-config`). A declared repo whose directory is
+  gone is an unmet R13 line with no waiver: restore it or abandon the run.
+- **Other sessions' commits** in a declared repo are left out the same way as in the main one.
 
 ## Configuration
 

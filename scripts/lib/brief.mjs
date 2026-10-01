@@ -5,8 +5,8 @@ import { caseTable, verifyLines } from "./report.mjs";
 import { saveLedger, section } from "./ledger.mjs";
 import { leadDelegates, renderTierBlock, tierMax, tierOf } from "./size.mjs";
 import { baseCopy, fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs";
-import { ROLES, flag, positional } from "./verbs.mjs";
-import { toPosixRel } from "./paths.mjs";
+import { ROLES, flag, outsideRepos, positional } from "./verbs.mjs";
+import { repoPath, toPosixRel } from "./paths.mjs";
 import { REVIEW_CAP, capUnitsOf, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
@@ -81,7 +81,8 @@ export function unifiedDiff(state, { cap = DIFF_CAP, files = state.diff.changed,
   const { diff, baseline, root } = state;
   const ref = baseline?.head ?? "HEAD";
   const dirty = new Set(baseline?.dirty ?? []);
-  const tracked = gitTracked(root);
+  const repos = state.repos ?? [];
+  const tracked = gitTracked(root, repos);
   const blocks = [];
   for (const rel of files) {
     if (diff.deleted.includes(rel)) {
@@ -89,8 +90,8 @@ export function unifiedDiff(state, { cap = DIFF_CAP, files = state.diff.changed,
       blocks.push(`deleted: ${rel} (${typeof n === "number" ? plural(n, "line") : "? lines"})`);
       continue;
     }
-    const base = baseCopy(state.dir, baseline, rel);
-    let text = fileDiff(root, ref, rel, tracked.has(rel), { base });
+    const base = baseCopy(state.dir, baseline, rel, repos);
+    let text = fileDiff(root, ref, rel, tracked.has(rel), { base, repos, heads: baseline?.heads });
     if (ranges.has(rel)) text = `${sliceDiff(text, ranges.get(rel))}\n(only lines ${ranges.get(rel).map(([a, b]) => `${a}-${b}`).join(", ")} of ${rel}: read the code around them with the Read tool)`;
     if (dirty.has(rel) && !base) text = `${text.split("\n")[0]}\n(unreliable for this task: the file was already modified when the task opened, so this diff mixes earlier changes with this task's and may hide a change that cancelled one out)\n${text.split("\n").slice(1).join("\n")}`;
     blocks.push(text);
@@ -120,16 +121,24 @@ function header(state, role, round) {
   }
   out.push(...caseTable(ledger, lastEditSeq(state, state.config, ledger)), "");
   out.push("## Tier", "", ...renderTierBlock(ledger, state.policy, state.tier?.measured ?? null), "");
-  out.push("## Tests", "", `globs: ${state.config.tests.join(", ")}`, `framework: ${detectFramework(state.root)}`, "");
+  out.push("## Tests", "", `globs: ${testGlobs(state)}`, `framework: ${detectFramework(state.root)}`, "");
   if (state.config.helperNote) out.push("## Standing note", "", state.config.helperNote, "");
   return out;
+}
+
+// The tests globs a helper may write under: the main repo's, then each declared repo's own
+// (the main ones where it has no gate.json) under its prefix.
+function testGlobs(state) {
+  const globs = [...state.config.tests];
+  for (const repo of state.config.repos ?? []) globs.push(...(repo.config.explicit ? repo.config.tests : state.config.tests).map((g) => `${repo.prefix}/${g}`));
+  return globs.join(", ");
 }
 
 function mayWrite(state, role, n) {
   if (role === "skeptic") return `only ${path.join(state.dir, `skeptic-${n}.md`)}; reply with its Act-on list only.`;
   if (role === "arbiter") return `only ${path.join(state.dir, `arbiter-${n}.md`)}; reply with the ruling line only.`;
-  if (role === "qa") return `only files under the tests globs (${state.config.tests.join(", ")}); nothing else.`;
-  if (role === "worker") return `the files named in this packet and files under the tests globs (${state.config.tests.join(", ")}); on a review round also ${path.join(state.dir, `worker-${n}.md`)}.`;
+  if (role === "qa") return `only files under the tests globs (${testGlobs(state)}); nothing else.`;
+  if (role === "worker") return `the files named in this packet and files under the tests globs (${testGlobs(state)}); on a review round also ${path.join(state.dir, `worker-${n}.md`)}.`;
   return `only ${path.join(state.dir, `${reviewPrefix(role)}-${n}.md`)}.`;
 }
 
@@ -144,6 +153,11 @@ export function fileNumber(name) {
   return Number(/-(\d+)\.md$/.exec(name)?.[1] ?? 0);
 }
 
+function absolute(state, rel) {
+  const at = repoPath(state.root, rel, state.repos ?? []);
+  return path.join(at.repoRoot, at.rel);
+}
+
 const plural = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 // The skeptic reads the files as they are now (it runs before code exists). QA must not learn
@@ -152,7 +166,7 @@ const plural = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;
 function fileList(state, files, { blind = false } = {}) {
   if (!files.length) return ["no files named in the plan (the implementer ran `gate note plan` without --files)"];
   return files.map((rel) => {
-    const abs = path.join(state.root, rel);
+    const abs = absolute(state, rel);
     if (blind) {
       const before = state.baseline?.files?.[rel]?.l;
       return typeof before === "number" ? `- ${rel} (${plural(before, "line")} when the task opened)` : `- ${rel} (new file for this task)`;
@@ -178,7 +192,7 @@ function arbiterBody(state, item) {
     const rel = cited[1];
     const full = unifiedDiff(state, { cap: 100000 });
     const block = full.split("\n\n").find((b) => b.startsWith(`diff --git a/${rel} `));
-    out.push(block ?? `no diff for ${rel} in this task; read the file at ${path.join(state.root, rel)}`, "");
+    out.push(block ?? `no diff for ${rel} in this task; read the file at ${absolute(state, rel)}`, "");
   } else out.push("the finding cites no file:line; read the files in the diff below", "", unifiedDiff(state), "");
   out.push("## Rule", "", "Rule for exactly one side, in writing, from the evidence. If neither side's evidence holds, rule for the reviewer (the safe side) and say why.", "");
   out.push("## File shape", "", "```", `# Arbiter <n> — ${state.ledger.slug}`, "", "## Ruling", `- ${item.id} — implementer: <reason>   (or)   - ${item.id} — reviewer: <reason>`, "```", "");
@@ -188,6 +202,7 @@ function arbiterBody(state, item) {
 // The verify commands a helper may run itself; "when: source" entries are listed too.
 function testCommands(state) {
   const cmds = (state.config.verify ?? []).map((v) => `- \`${v.cmd}\``);
+  for (const repo of state.config.repos ?? []) cmds.push(...repo.config.verify.map((v) => `- \`${v.cmd}\` (run in ${repo.root})`));
   return cmds.length ? cmds : ["_no verify command in gate.json_"];
 }
 
@@ -231,7 +246,7 @@ export function renderPacket(state, role, { round, n, item = null, piece = null,
     const samples = nearestTests(state, files);
     if (!samples.length) out.push("no existing test files found under the tests globs", "");
     samples.forEach((t, i) => {
-      const text = readFileSync(path.join(state.root, t), "utf8").split("\n").slice(0, SAMPLE_LINES).join("\n");
+      const text = readFileSync(absolute(state, t), "utf8").split("\n").slice(0, SAMPLE_LINES).join("\n");
       out.push(`${i + 1}. ${t}`, "", ...fence(text), "");
     });
   } else if (role === "worker") {
@@ -296,7 +311,8 @@ export const verbs = {
       const named = flag(ctx.args, "--files");
       const entries = named ? [...new Set(named.split(",").map((t) => t.trim()).filter(Boolean))].map((t) => {
         const e = parseEntry(t);
-        const rel = toPosixRel(ctx.root, e.path);
+        const rel = toPosixRel(ctx.root, e.path, state.repos);
+        if (rel === null) throw new UsageError(`--files: ${outsideRepos(e.path)}`);
         if (/:\S*$/.test(t) && !e.from) throw new UsageError(`--files: "${t}" is not a range; a slice reads path:from-to with 1 <= from <= to (line numbers of the new file)`);
         return e.from ? `${rel}:${e.from}-${e.to}` : rel;
       }) : scope;
@@ -373,7 +389,7 @@ export const verbs = {
     // number back, another piece the next one, so two workers out at once never share a file
     const named = role === "worker" ? flag(ctx.args, "--files") : undefined;
     const owned = named === undefined ? null : [...new Set(named.split(",").map((f) => {
-      const rel = toPosixRel(ctx.root, f.trim());
+      const rel = toPosixRel(ctx.root, f.trim(), state.repos);
       if (!rel) throw new UsageError(`--files: "${f.trim()}" is not a file inside the repo; name the worker's files as a,b`);
       return rel;
     }))];

@@ -8,7 +8,8 @@ import { implementationHash } from "./rules.mjs";
 import { nextSeq } from "./events.mjs";
 import { evaluate } from "./rules.mjs";
 import { ensureSession, loadSession, saveSession } from "./session-state.mjs";
-import { diffSnapshots, gitChanged, gitHead, gitNumstat, snapshot } from "./tree.mjs";
+import { diffSnapshots, gitChanged, gitDiffers, gitHead, gitNumstat, snapshot } from "./tree.mjs";
+import { repoPath } from "./paths.mjs";
 
 export function readVerify(dir) {
   const file = path.join(dir, "verify.json");
@@ -78,18 +79,34 @@ function editedSince(ledger, events) {
 // against HEAD, not edited or shell-written by this run. Skipped when this run wrote through git.
 function absorbForeign(root, ledger, now, config, events) {
   const base = ledger.baseline;
+  const repos = ledger.repos ?? [];
   const unexplained = ledger.unexplainedChanges ?? [];
   // an entry from before paths were recorded cannot say which files it covers
-  if (!base?.head || unexplained.some((u) => !u.paths)) return false;
-  const head = gitHead(root);
-  if (!head || head === base.head || head === ledger.foreignHead) return false;
+  if (unexplained.some((u) => !u.paths)) return false;
+  // each declared repo is asked on its own: its HEAD at declaration against its HEAD now
+  const roots = [
+    { dir: root, key: "", from: base?.head, seen: ledger.foreignHead },
+    ...repos.map((r) => ({ dir: r.root, key: `${r.prefix}/`, prefix: r.prefix, from: base?.heads?.[r.prefix], seen: ledger.foreignHeads?.[r.prefix] })),
+  ];
+  const ahead = [];
+  for (const r of roots) {
+    const head = r.from ? gitHead(r.dir) : null;
+    if (head && head !== r.from && head !== r.seen) ahead.push({ ...r, head });
+  }
+  if (!ahead.length) return false;
   if (events.some((e) => e.kind === "command" && e.git && e.seq > (ledger.openedSeq ?? 0))) return false;
-  ledger.foreignHead = head;
+  const committed = new Set();
+  for (const r of ahead) {
+    if (r.prefix) ledger.foreignHeads = { ...ledger.foreignHeads, [r.prefix]: r.head };
+    else ledger.foreignHead = r.head;
+    for (const p of gitChanged(r.dir, r.from, r.head)) committed.add(`${r.key}${p}`);
+  }
   const edited = editedSince(ledger, events);
   const shell = new Set(unexplained.filter((u) => u.writes).flatMap((u) => u.paths));
-  const committed = gitChanged(root, base.head, head);
-  const moved = diffSnapshots(base, now).changed.filter((p) => config.isSource(p) && committed.has(p) && !edited.has(p) && !shell.has(p));
-  const dirty = moved.length ? gitNumstat(root, moved) : new Map();
+  // what a late-declared repo held uncommitted at declaration is this run's, whoever commits it
+  const own = new Set(base.untrackedAtHead ?? []);
+  const moved = diffSnapshots(base, now).changed.filter((p) => config.isSource(p) && committed.has(p) && !edited.has(p) && !shell.has(p) && base.files[p]?.h !== "HEAD" && !own.has(p));
+  const dirty = moved.length ? gitNumstat(root, moved, "HEAD", { repos }) : new Map();
   const foreign = moved.filter((p) => !dirty.has(p));
   if (!foreign.length) return true;
   const without = { ...now.files };
@@ -127,6 +144,27 @@ function absorbForeign(root, ledger, now, config, events) {
   return true;
 }
 
+// A placeholder entry of a late-declared repo takes the file's real entry once git finds the
+// file equal to the repo's HEAD at declaration again: put back, it leaves the run. One git call per repo.
+function settleAtHead(root, ledger, now) {
+  const repos = (ledger.repos ?? []).filter((r) => r.fromHead);
+  if (!repos.length) return false;
+  const base = ledger.baseline;
+  const held = repos.map(() => []);
+  for (const p of Object.keys(base.files)) if (base.files[p].h === "HEAD") held[repoPath(root, p, repos).index]?.push(p);
+  let settled = false;
+  repos.forEach((repo, i) => {
+    const differs = held[i].length ? gitDiffers(repo.root, base.heads[repo.prefix], held[i].map((p) => p.slice(repo.prefix.length + 1))) : null;
+    for (const p of differs ? held[i] : []) {
+      if (differs.has(p.slice(repo.prefix.length + 1))) continue;
+      if (p in now.files) base.files[p] = now.files[p];
+      else delete base.files[p];
+      settled = true;
+    }
+  });
+  return settled;
+}
+
 const plural = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 // Tells the lead at the edit that crosses into the delegated size, once per run; the
@@ -136,7 +174,7 @@ function sizeWarning(root, ledger, config, now, logged) {
   if (!logged.some((e) => e.kind === "edit" && config.isSource(e.path) && !config.isTest(e.path))) return null;
   const policy = policyFor(ledger);
   if (leadDelegates(ledger, policy) || (ledger.waivers ?? []).some((w) => w.key === "delegate")) return null;
-  const m = measure({ config, policy, diff: diffSnapshots(ledger.baseline, now), baseline: ledger.baseline, now, root, quick: true });
+  const m = measure({ config, policy, diff: diffSnapshots(ledger.baseline, now), baseline: ledger.baseline, now, root, quick: true, repos: ledger.repos ?? [] });
   if (!delegatedTier(policy, m.tier)) return null;
   return `done-gate: this task now measures ${plural(m.lines, "line")} in ${plural(m.files, "source file")}, which is size ${m.tier}. At that size the lead does not edit source: the next gate verb records the size and from then on the fence refuses your source edits. Hand the rest to a worker now: run \`gate brief worker\` and spawn done-gate:worker with the prompt it prints.`;
 }
@@ -147,9 +185,10 @@ export function stampNow(ctx, logged = []) {
   const current = currentLedger(ctx.stateDir, ctx.session);
   if (!current || isDone(current.ledger)) return null;
   const { dir, ledger } = current;
-  const config = loadConfig(ctx.root);
+  const repos = ledger.repos ?? [];
+  const config = loadConfig(ctx.root, repos);
   const session = loadSession(ctx.stateDir, ctx.session);
-  const now = snapshot(ctx.root, session?.lastTree ?? ledger.baseline);
+  const now = snapshot(ctx.root, session?.lastTree ?? ledger.baseline, repos);
   const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
   const hash = implementationHash(now, config);
   let changed = hash !== ledger.lastSourceHash && absorbForeign(ctx.root, ledger, now, config, events);
@@ -161,7 +200,6 @@ export function stampNow(ctx, logged = []) {
 }
 
 export function buildState(ctx, { lastMessage = "" } = {}) {
-  const config = loadConfig(ctx.root);
   const session = ensureSession(ctx.stateDir, ctx.root, ctx.session);
   let current = null;
   try {
@@ -170,16 +208,20 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
     throw new LedgerParseError(`ledger.json unreadable: ${error.message}`);
   }
   if (current && isDone(current.ledger)) current = null;
+  const repos = current?.ledger.repos ?? [];
+  const config = loadConfig(ctx.root, repos);
 
   const baseline = current ? current.ledger.baseline : session.baseline;
   const cache = session.lastTree ?? baseline;
-  const now = snapshot(ctx.root, cache);
+  const now = snapshot(ctx.root, cache, repos);
+  // the declared repos' entries ride along as a hash cache for the run; close and abandon drop them
   saveSession(ctx.stateDir, { ...session, lastTree: { files: now.files, hash: now.hash } });
 
   const sessions = current ? current.ledger.sessions : [ctx.session];
   const events = sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
   // before the diff is taken, so another session's commit never shows as this task's change
-  const absorbed = current ? absorbForeign(ctx.root, current.ledger, now, config, events) : false;
+  const settled = current ? settleAtHead(ctx.root, current.ledger, now) : false;
+  const absorbed = (current ? absorbForeign(ctx.root, current.ledger, now, config, events) : false) || settled;
   const diff = diffSnapshots(baseline, now);
 
   // Size and freshness bookkeeping. The ledger is written only on a state flip (a step
@@ -189,7 +231,7 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
   if (current) {
     let flipped = stampSourceChange(current.ledger, implementationHash(now, config), events, { now, config }) || absorbed;
     if (tiered(current.ledger)) {
-      const measured = measure({ config, policy, diff, baseline, now, root: ctx.root, dir: current.dir });
+      const measured = measure({ config, policy, diff, baseline, now, root: ctx.root, dir: current.dir, repos });
       if (reconcileTier(current.ledger, policy, measured).length) flipped = true;
       current.ledger.tier = { ...current.ledger.tier, measured };
       tier = current.ledger.tier;
@@ -210,6 +252,7 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
   return {
     root: ctx.root,
     stateDir: ctx.stateDir,
+    repos,
     ledgerMd,
     config,
     session,

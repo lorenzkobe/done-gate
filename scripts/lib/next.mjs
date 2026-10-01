@@ -63,7 +63,7 @@ export function printNext(ctx, { full = false } = {}) {
     const ledger = current?.ledger ?? null;
     // the event log is read only when a click case holds an event that an edit could outdate
     const after = ledger?.cases?.some((c) => c.event)
-      ? lastEditSeq({ events: ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq) }, loadConfig(ctx.root), ledger)
+      ? lastEditSeq({ events: ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq) }, loadConfig(ctx.root, ledger.repos), ledger)
       : 0;
     const { text, step } = hintOf(ledger, after);
     if (!text) return;

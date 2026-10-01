@@ -8,7 +8,8 @@ import { loadSession } from "./session-state.mjs";
 // Read-only verbs. `check` prints only what is still unmet; "clean" when nothing is.
 // `doctor` prints the plugin, config, session and ledger state for debugging.
 const HELP = `gate <verb>: node <plugin>/scripts/gate.mjs <verb>
-  open <slug> <feature|bugfix|refactor|plan|investigation>   start a run (or re-attach one with that slug)
+  open <slug> <feature|bugfix|refactor|plan|investigation> [--repo <path>]   start a run (or re-attach one with that slug); --repo adds a further git repo to it
+  repo add <path>                                           add a further git repo to the open run, measured from its HEAD
   attach <slug>                                             join an open run from another session
   note task|context|plan "<text>" [--files a,b] [--size t]  write the ledger sections
   case add "<case>" --kind <kind> · case add --batch <file> (one <kind><TAB><case> per line) · case amend <id> "<case>" · case close <id> --test <file:name> | --na "<why>"
@@ -61,6 +62,10 @@ export const verbs = {
       ctx.out(`ledger: UNREADABLE — ${error.message}`);
     }
     ctx.out(`ledger: ${current ? `${current.dir} (${current.ledger.playbook}, ${current.ledger.status})` : "none"}`);
+    for (const repo of current?.ledger.repos?.length ? loadConfig(ctx.root, current.ledger.repos).repos : []) {
+      const cmds = repo.config.verify.map((v) => `${v.cmd} (${v.timeout}s)${v.when === "source" ? " (when source)" : ""}`);
+      ctx.out(`  repo: ${repo.prefix} (${repo.root})${repo.missing ? " — GONE" : ""} · verify: ${cmds.length ? `${cmds.join(" · ")} (its ${repo.config.verifySource})` : "none"}`);
+    }
     if (current?.ledger.verifyAdded?.length) ctx.out(`  verify added by this run: ${current.ledger.verifyAdded.join(" · ")}`);
     const open = openRuns(ctx.stateDir);
     if (open.length) ctx.out(`open runs: ${open.map((r) => path.basename(r.dir)).join(", ")}`);

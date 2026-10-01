@@ -342,10 +342,10 @@ export function shellWrites(raw) {
   return { outside, blind };
 }
 
-function targetPaths(input, root) {
+function targetPaths(input, root, repos) {
   const ti = input.tool_input ?? {};
   const raw = input.tool_name === "MultiEdit" ? (ti.edits ?? []).map((e) => e?.file_path) : [ti.file_path ?? ti.notebook_path];
-  return raw.map((p) => toPosixRel(root, p)).filter((p) => typeof p === "string" && p.length);
+  return raw.map((p) => toPosixRel(root, p, repos)).filter((p) => typeof p === "string" && p.length);
 }
 
 const PACKET = /^\.claude\/gate\/runs\/[^/]+\/brief-[a-z0-9-]+-\d+\.md$/;
@@ -408,13 +408,15 @@ function draftOwed(roleName, root, currentRun, { stateDir, session, agentId } = 
   return owed.sort((a, b) => a - b).map((n) => `${currentRun}/${prefix}-${n}.md`);
 }
 
-export function decide(input, root, config = loadConfig(root), currentRun = null, ledger = null, where = {}) {
+export function decide(input, root, config = null, currentRun = null, ledger = null, where = {}) {
+  const repos = ledger?.repos ?? [];
+  config ??= loadConfig(root, repos);
   const tool = input.tool_name ?? "";
   const agentType = input.agent_type ?? null;
   const roleName = Object.keys(OWN_FILE).find((r) => agentType === `done-gate:${r}` || agentType === r) ?? null;
   const owed = roleName ? draftOwed(roleName, root, currentRun, { ...where, agentId: input.agent_id ?? null }) : null;
   if (owed) {
-    const rel = targetPaths(input, root)[0] ?? null;
+    const rel = targetPaths(input, root, repos)[0] ?? null;
     const packet = rel && PACKET.test(rel);
     const ownFile = owed.includes(rel);
     if (!((tool === "Read" && packet) || (EDIT_TOOLS.has(tool) && ownFile))) {
@@ -444,7 +446,7 @@ export function decide(input, root, config = loadConfig(root), currentRun = null
   }
   if (!EDIT_TOOLS.has(tool)) return { deny: false };
 
-  const paths = targetPaths(input, root);
+  const paths = targetPaths(input, root, repos);
   for (const rel of paths) {
     if (isEvidence(rel)) {
       return { deny: true, reason: `done-gate: ${rel} is gate evidence and is written only by \`gate\` verbs.`, paths };
