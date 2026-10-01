@@ -8,7 +8,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { briefOf, helperRun, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers } from "./rules.mjs";
+import { briefOf, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers } from "./rules.mjs";
 import { assess, buildState, readVerify, reviewFiles, readVerifyStarted } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { readEvents } from "./events.mjs";
@@ -38,7 +38,7 @@ export function finalise(ctx, state) {
 
 // Steps whose evidence comes from a script or an agent: DONE or WAIVED only.
 export const EVIDENCED_KEYS = new Set(["context", "verify", "verify-before", "driver", "review", "tests", "qa", "skeptic", "close"]);
-export const CASE_KINDS = ["happy", "edge", "refused", "boundary", "idempotent", "reported-surface", "performance"];
+export const CASE_KINDS = ["happy", "edge", "refused", "boundary", "idempotent", "reported-surface", "performance", "click"];
 export const ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter", "worker"];
 
 export function flag(args, name) {
@@ -46,11 +46,13 @@ export function flag(args, name) {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
+const BARE_FLAGS = new Set(["--click"]);
+
 export function positional(args) {
   const out = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith("--")) {
-      i += 1;
+      if (!BARE_FLAGS.has(args[i])) i += 1;
       continue;
     }
     out.push(args[i]);
@@ -109,11 +111,22 @@ function checkContext(text, root) {
 export const verbs = {
   note(ctx) {
     const [section, ...rest] = ctx.args;
-    if (!["task", "context", "plan"].includes(section)) throw new UsageError('usage: gate note <task|context|plan> "<text>" [--files a,b] [--size <tier>] (or - to read stdin)');
+    if (!["task", "context", "plan", "caveat"].includes(section)) throw new UsageError('usage: gate note <task|context|plan|caveat> "<text>" [--files a,b] [--size <tier>] (or - to read stdin)');
     const files = flag(rest, "--files");
     const size = flag(rest, "--size");
     const text = readText(ctx, positional(rest).join(" ")).trim();
     if (!text) throw new UsageError("note: empty text");
+    if (section === "caveat") {
+      if (files !== undefined || size !== undefined) throw new UsageError('usage: gate note caveat "<what was not shown>" (--files and --size belong to gate note plan)');
+      const added = withLedger(ctx, (ledger) => {
+        if (ledger.caveats?.includes(text)) return false;
+        ledger.caveats = [...(ledger.caveats ?? []), text];
+        return true;
+      });
+      ctx.out(added ? "caveat noted: the report will show it" : "caveat already noted");
+      printNext(ctx);
+      return;
+    }
     if (section === "context") checkContext(text, ctx.root);
     if (size !== undefined) {
       const sizes = tierOrder(policyFor(open(ctx).ledger));
@@ -151,7 +164,7 @@ export const verbs = {
     if (action === "add") {
       const text = pos.join(" ");
       const kind = flag(rest, "--kind") ?? "happy";
-      if (!text) throw new UsageError('usage: gate case add "<case>" --kind <happy|edge|refused|boundary|idempotent|reported-surface|performance>');
+      if (!text) throw new UsageError('usage: gate case add "<case>" --kind <happy|edge|refused|boundary|idempotent|reported-surface|performance|click>');
       if (!CASE_KINDS.includes(kind)) throw new UsageError(`unknown kind "${kind}" (have: ${CASE_KINDS.join(", ")})`);
       const id = withLedger(ctx, (ledger) => {
         const id = `C${ledger.cases.length + 1}`;
@@ -167,13 +180,27 @@ export const verbs = {
       const [id] = pos;
       const testPtr = flag(rest, "--test");
       const na = flag(rest, "--na");
-      if (!id || (!testPtr && !na)) throw new UsageError("usage: gate case close <id> --test <file:testname> | --na <reason>");
-      withLedger(ctx, (ledger) => {
+      const byClick = rest.includes("--click");
+      if (!id || (!testPtr && !na && !byClick)) throw new UsageError("usage: gate case close <id> --test <file:testname> | --click | --na <reason>");
+      const kind = open(ctx).ledger.cases.find((c) => c.id === id)?.kind;
+      if (kind === "click" && testPtr) throw new UsageError(`${id} is a click case: a test does not close it. Click the control in the real app after the last edit, then \`gate case close ${id} --click\` (or \`--na "<reason>"\`).`);
+      if (byClick && kind && kind !== "click") throw new UsageError(`${id} is a ${kind} case: --click closes a click case only`);
+      const state = byClick && !na ? buildState(ctx, {}) : null;
+      const taken = withLedger(ctx, (ledger) => {
         const row = ledger.cases.find((c) => c.id === id);
         if (!row) throw new UsageError(`no case ${id}`);
-        Object.assign(row, { test: testPtr ?? null, na: na ?? null, status: "closed", closedSeq: nextSeq() });
+        let event = null;
+        if (state) {
+          // one event closes one case: two controls need two clicks
+          const held = new Set(ledger.cases.filter((c) => c.id !== id && c.event).map((c) => c.event));
+          event = clickEvents(state, lastEditSeq(state, state.config, state.ledger)).filter((e) => !held.has(`events#${e.seq}`)).pop();
+          if (!event) throw new UsageError(`${id}: no click of yours after the last edit that another case does not already hold. Click the link, button or tab in the real app (left_click or form_input; navigate, screenshot, javascript_tool and a helper's click do not count)${driverCommand(state.config) !== null ? `, or run \`${driverCommand(state.config)}\` green` : ""}, then run this again.`);
+        }
+        Object.assign(row, { test: testPtr ?? null, na: na ?? null, ...(row.kind === "click" ? { event: event ? `events#${event.seq}` : null } : {}), status: "closed", closedSeq: nextSeq() });
+        return event;
       });
-      ctx.out(`${id} closed`);
+      const what = taken?.kind === "command" ? `\`${taken.cmd}\`` : [taken?.action, taken?.target, taken?.url, taken?.actions?.map((a) => [a.action, a.target].filter(Boolean).join(" ")).join(", ")].filter(Boolean).join(" ");
+      ctx.out(taken ? `${id} closed by ${what} (events#${taken.seq})` : `${id} closed`);
     printNext(ctx);
       return;
     }

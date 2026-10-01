@@ -92,13 +92,26 @@ export function gitTracked(root) {
   }
 }
 
+// Paths that differ between two commits, a rename as both its paths; empty when git cannot answer.
+export function gitChanged(root, from, to) {
+  try {
+    return new Set(git(root, ["diff", "--name-only", "--no-renames", "-z", from, to]).split("\0").filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
+// Files where indentation is meaning: a whitespace-only change to one is a real change.
+const INDENTED = /\.(?:py|pyi|ya?ml|pug|haml|sass|styl|coffee|nim|mk)$|(?:^|\/)Makefile$/;
+export const indentMatters = (rel) => INDENTED.test(rel);
+
 // Added/deleted line counts of uncommitted changes vs HEAD, keyed by the current path;
 // empty when git cannot answer. NUL-separated output, so quoted or odd filenames survive,
 // and renames arrive as one row with `from` set (a pure move is 0 lines).
-export function gitNumstat(root, paths = [], ref = "HEAD") {
+export function gitNumstat(root, paths = [], ref = "HEAD", { ignoreWhitespace = false } = {}) {
   const out = new Map();
   try {
-    const raw = git(root, ["diff", "--numstat", "-z", "-M", ref, "--", ...paths]);
+    const raw = git(root, ["diff", "--numstat", "-z", "-M", ...(ignoreWhitespace ? ["-w"] : []), ref, "--", ...paths]);
     const parts = raw.split("\0");
     for (let i = 0; i < parts.length; i++) {
       const m = /^(\S+)\t(\S+)\t(.*)$/.exec(parts[i]);
@@ -116,6 +129,31 @@ export function gitNumstat(root, paths = [], ref = "HEAD") {
     // no HEAD (fresh repo) or not a git repo: callers fall back to line-count deltas
   }
   return out;
+}
+
+// The copy `gate open` kept of a file already modified then (base/<rel>.base, a name no
+// test or lint glob picks up), or null: baseline.based does not list it or the copy is gone.
+export function baseCopy(dir, baseline, rel) {
+  if (!dir || !baseline?.based?.includes(rel)) return null;
+  const copy = path.join(dir, "base", `${rel}.base`);
+  return existsSync(copy) ? copy : null;
+}
+
+// git diff --no-index exits 1 when the two files differ; that is its answer, not a failure.
+function gitNoIndex(root, args) {
+  try {
+    return git(root, ["diff", "--no-index", ...args]);
+  } catch (error) {
+    if (error.status === 1) return String(error.stdout ?? "");
+    throw error;
+  }
+}
+
+// Lines added plus deleted between a base copy and the file now. --no-index prints its row
+// in rename form (copy => file), so only the two counts are read; no row is no difference.
+export function copyNumstat(root, copy, rel, { ignoreWhitespace = false } = {}) {
+  const m = /^(\d+)\t(\d+)\t/.exec(gitNoIndex(root, ["--numstat", ...(ignoreWhitespace ? ["-w"] : []), "--", copy, path.join(root, rel)]));
+  return m ? Number(m[1]) + Number(m[2]) : 0;
 }
 
 // {hash, files: {rel: {h, s, m, l}}, rehashed}. Content-hashed; size+mtime only decide
@@ -240,6 +278,15 @@ export function changedUnits(text) {
   return out;
 }
 
+// Whether a diff could shrink when whitespace is ignored: some removed line equals an added
+// one once its whitespace is gone. Spares the second diff process when it cannot.
+export function hasReindent(text) {
+  const lines = parseHunks(text).hunks.flatMap((h) => h.lines);
+  const bare = (l) => l.text.slice(1).replace(/\s+/g, "");
+  const removed = new Set(lines.filter((l) => l.tag === "-").map(bare));
+  return lines.some((l) => l.tag === "+" && removed.has(bare(l)));
+}
+
 // The last position a slice from the units' first position may reach and still hold at most
 // cap units; a first position that alone holds more is the slice (it cannot be narrowed).
 export function sliceEnd(units, cap) {
@@ -269,18 +316,25 @@ export function sliceDiff(text, ranges) {
   return out.join("\n");
 }
 
-// The raw unified diff of one changed file against ref: git's for a tracked file, a
-// synthetic all-added block for one git never saw.
-export function fileDiff(root, ref, rel, tracked) {
+// The raw unified diff of one changed file: against its base copy (headed with the repo path),
+// else git's against ref for a tracked file, else a synthetic all-added block.
+export function fileDiff(root, ref, rel, tracked, { base = null, ignoreWhitespace = false } = {}) {
+  const abs = path.join(root, rel);
+  const w = ignoreWhitespace ? ["-w"] : [];
+  if (base) {
+    if (!existsSync(abs)) return "";
+    const lines = gitNoIndex(root, [...w, "--", base, abs]).trim().split("\n");
+    const first = lines.findIndex((l) => l.startsWith("@@"));
+    return first < 0 ? "" : [`diff --git a/${rel} b/${rel}`, `--- a/${rel}`, `+++ b/${rel}`, ...lines.slice(first)].join("\n");
+  }
   if (tracked) {
     try {
-      const text = git(root, ["diff", ref, "--", rel]).trim();
-      if (text) return text;
+      const text = git(root, ["diff", ...w, ref, "--", rel]).trim();
+      if (text || ignoreWhitespace) return text;
     } catch {
       // no ref or not a repo: fall through to the synthetic block
     }
   }
-  const abs = path.join(root, rel);
   if (!existsSync(abs)) return "";
   const buf = readFileSync(abs);
   for (let i = 0; i < Math.min(buf.length, 8000); i++) if (buf[i] === 0) return `diff --git a/${rel} b/${rel}\nbinary file (${buf.length} bytes), contents not shown`;

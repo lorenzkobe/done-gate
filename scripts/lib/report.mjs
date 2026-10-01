@@ -7,7 +7,7 @@ import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
 import { readEvents } from "./events.mjs";
 import { effectiveTier, policyFor, renderTierBlock, requires, tiered, tierOf } from "./size.mjs";
-import { drivenAfter, driverCommand, isRole, lastEditSeq, hasContextStep, lateOrder, tracedPointers } from "./rules.mjs";
+import { clickStale, drivenAfter, driverCommand, isRole, lastEditSeq, hasContextStep, lateOrder, tracedPointers } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 
 function tailLines(file, n) {
@@ -24,10 +24,10 @@ function ledgerMd(dir) {
 
 // ---- pieces of the full report (text unchanged; the brief reuses the same facts) ----
 
-export function summaryLine(ledger, events, unmet) {
+export function summaryLine(ledger, events, unmet, after = 0) {
   const count = (s) => ledger.steps.filter((x) => x.state === s).length;
   const blank = ledger.steps.filter((x) => !x.state).length;
-  const closedCases = ledger.cases.filter((c) => c.status === "closed").length;
+  const closedCases = ledger.cases.filter((c) => c.status === "closed" && !clickStale(c, after)).length;
   const naCases = ledger.cases.filter((c) => c.na).length;
   const denies = events.filter((e) => e.kind === "deny" && !e.delegate).length;
   return (
@@ -37,10 +37,10 @@ export function summaryLine(ledger, events, unmet) {
   );
 }
 
-export function caseTable(ledger) {
+export function caseTable(ledger, after = 0) {
   if (!ledger.cases.length) return ["_none_"];
   const out = ["| id | case | kind | test | status |\n| --- | --- | --- | --- | --- |"];
-  for (const c of ledger.cases) out.push(`| ${c.id} | ${cell(c.case)} | ${c.kind} | ${cell(c.test ?? (c.na ? `n/a: ${c.na}` : ""))} | ${c.status} |`);
+  for (const c of ledger.cases) out.push(`| ${c.id} | ${cell(c.case)} | ${c.kind} | ${cell(c.test ?? c.event ?? (c.na ? `n/a: ${c.na}` : ""))} | ${clickStale(c, after) ? "open: edited after the click" : c.status} |`);
   return out;
 }
 
@@ -139,14 +139,15 @@ export function renderReport(state, unmet) {
   const gateErrors = tailLines(errLog, 3);
   if (gateErrors) out.push(`\n**GATE ERROR** (last lines of gate-error.log):\n\`\`\`\n${gateErrors}\n\`\`\``);
 
-  out.push(`\n${summaryLine(ledger, events, unmet)}`);
+  const after = lastEditSeq(state, config, ledger);
+  out.push(`\n${summaryLine(ledger, events, unmet, after)}`);
 
   out.push(`\n## Task\n\n${section(md, "Task") || "_not written_"}`);
   out.push(`\n## Plan\n\n${section(md, "Plan") || "_not written_"}`);
   out.push(`\n## Context\n\n${section(md, "Context") || "_not written_"}`);
 
   out.push("\n## Case table\n");
-  out.push(...caseTable(ledger));
+  out.push(...caseTable(ledger, after));
 
   out.push("\n## Steps\n");
   for (const s of ledger.steps) {
@@ -174,6 +175,7 @@ export function renderReport(state, unmet) {
   const other = changed.filter((f) => !seen.has(f));
   if (other.length) out.push(`- other (${other.length}): ${other.slice(0, 20).join(", ")}`);
   if (!changed.length) out.push("_none since baseline_");
+  if (ledger.foreign?.length) out.push(`\n${plural(ledger.foreign.length, "file")} changed only by other commits left out: ${ledger.foreign.slice(0, 20).join(", ")}${ledger.foreign.length > 20 ? ", …" : ""}`);
 
   const tier = tierBlock(state);
   if (tier.length) out.push("\n## Tier\n", ...tier);
@@ -189,6 +191,11 @@ export function renderReport(state, unmet) {
   if (ledger.pauses.length) {
     out.push("\n## Pauses\n");
     for (const p of ledger.pauses) out.push(`- ${p.ts}: ${cell(p.text)}`);
+  }
+
+  if (ledger.caveats?.length) {
+    out.push("\n## Caveats\n");
+    for (const c of ledger.caveats) out.push(`- ${cell(c)}`);
   }
 
   out.push("\n## Attention\n");
@@ -294,7 +301,8 @@ function checksLine2(state) {
   const cases = ledger.cases;
   let casesText = "No test cases recorded.";
   if (cases.length) {
-    const open = cases.filter((c) => c.status !== "closed").length;
+    const after = lastEditSeq(state, config, ledger);
+    const open = cases.filter((c) => c.status !== "closed" || clickStale(c, after)).length;
     const na = cases.filter((c) => c.na).length;
     const parts = [];
     if (open) parts.push(`${open} still open`);
@@ -393,6 +401,7 @@ export function renderBrief(state, unmet) {
   out.push(reviewLine2(ledger));
   out.push(appLine(state));
   out.push(forYouLine(state, unmet));
+  if (ledger.caveats?.length) out.push(`Caveats: ${ledger.caveats.map((c) => plain(c).replace(/\s+/g, " ").replace(/\.$/, "")).join("; ")}.`);
   out.push("");
   out.push(`Full report: ${path.join(dir, "report.md")} · done-gate ${ledger.version ?? "unknown"}`);
   return `${out.join("\n")}\n`;

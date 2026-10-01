@@ -1,5 +1,8 @@
 import { currentLedger, isDone } from "./ledger.mjs";
 import { optionalSteps, tiered } from "./size.mjs";
+import { loadConfig } from "./config.mjs";
+import { readEvents } from "./events.mjs";
+import { clickStale, lastEditSeq } from "./rules.mjs";
 
 // One line after every verb: what to do next and the exact verb. The skill no longer has
 // to spell the workflow out, and the model no longer has to remember it.
@@ -21,7 +24,8 @@ const VERB_FOR = {
   close: "`gate close`",
 };
 
-export function nextHint(ledger) {
+// `after` is the last implementation edit: a click case clicked before it is open again.
+export function nextHint(ledger, after = 0) {
   if (!ledger || isDone(ledger)) return "";
   if (!ledger.taskSeq) return "next: `gate note task \"<the user's ask, quoted, then your own words>\"`";
   if (!ledger.planSeq) {
@@ -32,11 +36,11 @@ export function nextHint(ledger) {
     if (before) return `next: step ${before.n}: ${VERB_FOR[before.key]}`;
     return "next: `gate note plan \"<approach, files, data plan>\" --files a.ts,b.ts [--size large]`";
   }
-  if (tiered(ledger) && !ledger.cases.length) return "next: `gate case add \"<case>\" --kind happy|edge|refused|boundary|idempotent|reported-surface|performance`, one per row";
+  if (tiered(ledger) && !ledger.cases.length) return "next: `gate case add \"<case>\" --kind happy|edge|refused|boundary|idempotent|reported-surface|performance|click`, one per row (click: one per new or changed link, button or tab)";
   const blank = ledger.steps.filter((s) => !s.state);
   const step = blank[0];
-  const open = ledger.cases.filter((c) => c.status !== "closed");
-  const closeCases = `next: close ${open.map((c) => c.id).join(", ")} with \`gate case close C<n> --test <file:name>\` or \`--na "<reason>"\``;
+  const open = ledger.cases.filter((c) => c.status !== "closed" || clickStale(c, after));
+  const closeCases = `next: close ${open.map((c) => c.id).join(", ")} with \`gate case close C<n> --test <file:name>\` or \`--na "<reason>"\`${open.some((c) => c.kind === "click") ? "; a click case: click the control in the real app after the last edit, then `gate case close C<n> --click`" : ""}`;
   // open cases come before the close step: closing with a blank case would only bounce off R8
   if (open.length && (!step || step.key === "close")) return closeCases;
   if (step) {
@@ -49,7 +53,12 @@ export function nextHint(ledger) {
 export function printNext(ctx) {
   try {
     const current = currentLedger(ctx.stateDir, ctx.session);
-    const hint = nextHint(current?.ledger ?? null);
+    const ledger = current?.ledger ?? null;
+    // the event log is read only when a click case holds an event that an edit could outdate
+    const after = ledger?.cases?.some((c) => c.event)
+      ? lastEditSeq({ events: ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq) }, loadConfig(ctx.root), ledger)
+      : 0;
+    const hint = nextHint(ledger, after);
     if (hint) ctx.out(hint);
   } catch {
     // a hint is a courtesy; never turn a successful verb into a failure

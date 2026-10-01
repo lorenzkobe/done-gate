@@ -537,12 +537,13 @@ test("C12 boundary: untracked or non-git files appear in the reviewer diff as al
   // Deleted: one line, with the line count it had.
   assert.match(diff, /^deleted: src\/a\.ts \(1 lines?\)$/m, `no one-line note for the deleted file:\n${diff}`);
 
-  // Dirty at open: the block says so.
+  // Dirty at open, with content the baseline holds: diffed against its copy from open, so
+  // only this task's line is added and the block carries no unreliable note.
   const pageAt = diff.indexOf("src/app/page.tsx");
   assert.ok(pageAt >= 0, "the file that was dirty at open is not in the diff");
-  const note = /^\s*\(unreliable for this task: /m;
-  assert.match(diff, note, `no "(unreliable for this task: ..." note anywhere in the diff:\n${diff}`);
-  assert.ok(diff.search(note) > pageAt, "the unreliable-for-this-task note is not attached to the file that was dirty at open");
+  assert.ok(diff.includes("+const during = 2;"), `this task's line is missing:\n${diff}`);
+  assert.ok(!diff.includes("+const pre = 1;"), `a line from before the task opened is shown as added:\n${diff}`);
+  assert.doesNotMatch(diff, /^\s*\(unreliable for this task: /m);
 });
 
 // ---------------------------------------------------------------------------

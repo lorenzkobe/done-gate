@@ -326,7 +326,8 @@ test("C7 idempotent: every playbook section still has the same step count and th
 // ---------------------------------------------------------------------------
 
 test("C8 boundary: CASE_KINDS gains performance and nothing else, and SKILL.md and README.md list exactly those kinds", () => {
-  assert.deepEqual(CASE_KINDS, [...KINDS_BEFORE, NEW_KIND], "scripts/lib/verbs.mjs CASE_KINDS: the task adds performance to the six kinds that existed");
+  // measure-and-click (0.13.0) adds the click kind after it
+  assert.deepEqual(CASE_KINDS, [...KINDS_BEFORE, NEW_KIND, "click"], "scripts/lib/verbs.mjs CASE_KINDS: the task adds performance to the six kinds that existed");
 
   // SKILL.md: the kind list is on the `gate case add` line, so it stays one line
   const skill = read("skills", "gate", "SKILL.md");

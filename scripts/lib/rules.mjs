@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { effectiveTier, leadDelegates, policyFor, requires } from "./size.mjs";
-import { changedUnits, fileDiff, gitTracked, sliceEnd } from "./tree.mjs";
+import { baseCopy, changedUnits, fileDiff, gitTracked, hasReindent, indentMatters, sliceEnd } from "./tree.mjs";
 import { scanDiff } from "./slop.mjs";
 import { toPosixRel } from "./paths.mjs";
 
@@ -77,7 +77,8 @@ function sectionLines(text, heading) {
   return (end ? rest.slice(0, end.index) : rest).split("\n");
 }
 
-const BULLET = /^(\s*)[-*]\s+(.*\S)\s*$/;
+// "-", "*", "1." and "1)" all open a list item: a numbered finding is still a finding
+const BULLET = /^(\s*)(?:[-*]|\d+[.)])\s+(.*\S)\s*$/;
 // A bullet that opens with "none" or "n/a" is an empty section, whatever follows ("none found
 // for this piece", "none. I traced …"); so is "nothing" alone or "nothing found". "None of the
 // callers …" and "Nothing tests …" are findings.
@@ -302,14 +303,16 @@ export function parseEntry(entry) {
 }
 export const pathOf = (entry) => parseEntry(entry).path;
 
-// One file's diff for this task, read once per assess: the slop check and the piece
-// bookkeeping below share it.
+function taskDiff(state, rel, { ignoreWhitespace = false } = {}) {
+  const tracked = (state.tracked ??= gitTracked(state.root)).has(rel);
+  return fileDiff(state.root, state.baseline?.head ?? "HEAD", rel, tracked, { base: baseCopy(state.dir, state.baseline, rel), ignoreWhitespace });
+}
+
+// One file's diff for this task (from open, for a file with a base copy), read once per
+// assess: the slop check and the piece bookkeeping below share it.
 export function diffTextOf(state, rel) {
   state.diffText ??= new Map();
-  if (!state.diffText.has(rel)) {
-    const tracked = (state.tracked ??= gitTracked(state.root)).has(rel);
-    state.diffText.set(rel, state.diff?.deleted?.includes(rel) ? "" : fileDiff(state.root, state.baseline?.head ?? "HEAD", rel, tracked));
-  }
+  if (!state.diffText.has(rel)) state.diffText.set(rel, state.diff?.deleted?.includes(rel) ? "" : taskDiff(state, rel));
   return state.diffText.get(rel);
 }
 
@@ -319,6 +322,16 @@ export function changedUnitsOf(state, rel) {
   state.changedUnits ??= new Map();
   if (!state.changedUnits.has(rel)) state.changedUnits.set(rel, changedUnits(diffTextOf(state, rel)));
   return state.changedUnits.get(rel);
+}
+
+// The changed lines the piece cap counts, for `gate brief` and nextPiece alike: those a
+// whitespace-ignoring diff still holds. Use their positions only; coverage keys come from changedUnitsOf.
+export function capUnitsOf(state, rel) {
+  const full = changedUnitsOf(state, rel);
+  if (indentMatters(rel) || state.diff?.deleted?.includes(rel) || !hasReindent(diffTextOf(state, rel))) return full;
+  state.capUnits ??= new Map();
+  if (!state.capUnits.has(rel)) state.capUnits.set(rel, changedUnits(taskDiff(state, rel, { ignoreWhitespace: true })));
+  return state.capUnits.get(rel);
 }
 export const positionsOf = (units) => [...new Set(units.map((u) => u.pos))].sort((a, b) => a - b);
 
@@ -395,10 +408,11 @@ export function nextPiece(state, entries) {
   let lines = 0;
   for (const entry of entries) {
     const e = parseEntry(entry);
-    const units = changedUnitsOf(state, e.path).filter((u) => !e.from || (u.pos >= e.from && u.pos <= e.to));
-    const n = units.length || 1;
+    const inRange = (u) => !e.from || (u.pos >= e.from && u.pos <= e.to);
+    const counted = capUnitsOf(state, e.path).filter(inRange);
+    const n = counted.length || 1;
     if (!piece.length && n > cap) {
-      piece.push(`${e.path}:${units[0].pos}-${sliceEnd(units, cap)}`);
+      piece.push(`${e.path}:${changedUnitsOf(state, e.path).find(inRange).pos}-${sliceEnd(counted, cap)}`);
       break;
     }
     if (piece.length && lines + n > cap) break;
@@ -430,9 +444,33 @@ export function driverCommand(config) {
 // writes is what dates the mark; browser and skill events count only past it. Returns the
 // driving event or null; R4 and the report both read it, so they cannot disagree.
 export function drivenAfter(state, after) {
-  const driverCmd = driverCommand(state.config);
-  const ranDriver = (e) => driverCmd !== null && e.kind === "command" && !e.background && String(e.cmd ?? "").includes(driverCmd) && e.seq >= after && (e.exit == null || e.exit === 0);
+  const ranDriver = driverRun(state, after);
   return (state.events ?? []).find((e) => !e.agent && (ranDriver(e) || (e.seq > after && (e.kind === "browser" || (e.kind === "skill" && e.skill === "verify"))))) ?? null;
+}
+
+function driverRun(state, after) {
+  const driverCmd = driverCommand(state.config);
+  return (e) => driverCmd !== null && e.kind === "command" && !e.background && String(e.cmd ?? "").includes(driverCmd) && e.seq >= after && (e.exit == null || e.exit === 0);
+}
+
+const CLICK_ACTIONS = new Set(["left_click", "double_click", "triple_click", "right_click", "form_input"]);
+
+// What can close a click case, oldest first: a click or form_input by the lead (alone or in
+// a batch) or a cmd: driver run as R4 counts it, after the last edit and after this run opened.
+export function clickEvents(state, after) {
+  const since = Math.max(after, state.ledger?.openedSeq ?? 0);
+  const ranDriver = driverRun(state, since);
+  const clicked = (e) => e.kind === "browser" && e.seq > since && (CLICK_ACTIONS.has(e.action) || (e.actions ?? []).some((a) => CLICK_ACTIONS.has(a.action)));
+  return (state.events ?? []).filter((e) => !e.agent && (ranDriver(e) || clicked(e)));
+}
+
+// A click case reopens when source changed after its event: the control may have moved.
+export function clickStale(c, after) {
+  return c.kind === "click" && c.status === "closed" && Boolean(c.event) && Number(c.event.slice("events#".length)) < after;
+}
+
+export function caseOpen(c, after) {
+  return c.status !== "closed" || (!c.test && !c.na && !c.event) || clickStale(c, after);
 }
 
 function processAlive(pid) {
@@ -606,8 +644,8 @@ export function evaluate(state) {
   }
 
   // R8: nothing blank
-  const openCases = (ledger.cases ?? []).filter((c) => c.status !== "closed" || (!c.test && !c.na));
-  if (openCases.length) unmet.push({ rule: "R8", text: `case(s) not closed: ${openCases.map((c) => c.id).join(", ")}. \`gate case close <id> --test <file:name>\` or \`--na <reason>\`.` });
+  const openCases = (ledger.cases ?? []).filter((c) => caseOpen(c, after));
+  if (openCases.length) unmet.push({ rule: "R8", text: `case(s) not closed: ${openCases.map((c) => c.id).join(", ")}. \`gate case close <id> --test <file:name>\` or \`--na <reason>\`${openCases.some((c) => c.kind === "click") ? "; a click case: click the control in the real app after the last edit, then `gate case close <id> --click`" : ""}.` });
   const blankSteps = (ledger.steps ?? []).filter((s) => !s.state);
   if (blankSteps.length) unmet.push({ rule: "R8", text: `step(s) blank: ${blankSteps.map((s) => `${s.n}${s.key ? ` {${s.key}}` : ""}`).join(", ")}. Close each with \`gate step <n|key> done|skipped|na "<note>"\`.` });
 

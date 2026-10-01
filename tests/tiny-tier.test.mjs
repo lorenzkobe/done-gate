@@ -42,7 +42,12 @@ function committed(name, files) {
 }
 function opened(name, { playbook = "feature", files = {}, planFiles = "src/a.ts", dirty = null } = {}) {
   const repo = committed(name, { "src/a.ts": "export const a = 1;\n", ...files });
-  if (dirty) write(repo, dirty[0], dirty[1]);
+  // the session starts first, so the dirty write is an edit made in this session before open:
+  // it matches no baseline entry, gets no base copy and keeps the line-delta estimate
+  if (dirty) {
+    run(repo, "check");
+    write(repo, dirty[0], dirty[1]);
+  }
   cli(repo, "open", [name, playbook]);
   cli(repo, "note", ["task", "Add a badge. [inferred]"]);
   cli(repo, "note", ["context", "Traced: src/a.ts:1\nRelated: none\nResearch: none needed: tiny"]);

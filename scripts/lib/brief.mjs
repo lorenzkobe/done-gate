@@ -4,10 +4,10 @@ import { buildState } from "./assess.mjs";
 import { caseTable, verifyLines } from "./report.mjs";
 import { saveLedger, section } from "./ledger.mjs";
 import { leadDelegates, renderTierBlock, tierMax, tierOf } from "./size.mjs";
-import { fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs";
+import { baseCopy, fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs";
 import { ROLES, flag, positional } from "./verbs.mjs";
 import { toPosixRel } from "./paths.mjs";
-import { REVIEW_CAP, changedUnitsOf, helperRun, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify } from "./rules.mjs";
+import { REVIEW_CAP, capUnitsOf, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { nextSeq } from "./events.mjs";
@@ -89,9 +89,10 @@ export function unifiedDiff(state, { cap = DIFF_CAP, files = state.diff.changed,
       blocks.push(`deleted: ${rel} (${typeof n === "number" ? plural(n, "line") : "? lines"})`);
       continue;
     }
-    let text = fileDiff(root, ref, rel, tracked.has(rel));
+    const base = baseCopy(state.dir, baseline, rel);
+    let text = fileDiff(root, ref, rel, tracked.has(rel), { base });
     if (ranges.has(rel)) text = `${sliceDiff(text, ranges.get(rel))}\n(only lines ${ranges.get(rel).map(([a, b]) => `${a}-${b}`).join(", ")} of ${rel}: read the code around them with the Read tool)`;
-    if (dirty.has(rel)) text = `${text.split("\n")[0]}\n(unreliable for this task: the file was already modified when the task opened, so this diff mixes earlier changes with this task's and may hide a change that cancelled one out)\n${text.split("\n").slice(1).join("\n")}`;
+    if (dirty.has(rel) && !base) text = `${text.split("\n")[0]}\n(unreliable for this task: the file was already modified when the task opened, so this diff mixes earlier changes with this task's and may hide a change that cancelled one out)\n${text.split("\n").slice(1).join("\n")}`;
     blocks.push(text);
   }
   const all = blocks.join("\n\n").split("\n");
@@ -117,7 +118,7 @@ function header(state, role, round) {
     const reported = ledger.cases.find((c) => c.kind === "reported-surface");
     if (reported) out.push(`Start with ${reported.id}: ${reported.case}`, "");
   }
-  out.push(...caseTable(ledger), "");
+  out.push(...caseTable(ledger, lastEditSeq(state, state.config, ledger)), "");
   out.push("## Tier", "", ...renderTierBlock(ledger, state.policy, state.tier?.measured ?? null), "");
   out.push("## Tests", "", `globs: ${state.config.tests.join(", ")}`, `framework: ${detectFramework(state.root)}`, "");
   return out;
@@ -296,15 +297,18 @@ export const verbs = {
       const cap = state.policy.reviewMaxLines;
       const rows = entries.map((entry) => {
         const e = parseEntry(entry);
-        const units = changedUnitsOf(state, e.path).filter((u) => !e.from || (u.pos >= e.from && u.pos <= e.to));
-        return { entry, e, units, lines: units.length };
+        const inRange = (u) => !e.from || (u.pos >= e.from && u.pos <= e.to);
+        const units = changedUnitsOf(state, e.path).filter(inRange);
+        // the cap counts what a reader must weigh; the slice keys below keep every changed line
+        const counted = capUnitsOf(state, e.path).filter(inRange);
+        return { entry, e, units, counted, lines: counted.length };
       });
       const lines = rows.reduce((n, r) => n + r.lines, 0);
       // a range on one position (a block of deletions) cannot be narrowed: it is a piece as is
       const floor = rows.length === 1 && rows[0].e.from !== null && rows[0].e.from === rows[0].e.to;
       if (lines > cap && !floor) {
         // the first slice of a file that fits the cap, from its first changed line
-        const firstSlice = (r) => `${r.e.path}:${r.units[0].pos}-${sliceEnd(r.units, cap)}`;
+        const firstSlice = (r) => `${r.e.path}:${r.units[0].pos}-${sliceEnd(r.counted, cap)}`;
         if (rows.length === 1) {
           const r = rows[0];
           throw new UsageError(`${r.entry} holds ${r.lines} changed lines, more than one review round can read well (cap ${cap}). ${r.e.from ? "Narrow the range" : "Slice it by line"}: \`gate brief ${role} --files ${firstSlice(r)}\`; a line counts as reviewed once a clean round saw it.`);

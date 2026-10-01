@@ -124,7 +124,9 @@ For you: skipped with your OK: chrome is disconnected, no phone pass this time.
 Full report: .claude/gate/runs/2026-09-14-venue-badge/report.md
 ```
 
-The five lines are always there ("For you: nothing." when there is nothing). The full report on disk has every case with its
+The five lines are always there ("For you: nothing." when there is nothing). A `Caveats:` line
+follows them when the lead recorded what it could not show (`gate note caveat "the phone
+viewport was not driven"`); the full report lists the same under Caveats. The full report on disk has every case with its
 test, each step with its evidence, the reviewer's own file, the check output, the decision log and the changed files; `gate report` prints it
 when you want the detail.
 
@@ -143,7 +145,7 @@ attempt to finish.
 | R5 | no reviewer pass after the last edit, or an Act-on item is still open; tier tiny needs no reviewer. A change past the piece cap (400 changed lines) is reviewed in pieces, `gate brief reviewer --files a,b`, and one big file in slices, `--files a.ts:1-400`; a line is covered once the last round that saw it came back clean (or was the file's third); new or uncovered lines need a round |
 | R6 | schema files changed with no real-schema probe |
 | R7 | source changed and no test file changed |
-| R8 | any case or step is blank |
+| R8 | any case or step is blank, or a click case's click is older than the last source edit |
 | R9 | high-risk paths changed without the second reviewer (same round rules as R5; an open reviewer-2 item is named) |
 | R10 | a repo check failed: the slop scan found a banner comment, step narration, an empty label, an end marker, an emoji, a bare TODO or a `@param` that echoes its name on an added non-test line (`"slop": false` in gate.json turns it off between tasks; mid-task, `gate waive slop` clears a false positive), or an opted-in check (`claude-md-budget`, `migration-number`) |
 | R13 | `.claude/gate.json` or the plugin's `models.json` changed mid-task |
@@ -206,6 +208,33 @@ with `gate waive <key> "…"`, and the report lists every waiver.
   plan naming more than ten files) the lead's own `Edit`/`Write` on source or tests is
   refused and it is told to brief a worker per piece. A shell edit (`sed -i`, a heredoc) slips past this fence; the
   Stop hook's R16 catches it after the fact from the event log.
+- **A new control is clicked, not just loaded.** A case of kind `click` (one per new or
+  changed link, button or tab; the skeptic and the reviewer ask for them) cannot be closed
+  with a test. `gate case close <id> --click` takes the lead's newest click after the last
+  source edit that no other click case holds and stores it on the case as `events#<seq>`:
+  a `left_click`, `double_click`, `triple_click`, `right_click` or `form_input` in Chrome,
+  alone or inside a `browser_batch`, or a green run of the `cmd:` driver. Loading the page,
+  a screenshot, `javascript_tool` and a helper's click do not count. One click closes one
+  case, and a source edit after it opens the case again (R8). `--na "<reason>"` still works.
+- **Size is counted from open.** A file that already had uncommitted work when the task
+  opened (left by an earlier run of the session, or from before it) is copied to
+  `<run>/base/<path>.base` at `gate open` and diffed against that copy, so the size, the review cap,
+  the reviewer's diff, review coverage and the slop scan see only what this task changed.
+  Copies are text files of at most 1 MB, at most 200 per run, fenced like other evidence; a
+  file edited in the session before open with no run closed since keeps the old line-count
+  estimate.
+- **Re-indenting is not size.** Whitespace-only lines do not count toward the tier or the
+  400-line piece cap; the reviewer still sees them and they still need a review round.
+  Where indentation is meaning every line counts: `.py`, `.pyi`, `.yml`, `.yaml`, `.pug`,
+  `.haml`, `.sass`, `.styl`, `.coffee`, `.nim`, `Makefile` and `*.mk`.
+- **Another session's commits are not yours.** When HEAD moved and this run ran no git
+  command that writes (any subcommand that is not read-only) and changed nothing through the shell, a file those commits changed that is clean
+  against HEAD and that this run never edited is folded into the baseline: not sized, not
+  reviewed, not scanned. The report says how many files from other commits were left out.
+- **Outgrowing the size is said at the edit.** The first lead edit that takes a run
+  predicted below large into it gets a note from the log hook with the measured size and
+  `gate brief worker`; the fence refuses the lead's edits from the next gate verb on. Once
+  per run.
 - **What it cannot know.** Whether a test asserts the right thing. It makes that visible
   instead: case → test mapping and the reviewer's own file, so a human can check them in
   two minutes.
@@ -243,8 +272,8 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | Verb | Does |
 | --- | --- |
 | `open <slug> <feature\|bugfix\|refactor\|plan\|investigation>` | start a ledger with the playbook's steps |
-| `note task\|context\|plan "…"` · `note plan "…" --files a,b` | write the prose sections (stamps the order for R2); Context is Traced (file:line pointers), Related, Research; `--files` predicts the size |
-| `case add "…" --kind <kind>` · `case close C1 --test file:name \| --na "…"` | the case table; kinds: happy, edge, refused, boundary, idempotent, reported-surface, performance |
+| `note task\|context\|plan "…"` · `note plan "…" --files a,b` · `note caveat "…"` | write the prose sections (stamps the order for R2); Context is Traced (file:line pointers), Related, Research; `--files` predicts the size; a caveat is something the run could not show, printed in both reports |
+| `case add "…" --kind <kind>` · `case close C1 --test file:name \| --click \| --na "…"` | the case table; kinds: happy, edge, refused, boundary, idempotent, reported-surface, performance, click; `--click` closes a click case with the lead's newest click after the last edit and prints it |
 | `step <key\|n> done\|skipped\|na "…" [--evidence ptr]` | close a playbook step |
 | `huddle add <role> --file review-1.md` · `acton` · `resolve` · `dispute` | reviewer rounds and Act-on items; `add` prints each recorded id with its finding |
 | `huddle reply --file worker-<n>.md` | record a worker's answers: `fixed:` closes an item, `disagree:` disputes it; an unknown id fails and lists the open ones. Worker reply files are their own stream, numbered like their packet (`brief-worker-2.md` asks for `worker-2.md`) |

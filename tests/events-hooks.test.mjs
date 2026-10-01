@@ -56,9 +56,12 @@ test("Agent, Skill and Chrome tools map to agent, skill and browser kinds", () =
   assert.deepEqual(pick(eventsFromHookInput(stdin("skill"), "/repo")[0]), {
     session: "S1", agent: null, agentType: null, kind: "skill", tool: "Skill", skill: "verify",
   });
-  assert.deepEqual(pick(eventsFromHookInput(stdin("chrome"), "/repo")[0]), {
-    session: "S1", agent: null, agentType: null, kind: "browser", tool: "mcp__claude-in-chrome__computer",
-  });
+  // a browser event also keeps what was done: the fixture's tool_input.action is "screenshot"
+  const browser = pick(eventsFromHookInput(stdin("chrome"), "/repo")[0]);
+  assert.equal(browser.kind, "browser");
+  assert.equal(browser.tool, "mcp__claude-in-chrome__computer");
+  assert.equal(browser.action, "screenshot");
+  assert.equal(browser.agent, null);
 });
 
 test("an edit inside a subagent keeps the agent id and type", () => {

@@ -9,7 +9,7 @@ import { toPosixRel } from "./paths.mjs";
 // Files only the gate's own verbs may write. A model that could edit these could
 // forge its evidence, so the deny is unconditional and every attempt is logged.
 const EVIDENCE_FILES = new Set(["events.jsonl", "verify.json", "verify.started.json", "decisions.tsv", "ledger.json", "blocks.json", "state.json", "gate-error.log", "current-session"]);
-const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(events\.jsonl|verify\.json|verify\.started\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json|current-session|brief-[a-z0-9-]+-\d+\.md|(?:review2?|skeptic|arbiter|worker)-\d+\.md)/;
+const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(events\.jsonl|verify\.json|verify\.started\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json|current-session|brief-[a-z0-9-]+-\d+\.md|(?:review2?|skeptic|arbiter|worker)-\d+\.md|runs\/[^/\s]+\/base(?![\w.-]))/;
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const HELPER_ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter"];
 // Shell analysis for the Bash fence. Two readers of one parse: `readsOnly` (may a command
@@ -19,6 +19,8 @@ const HELPER_ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter"];
 // like any other.
 const GIT_WRITE = new Set(["add", "commit", "checkout", "switch", "reset", "restore", "stash", "apply", "am", "merge", "rebase", "mv", "rm", "clean", "push"]);
 const GIT_READ = new Set(["show", "diff", "log", "status", "blame", "ls-files", "cat-file", "rev-parse"]);
+// subcommands that leave HEAD and the working tree alone; any other may move them
+const GIT_STILL = new Set([...GIT_READ, "ls-tree", "grep", "describe", "shortlog", "reflog", "fetch", "remote", "config", "branch", "tag"]);
 const INTERPRETERS = new Set(["node", "nodejs", "deno", "bun", "python", "python3", "perl", "ruby", "php", "sh", "bash", "zsh"]);
 const SHELLS = new Set(["sh", "bash", "zsh"]);
 const INLINE_FLAG = /^-[a-zA-Z]*[ecpEr]$|^--eval$|^--print$/;
@@ -213,6 +215,14 @@ export function readsOnly(raw) {
   });
 }
 
+// Whether a command may have moved HEAD or the tree through git: it is not read-only and its text
+// names git with a subcommand outside the still ones, behind any wrapper. Errs toward yes.
+const GIT_CALL = /(?:^|[^\w.-])git(?:\s+(?:-[Cc]\s+\S+|-\S+))*\s+([a-z][\w-]*)(\s+list\b)?/g;
+export function gitWrites(raw) {
+  if (readsOnly(raw)) return false;
+  return [...String(raw).matchAll(GIT_CALL)].some((m) => !GIT_STILL.has(m[1]) && !(m[2] && (m[1] === "stash" || m[1] === "worktree")));
+}
+
 // Inline code that writes, wherever its target: a heredoc body is text to the shell but code
 // to the interpreter it feeds.
 export function inlineWrites(raw) {
@@ -338,11 +348,14 @@ function targetPaths(input, root) {
 }
 
 const PACKET = /^\.claude\/gate\/runs\/[^/]+\/brief-[a-z0-9-]+-\d+\.md$/;
+// the copies `gate open` took of files already modified then: what the task's diff starts from
+const BASE_COPY = /^\.claude\/gate\/runs\/[^/]+\/base(?![\w.-])/;
 
 function isEvidence(rel) {
   if (!rel.startsWith(".claude/gate/")) return false;
   if (rel.startsWith(".claude/gate/sessions/")) return true;
   if (PACKET.test(rel)) return true; // a helper's packet is written by `gate brief` only
+  if (BASE_COPY.test(rel)) return true;
   return EVIDENCE_FILES.has(rel.split("/").pop());
 }
 

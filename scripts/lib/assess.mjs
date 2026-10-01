@@ -3,12 +3,12 @@ import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { readEvents } from "./events.mjs";
 import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
-import { measure, policyFor, reconcileTier, tiered } from "./size.mjs";
+import { delegatedTier, leadDelegates, measure, policyFor, reconcileTier, tiered } from "./size.mjs";
 import { implementationHash } from "./rules.mjs";
 import { nextSeq } from "./events.mjs";
 import { evaluate } from "./rules.mjs";
 import { ensureSession, loadSession, saveSession } from "./session-state.mjs";
-import { diffSnapshots, snapshot } from "./tree.mjs";
+import { diffSnapshots, gitChanged, gitHead, gitNumstat, snapshot } from "./tree.mjs";
 
 export function readVerify(dir) {
   const file = path.join(dir, "verify.json");
@@ -43,32 +43,121 @@ export class LedgerParseError extends Error {}
 // PostToolUse hook right after any tool that can write files, so the stamp is the tool call
 // that made the change; and by every assess, where a change with no cause is dated now.
 // Returns true when the ledger changed and needs saving.
-export function stampSourceChange(ledger, hash, events) {
+export function stampSourceChange(ledger, hash, events, tree = null) {
   if (ledger.lastSourceHash === hash) return false;
   const first = ledger.lastSourceHash === undefined; // the opening stamp is not an edit
   const prev = ledger.lastSourceChangeSeq ?? 0;
+  const prevHash = ledger.lastSourceHash;
   const cause = events.filter((e) => (e.kind === "edit" || e.kind === "command") && e.seq > prev).pop();
   ledger.lastSourceHash = hash;
   ledger.lastSourceChangeSeq = first ? 0 : (cause?.seq ?? nextSeq());
   // a change no edit-tool event accounts for came through the shell (sed, a heredoc, git
   // apply); R16 reads this list at a size where only workers may edit
   if (!first && !events.some((e) => e.kind === "edit" && e.seq > prev)) {
-    ledger.unexplainedChanges = [...(ledger.unexplainedChanges ?? []), { seq: ledger.lastSourceChangeSeq, cmd: cause?.kind === "command" ? cause.cmd ?? null : null, agentType: cause?.agentType ?? null }];
+    const entry = { seq: ledger.lastSourceChangeSeq, cmd: cause?.kind === "command" ? cause.cmd ?? null : null, agentType: cause?.agentType ?? null };
+    // the files it may cover, and whether any command of this run since the last stamp could
+    // have written them: with none, the change is another session's and may be absorbed later
+    if (tree) {
+      const edited = editedSince(ledger, events);
+      entry.paths = diffSnapshots(ledger.baseline, tree.now).changed.filter((p) => tree.config.isSource(p) && !edited.has(p));
+      entry.writes = events.some((e) => e.kind === "command" && e.seq > prev && !e.readOnly);
+      entry.prev = prev;
+      entry.prevHash = prevHash;
+    }
+    ledger.unexplainedChanges = [...(ledger.unexplainedChanges ?? []), entry];
   }
   return true;
 }
 
-// The cheap path for the hook: snapshot, hash, stamp. No measuring, no git, and no session
-// write: session.json is the Stop hook's to update, and a concurrent write here could undo
-// its close marker. The session's cached tree is read for speed but never saved.
-export function stampNow(ctx) {
+function editedSince(ledger, events) {
+  const since = ledger.openedSeq ?? 0;
+  return new Set(events.filter((e) => e.kind === "edit" && e.seq > since).map((e) => e.path));
+}
+
+// Folds other sessions' commits into the baseline: a source file committed since open, clean
+// against HEAD, not edited or shell-written by this run. Skipped when this run wrote through git.
+function absorbForeign(root, ledger, now, config, events) {
+  const base = ledger.baseline;
+  const unexplained = ledger.unexplainedChanges ?? [];
+  // an entry from before paths were recorded cannot say which files it covers
+  if (!base?.head || unexplained.some((u) => !u.paths)) return false;
+  const head = gitHead(root);
+  if (!head || head === base.head || head === ledger.foreignHead) return false;
+  if (events.some((e) => e.kind === "command" && e.git && e.seq > (ledger.openedSeq ?? 0))) return false;
+  ledger.foreignHead = head;
+  const edited = editedSince(ledger, events);
+  const shell = new Set(unexplained.filter((u) => u.writes).flatMap((u) => u.paths));
+  const committed = gitChanged(root, base.head, head);
+  const moved = diffSnapshots(base, now).changed.filter((p) => config.isSource(p) && committed.has(p) && !edited.has(p) && !shell.has(p));
+  const dirty = moved.length ? gitNumstat(root, moved) : new Map();
+  const foreign = moved.filter((p) => !dirty.has(p));
+  if (!foreign.length) return true;
+  const without = { ...now.files };
+  for (const p of foreign) {
+    if (p in base.files) without[p] = base.files[p];
+    else delete without[p];
+  }
+  const rest = implementationHash({ files: without }, config);
+  for (const p of foreign) {
+    if (p in now.files) base.files[p] = now.files[p];
+    else delete base.files[p];
+  }
+  ledger.foreign = [...new Set([...(ledger.foreign ?? []), ...foreign])].sort();
+  // an unexplained change that was only these files is explained now: R16 and the freshness
+  // clock stop counting it
+  const gone = new Set(foreign);
+  const removed = new Map();
+  ledger.unexplainedChanges = unexplained.filter((u) => {
+    if (!u.paths.some((p) => gone.has(p))) return true;
+    u.paths = u.paths.filter((p) => !gone.has(p));
+    if (u.paths.length) return true;
+    removed.set(u.seq, u);
+    return false;
+  });
+  // the stamp walks back past every removed entry, and stops at one a real change made
+  let before = ledger.lastSourceHash;
+  while (removed.has(ledger.lastSourceChangeSeq)) {
+    const u = removed.get(ledger.lastSourceChangeSeq);
+    ledger.lastSourceChangeSeq = u.prev;
+    before = u.prevHash;
+  }
+  // the rest of the tree is as it was at that stamp, so only the absorbed files moved: the
+  // hash follows with no stamp, whatever content the commit gave them
+  if (rest === ledger.lastSourceHash || rest === before) ledger.lastSourceHash = implementationHash(now, config);
+  return true;
+}
+
+const plural = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;
+
+// Tells the lead at the edit that crosses into the delegated size, once per run; the
+// measurement is not saved, so the fence starts refusing at the next gate verb as before.
+function sizeWarning(root, ledger, config, now, logged) {
+  if (!tiered(ledger) || ledger.tierWarned) return null;
+  if (!logged.some((e) => e.kind === "edit" && config.isSource(e.path) && !config.isTest(e.path))) return null;
+  const policy = policyFor(ledger);
+  if (leadDelegates(ledger, policy) || (ledger.waivers ?? []).some((w) => w.key === "delegate")) return null;
+  const m = measure({ config, policy, diff: diffSnapshots(ledger.baseline, now), baseline: ledger.baseline, now, root, quick: true });
+  if (!delegatedTier(policy, m.tier)) return null;
+  return `done-gate: this task now measures ${plural(m.lines, "line")} in ${plural(m.files, "source file")}, which is size ${m.tier}. At that size the lead does not edit source: the next gate verb records the size and from then on the fence refuses your source edits. Hand the rest to a worker now: run \`gate brief worker\` and spawn done-gate:worker with the prompt it prints.`;
+}
+
+// The hook's path, bounded: git is asked for HEAD only when the source hash moved, and for one
+// numstat only after a lead edit of a sized file on a run not yet warned. Never writes session.json (the Stop hook's).
+export function stampNow(ctx, logged = []) {
   const current = currentLedger(ctx.stateDir, ctx.session);
-  if (!current || isDone(current.ledger)) return;
+  if (!current || isDone(current.ledger)) return null;
+  const { dir, ledger } = current;
   const config = loadConfig(ctx.root);
   const session = loadSession(ctx.stateDir, ctx.session);
-  const now = snapshot(ctx.root, session?.lastTree ?? current.ledger.baseline);
-  const events = current.ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
-  if (stampSourceChange(current.ledger, implementationHash(now, config), events)) saveLedger(current.dir, current.ledger);
+  const now = snapshot(ctx.root, session?.lastTree ?? ledger.baseline);
+  const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
+  const hash = implementationHash(now, config);
+  let changed = hash !== ledger.lastSourceHash && absorbForeign(ctx.root, ledger, now, config, events);
+  if (stampSourceChange(ledger, hash, events, { now, config })) changed = true;
+  const warning = sizeWarning(ctx.root, ledger, config, now, logged);
+  if (warning) ledger.tierWarned = true;
+  if (changed || warning) saveLedger(dir, ledger);
+  return warning;
 }
 
 export function buildState(ctx, { lastMessage = "" } = {}) {
@@ -86,19 +175,21 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
   const cache = session.lastTree ?? baseline;
   const now = snapshot(ctx.root, cache);
   saveSession(ctx.stateDir, { ...session, lastTree: { files: now.files, hash: now.hash } });
-  const diff = diffSnapshots(baseline, now);
 
   const sessions = current ? current.ledger.sessions : [ctx.session];
   const events = sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
+  // before the diff is taken, so another session's commit never shows as this task's change
+  const absorbed = current ? absorbForeign(ctx.root, current.ledger, now, config, events) : false;
+  const diff = diffSnapshots(baseline, now);
 
   // Size and freshness bookkeeping. The ledger is written only on a state flip (a step
   // reopened, or the source hash moved), so a plain `gate check` leaves it byte-identical.
   const policy = policyFor(current?.ledger);
   let tier = null;
   if (current) {
-    let flipped = stampSourceChange(current.ledger, implementationHash(now, config), events);
+    let flipped = stampSourceChange(current.ledger, implementationHash(now, config), events, { now, config }) || absorbed;
     if (tiered(current.ledger)) {
-      const measured = measure({ config, policy, diff, baseline, now, root: ctx.root });
+      const measured = measure({ config, policy, diff, baseline, now, root: ctx.root, dir: current.dir });
       if (reconcileTier(current.ledger, policy, measured).length) flipped = true;
       current.ledger.tier = { ...current.ledger.tier, measured };
       tier = current.ledger.tier;

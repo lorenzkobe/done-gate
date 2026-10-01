@@ -1,10 +1,11 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync, appendFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync, appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.mjs";
 import { nextSeq } from "./events.mjs";
 import { ensureSession, loadSession, updateSession } from "./session-state.mjs";
-import { gitHead, gitNumstat, taskBaseline } from "./tree.mjs";
+import { gitHead, gitNumstat, gitTracked, taskBaseline } from "./tree.mjs";
 import { emptyTier } from "./size.mjs";
 // size.mjs imports assess.mjs, which imports this module: loadPolicy is only ever called at
 // verb time, never at module top level, or the cycle would hit a TDZ error.
@@ -89,6 +90,32 @@ function ensureGitignore(root) {
   appendFileSync(file, `${current.length && !current.endsWith("\n") ? "\n" : ""}${line}\n`);
 }
 
+const BASED_MAX_FILES = 200;
+const BASED_MAX_BYTES = 1024 * 1024;
+
+// Copies each source file already modified or untracked at open to <run>/base/<rel>.base, so its
+// diff starts at open; only text whose content is what the task baseline holds qualifies.
+function copyBases(root, dir, start, dirty, config) {
+  if (!gitHead(root)) return [];
+  const tracked = gitTracked(root);
+  const untracked = Object.keys(start.files).filter((rel) => !tracked.has(rel)).sort();
+  const based = [];
+  for (const rel of [...dirty, ...untracked]) {
+    if (based.length === BASED_MAX_FILES) break;
+    const entry = start.files[rel];
+    if (!entry || entry.l === null || entry.s > BASED_MAX_BYTES || !config.isSource(rel)) continue;
+    const abs = path.join(root, rel);
+    if (!existsSync(abs) || statSync(abs).size !== entry.s) continue;
+    const buf = readFileSync(abs);
+    if (createHash("sha1").update(buf).digest("hex") !== entry.h) continue;
+    const copy = path.join(dir, "base", `${rel}.base`);
+    mkdirSync(path.dirname(copy), { recursive: true });
+    writeFileSync(copy, buf);
+    based.push(rel);
+  }
+  return based;
+}
+
 const TEMPLATE = `# {{slug}} — {{playbook}} (opened {{opened}})
 
 ## Task
@@ -153,8 +180,9 @@ export function openLedger(ctx, slug, playbook) {
     // the freshness clock starts here, so the first real edit gets a real timestamp
     lastSourceHash: implementationHash(start, config),
     lastSourceChangeSeq: 0,
-    // files already dirty vs HEAD now cannot be measured by git later; they get a line-count estimate
-    baseline: { hash: start.hash, files: start.files, seq: session.baselineSeq, head: gitHead(ctx.root), dirty },
+    // files already dirty vs HEAD now cannot be measured by git against HEAD later: the ones
+    // in based are diffed against their copy from open, the rest get a line-count estimate
+    baseline: { hash: start.hash, files: start.files, seq: session.baselineSeq, head: gitHead(ctx.root), dirty, based: copyBases(ctx.root, dir, start, dirty, config) },
     tier: ["feature", "bugfix", "refactor"].includes(playbook) ? emptyTier() : null,
     planSeq: null,
     taskSeq: null,

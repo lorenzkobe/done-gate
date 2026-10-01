@@ -1,6 +1,8 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { toPosixRel } from "./paths.mjs";
+// guard.mjs imports this module back: both sides only call each other inside functions
+import { gitWrites, readsOnly } from "./guard.mjs";
 
 // Wall-clock microseconds, strictly increasing within a process. Orders events across
 // parallel hook processes by wall clock without a shared counter file (which would race).
@@ -13,6 +15,7 @@ export function nextSeq() {
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const TEXT_LIMIT = 200;
+const CHROME_PREFIX = "mcp__claude-in-chrome__";
 
 function base(input) {
   return {
@@ -65,7 +68,12 @@ export function eventsFromHookInput(input, root) {
   if (tool === "Bash") {
     // a background run reports at launch, before it can fail, so its exit is never known
     const background = input.tool_input?.run_in_background === true;
-    return [{ ...b(), kind: "command", tool, cmd: String(input.tool_input?.command ?? "").slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...(background ? { background: true } : {}) }];
+    const cmd = String(input.tool_input?.command ?? "");
+    // both flags are read from the whole command, since the stored text is cut: git when this
+    // run may have moved HEAD itself, readOnly when the command cannot have written source
+    const git = gitWrites(cmd);
+    const readOnly = readsOnly(cmd);
+    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...(background ? { background: true } : {}), ...(git ? { git: true } : {}), ...(readOnly ? { readOnly: true } : {}) }];
   }
   if (tool === "Agent" || tool === "Task") {
     return [{ ...b(), kind: "agent", tool, spawned: input.tool_input?.subagent_type ?? null }];
@@ -73,10 +81,23 @@ export function eventsFromHookInput(input, root) {
   if (tool === "Skill") {
     return [{ ...b(), kind: "skill", tool, skill: input.tool_input?.skill ?? null }];
   }
-  if (tool.startsWith("mcp__claude-in-chrome__")) {
-    return [{ ...b(), kind: "browser", tool }];
+  if (tool.startsWith(CHROME_PREFIX)) {
+    return [{ ...b(), kind: "browser", tool, ...browserFields(tool.slice(CHROME_PREFIX.length), input.tool_input ?? {}) }];
   }
   return [];
+}
+
+// What a browser call did: the computer tool's action, else the tool's short name; the
+// element ref or the coordinates it aimed at; a batch keeps the same for each inner call.
+function browserFields(short, ti) {
+  const target = ti.ref ?? (Array.isArray(ti.coordinate) ? ti.coordinate.join(",") : null);
+  return {
+    action: short === "computer" && ti.action ? String(ti.action) : short,
+    ...(target !== null ? { target: String(target).slice(0, TEXT_LIMIT) } : {}),
+    ...(typeof ti.url === "string" ? { url: ti.url.slice(0, TEXT_LIMIT) } : {}),
+    // a batch item is {name, input}; a flat {tool, ...input} item is read the same way
+    ...(short === "browser_batch" && Array.isArray(ti.actions) ? { actions: ti.actions.map((a) => browserFields(String(a?.name ?? a?.tool ?? ""), a?.input ?? a ?? {})) } : {}),
+  };
 }
 
 export function sessionDir(stateDir, session) {
@@ -119,14 +140,16 @@ export const verbs = {
     // so the freshness clock for R4/R5 points at the tool call that made the change.
     // Subagents are skipped: their edits carry an agent event, and the next assess dates
     // the change to it; skipping keeps helper tool calls from racing the main session.
+    let warning = null;
     if (ctx.input?.hook_event_name === "PostToolUse" && WRITING_TOOLS.has(ctx.input.tool_name) && ctx.session && !ctx.input.agent_id) {
       try {
         const { stampNow } = await import("./assess.mjs");
-        stampNow(ctx);
+        warning = stampNow(ctx, events);
       } catch {
         // a stamp is a courtesy; the next assess dates the change itself
       }
     }
-    ctx.out(SILENT);
+    // additionalContext is the one hook output the model reads after a tool call
+    ctx.out(warning ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: warning } } : SILENT);
   },
 };
