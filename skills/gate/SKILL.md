@@ -38,7 +38,7 @@ line: follow it. `gate check` lists what is unmet (R1–R10, R13, R15, R16). You
    run side by side), spawn, `gate huddle add reviewer --file review-<n>.md`; high-risk: brief
    reviewer-2 too and spawn both at once; `gate verify` may run in the background meanwhile.
    Below large: fix and `gate huddle resolve H<k>.<i> --evidence <ptr>`. Large: `gate brief
-   worker`, SendMessage the worker the review path, then `gate huddle reply --file
+   worker`, SendMessage the worker its packet (it lists ids), then `gate huddle reply --file
    worker-<n>.md`. Same reviewer until a round is clean, three rounds at most; still disputed: `gate brief arbiter --item H<k>.<i>`, `done-gate:arbiter`. Disagree:
    `gate huddle dispute H<k>.<i> "<why>" --evidence <ptr>`, one round.
 6. `gate verify` after the last edit, Bash timeout 600000 ms. Drive the real UI if it
@@ -50,8 +50,8 @@ line: follow it. `gate check` lists what is unmet (R1–R10, R13, R15, R16). You
 
 - Two readings of the ask: `AskUserQuestion` before step 2.
 - A helper's self-report is never evidence; only `gate verify`, hook events and its file
-  count. One that stops with no file: SendMessage it once, "write <file> now"; never
-  brief the next round without the file.
+  count. One that stops with its file unfinished: `gate brief <role>` again; a fresh
+  helper continues from the file.
 - Waiting for a helper ends the turn; its hand-back wakes you. A run a dead session left open: `gate abandon <slug> "<reason>"`.
 - Ceiling: ten helpers per task (`gate size`).
 - A step you cannot do: ask the user, then `gate waive <key> "<why>"`.

@@ -187,6 +187,8 @@ function cleanClosingFixture(name, slug = "tidy", before = () => {}) {
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:refused"]);
   cli(repo, "case", ["close", "C2", "--test", "tests/a.test.ts:happy"]);
   cli(repo, "step", ["context", "done", "traced it", "--evidence", "events#1"]);
+  writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
+  cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
   cli(repo, "step", ["skeptic", "done", "no findings", "--evidence", "events#2"]);
   cli(repo, "step", ["implement", "done", "spec written", "--evidence", "docs/notes.md"]);
   before(repo);
@@ -752,6 +754,10 @@ function closeEveryStep(repo) {
     .map((l) => /\{([a-z0-9-]+)\}/.exec(l)?.[1])
     .filter(Boolean);
   assert.ok(keys.length > 0, "the playbook printed no keyed steps");
+  if (keys.includes("skeptic")) {
+    writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
+    cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
+  }
   for (const key of keys) cli(repo, "step", [key, "done", `did ${key}`, "--evidence", "docs/notes.md"]);
 }
 

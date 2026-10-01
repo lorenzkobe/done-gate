@@ -78,10 +78,10 @@ test("C2/C12 happy: one plain source file predicts tiny; {skeptic} and {review} 
   for (const key of ["tests", "verify", "close"]) assert.equal(stepOf(repo, key).state, null, key);
 });
 
-test("C3 happy: bugfix and refactor at predicted tiny drop only {review}; OPTIONAL_STEPS says which step each playbook may drop", () => {
+test("C3 happy: bugfix and refactor at predicted tiny drop {skeptic} and {review} like feature; OPTIONAL_STEPS says which step each playbook may drop", () => {
   assert.deepEqual(OPTIONAL_STEPS.feature, ["skeptic", "review"]);
-  assert.deepEqual(OPTIONAL_STEPS.bugfix, ["review"]);
-  assert.deepEqual(OPTIONAL_STEPS.refactor, ["review"]);
+  assert.deepEqual(OPTIONAL_STEPS.bugfix, ["skeptic", "review"]);
+  assert.deepEqual(OPTIONAL_STEPS.refactor, ["skeptic", "review"]);
   assert.deepEqual(optionalSteps({ playbook: "plan" }), []);
   assert.deepEqual(requiredSteps(policy, "tiny", { playbook: "feature" }), []);
   assert.deepEqual(requiredSteps(policy, "small", { playbook: "feature" }), ["review"]);
@@ -89,7 +89,8 @@ test("C3 happy: bugfix and refactor at predicted tiny drop only {review}; OPTION
   for (const playbook of ["bugfix", "refactor"]) {
     const { repo } = opened(`tiny-c3-${playbook}`, { playbook });
     assert.equal(stepOf(repo, "review").state, "N/A", playbook);
-    assert.deepEqual(ledgerOf(repo).tier.autoNa, ["review"], playbook);
+    assert.equal(stepOf(repo, "skeptic").state, "N/A", playbook);
+    assert.deepEqual(ledgerOf(repo).tier.autoNa.sort(), ["review", "skeptic"], playbook);
   }
 });
 

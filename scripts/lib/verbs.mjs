@@ -8,7 +8,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { isDraft, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers } from "./rules.mjs";
+import { briefOf, helperRun, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers } from "./rules.mjs";
 import { assess, buildState, readVerify, reviewFiles, readVerifyStarted } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { readEvents } from "./events.mjs";
@@ -187,7 +187,7 @@ export const verbs = {
     const states = { done: "DONE", skipped: "SKIPPED", na: "N/A", "n/a": "N/A" };
     const state = states[String(stateWord).toLowerCase()];
     if (!ref || !state) throw new UsageError('usage: gate step <n|key> <done|skipped|na> "<note>" [--evidence <pointer>]');
-    withLedger(ctx, (ledger) => {
+    withLedger(ctx, (ledger, dir) => {
       const step = ledger.steps.find((s) => s.key === ref || String(s.n) === ref);
       if (!step) throw new UsageError(`no step "${ref}"`);
       if (state === "SKIPPED" && step.key && EVIDENCED_KEYS.has(step.key)) {
@@ -195,6 +195,17 @@ export const verbs = {
       }
       if (state === "DONE" && !evidence) throw new UsageError("DONE needs --evidence <pointer> (events#seq, verify.json, review-<n>.md, decisions#n, or a file path)");
       if (state !== "DONE" && !note) throw new UsageError(`${state} needs a reason`);
+      // the design huddle is done when its newest file is finished and recorded and every
+      // finding in it is answered, not when the lead says so
+      if (state === "DONE" && step.key === "skeptic") {
+        const huddles = ledger.huddles.filter((h) => h.role === "skeptic" && h.file);
+        const last = huddles[huddles.length - 1];
+        if (!last) throw new UsageError("step {skeptic} needs a recorded skeptic huddle: `gate brief skeptic`, spawn done-gate:skeptic, then `gate huddle add skeptic --file skeptic-<n>.md`");
+        const full = path.join(dir, last.file);
+        if (!existsSync(full) || unfinishedFile(full)) throw new UsageError(`step {skeptic}: ${last.file} is not finished. Run \`gate brief skeptic\` again and spawn a fresh helper; its packet continues from the file.`);
+        const openItems = huddles.flatMap((h) => h.actOn.filter((a) => !a.closed));
+        if (openItems.length) throw new UsageError(`step {skeptic}: Act-on item(s) still open: ${openItems.map((a) => a.id).join(", ")}. Answer each, then \`gate huddle resolve <id> --evidence <pointer>\`.`);
+      }
       Object.assign(step, { state, note: note || null, evidence: evidence ?? null, seq: nextSeq() });
     });
     ctx.out(`step ${ref} → ${state}`);
@@ -224,12 +235,17 @@ export const verbs = {
         const full = path.join(dir, file);
         // a draft left by a helper cut off mid-write: every bullet reads "unverified". The
         // round is unfinished, not done — record nothing and send the lead back to re-brief it.
-        if (existsSync(full) && isDraft(readFileSync(full, "utf8"))) {
-          throw new UsageError(`${file} is a draft: the helper has not finished (every bullet reads "unverified"). Nothing recorded. Run \`gate brief ${role}\` again and spawn a fresh helper for the same round.`);
+        if (unfinishedFile(full)) {
+          if (helperRun(buildState(ctx, {}), role, file, briefOf(ledger, file)?.seq ?? 0).running) {
+            throw new UsageError(`${file} is unfinished and its helper is still running: wait for it. Nothing recorded.`);
+          }
+          throw new UsageError(isDraft(readFileSync(full, "utf8"))
+            ? `${file} is a draft: the helper has not finished (every bullet reads "unverified"). Nothing recorded. Run \`gate brief ${role}\` again and spawn a fresh helper for the same round.`
+            : `${file} is unfinished: a section still reads "- unverified". Nothing recorded. Run \`gate brief ${role}\` again and spawn a fresh helper; its packet continues from the file.`);
         }
       }
       const same = (a, b) => String(a).toLowerCase().replace(/\s+/g, " ").trim() === String(b).toLowerCase().replace(/\s+/g, " ").trim();
-      const { id, imported, answered } = withLedger(ctx, (ledger, dir) => {
+      const { id, answered, added } = withLedger(ctx, (ledger, dir) => {
         // adding the same file again re-reads it into the same huddle instead of a new round
         let huddle = file ? ledger.huddles.find((h) => h.role === role && h.file === file) : null;
         if (!huddle) {
@@ -242,8 +258,8 @@ export const verbs = {
           ledger.huddles.push(huddle);
         }
         const id = huddle.id;
-        let imported = 0;
         let answered = 0;
+        const added = [];
         const text = file && existsSync(path.join(dir, file)) ? readFileSync(path.join(dir, file), "utf8") : null;
         if (text !== null) {
           // every Act-on bullet becomes an item, so nothing can be left out (R15 checks the count).
@@ -257,8 +273,9 @@ export const verbs = {
               byHand.fileIndex = i;
               return;
             }
-            huddle.actOn.push({ id: `${id}.${huddle.actOn.length + 1}`, text: f.text, closed: null, fileIndex: i });
-            imported += 1;
+            const item = { id: `${id}.${huddle.actOn.length + 1}`, text: f.text, closed: null, fileIndex: i };
+            huddle.actOn.push(item);
+            added.push(item);
           });
           const item = (aid) => ledger.huddles.flatMap((h) => h.actOn).find((a) => a.id === aid);
           for (const d of parseDisputes(text)) {
@@ -286,9 +303,11 @@ export const verbs = {
             }
           }
         }
-        return { id, imported, answered };
+        return { id, answered, added };
       });
-      ctx.out(`${id} added (${role})${imported ? ` · ${imported} Act-on item${imported === 1 ? "" : "s"} recorded` : ""}${answered ? ` · ${answered} dispute${answered === 1 ? "" : "s"} answered` : ""}`);
+      ctx.out(`${id} added (${role})${added.length ? ` · ${added.length} Act-on item${added.length === 1 ? "" : "s"} recorded` : ""}${answered ? ` · ${answered} dispute${answered === 1 ? "" : "s"} answered` : ""}`);
+      // the ids the worker and the reviewer will be asked about, next to what each one says
+      for (const a of added) ctx.out(`${a.id} — ${a.text}`);
       printNext(ctx);
       return;
     }
@@ -365,7 +384,7 @@ export const verbs = {
         // validate every line first, so a bad reply changes nothing
         for (const r of replies) {
           const a = items.find((x) => x.id === r.id);
-          if (!a) throw new UsageError(`no act-on item ${r.id}`);
+          if (!a) throw new UsageError(`no act-on item ${r.id} (open: ${items.filter((x) => !x.closed).map((x) => x.id).join(", ") || "none"})`);
           if (a.closed) continue;
           // a fix is shown by a test, a source line, verify.json or an event, never by the
           // worker's own reply file or a packet

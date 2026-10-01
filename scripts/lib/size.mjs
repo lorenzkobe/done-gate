@@ -129,10 +129,9 @@ export function tierFor(policy, { files = 0, lines = 0, forced = [] } = {}) {
 }
 
 // The steps a tier may drop, per playbook, and the helper role each one stands for: a step
-// is required exactly when its role is in the tier's requires. Only the feature playbook has
-// a design huddle; every tiered playbook has a review. A dropped step comes back the moment
-// the diff outgrows the tier.
-export const OPTIONAL_STEPS = { feature: ["skeptic", "review"], bugfix: ["review"], refactor: ["review"] };
+// is required exactly when its role is in the tier's requires. Every tiered playbook has a
+// design huddle and a review. A dropped step comes back the moment the diff outgrows the tier.
+export const OPTIONAL_STEPS = { feature: ["skeptic", "review"], bugfix: ["skeptic", "review"], refactor: ["skeptic", "review"] };
 const STEP_ROLE = { skeptic: "skeptic", review: "reviewer" };
 const TIERED_PLAYBOOKS = new Set(Object.keys(OPTIONAL_STEPS));
 export function optionalSteps(ledgerOrPlaybook) {

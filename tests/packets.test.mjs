@@ -1190,7 +1190,7 @@ test("C6 happy: the Stop hook passes silently without finalising while a done-ga
 // C7 edge — the budgets the agent files state
 // ---------------------------------------------------------------------------
 
-test("C7 edge: reviewer is 40 turns at effort medium, reviewer-2 is 40 and the skeptic 24, and every agent's By-turn line matches its own frontmatter", () => {
+test("C7 edge: reviewer is 60 turns at effort medium, reviewer-2 is 60 and the skeptic 40, and every agent's By-turn line matches its own frontmatter", () => {
   const agentsDir = path.join(pluginRoot, "agents");
 
   function frontmatter(role) {
@@ -1206,7 +1206,7 @@ test("C7 edge: reviewer is 40 turns at effort medium, reviewer-2 is 40 and the s
   }
 
   // the numbers the requirements state
-  const WANT = { reviewer: 40, "reviewer-2": 40, skeptic: 24 };
+  const WANT = { reviewer: 60, "reviewer-2": 60, skeptic: 40 };
   for (const [role, turns] of Object.entries(WANT)) {
     const { fm } = frontmatter(role);
     assert.equal(fm.maxTurns, String(turns), `agents/${role}.md maxTurns`);

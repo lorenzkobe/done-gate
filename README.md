@@ -29,7 +29,7 @@ judgment out of the model and into hooks that can't be talked out of it.
 | "Done" with the click-through quietly skipped | Every playbook step ends `DONE`, `SKIPPED (reason)`, `WAIVED ("your words")` or `N/A (reason)`. Blank is impossible. |
 | Tests written from the same wrong assumption as the code | A QA agent writes tests from the **requirements and case table**, fenced so it can't read the new code or write outside `tests/`. |
 | "Tests pass" that were never run | `gate verify` runs lint/test/build itself and records exit codes. Only that file counts, and it goes stale the moment source changes again. |
-| Nobody else looked at it | An independent reviewer on a different model, fresh context, writes its own findings file. Act-on items block the close. |
+| Nobody else looked at it | An independent reviewer, fresh context, writes its own findings file. Act-on items block the close. |
 | A "waiver" you never gave | Every waiver is listed in the final report with its reason. |
 
 ## How it works
@@ -75,10 +75,9 @@ Three things make this hard to game:
 - **Findings are recorded, not paraphrased, and can be disputed once.** `gate huddle add`
   records every Act-on bullet of the reviewer's file (R15 blocks if one is missing). A
   finding the model believes wrong is disputed with evidence; the reviewer withdraws or
-  upholds it in writing; an upheld one goes to a fresh arbiter on the stronger model that
-  rules for one side. Every outcome is in the short report, and you can overrule.
+  upholds it in writing; an upheld one goes to a fresh arbiter that rules for one side. Every outcome is in the short report, and you can overrule.
 - **Helpers can't vouch for themselves.** QA may write only under the tests globs; the
-  reviewer may write only `review-<n>.md` (the second reviewer `review2-<n>.md`); the skeptic writes nothing. Their replies are
+  reviewer may write only `review-<n>.md` (the second reviewer `review2-<n>.md`); the skeptic only `skeptic-<n>.md`. Their replies are
   never evidence; their files and the hook events are.
 
 ## Install
@@ -148,7 +147,7 @@ attempt to finish.
 | R9 | high-risk paths changed without the second reviewer (same round rules as R5; an open reviewer-2 item is named) |
 | R10 | a repo check failed: the slop scan found a banner comment, step narration, an empty label, an end marker, an emoji, a bare TODO or a `@param` that echoes its name on an added non-test line (`"slop": false` in gate.json turns it off between tasks; mid-task, `gate waive slop` clears a false positive), or an opted-in check (`claude-md-budget`, `migration-number`) |
 | R13 | `.claude/gate.json` or the plugin's `models.json` changed mid-task |
-| R15 | a helper's file lists more findings than the ledger recorded |
+| R15 | a helper's file lists more findings than the ledger recorded, or a briefed skeptic, reviewer or arbiter stopped before finishing its file |
 | R16 | the lead edited source itself at size large (a worker's job); waivable with `gate waive delegate` |
 
 Waivers are the only way past a keyed step: the user OKs it, Claude records the reason
@@ -166,9 +165,13 @@ with `gate waive <key> "…"`, and the report lists every waiver.
   the same repo: the tree hash is unchanged, the gate stays silent.
 - **Helpers write their file first.** A skeptic, reviewer or arbiter may only read its packet
   and write its own findings file until that file exists; every other read or shell call is
-  refused with "write your draft first". A helper that runs out of turns still leaves a file.
-  A draft left behind this way is not a finished round: `gate brief` re-briefs the same round
-  and `gate huddle add` refuses to record it until a fresh helper rewrites it. Two reviewers
+  refused with "write your draft first". It then rewrites the file after each confirmed
+  finding, so a helper that runs out of turns leaves what it found. A file with a section
+  still reading `- unverified` is not a finished round: `gate check` names it once its helper
+  has stopped, `gate huddle add` refuses to record it, and `gate brief <role>` briefs the
+  same round again with the file in the packet, so a fresh helper continues from it and
+  keeps the finished sections. Turn limits: skeptic 40, reviewers and QA 60, worker 100,
+  arbiter 12. Two reviewers
   of one role may be out at once, on two pieces: each packet carries its own file number
   (`brief-reviewer-2.md` asks for `review-2.md`), and a reviewer that has written its draft
   is free while the other still owes its own.
@@ -227,7 +230,9 @@ tests itself, from the case table, before the code.
 feature skips the design critique up front and a tiny one skips the reviewer too; if the diff
 then outgrows the prediction, the step comes back and the gate says so. Tiny is reached only
 by evidence: a plan naming exactly one source file, or a measurement with no estimated lines. `gate size` prints the
-numbers. The policy is in `models.json`. Hard ceiling: **ten helper invocations per task**,
+numbers. The skeptic step is on the feature, bugfix and refactor playbooks at standard and
+large; it cannot close without a finished, recorded `skeptic-<n>.md` whose Act-on items are
+all closed. The policy is in `models.json`. Hard ceiling: **ten helper invocations per task**,
 typically two or three. Always-on context cost is about 500 tokens; everything the hooks do
 is off-model.
 
@@ -237,16 +242,16 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 
 | Verb | Does |
 | --- | --- |
-| `open <slug> <feature\|bugfix\|refactor\|plan>` | start a ledger with the playbook's steps |
+| `open <slug> <feature\|bugfix\|refactor\|plan\|investigation>` | start a ledger with the playbook's steps |
 | `note task\|context\|plan "…"` · `note plan "…" --files a,b` | write the prose sections (stamps the order for R2); Context is Traced (file:line pointers), Related, Research; `--files` predicts the size |
 | `case add "…" --kind <kind>` · `case close C1 --test file:name \| --na "…"` | the case table; kinds: happy, edge, refused, boundary, idempotent, reported-surface, performance |
 | `step <key\|n> done\|skipped\|na "…" [--evidence ptr]` | close a playbook step |
-| `huddle add <role> --file review-1.md` · `acton` · `resolve` · `dispute` | reviewer rounds and Act-on items |
-| `huddle reply --file worker-1.md` | record a worker's answers: `fixed:` closes an item, `disagree:` disputes it |
+| `huddle add <role> --file review-1.md` · `acton` · `resolve` · `dispute` | reviewer rounds and Act-on items; `add` prints each recorded id with its finding |
+| `huddle reply --file worker-<n>.md` | record a worker's answers: `fixed:` closes an item, `disagree:` disputes it; an unknown id fails and lists the open ones. Worker reply files are their own stream, numbered like their packet (`brief-worker-2.md` asks for `worker-2.md`) |
 | `waive <key> "<reason>"` | record a waiver; it shows in the report |
 | `verify [--step verify-before]` | run the repo's verify commands, write `verify.json` |
 | `decide <phase> <decision> <why> <evidence> <result>` | append a decision-log row |
-| `brief <skeptic\|qa\|worker\|reviewer\|reviewer-2\|arbiter> [--files a,b \| a.ts:1-400] [--item H#.#]` | write the helper's packet and print its spawn prompt; a reviewer's packet is numbered like its file |
+| `brief <skeptic\|qa\|worker\|reviewer\|reviewer-2\|arbiter> [--files a,b \| a.ts:1-400] [--item H#.#]` | write the helper's packet and print its spawn prompt; a packet is numbered like the file it names; a worker's `--files` are the files it owns |
 | `abandon <slug> "<reason>"` | give a run up: marks it abandoned with the reason; it stops attaching to sessions and blocking turns |
 | `check` · `steps` · `size` · `report [--brief]` · `close` · `doctor` · `help` | unmet items only · every step · the report, short or full · close a clean run · inspect config · the verbs |
 

@@ -4,6 +4,7 @@ import path from "node:path";
 import { effectiveTier, leadDelegates, policyFor, requires } from "./size.mjs";
 import { changedUnits, fileDiff, gitTracked, sliceEnd } from "./tree.mjs";
 import { scanDiff } from "./slop.mjs";
+import { toPosixRel } from "./paths.mjs";
 
 const SLOP_SHOWN = 12;
 
@@ -98,6 +99,13 @@ function bullets(lines) {
 export function isDraft(text) {
   const found = bullets(String(text ?? "").replace(/\r/g, "").split("\n"));
   return found.length > 0 && found.every((b) => /^(?:[^:]{1,40}:\s*)?unverified[\s.,;:!-]*$/i.test(b));
+}
+
+// Past the draft, but a section still reads the bare "- unverified": the helper was cut off.
+// A verdict line ("tests: … unverified") is a finished line, not a placeholder.
+export function isPartial(text) {
+  if (isDraft(text)) return false;
+  return bullets(String(text ?? "").replace(/\r/g, "").split("\n")).some((b) => /^unverified[\s.,;:!-]*$/i.test(b));
 }
 
 // Every Act-on bullet of a helper file. "none" and a missing section are empty.
@@ -245,6 +253,34 @@ export function lastEditSeq(state, config, ledger) {
   const edits = (state.events ?? []).filter((e) => implementationEdit(e, config));
   const fromEvents = edits.length ? edits[edits.length - 1].seq : (ledger.baseline?.seq ?? 0);
   return Math.max(fromEvents, ledger.lastSourceChangeSeq ?? 0);
+}
+
+export function fileRole(name) {
+  return name.startsWith("review2-") ? "reviewer-2" : name.startsWith("review-") ? "reviewer" : name.startsWith("skeptic-") ? "skeptic" : name.startsWith("arbiter-") ? "arbiter" : "worker";
+}
+
+// The brief that named a helper file: reviewer pieces under ledger.seen, the other roles
+// under ledger.briefed (kept apart so a ledger with no seen map stays a legacy one).
+export function briefOf(ledger, file) {
+  return ledger.seen?.[file] ?? ledger.briefed?.[file] ?? null;
+}
+
+// A stop event at max turns is not proven to arrive, so a helper silent for longer than
+// this counts as gone.
+export const HELPER_MAX_MS = 45 * 60 * 1000;
+
+// Who worked on a helper file since its brief, per agent id: the agents that wrote it, or
+// with none, those of the role started since. Silence is measured from an agent's newest event.
+export function helperRun(state, role, file, since, now = Date.now()) {
+  const rel = toPosixRel(state.root, path.join(state.dir, file));
+  const events = (state.events ?? []).filter((e) => e.seq > since && e.agent && isRole(e.agentType, role));
+  const writers = events.filter((e) => e.kind === "edit" && e.path === rel).map((e) => e.agent);
+  const ids = [...new Set(writers.length ? writers : events.filter((e) => e.kind === "subagent-start").map((e) => e.agent))];
+  const running = ids.some((id) => {
+    const own = events.filter((e) => e.agent === id);
+    return now - Date.parse(own[own.length - 1].ts) < HELPER_MAX_MS && !own.some((e) => e.kind === "subagent-stop");
+  });
+  return { ran: ids.length > 0, running };
 }
 
 // Review rounds per reviewer role; past it a round is briefed only for a file no round saw.
@@ -418,6 +454,12 @@ export function unfinishedVerify(state) {
   return { startedAt: started.startedAt ?? "an unknown time", pid: started.pid ?? null, running: processAlive(started.pid) };
 }
 
+export function unfinishedFile(full) {
+  if (!existsSync(full)) return false;
+  const text = readFileSync(full, "utf8");
+  return isDraft(text) || isPartial(text);
+}
+
 function waived(ledger, key) {
   return (ledger.waivers ?? []).some((w) => w.key === key);
 }
@@ -589,7 +631,7 @@ export function evaluate(state) {
   }
 
   // R15: every Act-on finding in a helper file is recorded from the file (hand-typed items do
-  // not count toward it), and every helper file in the run dir belongs to a huddle.
+  // not count), every helper file belongs to a huddle, and an unfinished one is handed on.
   for (const h of ledger.huddles ?? []) {
     if (!h.file || !state.dir) continue;
     const file = path.join(state.dir, h.file);
@@ -603,12 +645,20 @@ export function evaluate(state) {
   const recorded = new Set((ledger.huddles ?? []).map((h) => h.file).filter(Boolean));
   for (const f of state.reviews ?? []) {
     if (recorded.has(f)) continue;
-    // a draft left by a cut-off helper is an unfinished round, not a written-but-unrecorded
-    // file: brief re-briefs the same round instead
-    const full = state.dir ? path.join(state.dir, f) : null;
-    if (full && existsSync(full) && isDraft(readFileSync(full, "utf8"))) continue;
-    const role = f.startsWith("review2-") ? "reviewer-2" : f.startsWith("review-") ? "reviewer" : f.startsWith("skeptic-") ? "skeptic" : "arbiter";
-    unmet.push({ rule: "R15", text: `${f} was written but never recorded. Run \`gate huddle add ${role} --file ${f}\`.` });
+    // a draft or partial file left by a cut-off helper is an unfinished round, not a
+    // written-but-unrecorded file: brief re-briefs the same round instead
+    if (state.dir && unfinishedFile(path.join(state.dir, f))) continue;
+    unmet.push({ rule: "R15", text: `${f} was written but never recorded. Run \`gate huddle add ${fileRole(f)} --file ${f}\`.` });
+  }
+  for (const [f, brief] of Object.entries({ ...(ledger.briefed ?? {}), ...(ledger.seen ?? {}) })) {
+    const role = fileRole(f);
+    if (role === "worker" || !state.dir) continue;
+    const full = path.join(state.dir, f);
+    if (existsSync(full) && !unfinishedFile(full)) continue;
+    const run = helperRun(state, role, f, brief.seq ?? 0);
+    if (!run.ran || run.running) continue;
+    const again = role === "arbiter" && brief.item ? ` --item ${brief.item}` : Array.isArray(brief.files) ? ` --files ${brief.files.join(",")}` : "";
+    unmet.push({ rule: "R15", text: `the ${role} stopped before finishing ${f}: \`gate brief ${role}${again}\` and spawn a fresh one, its packet continues from the file.` });
   }
 
   return unmet;

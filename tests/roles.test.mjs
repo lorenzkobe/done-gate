@@ -87,7 +87,7 @@ const AGENTS_DIR = path.join(pluginRoot, "agents");
 // every one runs on the session's own model (agents/*.md: model: inherit)
 const EXPECTED_ROLES = { skeptic: "inherit", qa: "inherit", reviewer: "inherit", "reviewer-2": "inherit", arbiter: "inherit", worker: "inherit" };
 const EXPECTED_CEILING = 10;
-const WORKER_MAX_TURNS = 60;
+const WORKER_MAX_TURNS = 100;
 
 // roles that must never touch code: they read and write their own findings file only.
 // qa is deliberately absent — it writes tests, so agents/qa.md carries no disallowedTools.
@@ -225,7 +225,7 @@ test("C3 refused: `gate brief bogus` fails with a usage message listing every ro
 // C4
 // ---------------------------------------------------------------------------
 
-test("C4 edge: every role in models.json has an agents/<role>.md whose model matches, worker runs 60 turns with no Edit ban, and the reading roles still ban Edit", () => {
+test("C4 edge: every role in models.json has an agents/<role>.md whose model matches, worker runs 100 turns with no Edit ban, and the reading roles still ban Edit", () => {
   for (const [role, model] of Object.entries(EXPECTED_ROLES)) {
     const file = path.join(AGENTS_DIR, `${role}.md`);
     assert.ok(existsSync(file), `agents/${role}.md does not exist`);
@@ -381,7 +381,7 @@ function matches(text, re, file, why = "") {
 // C1 — SKILL.md fits the budget and names every verb and agent the team loop needs
 // ---------------------------------------------------------------------------
 
-test("C1 happy: SKILL.md stays under 4096 bytes and names the whole team loop — open/note/case, brief worker, done-gate:worker, SendMessage, huddle reply, huddle dispute, arbiter, three rounds, ten helpers, verify, report --brief, and the write-now resume", () => {
+test("C1 happy: SKILL.md stays under 4096 bytes and names the whole team loop — open/note/case, brief worker, done-gate:worker, SendMessage, huddle reply, huddle dispute, arbiter, three rounds, ten helpers, verify, report --brief, and the hand-off to a fresh helper", () => {
   const size = statSync(SKILL_MD).size;
   assert.ok(size < 4096, `skills/gate/SKILL.md is ${size} bytes, the budget is 4096`);
 
@@ -413,14 +413,12 @@ test("C1 happy: SKILL.md stays under 4096 bytes and names the whole team loop �
   // the helper ceiling — ten per task
   matches(md, /\bten\b[^.]{0,40}helper/i, file, "the ceiling of ten helper invocations");
 
-  // A helper that stops without its file is resumed exactly once, with the "write <file> now"
-  // message scripts/lib/brief.mjs itself prints; the next round waits for the file. The
-  // requirement is the rule, not the word "resume", so the substance is what is pinned:
-  // the no-file case, the once, the message, and the refusal to go on without the file.
-  matches(md, /(no file|without (its|the|a) file|stops? with no file)/i, file, "the case the rule covers: a helper that stopped without its file");
-  matches(md, /\bonce\b/i, file, "the helper is nudged once, not repeatedly");
-  matches(md, /write [^.]{0,40}\bnow\b/i, file, 'the "write <file> now" resume message');
-  matches(md, /never brief[^.]{0,60}(file|round)/i, file, "no next round without the file");
+  // A helper that stops with its file missing or unfinished is handed off: the role is briefed
+  // again and a fresh helper continues from the file. The "write <file> now" nudge is gone.
+  matches(md, /brief[^.]{0,80}again|re-?brief/i, file, "the hand-off: brief the role again");
+  matches(md, /fresh/i, file, "the hand-off: a fresh helper");
+  matches(md, /continues?\b/i, file, "the hand-off: the fresh helper continues from the file");
+  assert.ok(!/write [^.]{0,40}\bnow\b/i.test(flat(md)), `${file} still carries the "write <file> now" resume message`);
 });
 
 // ---------------------------------------------------------------------------

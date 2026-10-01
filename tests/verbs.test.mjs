@@ -116,6 +116,8 @@ test("close closes a clean run itself, marks the close step and clears the sessi
   cli(repo, "note", ["task", "t"]);
   cli(repo, "note", ["plan", "p"]);
   cli(repo, "step", ["context", "done", "traced it", "--evidence", "events#1"]);
+  write(runDir(repo), "skeptic-1.md", "# Skeptic 1\n\n## Act on\n- none\n");
+  cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
   cli(repo, "step", ["skeptic", "done", "no findings", "--evidence", "events#2"]);
   cli(repo, "step", ["implement", "done", "spec written", "--evidence", "docs/spec.md"]);
   const dir = runDir(repo);

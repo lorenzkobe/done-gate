@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { buildState } from "./assess.mjs";
 import { caseTable, verifyLines } from "./report.mjs";
@@ -7,7 +7,7 @@ import { leadDelegates, renderTierBlock, tierMax, tierOf } from "./size.mjs";
 import { fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs";
 import { ROLES, flag, positional } from "./verbs.mjs";
 import { toPosixRel } from "./paths.mjs";
-import { REVIEW_CAP, changedUnitsOf, isDraft, isRole, parseEntry, pathOf, reviewScope, uncovered, unfinishedVerify } from "./rules.mjs";
+import { REVIEW_CAP, changedUnitsOf, helperRun, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { nextSeq } from "./events.mjs";
@@ -123,12 +123,12 @@ function header(state, role, round) {
   return out;
 }
 
-function mayWrite(state, role, reviewN, skepticN, arbiterN = 1) {
-  if (role === "skeptic") return `only ${path.join(state.dir, `skeptic-${skepticN}.md`)}; reply with its Act-on list only.`;
-  if (role === "arbiter") return `only ${path.join(state.dir, `arbiter-${arbiterN}.md`)}; reply with the ruling line only.`;
+function mayWrite(state, role, n) {
+  if (role === "skeptic") return `only ${path.join(state.dir, `skeptic-${n}.md`)}; reply with its Act-on list only.`;
+  if (role === "arbiter") return `only ${path.join(state.dir, `arbiter-${n}.md`)}; reply with the ruling line only.`;
   if (role === "qa") return `only files under the tests globs (${state.config.tests.join(", ")}); nothing else.`;
-  if (role === "worker") return `the files named in this packet and files under the tests globs (${state.config.tests.join(", ")}); on a review round also ${path.join(state.dir, `worker-${reviewN}.md`)}.`;
-  return `only ${path.join(state.dir, `${reviewPrefix(role)}-${reviewN}.md`)}.`;
+  if (role === "worker") return `the files named in this packet and files under the tests globs (${state.config.tests.join(", ")}); on a review round also ${path.join(state.dir, `worker-${n}.md`)}.`;
+  return `only ${path.join(state.dir, `${reviewPrefix(role)}-${n}.md`)}.`;
 }
 
 // The reviewer writes review-<n>.md, the second reviewer review2-<n>.md: two streams, so
@@ -208,10 +208,15 @@ function diffOrFiles(state, heading = "Diff", files = state.changed ?? [], range
   ];
 }
 
-export function renderPacket(state, role, { round, reviewN, skepticN = 1, arbiterN = 1, item = null, piece = null }) {
+// n is the number of the role's own file (skeptic-<n>.md, review-<n>.md, worker-<n>.md);
+// continueFrom is the text an earlier helper left in that file before it stopped.
+export function renderPacket(state, role, { round, n, item = null, piece = null, owned = null, continueFrom = null }) {
   const out = header(state, role, round);
-  out.push("## You may write", "", mayWrite(state, role, reviewN, skepticN, arbiterN), "");
-  const files = planFiles(state.ledger);
+  out.push("## You may write", "", mayWrite(state, role, n), "");
+  if (continueFrom !== null) {
+    out.push("## Continue from", "", "An earlier helper stopped before finishing your file. It is on disk as shown here: keep its finished sections, never reset it to the all-unverified draft, and finish the sections that still read \"- unverified\", rewriting the file after each finding.", "", ...fence(continueFrom.trimEnd()), "");
+  }
+  const files = owned ?? planFiles(state.ledger);
   if (role === "arbiter") {
     out.push(...arbiterBody(state, item));
   } else if (role === "skeptic") {
@@ -232,11 +237,14 @@ export function renderPacket(state, role, { round, reviewN, skepticN = 1, arbite
     const qaTests = (state.changed ?? []).filter((p) => state.config.isTest(p));
     out.push("## Tests QA wrote", "", ...(qaTests.length ? qaTests.map((t) => `- ${t}`) : ["_none yet_"]), "");
     out.push("## Test command", "", ...testCommands(state), "");
-    const open = state.ledger.huddles.filter((h) => h.role === "reviewer" || h.role === "reviewer-2").flatMap((h) => h.actOn.filter((a) => !a.closed));
+    // a piece's worker answers the findings that cite its files; the rest go to the packet
+    // briefed without --files
+    const cites = (text) => owned.some((f) => new RegExp(`(?<![\\w/.-])${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`).test(text));
+    const open = state.ledger.huddles.filter((h) => h.role === "reviewer" || h.role === "reviewer-2").flatMap((h) => h.actOn.filter((a) => !a.closed && (!owned || cites(a.text))));
     if (open.length) {
       out.push(...diffOrFiles(state, "Diff so far"));
       out.push("## Open findings", "", ...open.map((a) => `- ${a.id} — ${a.text}`), "");
-      out.push("## Write your replies to", "", path.join(state.dir, `worker-${reviewN}.md`), "");
+      out.push("## Write your replies to", "", path.join(state.dir, `worker-${n}.md`), "");
     }
   } else {
     const ranges = new Map();
@@ -253,10 +261,11 @@ export function renderPacket(state, role, { round, reviewN, skepticN = 1, arbite
     out.push(...diffOrFiles(state, "Diff", shown, ranges));
     out.push("## Verify", "", ...verifyLines(state.verify, { tails: false, unfinished: unfinishedVerify(state) }), "");
     out.push("## Test command", "", ...testCommands(state), "");
-    out.push("", "## Write your findings to", "", path.join(state.dir, `${reviewPrefix(role)}-${reviewN}.md`), "");
+    out.push("", "## Write your findings to", "", path.join(state.dir, `${reviewPrefix(role)}-${n}.md`), "");
     if (role === "reviewer-2") {
-      // the newest finished review-<n>.md; a draft (the reviewer still running) says nothing yet
-      const finished = state.reviews.filter((f) => /^review-\d+\.md$/.test(f)).map((f) => ({ n: fileNumber(f), text: readFileSync(path.join(state.dir, f), "utf8") })).filter((r) => !isDraft(r.text)).sort((a, b) => b.n - a.n)[0];
+      // the newest finished review-<n>.md; a draft or partial file (the reviewer still running,
+      // or cut off) is not a review yet
+      const finished = state.reviews.filter((f) => /^review-\d+\.md$/.test(f)).map((f) => ({ n: fileNumber(f), text: readFileSync(path.join(state.dir, f), "utf8") })).filter((r) => !isDraft(r.text) && !isPartial(r.text)).sort((a, b) => b.n - a.n)[0];
       out.push(finished ? `## Review ${finished.n}` : "## Review", "", finished ? finished.text.trim() : "_no finished review-<n>.md yet; the reviewer may still be running_", "");
     }
   }
@@ -266,7 +275,7 @@ export function renderPacket(state, role, { round, reviewN, skepticN = 1, arbite
 export const verbs = {
   brief(ctx) {
     const [role] = positional(ctx.args);
-    if (!ROLES.includes(role)) throw new UsageError(`usage: gate brief <${ROLES.join("|")}> [--round n] [--files a,b]`);
+    if (!ROLES.includes(role)) throw new UsageError(`usage: gate brief <${ROLES.join("|")}> [--files a,b] [--item H#.#] [--round n, qa only]`);
     const state = buildState(ctx, {});
     if (!state.ledger) throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
     const reviewing = role === "reviewer" || role === "reviewer-2";
@@ -321,51 +330,61 @@ export const verbs = {
         : `size ${eff}: write the tests yourself from the case table, red first; blind QA is for ${at}`);
     }
     const rounds = state.ledger.huddles.filter((h) => h.role === role).length;
-    // a round whose earlier file never appeared is not a round: the helper is resumed and
-    // told to write, not briefed again
-    const missing = state.ledger.huddles.filter((h) => h.role === role && h.file && !existsSync(path.join(state.dir, h.file)));
-    if (missing.length) throw new UsageError(`${role} round ${missing[0].round} recorded ${missing[0].file} but the file is not in the run dir; resume that helper and have it write the file (SendMessage: "write ${missing[0].file} now") before briefing another round`);
+    const records = { ...(state.ledger.briefed ?? {}), ...(state.ledger.seen ?? {}) };
+    // a recorded round whose file never appeared: one a brief named is briefed again under
+    // the same number; one no brief named has no packet to hand on, so its file comes back first
+    const lost = state.ledger.huddles.find((h) => h.role === role && h.file && !records[h.file] && !existsSync(path.join(state.dir, h.file)));
+    if (lost) throw new UsageError(`${role} round ${lost.round} recorded ${lost.file} but the file is not in the run dir and no \`gate brief ${role}\` named it; put the helper's file back, then brief again (a fresh helper continues from a file its brief named)`);
     // the cap counts review files written as well as huddles recorded, so skipping
     // `gate huddle add` cannot stretch the loop; each reviewer role has its own file stream
-    // a draft left by a cut-off helper (every bullet "unverified") is not a finished file: it
-    // does not consume a round number, so a re-brief reuses it instead of orphaning it
-    const isDraftFile = (f) => {
-      const full = path.join(state.dir, f);
-      return existsSync(full) && isDraft(readFileSync(full, "utf8"));
-    };
+    // a draft or partial file left by a cut-off helper is not a finished file: it does not
+    // consume a round number, so a re-brief reuses it instead of orphaning it
+    const unfinished = (f) => unfinishedFile(path.join(state.dir, f));
     const numbers = (prefix) => state.reviews.filter((f) => f.startsWith(prefix)).map(fileNumber);
-    // a number is free again only when its round is over: a draft whose helper was cut off,
-    // or a packet nobody ran. A round still running keeps its number, so a second piece
-    // briefed meanwhile takes the next one and the two reviewers run side by side.
-    const runningSince = (seq) => {
-      const events = (state.events ?? []).filter((e) => isRole(e.agentType, role) && e.seq > seq);
-      const started = events.find((e) => e.kind === "subagent-start");
-      return Boolean(started) && !events.some((e) => e.kind === "subagent-stop" && e.seq > started.seq);
-    };
+    const sameFiles = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
+    // a number is free again only when its round is over (a cut-off helper's file, a packet
+    // nobody ran); a round still running keeps it, so a second piece takes the next one
     const next = (prefix) => {
-      const briefed = Object.keys(state.ledger.seen ?? {}).filter((f) => f.startsWith(prefix)).map(fileNumber);
+      const briefed = Object.keys(records).filter((f) => f.startsWith(prefix)).map(fileNumber);
       const ns = [...new Set([...numbers(prefix), ...briefed])].sort((a, b) => b - a);
       if (!ns.length) return 1;
-      const same = (f) => !piece || !f || (f.length === piece.files.length && f.every((x) => piece.files.includes(x)));
+      const same = (f) => !piece || !f || sameFiles(f, piece.files);
       const reusable = (n) => {
         const name = `${prefix}${n}.md`;
-        const seen = state.ledger.seen?.[name];
-        const unfinished = isDraftFile(name) || (Boolean(seen) && !state.reviews.includes(name));
-        return unfinished && same(seen?.files) && !runningSince(seen?.seq ?? Infinity);
+        const record = records[name];
+        const open = unfinished(name) || (Boolean(record) && !state.reviews.includes(name));
+        return open && same(record?.files) && !(record && helperRun(state, role, name, record.seq).running);
       };
       return ns.find(reusable) ?? ns[0] + 1;
     };
-    const reviewN = next(`${reviewPrefix(role)}-`);
-    // a reviewer's packet carries its file's number, so two packets out at once never collide
-    const round = reviewing ? reviewN : Number(flag(ctx.args, "--round")) || rounds + 1;
-    const finished = (prefix) => state.reviews.filter((f) => f.startsWith(prefix) && !isDraftFile(f)).length;
+    // a worker's packet and reply file follow its piece: the same --files gets the same
+    // number back, another piece the next one, so two workers out at once never share a file
+    const named = role === "worker" ? flag(ctx.args, "--files") : undefined;
+    const owned = named === undefined ? null : [...new Set(named.split(",").map((f) => {
+      const rel = toPosixRel(ctx.root, f.trim());
+      if (!rel) throw new UsageError(`--files: "${f.trim()}" is not a file inside the repo; name the worker's files as a,b`);
+      return rel;
+    }))];
+    const workerNumber = () => {
+      const mine = Object.entries(state.ledger.briefed ?? {}).filter(([f]) => f.startsWith("worker-"));
+      const again = mine.find(([, v]) => sameFiles(v.files ?? [], owned ?? []));
+      if (again) return fileNumber(again[0]);
+      const onDisk = readdirSync(state.dir).filter((f) => /^(?:brief-)?worker-\d+\.md$/.test(f)).map(fileNumber);
+      return Math.max(0, ...onDisk, ...mine.map(([f]) => fileNumber(f))) + 1;
+    };
+    const prefix = reviewing ? `${reviewPrefix(role)}-` : role === "qa" ? null : `${role}-`;
+    const n = role === "worker" ? workerNumber() : prefix ? next(prefix) : 0;
+    // a packet carries its file's number, so two packets out at once never collide and the
+    // write guard owes the file the packet names; QA writes no file of its own
+    const round = prefix ? n : Number(flag(ctx.args, "--round")) || rounds + 1;
+    const finished = (stream) => state.reviews.filter((f) => f.startsWith(stream) && !unfinished(f)).length;
     // a ledger from before the second stream recorded reviewer-2 rounds on review-<n>.md
     const legacySeconds = state.ledger.huddles.filter((h) => h.role === "reviewer-2" && /^review-/.test(h.file ?? "")).length;
     const written = finished("review-") - legacySeconds;
     // past the cap a round is briefed only for a file no round of this role saw, so the cap
     // can never leave R5/R9 waiting on a round nobody may brief. With pieces the cap counts
     // the rounds that saw the piece's files (finished files, recorded or not), as R5 does.
-    const seenRounds = Object.entries(state.ledger.seen ?? {}).filter(([f]) => f.startsWith(`${reviewPrefix(role)}-`) && state.reviews.includes(f) && !isDraftFile(f)).map(([, v]) => v);
+    const seenRounds = Object.entries(state.ledger.seen ?? {}).filter(([f]) => f.startsWith(`${reviewPrefix(role)}-`) && state.reviews.includes(f) && !unfinished(f)).map(([, v]) => v);
     // a whole-file entry counts every round that saw the file; a slice counts the rounds that
     // saw any of its lines (a whole-file round, or a slice sharing a line)
     const sawEntry = (r, entry) => {
@@ -387,8 +406,6 @@ export const verbs = {
     if (done >= REVIEW_CAP && !(legacy && role === "reviewer-2") && !stillOpen) {
       throw new UsageError(`${role} round ${done + 1}: three rounds is the cap. What is still disputed goes to the arbiter (\`gate brief arbiter --item H<k>.<i>\`, spawn done-gate:arbiter); what is still open is fixed and closed with \`gate huddle resolve\`.`);
     }
-    const skepticN = next("skeptic-");
-    const arbiterN = next("arbiter-");
     let item = null;
     if (role === "arbiter") {
       const aid = flag(ctx.args, "--item");
@@ -397,17 +414,26 @@ export const verbs = {
       if (!item) throw new UsageError(`no act-on item ${aid}`);
       if (!item.dispute || item.dispute.verdict !== "upheld") throw new UsageError(`${aid} is not a disputed item the reviewer upheld; the arbiter only settles those`);
     }
-    // what this round's reviewer is shown; the huddle for its file inherits it, and edits
-    // after a clean round are judged against it
+    const own = prefix ? `${prefix}${n}.md` : null;
+    // seen is what this round's reviewer is shown (its huddle inherits it); the other roles'
+    // briefs are dated under briefed, so a ledger with no seen map stays a legacy one
     if (piece) {
-      state.ledger.seen = { ...(state.ledger.seen ?? {}), [`${reviewPrefix(role)}-${reviewN}.md`]: { files: piece.files, seq: nextSeq(), ...(Object.keys(piece.units).length ? { units: piece.units } : {}) } };
+      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...(Object.keys(piece.units).length ? { units: piece.units } : {}) } };
+      saveLedger(state.dir, state.ledger);
+    } else if (own) {
+      state.ledger.briefed = { ...(state.ledger.briefed ?? {}), [own]: { seq: nextSeq(), ...(owned ? { files: owned } : {}), ...(item ? { item: item.id } : {}) } };
       saveLedger(state.dir, state.ledger);
     }
+    const full = own ? path.join(state.dir, own) : null;
+    const left = own && role !== "worker" && existsSync(full) ? readFileSync(full, "utf8") : null;
+    const continueFrom = left !== null && isPartial(left) ? left : null;
     const file = path.join(state.dir, `brief-${role}-${round}.md`);
-    writeFileSync(file, renderPacket(state, role, { round, reviewN, skepticN, arbiterN, item, piece }));
-    const own = { skeptic: `skeptic-${skepticN}.md`, arbiter: `arbiter-${arbiterN}.md`, reviewer: `review-${reviewN}.md`, "reviewer-2": `review2-${reviewN}.md`, worker: `worker-${reviewN}.md` }[role];
+    writeFileSync(file, renderPacket(state, role, { round, n, item, piece, owned, continueFrom }));
     ctx.out(`packet: ${file}`);
-    ctx.out(`prompt: Read ${file} and follow your role brief.${own && role !== "worker" ? ` Your file is ${path.join(state.dir, own)}: write it first, then investigate and rewrite it.` : ""}`);
+    const yours = !own || role === "worker" ? "" : continueFrom !== null
+      ? ` Your file is ${full} and it already exists: keep its finished sections, never reset it to the all-unverified draft, and rewrite it after each finding.`
+      : ` Your file is ${full}: write it first, then investigate and rewrite it after each finding.`;
+    ctx.out(`prompt: Read ${file} and follow your role brief.${yours}`);
     printNext(ctx);
   },
 };

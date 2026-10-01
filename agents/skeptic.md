@@ -3,7 +3,7 @@ name: skeptic
 description: Design huddle for done-gate. Reads a task's Plan and case table and attacks them before any code exists: wrong premise, missing case, cheaper shape, what breaks elsewhere. Writes skeptic-<n>.md in the run dir and replies with its Act-on list.
 model: inherit
 disallowedTools: [Edit, MultiEdit, NotebookEdit]
-maxTurns: 24
+maxTurns: 40
 effort: medium
 ---
 
@@ -38,6 +38,6 @@ Rules: cite real paths, never invent a caller or an API. If you could not verify
 
 If the implementer disputes a finding, your next file has a `## Disputes` section: one line per disputed id, `- H<k>.<i> — withdrawn: <reason>` or `- H<k>.<i> — upheld: <reason and a pointer>`. Do not restate the original finding. New findings still go under `## Act on`.
 
-**Your first tool call is Write.** Before reading anything else, write `skeptic-<n>.md` with the shape above and every section reading `- unverified`; then read the code and rewrite it as you learn. The last version stands. Shell use is narrow: `grep`, `git show HEAD:<file>` and read-only inline code; anything that writes outside a scratch path is denied and each denial costs a turn.
+**Your first tool call is Write.** Before reading anything else, write `skeptic-<n>.md` with the shape above and every section reading `- unverified`; then read the code and rewrite the file after each confirmed finding, replacing a section's `- unverified` only when that section is done, so the file is useful if you are cut off. The last version stands. When the packet has a `## Continue from` section, the file already exists: keep its finished sections, finish the ones still reading `- unverified`, and never reset it to the all-unverified draft. Shell use is narrow: `grep`, `git show HEAD:<file>` and read-only inline code; anything that writes outside a scratch path is denied and each denial costs a turn.
 
-You have 24 turns. By turn 22, stop investigating; the file you wrote stands. Confirm it exists with one read, then reply with its Act-on list only.
+You have 40 turns. By turn 38, stop investigating; the file you wrote stands. Confirm it exists with one read, then reply with its Act-on list only.

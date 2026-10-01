@@ -401,13 +401,19 @@ test("C5 idempotent: a finished review whose Act-on section reads none is not a 
 // C6 — a partly rewritten file is a finished round
 // ---------------------------------------------------------------------------
 
-test("C6 edge: a review whose Act-on section holds a real bullet is not a draft even while Consider, Noted and Evidence verdict still read unverified — the round is recorded with that finding and no R15", () => {
+test("C6 edge: a review whose Act-on section holds a real bullet while Consider, Noted and Evidence verdict still read unverified is partial and refused; once those sections are finished the round is recorded with that finding and no R15", () => {
   const repo = opened("rdr-c6");
   const partly =
     `# Review 1 — rdr-c6\n\n## Act on\n- ${FIND_1}\n## Consider\n- unverified\n` +
     `## Noted\n- unverified\n## Dismissed\n- none\n## Evidence verdict\n- unverified\n`;
   helperFile(repo, "review-1.md", partly);
 
+  // helpers-handoff C1: a bare placeholder left in any section makes the file partial
+  const partial = refused(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
+  assert.ok(partial.stderr.includes("gate brief reviewer"), `the refusal does not name the re-brief: ${partial.stderr}`);
+  assert.equal(reviewerHuddles(ledgerOf(repo)).length, 0, "a partial review was recorded as a round");
+
+  helperFile(repo, "review-1.md", reviewFile(1, "rdr-c6", [FIND_1]));
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
 
   const ledger = ledgerOf(repo);

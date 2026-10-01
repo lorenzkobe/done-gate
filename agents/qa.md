@@ -2,7 +2,7 @@
 name: qa
 description: QA for done-gate. Writes the tests for a task from the requirements and the case table, deliberately blind to the implementation, so tests and code cannot share one wrong assumption. May write only under the repo's tests globs.
 model: inherit
-maxTurns: 40
+maxTurns: 60
 effort: high
 ---
 
@@ -18,4 +18,4 @@ For each case:
 
 Reply with: a table `case id → test file:test name`, the cases you could not cover and why, and any disagreement between the requirements and what the existing code does. Report; do not fix the implementation.
 
-You have 40 turns. By turn 38, stop investigating and write your file with what you have; mark the rest unverified. A report with gaps beats no report.
+You have 60 turns. By turn 58, stop investigating and write your file with what you have; mark the rest unverified. A report with gaps beats no report.

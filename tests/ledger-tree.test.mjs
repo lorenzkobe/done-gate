@@ -580,8 +580,8 @@ const PLAYBOOK_FILE = path.join(pluginRoot, "skills", "gate", "playbooks.md");
 // key lists exactly as the task states them; `null` is an unkeyed step
 const EXPECTED = {
   feature: ["context", "plan", "cases", "skeptic", "tests", "implement", "verify", "driver", "schema", "review", "close"],
-  bugfix: ["repro", "rootcause", "context", "plan", "cases", "tests", "implement", "verify", "driver", "schema", "review", "close"],
-  refactor: ["context", "plan", "cases", "tests", "verify-before", "implement", "verify", "driver", "schema", "review", "close"],
+  bugfix: ["repro", "rootcause", "context", "plan", "cases", "skeptic", "tests", "implement", "verify", "driver", "schema", "review", "close"],
+  refactor: ["context", "plan", "cases", "skeptic", "tests", "verify-before", "implement", "verify", "driver", "schema", "review", "close"],
   plan: ["context", "plan", "skeptic", "implement", "close"],
   investigation: [null, null],
 };
@@ -664,7 +664,7 @@ test("C3 happy: a fresh ledger.md has exactly the Task, Context and Plan section
 // C4 — the one optional step left
 // ---------------------------------------------------------------------------
 
-test("C4 edge: `note plan --files <one file>` marks {skeptic} and {review} N/A on a feature; bugfix and refactor mark only {review}", () => {
+test("C4 edge: `note plan --files <one file>` marks {skeptic} and {review} N/A on a feature, a bugfix and a refactor", () => {
   assert.equal(POLICY.tiers.tiny.maxFiles, 1, "premise: one file is tier tiny per models.json");
 
   const feature = committed("playbooks-c4-feature");
@@ -688,11 +688,12 @@ test("C4 edge: `note plan --files <one file>` marks {skeptic} and {review} N/A o
     cli(repo, "note", ["plan", "One component.", "--files", "src/a.ts"]);
     const l = ledgerOf(repo);
     assert.equal(l.tier.predicted, "tiny", name);
-    assert.deepEqual(l.tier.autoNa, ["review"], `${name}: only the review is auto-N/A`);
+    assert.deepEqual(l.tier.autoNa, ["skeptic", "review"], `${name}: the skeptic and the review are auto-N/A`);
+    assert.equal(stepOf(l, "skeptic").state, "N/A", name);
     assert.deepEqual(
       l.steps.filter((s) => s.state).map((s) => s.key),
-      ["plan", "review"],
-      `${name}: only {plan} and the auto-N/A {review} are closed`,
+      ["plan", "skeptic", "review"],
+      `${name}: only {plan} and the auto-N/A {skeptic} and {review} are closed`,
     );
   }
 });
@@ -1008,6 +1009,8 @@ test("C5 boundary: open cases with every step closed hint `gate case close`, not
   assert.ok(!/`gate case close/.test(afterCase), afterCase);
 
   // at standard the skeptic and review steps are required, so an N/A is reopened at the next assess
+  writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
+  cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
   for (const key of ["skeptic", "review"]) cli(repo, "step", [key, "done", "fixture", "--evidence", "docs/notes.md"]);
   const afterClose = hint(repo, "close");
   assert.equal(ledgerOf(repo).status, "closed", "close closes a clean run");
@@ -1170,18 +1173,19 @@ test("C10 boundary: SKILL.md is under 4096 bytes and still carries the live rule
 // C11
 // ---------------------------------------------------------------------------
 
-test("C11 refused: the hint never names a closed step, and never names the skeptic on a bugfix or a refactor", () => {
+test("C11 refused: the hint never names a closed step, and never names the skeptic on a tiny bugfix or refactor, where its step is auto N/A", () => {
   for (const playbook of ["bugfix", "refactor"]) {
     const keys = playbookKeys(playbook);
-    assert.ok(!keys.includes("skeptic"), `${playbook} unexpectedly has a {skeptic} step: ${keys.join(",")}`);
+    assert.ok(keys.includes("skeptic"), `${playbook} has no {skeptic} step: ${keys.join(",")}`);
 
     const repo = opened(`next-c11-${playbook}`, { playbook, planFiles: "src/a.ts" });
+    assert.equal(stepOf(ledgerOf(repo), "skeptic").state, "N/A", `premise: ${playbook} at tiny drops the skeptic step`);
     let h = hint(repo, "case", ["add", "the reported surface", "--kind", "happy"]);
 
     const seen = [];
     let finished = false;
     for (let i = 0; i < keys.length + 2 && !finished; i += 1) {
-      assert.ok(!/skeptic/i.test(h), `${playbook} hinted the skeptic, which its playbook does not have:\n${h}`);
+      assert.ok(!/skeptic/i.test(h), `${playbook} hinted the skeptic, whose step is N/A at tiny:\n${h}`);
       const key = hintedKey(h);
       if (key === null || key === "close") {
         finished = true;

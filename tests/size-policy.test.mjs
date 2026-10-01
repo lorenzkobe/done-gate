@@ -451,6 +451,8 @@ test("C11 edge: a DONE or WAIVED step is never reopened by further growth", () =
   cli(repo, "open", ["done-steps", "feature"]);
   cli(repo, "note", ["task", "One small change. [inferred]"]);
   cli(repo, "note", ["plan", "Touch one file.", "--files", "src/a.ts"]);
+  writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
+  cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
   cli(repo, "step", ["skeptic", "done", "huddled, no findings", "--evidence", "events#1"]);
 
   write(repo, "src/a.ts", "export const a = 2;\n");
@@ -652,13 +654,13 @@ test("C19 edge: a waived {skeptic} stays WAIVED when the diff grows; nothing goe
 // C20
 // ---------------------------------------------------------------------------
 
-test("C20 refused: the feature playbook may drop {skeptic} and {review}; bugfix and refactor only {review}", () => {
+test("C20 refused: the feature, bugfix and refactor playbooks may drop {skeptic} and {review}; the plan playbook nothing", () => {
   // The source of truth for which steps a tier may drop, per playbook.
   assert.deepEqual(Object.keys(OPTIONAL_STEPS).sort(), ["bugfix", "feature", "refactor"]);
   assert.deepEqual(OPTIONAL_STEPS.feature, ["skeptic", "review"]);
-  assert.deepEqual(OPTIONAL_STEPS.bugfix, ["review"]);
-  assert.deepEqual(OPTIONAL_STEPS.refactor, ["review"]);
-  assert.deepEqual(optionalSteps({ playbook: "bugfix" }), ["review"]);
+  assert.deepEqual(OPTIONAL_STEPS.bugfix, ["skeptic", "review"]);
+  assert.deepEqual(OPTIONAL_STEPS.refactor, ["skeptic", "review"]);
+  assert.deepEqual(optionalSteps({ playbook: "bugfix" }), ["skeptic", "review"]);
   assert.deepEqual(optionalSteps({ playbook: "feature" }), ["skeptic", "review"]);
   assert.deepEqual(optionalSteps({ playbook: "plan" }), [], "the plan playbook is never tiered");
 
@@ -671,8 +673,8 @@ test("C20 refused: the feature playbook may drop {skeptic} and {review}; bugfix 
 
     const l = ledgerOf(repo);
     assert.equal(l.tier.predicted, "tiny", playbook);
-    assert.deepEqual(l.tier.autoNa, ["review"], `${playbook} drops only the review`);
-    assert.equal(stepOf(l, "skeptic"), undefined, `${playbook} has no skeptic step`);
+    assert.deepEqual([...l.tier.autoNa].sort(), ["review", "skeptic"], `${playbook} drops the skeptic and the review`);
+    assert.equal(stepOf(l, "skeptic").state, "N/A", `${playbook} has a skeptic step, N/A at tiny`);
   }
 });
 
@@ -1170,6 +1172,8 @@ function closedTieredFixture(name, slug = "shipped") {
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:shows the size"]);
   // DONE, not N/A: an optional step left N/A is reopened the moment the tier is reconciled
   const steps = loadLedger(runDir(repo)).steps;
+  writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
+  cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
   for (const s of steps) if (!s.state) cli(repo, "step", [String(s.n), "done", "nothing changed under source", "--evidence", "events#1"]);
   cli(repo, "close");
   return repo;
@@ -1637,6 +1641,8 @@ test("C2 happy: growth from small to standard blanks {skeptic} and `gate check` 
   assert.ok(!/reopened/i.test(size), `\`gate size\` still prints a reopened line:\n${size}`);
 
   // Closing the blanked step clears it from R8 again.
+  writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
+  cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
   cli(repo, "step", ["skeptic", "done", "huddled, two findings answered", "--evidence", "events#1"]);
   const after = check(repo);
   assert.ok(
@@ -1746,6 +1752,8 @@ function cleanClosingFixture(name, slug = "tidy") {
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:refused"]);
   cli(repo, "case", ["close", "C2", "--test", "tests/a.test.ts:happy"]);
   cli(repo, "step", ["context", "done", "traced it", "--evidence", "events#1"]);
+  writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
+  cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
   cli(repo, "step", ["skeptic", "done", "no findings", "--evidence", "events#2"]);
   cli(repo, "step", ["implement", "done", "spec written", "--evidence", "docs/notes.md"]);
   cli(repo, "close");

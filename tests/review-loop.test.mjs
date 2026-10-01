@@ -1662,6 +1662,10 @@ test("C6 happy: the skeptic hint names `gate huddle add skeptic --file skeptic-<
   for (const key of keys) {
     if (["context", "read", "plan", "cases"].includes(key)) continue;
     if (key === "review") break;
+    if (key === "skeptic") {
+      writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
+      cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
+    }
     record(cli(repo, "step", [key, "done", `${key} done`, "--evidence", "events#1"]).stdout);
   }
 

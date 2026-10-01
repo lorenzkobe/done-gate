@@ -3,6 +3,7 @@ import { recordGateError } from "./context.mjs";
 import { appendEvents, nextSeq } from "./events.mjs";
 import { loadLedger, saveLedger } from "./ledger.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
+import { HELPER_MAX_MS } from "./rules.mjs";
 
 export const OVERRIDE_AFTER = 6;
 const PAUSE_RE = /(?:^|\n)\s*PAUSED:\s*(.+?)\s*$/;
@@ -30,7 +31,6 @@ function clearBlocks(ctx) {
 // prompt too (events.mjs tags it), and does not count as a new turn. Bounded: a start older
 // than HELPER_MAX_MS is treated as gone, so a crashed or hung agent cannot let the turn end
 // quietly forever.
-const HELPER_MAX_MS = 45 * 60 * 1000;
 function helperRunning(events, session, now = Date.now()) {
   const mine = events.filter((e) => e.session === session);
   const lastPrompt = mine.filter((e) => e.kind === "prompt" && !e.handback).pop()?.seq ?? 0;
