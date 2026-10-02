@@ -50,7 +50,7 @@ function opened(name, { playbook = "feature", files = {}, planFiles = "src/a.ts"
   }
   cli(repo, "open", [name, playbook]);
   cli(repo, "note", ["task", "Add a badge. [inferred]"]);
-  cli(repo, "note", ["context", "Traced: src/a.ts:1\nRelated: none\nResearch: none needed: tiny"]);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: tiny"]);
   const out = cli(repo, "note", ["plan", "One module. No hot path.", "--files", planFiles]);
   cli(repo, "case", ["add", "renders the badge", "--kind", "happy"]);
   return { repo, out };
@@ -233,7 +233,7 @@ test("C17 refused: an untiered plan ledger with source edits still gets R5; a ti
   const plan = committed("tiny-c17-plan", { "src/a.ts": "export const a = 1;\n" });
   cli(plan, "open", ["spec", "plan"]);
   cli(plan, "note", ["task", "Write the spec. [inferred]"]);
-  cli(plan, "note", ["context", "Traced: src/a.ts:1\nRelated: none\nResearch: none needed: tiny"]);
+  cli(plan, "note", ["context", "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: tiny"]);
   cli(plan, "note", ["plan", "Spec only."]);
   write(plan, "src/a.ts", lines(2));
   assert.ok(blocks(check(plan), "R5"), check(plan));
@@ -241,7 +241,7 @@ test("C17 refused: an untiered plan ledger with source edits still gets R5; a ti
   const unpredicted = committed("tiny-c17-unpredicted", { "src/a.ts": "export const a = 1;\n" });
   cli(unpredicted, "open", ["badge", "feature"]);
   cli(unpredicted, "note", ["task", "Add a badge. [inferred]"]);
-  cli(unpredicted, "note", ["context", "Traced: src/a.ts:1\nRelated: none\nResearch: none needed: tiny"]);
+  cli(unpredicted, "note", ["context", "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: tiny"]);
   cli(unpredicted, "note", ["plan", "No files named."]);
   cli(unpredicted, "case", ["add", "renders", "--kind", "happy"]);
   write(unpredicted, "src/a.ts", lines(2));

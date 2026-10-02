@@ -43,7 +43,7 @@ function opened(name, config = {}) {
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
   cli(repo, "open", [name, "feature"]);
   cli(repo, "note", ["task", "Two modules. [inferred]"]);
-  cli(repo, "note", ["context", "Traced: src/a.ts:1\nRelated: none\nResearch: none needed: local"]);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: local"]);
   cli(repo, "note", ["plan", "Two modules.", "--files", "src/a.ts,src/b.ts"]);
   cli(repo, "case", ["add", "renders", "--kind", "happy"]);
   return repo;

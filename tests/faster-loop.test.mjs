@@ -59,7 +59,7 @@ function opened(name, { files = {}, planFiles = "src/a.ts" } = {}) {
   const repo = committed(name, files);
   cli(repo, "open", [name, "feature"]);
   cli(repo, "note", ["task", "Add a badge. [inferred]"]);
-  cli(repo, "note", ["context", "Traced: src/a.ts:1\nRelated: none\nResearch: none needed: tiny"]);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: tiny"]);
   cli(repo, "note", ["plan", "One module. No hot path.", "--files", planFiles]);
   cli(repo, "case", ["add", "renders the badge", "--kind", "happy"]);
   return repo;

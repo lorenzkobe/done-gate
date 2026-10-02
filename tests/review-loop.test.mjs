@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, doneArgs } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { pointerResolver } from "../scripts/lib/rules.mjs";
@@ -1666,7 +1666,7 @@ test("C6 happy: the skeptic hint names `gate huddle add skeptic --file skeptic-<
       writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
       cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
     }
-    record(cli(repo, "step", [key, "done", `${key} done`, "--evidence", "events#1"]).stdout);
+    record(cli(repo, "step", doneArgs(repo, key, key, `${key} done`, "ledger.md")).stdout);
   }
 
   assert.ok(hints.skeptic, `no hint ever pointed at {skeptic}: ${JSON.stringify(hints, null, 2)}`);

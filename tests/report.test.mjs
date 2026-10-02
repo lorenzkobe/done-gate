@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync, execSync, execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, here, pluginRoot } from "./helpers.mjs";
+import { makeRepo, write, gate, here, pluginRoot, doneArgs } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { evaluate } from "../scripts/lib/rules.mjs";
@@ -162,7 +162,7 @@ function standardFixture(name, { gateJson = null } = {}) {
   cli(repo, "case", ["add", "hidden when the venue has no rating", "--kind", "edge"]);
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:renders the badge"]);
   cli(repo, "case", ["close", "C2", "--na", "covered by C1's fixture"]);
-  cli(repo, "step", ["context", "done", "traced it", "--evidence", "events#1"]);
+  cli(repo, "step", ["context", "done", "traced it", "--evidence", "ledger.md"]);
   cli(repo, "step", ["schema", "skipped", "no schema files"]);
   cli(repo, "waive", ["driver", "skip the phone pass this time, chrome is disconnected"]);
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n- null venue crashes\n");
@@ -186,10 +186,10 @@ function cleanClosingFixture(name, slug = "tidy", before = () => {}) {
   cli(repo, "case", ["add", "spec covers the happy path", "--kind", "happy"]);
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:refused"]);
   cli(repo, "case", ["close", "C2", "--test", "tests/a.test.ts:happy"]);
-  cli(repo, "step", ["context", "done", "traced it", "--evidence", "events#1"]);
+  cli(repo, "step", ["context", "done", "traced it", "--evidence", "ledger.md"]);
   writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
   cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
-  cli(repo, "step", ["skeptic", "done", "no findings", "--evidence", "events#2"]);
+  cli(repo, "step", ["skeptic", "done", "no findings", "--evidence", "ledger.md"]);
   cli(repo, "step", ["implement", "done", "spec written", "--evidence", "docs/notes.md"]);
   before(repo);
   cli(repo, "close");
@@ -445,7 +445,7 @@ function c11Fixture(name, bin) {
   go("case", ["add", "hidden with no rating", "--kind", "edge"]);
   go("case", ["close", "C1", "--test", "tests/a.test.ts:renders"]);
   go("case", ["close", "C2", "--na", "covered by C1"]);
-  go("step", ["context", "done", "traced it", "--evidence", "events#1"]);
+  go("step", ["context", "done", "traced it", "--evidence", "ledger.md"]);
   go("step", ["schema", "skipped", "no schema files"]);
   go("waive", ["driver", "skip the phone pass"]);
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n- null venue crashes\n");
@@ -759,7 +759,7 @@ function closeEveryStep(repo) {
     cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
   }
   // {close} is closed by `gate close`, never by hand
-  for (const key of keys.filter((k) => k !== "close")) cli(repo, "step", [key, "done", `did ${key}`, "--evidence", "docs/notes.md"]);
+  for (const key of keys.filter((k) => k !== "close")) cli(repo, "step", doneArgs(repo, key, key, `did ${key}`, "docs/notes.md"));
 }
 
 // An opened feature run whose plan and case table predate the first source edit.

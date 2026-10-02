@@ -162,7 +162,7 @@ export function parseRuling(text) {
 // The Context note's three parts, each a line starting with its name.
 export const CONTEXT_PARTS = ["Traced", "Related", "Research"];
 
-const POINTER = /(?<![\w/.-])((?:[\w.-]+\/)*[\w.-]+\.[a-z0-9]+):(\d+)\b/gi;
+const POINTER = /(?<![\w/.~-])((?:~?\/)?(?:[\w.@()[\]-]+\/)*[\w.@()[\]-]+\.[a-z0-9]+):(\d+)\b/gi;
 
 // A part starts at a line start or after whitespace ("Traced: … · Related: …" on one line).
 export function contextPart(text, name) {
@@ -170,32 +170,106 @@ export function contextPart(text, name) {
   return m ? m[1].replace(/[\s·|]+$/, "").trim() : null;
 }
 
-// Every file:line pointer in a text, with whether it names a file inside root or a declared
-// repo: a pointer that walks out of them (`../x.ts:1`) or names a directory does not resolve.
+const count = (text, ch) => text.split(ch).length - 1;
+const balanced = (name) => count(name, "(") === count(name, ")") && count(name, "[") === count(name, "]");
+const NOT_A_FILE = /^(?:[\d.]+|[\w.-]+\.(?:com|net|org|io|dev|app|internal|local))$/i;
+
+// The file a path names inside root or a declared repo, or null: a path that walks out of
+// them (`../x.ts`) or names a directory is no file.
+function repoFile(named, root, repos) {
+  const given = named.startsWith("~/") ? path.join(homedir(), named.slice(2)) : named;
+  const rel = toPosixRel(root, given, repos);
+  // a declared repo's stored root is its real path, which the prefix may reach through a symlink
+  const at = rel === null ? null : repoPath(root, rel, repos);
+  // an absolute path outside every repo (a dependency, a plugin file) is checked where it is
+  if (at === null && !path.isAbsolute(given)) return null;
+  const full = at === null ? given : path.join(at.repoRoot, at.rel);
+  try {
+    return statSync(full).isFile() ? full : null;
+  } catch {
+    return null;
+  }
+}
+
+// Every file:line pointer in a text, with whether it resolves: the file exists and the line
+// is inside it. An address or a version (db.internal:5432, 0.13.0:5) is not a pointer.
 export function tracedPointers(text, root, repos = []) {
   const out = [];
   for (const m of String(text ?? "").matchAll(POINTER)) {
-    const rel = toPosixRel(root, m[1], repos);
-    // a declared repo's stored root is its real path, which the prefix may reach through a symlink
-    const at = rel === null ? null : repoPath(root, rel, repos);
+    // brackets and @ sit in route paths (app/[slug]/page.tsx) and in the prose around a pointer
+    // (`fn(src/a.ts:2)`, `user@host:22`): the match and what follows each one are tried in turn
+    const names = [m[1], ...[...m[1].matchAll(/[([@]/g)].map((b) => m[1].slice(b.index + 1))].filter(Boolean);
+    const found = names.find((n) => repoFile(n, root, repos) !== null);
+    const file = found ?? names.find(balanced) ?? names[names.length - 1];
+    const full = found ? repoFile(found, root, repos) : null;
+    if (full === null && (NOT_A_FILE.test(names[names.length - 1]) || (!file.includes("/") && /[()[\]]/.test(file)))) continue;
+    const line = Number(m[2]);
     let exists = false;
-    try {
-      exists = at !== null && statSync(path.join(at.repoRoot, at.rel)).isFile();
-    } catch {
-      exists = false;
+    if (full !== null && line >= 1) {
+      const lines = readFileSync(full, "utf8").replace(/\n$/, "").split("\n").length;
+      exists = line <= lines;
     }
-    out.push({ file: m[1], line: Number(m[2]), exists });
+    out.push({ file, line, exists });
   }
   return out;
 }
+
+const NAMED_FILE = /(?<![\w/.-])((?:[\w.@()[\]-]+\/)*[\w.@()[\]-]+\.[a-z0-9]+)/gi;
+
+// Whether a text names at least one file that exists, with or without a line.
+export function namesFile(text, root, repos = []) {
+  return [...String(text ?? "").matchAll(NAMED_FILE)].some((m) => repoFile(m[1], root, repos) !== null);
+}
+
+const RUN_KINDS = new Set(["command", "browser", "skill", "tool"]);
+// MCP servers that hold notes and documentation, never the system under test.
+const NOTES_SERVER = /(?:^|[_.-])(?:mem|mem0|memory|docs?|context7|search|exa|tavily|deepwiki)(?:$|[_.-])/i;
+const notesTool = (e) => e.kind === "tool" && e.tool.startsWith("mcp__") && NOTES_SERVER.test(e.tool.slice(5, e.tool.lastIndexOf("__")));
+const GATE_CALL = /gate\.mjs["']?\s+(\S+)/;
+const GATE_RUNS = new Set(["check", "verify", "report", "size", "doctor", "close"]);
+
+// A gate verb that only records text (note, step, verify --add) would let a note pass as a run.
+function gateNote(cmd) {
+  const m = GATE_CALL.exec(cmd ?? "");
+  return m !== null && (!GATE_RUNS.has(m[1]) || /\s--(?:add|drop)\b/.test(cmd));
+}
+
+// What a step that claims a run can close on, oldest first. A background run reports before
+// it can fail, and a read-only command (cat, grep, echo) reads the code without running it.
+export function ranEvents(state) {
+  const since = state.ledger?.openedSeq ?? 0;
+  return (state.events ?? []).filter((e) => RUN_KINDS.has(e.kind) && e.seq > since && !e.background && !e.readOnly && !gateNote(e.cmd) && (e.kind !== "skill" || e.skill === "verify") && !notesTool(e));
+}
+
+export function ranText(e) {
+  return [e.cmd, e.skill, e.kind === "tool" ? e.tool : null, e.input, e.action, e.target, e.url, ...(e.actions ?? []).flatMap((a) => [a.action, a.target, a.url])].filter(Boolean).join(" ");
+}
+
+const RECORD_KEYS = new Set(["cases", "huddles", "waivers", "pauses", "blast", "caveats"]);
 
 // Builds the "does this pointer resolve" predicate from gate state; dispute and resolve
 // evidence must point at something real.
 export function pointerResolver(state) {
   return (ptr) => {
     if (!ptr) return false;
-    if (ptr === "ledger.md" || ptr === "ledger.json" || ptr === "report.md" || ptr === "decisions.tsv") return true;
-    if (/^ledger\.(md|json)#/.test(ptr)) return true;
+    if (ptr.startsWith("ledger.json#")) {
+      // only the lists the run fills as it goes, and only once one holds a record: steps,
+      // baseline and the like are there from open and prove nothing
+      const key = ptr.slice("ledger.json#".length);
+      const held = RECORD_KEYS.has(key) ? (state.ledger ?? {})[key] : null;
+      return Array.isArray(held) && held.length > 0;
+    }
+    if (ptr.startsWith("ledger.md#")) {
+      const heading = ptr.slice("ledger.md#".length).trim().toLowerCase();
+      const file = state.dir ? path.join(state.dir, "ledger.md") : null;
+      if (!heading || !file || !existsSync(file)) return false;
+      // the template holds every heading from the start: a section counts once something is written under it
+      const lines = readFileSync(file, "utf8").replace(/<!--[\s\S]*?-->/g, "").split("\n");
+      const at = lines.findIndex((l) => /^##\s/.test(l) && l.slice(2).trim().toLowerCase() === heading);
+      if (at < 0) return false;
+      const end = lines.findIndex((l, i) => i > at && /^##\s/.test(l));
+      return lines.slice(at + 1, end < 0 ? lines.length : end).some((l) => l.trim());
+    }
     if (ptr === "verify.json" || /^verify#\d+$/.test(ptr)) return Boolean(state.verify);
     if (/^events#\d+$/.test(ptr)) {
       const seq = Number(ptr.slice(7));
@@ -214,6 +288,9 @@ export function pointerResolver(state) {
     // is named by its absolute or ~ path.
     const named = ptr.split(":")[0];
     if (!named) return false;
+    // file:<line> and file:<from>-<to> must sit inside the file; file:<test name> is not checked
+    const span = /^(\d+)(?:-(\d+))?(?::\d+)?$/.exec(ptr.slice(named.length + 1));
+    const [from, to] = span ? [Number(span[1]), Number(span[2] ?? span[1])] : [null, null];
     const file = named.startsWith("~/") ? path.join(homedir(), named.slice(2)) : named;
     const candidates = path.isAbsolute(file) ? [file] : [state.dir, state.root].filter(Boolean).map((base) => path.join(base, file));
     // a declared repo's stored root is its real path, which the prefix may reach through a symlink
@@ -221,7 +298,8 @@ export function pointerResolver(state) {
     if (at.index >= 0) candidates.push(path.join(at.repoRoot, at.rel));
     return candidates.some((full) => {
       try {
-        return statSync(full).isFile();
+        if (!statSync(full).isFile()) return false;
+        return from === null || (from >= 1 && from <= to && to <= readFileSync(full, "utf8").replace(/\n$/, "").split("\n").length);
       } catch {
         // prose given as a pointer (a name too long, a NUL byte) is not a file either
         return false;
@@ -639,7 +717,7 @@ export function evaluate(state) {
   if (changed.some((p) => config.isSchema(p)) && !waived(ledger, "schema")) {
     const step = (ledger.steps ?? []).find((s) => s.key === "schema");
     if (!step || step.state !== "DONE" || !step.evidence) {
-      unmet.push({ rule: "R6", text: `schema files changed: run the new/changed reader once against the real database (hit the endpoint in dev, or run the query) and close the schema step with \`gate step schema done "<what you ran>" --evidence <pointer>\`. N/A is not allowed here.${orWaive("schema")}` });
+      unmet.push({ rule: "R6", text: `schema files changed: run the new/changed reader once against the real database (hit the endpoint in dev, or run the query) and close the schema step on that run with \`gate step schema done "<what it returned>" --ran "<part of the command or url>"\`. N/A is not allowed here.${orWaive("schema")}` });
     }
   }
 

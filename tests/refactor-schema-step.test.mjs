@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import path from "node:path";
-import { makeRepo, write, gate } from "./helpers.mjs";
+import { makeRepo, write, gate, doneArgs } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { evaluate } from "../scripts/lib/rules.mjs";
@@ -57,7 +57,7 @@ test("C2 happy: `gate step schema done` is accepted on a refactor run and R6 sto
   const repo = openedRefactor("rs-c2");
   write(repo, "supabase/migrations/001_init.sql", "select 2;\n");
   assert.ok(unmetRules(repo).includes("R6"), "R6 should fire before the probe step is closed");
-  cli(repo, "step", ["schema", "done", "ran select 2 against the local db", "--evidence", "supabase/migrations/001_init.sql:1"]);
+  cli(repo, "step", doneArgs(repo, "schema", "schema", "ran select 2 against the local db", ""));
   assert.ok(!unmetRules(repo).includes("R6"), "R6 still fires after the schema step closed with evidence");
 });
 

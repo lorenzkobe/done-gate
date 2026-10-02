@@ -84,6 +84,10 @@ export function eventsFromHookInput(input, root, repos = []) {
   if (tool.startsWith(CHROME_PREFIX)) {
     return [{ ...b(), kind: "browser", tool, ...browserFields(tool.slice(CHROME_PREFIX.length), input.tool_input ?? {}) }];
   }
+  // a probe through another MCP server (a database, the built-in browser) or WebFetch
+  if (tool.startsWith("mcp__") || tool === "WebFetch") {
+    return [{ ...b(), kind: "tool", tool, input: JSON.stringify(input.tool_input ?? {}).slice(0, TEXT_LIMIT) }];
+  }
   return [];
 }
 

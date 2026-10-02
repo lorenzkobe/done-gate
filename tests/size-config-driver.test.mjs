@@ -44,7 +44,7 @@ function opened(name, config = GATE_JSON) {
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
   cli(repo, "open", [name, "feature"]);
   cli(repo, "note", ["task", "Add checkout. [inferred]"]);
-  cli(repo, "note", ["context", "Traced: src/a.ts:1\nRelated: none\nResearch: none needed: local"]);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: local"]);
   return repo;
 }
 

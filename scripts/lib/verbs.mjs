@@ -8,7 +8,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { briefOf, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, WAIVERS } from "./rules.mjs";
+import { briefOf, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS } from "./rules.mjs";
 import { assess, buildState, readVerify, reviewFiles, readVerifyStarted } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { withoutRepos } from "./tree.mjs";
@@ -40,7 +40,9 @@ export function finalise(ctx, state) {
 }
 
 // Steps whose evidence comes from a script or an agent: DONE or WAIVED only.
-export const EVIDENCED_KEYS = new Set(["context", "verify", "verify-before", "driver", "review", "tests", "qa", "skeptic", "close"]);
+export const EVIDENCED_KEYS = new Set(["context", "verify", "verify-before", "driver", "review", "tests", "qa", "skeptic", "close", "repro", "rootcause"]);
+// Steps that claim something was run: DONE only on a run the hooks recorded.
+const RUN_KEYS = new Set(["repro", "rootcause", "schema"]);
 export const CASE_KINDS = ["happy", "edge", "refused", "boundary", "idempotent", "reported-surface", "performance", "click"];
 export const ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter", "worker"];
 // Step keys whose rule has no waiver: waiving the step would leave that rule blocking.
@@ -117,7 +119,12 @@ function checkContext(text, root, repos) {
   if (missing.length) throw new UsageError(`${CONTEXT_USAGE} (missing: ${missing.join(", ")})`);
   const pointers = tracedPointers(contextPart(text, "Traced"), root, repos);
   if (!pointers.length) throw new UsageError("Traced needs at least one file:line pointer into the repo (the entry point, a caller, a data path); prose alone is not a trace");
-  if (!pointers.some((p) => p.exists)) throw new UsageError(`Traced names no file that exists in the repo (${pointers.map((p) => `${p.file}:${p.line}`).join(", ")}); a file:line pointer must resolve`);
+  const bad = pointers.filter((p) => !p.exists);
+  if (bad.length) throw new UsageError(`Traced: ${bad.map((p) => `${p.file}:${p.line}`).join(", ")} does not resolve (no such file in the repo, or the line is past its end); cite the lines you read`);
+  const related = contextPart(text, "Related");
+  if (!namesFile(related, root, repos) && !/^none\b[^`]*`[^`]+`/i.test(related)) {
+    throw new UsageError("Related names no file that exists in the repo: name what depends on it (a caller, a test, a doc, config), or write \"none: `<the search you ran>`\" so the claim that nothing does has a run behind it");
+  }
 }
 
 export const outsideRepos = (given) => `"${given}" is outside this repo and every declared repo: declare its repo with \`gate repo add <dir>\`, then name the file again`;
@@ -280,10 +287,13 @@ export const verbs = {
   step(ctx) {
     const [ref, stateWord, ...rest] = ctx.args;
     const note = positional(rest).join(" ");
-    const evidence = flag(rest, "--evidence");
+    let evidence = flag(rest, "--evidence");
+    const ran = flag(rest, "--ran");
     const states = { done: "DONE", skipped: "SKIPPED", na: "N/A", "n/a": "N/A" };
     const state = states[String(stateWord).toLowerCase()];
-    if (!ref || !state) throw new UsageError('usage: gate step <n|key> <done|skipped|na> "<note>" [--evidence <pointer>]');
+    if (!ref || !state) throw new UsageError('usage: gate step <n|key> <done|skipped|na> "<note>" [--evidence <pointer> | --ran "<part of the command or url>"]');
+    const gateState = state === "DONE" ? buildState(ctx, {}) : null;
+    let by = null;
     withLedger(ctx, (ledger, dir) => {
       const step = ledger.steps.find((s) => s.key === ref || String(s.n) === ref);
       if (!step) throw new UsageError(`no step "${ref}"`);
@@ -291,7 +301,22 @@ export const verbs = {
       if (state === "SKIPPED" && step.key && EVIDENCED_KEYS.has(step.key)) {
         throw new UsageError(`step {${step.key}} has script/agent evidence and cannot be SKIPPED — ${Object.hasOwn(NO_WAIVER, step.key) ? `it has no waiver either. ${NO_WAIVER[step.key]}.` : `do it, or get the user's waiver with \`gate waive ${step.key} "<reason>"\``}`);
       }
-      if (state === "DONE" && !evidence) throw new UsageError("DONE needs --evidence <pointer> (events#seq, verify.json, review-<n>.md, decisions#n, or a file path)");
+      if (state === "N/A" && (step.key === "repro" || step.key === "rootcause")) {
+        throw new UsageError(`step {${step.key}} cannot be N/A: a bug fix with no ${step.key === "repro" ? "reproduction" : "root cause"} is a guess. Do it, or get the user's waiver with \`gate waive ${step.key} "<reason>"\``);
+      }
+      if (state === "DONE" && RUN_KEYS.has(step.key)) {
+        const runs = ranEvents(gateState);
+        if (ran !== undefined && ran !== null && ran.trim().length < 4) throw new UsageError("--ran needs at least four characters of the command or url, enough to name one run");
+        by = (ran ? runs.filter((e) => ranText(e).includes(ran)).pop() : runs.find((e) => `events#${e.seq}` === evidence)) ?? null;
+        if (!by) throw new UsageError(`step {${step.key}} closes on a run the gate recorded, not on a note: run it (the Bash tool, the browser or the /verify driver) after this run opened, then \`gate step ${step.key} done "<what it showed>" --ran "<part of the command or url>"\` (the gate keeps the first 200 characters of a command; a background run, a read of the code and a memory or docs lookup do not count)`);
+        if (step.key === "rootcause" && !tracedPointers(note, ctx.root, ctx.repos).some((p) => p.exists)) {
+          throw new UsageError("step {rootcause}: the note names the line at fault as a file:line that resolves; a cause with no line is a guess");
+        }
+        evidence = `events#${by.seq}`;
+      } else if (state === "DONE") {
+        if (!evidence) throw new UsageError("DONE needs --evidence <pointer> (events#seq, verify.json, review-<n>.md, decisions#n, or a file path)");
+        if (!pointerResolver(gateState)(evidence)) throw new UsageError(`step evidence "${evidence}" does not resolve; point at a file, a file:line, ledger.md#<section>, verify.json, events#<seq>, decisions#<n> or a helper file`);
+      }
       if (state !== "DONE" && !note) throw new UsageError(`${state} needs a reason`);
       // the design huddle is done when its newest file is finished and recorded and every
       // finding in it is answered, not when the lead says so
@@ -306,7 +331,7 @@ export const verbs = {
       }
       Object.assign(step, { state, note: note || null, evidence: evidence ?? null, seq: nextSeq() });
     });
-    ctx.out(`step ${ref} → ${state}`);
+    ctx.out(by ? `step ${ref} → ${state} by \`${ranText(by).slice(0, 80)}\`${by.exit == null ? "" : ` exit ${by.exit}`} (events#${by.seq})` : `step ${ref} → ${state}`);
     printNext(ctx);
   },
 
@@ -372,6 +397,8 @@ export const verbs = {
               return;
             }
             const item = { id: `${id}.${huddle.actOn.length + 1}`, text: f.text, closed: null, fileIndex: i };
+            const cited = tracedPointers(f.text, ctx.root, ctx.repos);
+            if (cited.length && !cited.some((p) => p.exists)) item.unresolved = cited.map((p) => `${p.file}:${p.line}`);
             huddle.actOn.push(item);
             added.push(item);
           });
@@ -406,6 +433,7 @@ export const verbs = {
       ctx.out(`${id} added (${role})${added.length ? ` · ${added.length} Act-on item${added.length === 1 ? "" : "s"} recorded` : ""}${answered ? ` · ${answered} dispute${answered === 1 ? "" : "s"} answered` : ""}`);
       // the ids the worker and the reviewer will be asked about, next to what each one says
       for (const a of added) ctx.out(`${a.id} — ${a.text}`);
+      for (const a of added.filter((x) => x.unresolved)) ctx.out(`note: ${a.id} cites ${a.unresolved.join(", ")}, which does not resolve: check the claim yourself before acting on it`);
       printNext(ctx);
       return;
     }

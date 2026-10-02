@@ -28,8 +28,8 @@ You own the design and the diff. Plan, build, verify, get reviewed.
 Be scientific. Every shipped line traces to runtime evidence. "Might help" is a hypothesis,
 not a fix. "Inconclusive" or the wrong surface is not a pass.
 
-1. Reproduce on the real surface FIRST with the /verify driver; record the failing behaviour. {repro}
-2. Root cause with runtime evidence: form hypotheses, rule them out, no belt-and-suspenders. {rootcause}
+1. Reproduce on the real surface FIRST with the /verify driver or the failing command; close it on that run (`gate step repro done "<what failed>" --ran "<part of the command or url>"`). {repro}
+2. Root cause with runtime evidence: form hypotheses, rule each out with a run, no belt-and-suspenders; close it on the run that showed the cause, the note naming the line at fault as file:line (`--ran`). {rootcause}
 3. Understand first: trace the code the task touches (entry points, callers, data flow; `grep -a` for callers), list what depends on it, and research better ways when the problem is a known one (docs, context7, web); write it with `gate note context`. {context}
 4. Write Task and Plan in ledger.md (`gate note task|plan`); name the hot path the fix touches, the data sizes it sees and its cost shape, or "no hot path" in one line. {plan}
 5. Write the case table; row 1 is the repro, kind `reported-surface`; a performance row when the fix sits on a hot path; a `click` row per link, button or tab the fix changes. {cases}
@@ -75,5 +75,7 @@ Read-only. No ledger is required because nothing changes; the gate stays silent.
 
 1. Read the code and, where it is cheap, run it: an answer from running code outranks one from reading it.
 2. End with a recommendation, not a survey of options.
+
+Every claim in the answer cites what you ran or read (a command and its output, a `file:line`); one you did not check is labelled "unverified", never stated as fact.
 
 A security or exposure finding cites the deployed state or the handler code; one read off a config file alone is labelled "from config, unverified".

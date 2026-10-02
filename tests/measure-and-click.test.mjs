@@ -58,7 +58,7 @@ const commitArgs = ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm"
 const lines = (n, name) => Array.from({ length: n }, (_, i) => `export const ${name}${i} = ${i};`).join("\n") + "\n";
 
 const GATE_JSON = { source: ["src/**", "tests/**"], tests: ["tests/**"], verify: ["true"] };
-const CONTEXT = "Traced: src/a.ts:1\nRelated: none\nResearch: none needed: local";
+const CONTEXT = "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: local";
 
 function committed(name, files = {}, config = GATE_JSON) {
   const repo = makeRepo(name, { ".claude/gate.json": JSON.stringify(config, null, 2), "src/b.ts": lines(10, "b"), ...files });

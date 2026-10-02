@@ -814,10 +814,10 @@ test("C2: gate huddle dispute is refused when --evidence does not resolve, and a
   assert.equal(itemOf("H1.1").dispute ?? null, null, "a dispute was recorded against a helper file that does not exist");
 
   // permitted: a real file:line in the repo
-  cli(repo, "huddle", ["dispute", "H1.1", WHY, "--evidence", "src/a.ts:2"]);
+  cli(repo, "huddle", ["dispute", "H1.1", WHY, "--evidence", "src/a.ts:1"]);
   const recorded = JSON.stringify(itemOf("H1.1").dispute);
   assert.ok(recorded.includes(WHY), `the dispute does not carry the why: ${recorded}`);
-  assert.ok(recorded.includes("src/a.ts:2"), `the dispute does not carry the evidence pointer: ${recorded}`);
+  assert.ok(recorded.includes("src/a.ts:1"), `the dispute does not carry the evidence pointer: ${recorded}`);
 });
 
 // ---------------------------------------------------------------------------

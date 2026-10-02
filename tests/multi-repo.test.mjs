@@ -8,7 +8,7 @@
 //   "tier predicted <tier> (n file)" ............................... scripts/lib/verbs.mjs note plan
 //   "slop: 1 slop line", "<path>:<line> step narration" ............ tests/measure-and-click.test.mjs C4
 //   "<n> changed lines" on a piece over the cap .................... tests/measure-and-click.test.mjs C7
-//   "Traced names no file that exists in the repo" ................. scripts/lib/verbs.mjs checkContext
+//   "does not resolve in the repo" ................. scripts/lib/verbs.mjs checkContext
 //   "✗ <cmd> — exit n", "n of m red", skipped rows ................. scripts/lib/verify.mjs
 //   "## Changed files" ............................................. scripts/lib/report.mjs
 //   ledger.repos {prefix, root}, baseline.heads, base/@<n>/<rel>.base, verify row `repo`,
@@ -65,7 +65,7 @@ const tagged = (tag, code = 0) => `${NODE} -e "console.log('${tag}'); process.ex
 const CWD_CMD = `${NODE} -e "console.log(process.cwd())"`;
 
 const GATE_JSON = { source: ["src/**", "tests/**"], tests: ["tests/**"], verify: ["true"] };
-const CONTEXT = "Traced: src/a.ts:1\nRelated: none\nResearch: none needed: local";
+const CONTEXT = "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: local";
 
 // The main fixture repo, committed.
 function committed(name, files = {}, config = GATE_JSON) {
@@ -609,9 +609,9 @@ test("C21 edge: a when:source command of the declared repo runs when only that r
 
 test("C11 boundary: a Traced pointer and a huddle evidence pointer into the declared repo resolve; into an undeclared sibling the Traced pointer is refused as today and a missing file never resolves", () => {
   const { repo, p } = pair("mr-c11");
-  const traced = (ptr) => `Traced: ${ptr}\nRelated: none\nResearch: none needed: local`;
+  const traced = (ptr) => `Traced: ${ptr}\nRelated: tests/a.test.ts\nResearch: none needed: local`;
   cli(repo, "note", ["context", traced(`${p}/src/a.py:3`)]);
-  assert.match(refused(repo, "note", ["context", traced(`${p}/src/missing.py:3`)]), /Traced names no file that exists/);
+  assert.match(refused(repo, "note", ["context", traced(`${p}/src/missing.py:3`)]), /does not resolve/);
 
   cli(repo, "huddle", ["add", "qa", "--summary", "wrote the tests"]);
   const acton = (text) => /H\d+\.\d+/.exec(cli(repo, "huddle", ["acton", "H1", text]))[0];
@@ -622,7 +622,7 @@ test("C11 boundary: a Traced pointer and a huddle evidence pointer into the decl
   const plain = committed("mr-c11-plain");
   sibling("mr-c11-plain");
   openRun(plain, "mr-c11-plain", { files: "src/a.ts" });
-  assert.match(refused(plain, "note", ["context", traced("../mr-c11-plain-other/src/a.py:3")]), /Traced names no file that exists/);
+  assert.match(refused(plain, "note", ["context", traced("../mr-c11-plain-other/src/a.py:3")]), /does not resolve/);
   // evidence may leave the repo (a plan kept outside it): a ../ pointer to an existing file resolves
   cli(plain, "huddle", ["add", "qa", "--summary", "wrote the tests"]);
   const plainItem = /H\d+\.\d+/.exec(cli(plain, "huddle", ["acton", "H1", "the parser drops a row"]))[0];

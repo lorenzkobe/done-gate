@@ -4,7 +4,7 @@ import { execFileSync, spawnSync, execSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, here } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, doneArgs } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
@@ -453,7 +453,7 @@ test("C11 edge: a DONE or WAIVED step is never reopened by further growth", () =
   cli(repo, "note", ["plan", "Touch one file.", "--files", "src/a.ts"]);
   writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
   cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
-  cli(repo, "step", ["skeptic", "done", "huddled, no findings", "--evidence", "events#1"]);
+  cli(repo, "step", ["skeptic", "done", "huddled, no findings", "--evidence", "ledger.md"]);
 
   write(repo, "src/a.ts", "export const a = 2;\n");
   write(repo, "src/b.ts", "export const b = 1;\n");
@@ -1175,7 +1175,7 @@ function closedTieredFixture(name, slug = "shipped") {
   writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
   cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
   // {close} is closed by `gate close`, never by hand
-  for (const s of steps) if (!s.state && s.key !== "close") cli(repo, "step", [String(s.n), "done", "nothing changed under source", "--evidence", "events#1"]);
+  for (const s of steps) if (!s.state && s.key !== "close") cli(repo, "step", doneArgs(repo, String(s.n), s.key, "nothing changed under source", "ledger.md"));
   cli(repo, "close");
   return repo;
 }
@@ -1644,7 +1644,7 @@ test("C2 happy: growth from small to standard blanks {skeptic} and `gate check` 
   // Closing the blanked step clears it from R8 again.
   writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
   cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
-  cli(repo, "step", ["skeptic", "done", "huddled, two findings answered", "--evidence", "events#1"]);
+  cli(repo, "step", ["skeptic", "done", "huddled, two findings answered", "--evidence", "ledger.md"]);
   const after = check(repo);
   assert.ok(
     !ruleLines(after, "R8").join("\n").includes("{skeptic}"),
@@ -1752,10 +1752,10 @@ function cleanClosingFixture(name, slug = "tidy") {
   cli(repo, "case", ["add", "spec covers the happy path", "--kind", "happy"]);
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:refused"]);
   cli(repo, "case", ["close", "C2", "--test", "tests/a.test.ts:happy"]);
-  cli(repo, "step", ["context", "done", "traced it", "--evidence", "events#1"]);
+  cli(repo, "step", ["context", "done", "traced it", "--evidence", "ledger.md"]);
   writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
   cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
-  cli(repo, "step", ["skeptic", "done", "no findings", "--evidence", "events#2"]);
+  cli(repo, "step", ["skeptic", "done", "no findings", "--evidence", "ledger.md"]);
   cli(repo, "step", ["implement", "done", "spec written", "--evidence", "docs/notes.md"]);
   cli(repo, "close");
   return repo;

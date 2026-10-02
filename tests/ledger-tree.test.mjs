@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync, execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync, utimesSync, readdirSync, writeFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, gate, write, pluginRoot } from "./helpers.mjs";
+import { makeRepo, gate, write, pluginRoot, doneArgs } from "./helpers.mjs";
 import { loadSession, ensureSession } from "../scripts/lib/session-state.mjs";
 import { openLedger, attachLedger, currentLedger, loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadConfig, matchGlob, matchAny, DEFAULTS } from "../scripts/lib/config.mjs";
@@ -1202,7 +1202,7 @@ test("C11 refused: the hint never names a closed step, and never names the skept
       );
       assert.ok(!seen.includes(key), `${playbook}: the hint repeated {${key}}:\n${h}`);
       seen.push(key);
-      h = hint(repo, "step", [key, "na", "not exercised by this fixture"]);
+      h = hint(repo, "step", key === "repro" || key === "rootcause" ? doneArgs(repo, key, key, "shown by the probe", "") : [key, "na", "not exercised by this fixture"]);
     }
 
     // The walk really reached the end of the playbook, so the sweep above saw every hint.

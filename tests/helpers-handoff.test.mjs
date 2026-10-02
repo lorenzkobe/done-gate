@@ -644,6 +644,15 @@ test("huddle add on a draft whose helper is still running says it is still runni
   assert.doesNotMatch(after.stderr, /still running/i);
 });
 
+test("a worker packet marks an open finding whose citation does not resolve, and leaves one that resolves unmarked", () => {
+  const repo = large("hh-worker-unresolved");
+  helperFile(repo, "review-1.md", reviewFile(1, "hh-worker-unresolved", { actOn: ["a caller is missed — src/gone.ts:9", "f0 drops the null case — src/f0.ts:1"] }));
+  cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
+  const open = section(brief(repo, "worker").text, "Open findings").split("\n");
+  assert.match(open.find((l) => l.includes("H1.1")), /src\/gone\.ts:9, which does not resolve/);
+  assert.doesNotMatch(open.find((l) => l.includes("H1.2")), /does not resolve/);
+});
+
 test("gate brief worker --files refuses an empty entry and a path outside the repo, and writes no packet", () => {
   const repo = large("hh-worker-files");
   for (const files of ["", "src/f0.ts,,src/f1.ts", "../elsewhere.ts", "src/f0.ts,/etc/hosts"]) {

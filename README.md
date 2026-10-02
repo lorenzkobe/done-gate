@@ -305,7 +305,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `repo add <path>` | add a further git repo to the open run, measured from its HEAD |
 | `note task\|context\|plan "…"` · `note plan "…" --files a,b` · `note caveat "…"` | write the prose sections (stamps the order for R2); Context is Traced (file:line pointers), Related, Research; `--files` predicts the size; a caveat is something the run could not show, printed in both reports |
 | `case add "…" --kind <kind>` · `case add --batch <file>` · `case amend C1 "…"` · `case close C1 --test file:name \| --click \| --na "…"` | the case table; kinds: happy, edge, refused, boundary, idempotent, reported-surface, performance, click; `--batch` reads one case per line as `<kind><TAB><text>`, adds all or none and prints one `next:` line; `amend` replaces a case's text and reopens it; `--click` closes a click case with the lead's newest click after the last edit and prints it |
-| `step <key\|n> done\|skipped\|na "…" [--evidence ptr]` | close a playbook step (not the close step: `gate close` does that) |
+| `step <key\|n> done\|skipped\|na "…" [--evidence ptr \| --ran "<text>"]` | close a playbook step (not the close step: `gate close` does that); the pointer must resolve; `repro`, `rootcause` and `schema` close only on a recorded run (`--ran` picks the newest command, browser call or skill after the run opened whose text contains it), and `rootcause` names the line at fault as `file:line` in its note |
 | `next` | the full `next:` hint; after a verb it is printed in full the first time a step is hinted and in a short form afterwards, and in full again once a session joins the run (clear, resume, compact, `gate attach`) |
 | `huddle add <role> --file review-1.md` · `acton` · `resolve` · `dispute` | reviewer rounds and Act-on items; `add` prints each recorded id with its finding |
 | `huddle reply --file worker-<n>.md` | record a worker's answers: `fixed:` closes an item, `disagree:` disputes it; an unknown id fails and lists the open ones. Worker reply files are their own stream, numbered like their packet (`brief-worker-2.md` asks for `worker-2.md`) |
@@ -388,6 +388,14 @@ names hand-made rows in its reply; the reviewer checks a named audience against 
 callers; an investigation labels a security or exposure finding "from config, unverified"
 unless it cites the deployed state or the handler code. An API change is driven by calling
 the endpoint.
+
+Facts over assumptions: the context note is refused when a Traced `file:line` does not resolve
+(missing file, or a line past its end) or when Related names no existing file and is not
+"none: `<the search you ran>`"; a helper finding whose `file:line` does not resolve is recorded
+with a note to check it first; in read-only work a claim cites what was run or read, or is
+labelled "unverified". A memory, docs or search MCP lookup is not a run. An evidence pointer
+is checked: `ledger.md#<section>` needs text under that heading, `ledger.json#<key>` needs a record under one of the run's lists (cases, huddles, waivers, pauses, blast, caveats),
+`file:<number>` needs the line inside the file.
 
 ## Develop
 

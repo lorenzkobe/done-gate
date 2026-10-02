@@ -99,13 +99,13 @@ test("C2 refused: a missing part, no resolving pointer under Traced (prose, a mi
   const repo = opened("ctx-c2", { files: ["src/a.ts", "src/dir.ts/inner.txt"] });
   const noResearch = refused(repo, "note", ["context", "Traced: src/a.ts:1 exports a.\nRelated: none."]);
   assert.match(noResearch, /Traced/); assert.match(noResearch, /Related/); assert.match(noResearch, /Research/);
-  const noPointer = refused(repo, "note", ["context", "Traced: I looked at the module.\nRelated: none.\nResearch: none needed: trivial."]);
+  const noPointer = refused(repo, "note", ["context", "Traced: I looked at the module.\nRelated: tests/a.test.ts\nResearch: none needed: trivial."]);
   assert.match(noPointer, /file:line/);
-  const ghost = refused(repo, "note", ["context", "Traced: src/nope.ts:3 is the entry.\nRelated: none.\nResearch: none needed: trivial."]);
+  const ghost = refused(repo, "note", ["context", "Traced: src/nope.ts:3 is the entry.\nRelated: tests/a.test.ts\nResearch: none needed: trivial."]);
   assert.match(ghost, /file:line|resolve|exist/);
-  const traversal = refused(repo, "note", ["context", "Traced: ../package.json:1 is outside.\nRelated: none.\nResearch: none needed: trivial."]);
+  const traversal = refused(repo, "note", ["context", "Traced: ../package.json:1 is outside.\nRelated: tests/a.test.ts\nResearch: none needed: trivial."]);
   assert.match(traversal, /file:line|resolve|exist/);
-  const directory = refused(repo, "note", ["context", "Traced: src/dir.ts:1 is a folder.\nRelated: none.\nResearch: none needed: trivial."]);
+  const directory = refused(repo, "note", ["context", "Traced: src/dir.ts:1 is a folder.\nRelated: tests/a.test.ts\nResearch: none needed: trivial."]);
   assert.match(directory, /file:line|resolve|exist/);
   refused(repo, "note", ["context", ""]);
   const l = ledgerOf(repo);
@@ -235,7 +235,7 @@ test("C7 happy: the skeptic asks what the trace missed; the brief's first line s
   assert.match(brief, /^Changed no source files\. Understood first: 2 pointers traced, research not needed\.$/m, brief);
   assert.doesNotMatch(brief, /no context/i, brief);
   const researched = opened("ctx-c7-researched");
-  cli(researched, "note", ["context", "Traced: src/a.ts:1 is the entry.\nRelated: none.\nResearch: read the Node docs on process.hrtime; a monotonic clock orders events better than Date.now."]);
+  cli(researched, "note", ["context", "Traced: src/a.ts:1 is the entry.\nRelated: tests/a.test.ts\nResearch: read the Node docs on process.hrtime; a monotonic clock orders events better than Date.now."]);
   assert.match(cli(researched, "report", ["--brief"]).stdout, /Understood first: 1 pointer traced, research noted\./);
   assert.match(cli(repo, "report").stdout, /^## Context\n\nTraced: src\/a\.ts:1/m, "the full report carries the Context section");
   const none = opened("ctx-c7-none");
@@ -251,7 +251,7 @@ test("C8 idempotent: a second gate note context appends under the same heading a
   const repo = opened("ctx-c8");
   cli(repo, "note", ["context", CONTEXT]);
   const first = ledgerOf(repo).contextSeq;
-  cli(repo, "note", ["context", "Traced: src/app/page.tsx:1 renders a.\nRelated: none.\nResearch: none needed: same change."]);
+  cli(repo, "note", ["context", "Traced: src/app/page.tsx:1 renders a.\nRelated: tests/a.test.ts\nResearch: none needed: same change."]);
   const md = ledgerMd(repo);
   assert.equal((md.match(/^## Context$/gm) ?? []).length, 1, "two Context headings");
   assert.match(md, /Traced: src\/a\.ts:1[\s\S]*Traced: src\/app\/page\.tsx:1/);

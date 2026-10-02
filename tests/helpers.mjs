@@ -33,3 +33,14 @@ export function write(dir, rel, content) {
   mkdirSync(path.dirname(abs), { recursive: true });
   writeFileSync(abs, content);
 }
+
+const RUN_KEYS = new Set(["repro", "rootcause", "schema"]);
+
+// Arguments that close a step DONE. A step that claims a run (repro, rootcause, schema)
+// closes only on a recorded run, so one is logged first, the way the PostToolUse hook does.
+export function doneArgs(repo, ref, key, note, evidence, session = "S1") {
+  if (!RUN_KEYS.has(key)) return [ref, "done", note, "--evidence", evidence];
+  const payload = { session_id: session, cwd: repo, hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: `node probe.mjs ${key}` }, tool_response: { exit_code: 0 } };
+  execFileSync(process.execPath, [gate, "log"], { input: JSON.stringify(payload), env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: session } });
+  return [ref, "done", `${note} (src/a.ts:1)`, "--ran", `node probe.mjs ${key}`];
+}

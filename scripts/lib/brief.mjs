@@ -260,7 +260,7 @@ export function renderPacket(state, role, { round, n, item = null, piece = null,
     const open = state.ledger.huddles.filter((h) => h.role === "reviewer" || h.role === "reviewer-2").flatMap((h) => h.actOn.filter((a) => !a.closed && (!owned || cites(a.text))));
     if (open.length) {
       out.push(...diffOrFiles(state, "Diff so far"));
-      out.push("## Open findings", "", ...open.map((a) => `- ${a.id} — ${a.text}`), "");
+      out.push("## Open findings", "", ...open.map((a) => `- ${a.id} — ${a.text}${a.unresolved ? ` (cites ${a.unresolved.join(", ")}, which does not resolve: check the claim before acting on it)` : ""}`), "");
       out.push("## Write your replies to", "", path.join(state.dir, `worker-${n}.md`), "");
     }
   } else {
