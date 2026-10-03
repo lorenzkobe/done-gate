@@ -632,19 +632,23 @@ export function lateOrder(state) {
 // A file's mtime may land just after the PostToolUse stamp of the command that wrote it.
 const WRITE_SLACK_MS = 1000;
 
-// A writing command's run spans from the same agent's previous event to its stamp; a background
-// one runs on past it. A deleted file has no mtime, so any writing command may have removed it.
-function explains(events, since, file, mtime) {
+// The writing commands after `since` whose run (the agent's previous event to its stamp, or on
+// past it in the background) holds a file's mtime; with no mtime (deleted), every one.
+export function writersOf(events, since, mtime) {
   const last = new Map();
+  const out = [];
   for (const e of events) {
     const t = Date.parse(e.ts);
     const before = last.get(e.agent ?? "") ?? -Infinity;
     last.set(e.agent ?? "", t);
-    if (e.seq <= since) continue;
-    if (e.kind === "edit" && e.path === file) return true;
-    if (e.kind === "command" && !e.readOnly && (mtime === undefined || (mtime >= before && mtime <= (e.background ? Infinity : t + WRITE_SLACK_MS)))) return true;
+    if (e.seq <= since || e.kind !== "command" || e.readOnly || e.scratch) continue;
+    if (mtime === undefined || (mtime >= before && mtime <= (e.background ? Infinity : t + WRITE_SLACK_MS))) out.push(e);
   }
-  return false;
+  return out;
+}
+
+function explains(events, since, file, mtime) {
+  return events.some((e) => e.kind === "edit" && e.path === file && e.seq > since) || writersOf(events, since, mtime).length > 0;
 }
 
 // With no ledger open, a source change is this session's unless another session's events
@@ -658,6 +662,11 @@ function ownChanges(state, paths) {
     return explains(state.events ?? [], since, p, mtime) || !others.some((events) => explains(events, since, p, mtime));
   });
 }
+
+// An open finding with enough of its text to act on, so `gate check` is the list of what is open.
+export const openItem = (a) => `${a.id} (${a.text.length > 80 ? `${a.text.slice(0, 80)}…` : a.text})`;
+
+const stillOpen = (r) => (r.openItems?.length ? `still open from earlier rounds: ${r.openItems.map(openItem).join(", ")}; ` : "");
 
 // Pure: state in, unmet rules out. Every item says what to do next.
 export function evaluate(state) {
@@ -736,11 +745,11 @@ export function evaluate(state) {
   if (src.length && needsReviewer && !waived(ledger, "review")) {
     const r = reviewed(state, "reviewer", after);
     if (!r.stopped || !r.hasFile) {
-      unmet.push({ rule: "R5", text: r.pending.length && r.hasFile
+      unmet.push({ rule: "R5", text: stillOpen(r) + (r.pending.length && r.hasFile
         ? `no clean reviewer round yet for ${list(r.pending)}: \`gate brief reviewer --files ${nextPiece(state, r.pending).join(",")}\` (a piece of at most ${policy.reviewMaxLines} source lines), spawn \`done-gate:reviewer\`, then \`gate huddle add reviewer --file review-<n>.md\`.${orWaive("review")}`
-        : `no reviewer pass after the last edit. Spawn \`done-gate:reviewer\` (it writes review-<n>.md), then \`gate huddle add reviewer --file review-<n>.md\`.${orWaive("review")}` });
+        : `no reviewer pass after the last edit. Spawn \`done-gate:reviewer\` (it writes review-<n>.md), then \`gate huddle add reviewer --file review-<n>.md\`.${orWaive("review")}`) });
     } else if (r.openItems.length) {
-      unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map((a) => a.id).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${orWaive("review")}` });
+      unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${orWaive("review")}` });
     }
   }
 
@@ -756,11 +765,11 @@ export function evaluate(state) {
   if (changed.some((p) => config.isHighRisk(p)) && !waived(ledger, "review-2")) {
     const r = reviewed(state, "reviewer-2", after);
     if (r.stopped && r.hasFile && r.openItems.length) {
-      unmet.push({ rule: "R9", text: `reviewer-2 Act-on item(s) still open: ${r.openItems.map((a) => a.id).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${orWaive("review-2")}` });
+      unmet.push({ rule: "R9", text: `reviewer-2 Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${orWaive("review-2")}` });
     } else if (!r.stopped || !r.hasFile) {
-      unmet.push({ rule: "R9", text: r.pending.length && r.hasFile
+      unmet.push({ rule: "R9", text: stillOpen(r) + (r.pending.length && r.hasFile
         ? `high-risk paths changed: no clean reviewer-2 round yet for ${list(r.pending)}: \`gate brief reviewer-2 --files ${nextPiece(state, r.pending).join(",")}\`, spawn \`done-gate:reviewer-2\`, then \`gate huddle add reviewer-2 --file review2-<n>.md\`.${orWaive("review-2")}`
-        : `high-risk paths changed (${list(changed.filter((p) => config.isHighRisk(p)))}): a second review by \`done-gate:reviewer-2\` is required after the last edit, with its review2-<n>.md recorded via \`gate huddle add reviewer-2 --file ...\` and every Act-on item closed.${orWaive("review-2")}` });
+        : `high-risk paths changed (${list(changed.filter((p) => config.isHighRisk(p)))}): a second review by \`done-gate:reviewer-2\` is required after the last edit, with its review2-<n>.md recorded via \`gate huddle add reviewer-2 --file ...\` and every Act-on item closed.${orWaive("review-2")}`) });
     }
   }
 
@@ -810,17 +819,17 @@ export function evaluate(state) {
   const delegated = waived(ledger, "delegate") ? null : leadDelegates(ledger, state.policy ?? undefined);
   if (delegated) {
     const since = ledger.tier?.predictedSeq ?? ledger.planSeq ?? 0;
-    // the lead's own edit-tool calls, or those of any agent that is not a worker
-    const own = (state.events ?? []).filter((e) => implementationEdit(e, config) && !isRole(e.agentType, "worker") && e.seq > since);
+    // the lead's own edit-tool calls; any subagent's edit (a worker, an implementer) is delegation
+    const own = (state.events ?? []).filter((e) => implementationEdit(e, config) && !e.agent && e.seq > since);
     if (own.length) {
       unmet.push({ rule: "R16", text: `the lead edited ${list([...new Set(own.map((e) => e.path))])} at size ${delegated}; hand that piece to a worker (\`gate brief worker\`, spawn done-gate:worker) and let it own the file from here.${orWaive("delegate")}` });
     }
-    // source changed with no edit-tool event to explain it: a shell edit, unless the last
-    // shell command was a worker's, whose shell edits are its own business
-    const shell = (ledger.unexplainedChanges ?? []).filter((c) => c.seq > since && !isRole(c.agentType, "worker"));
+    // source changed with no edit-tool event to explain it: a shell edit, unless a subagent's
+    // command made it
+    const shell = (ledger.unexplainedChanges ?? []).filter((c) => c.seq > since && !c.agentType);
     if (shell.length) {
       const last = shell[shell.length - 1];
-      unmet.push({ rule: "R16", text: `source changed with no worker edit behind it (${last.cmd ? `after \`${String(last.cmd).slice(0, 60)}\`` : "a shell edit"}) at size ${delegated}; at this size only workers edit source. Hand the piece to a worker (\`gate brief worker\`).${orWaive("delegate")}` });
+      unmet.push({ rule: "R16", text: `source changed with no worker edit behind it (${last.cmd ? `after \`${String(last.cmd).slice(0, 60)}\`` : "a shell edit"}) at size ${delegated}; at this size only helpers edit source. Hand the piece to a worker (\`gate brief worker\`).${orWaive("delegate")}` });
     }
   }
 

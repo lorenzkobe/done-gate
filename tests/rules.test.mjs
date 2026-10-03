@@ -165,6 +165,26 @@ test("R9 names the open reviewer-2 item, as R5 does, instead of asking for anoth
   assert.doesNotMatch(r9.text, /required after the last edit/);
 });
 
+test("C3 reported-surface: gate check prints each open reviewer finding with the start of its text, cut at 80 characters", () => {
+  const changed = ["src/a.ts", "tests/a.test.ts"];
+  const edit = { seq: 10, kind: "edit", path: "src/a.ts", agent: null };
+  const r1 = { seq: 20, kind: "subagent-stop", agentType: "done-gate:reviewer" };
+  const long = "sed -f still scans a file path as the script, so a read-only call with -f is refused by the fence";
+  const h1 = { id: "H1", role: "reviewer", file: "review-1.md", actOn: [{ id: "H1.1", text: "comment past two lines", closed: null }, { id: "H1.2", text: long, closed: null }] };
+  const r5 = evaluate(clean({ changed, events: [edit, r1], reviews: ["review-1.md"], ledger: { huddles: [h1] } })).find((u) => u.rule === "R5");
+  assert.match(r5.text, /H1\.1 \(comment past two lines\)/);
+  assert.ok(r5.text.includes(`H1.2 (${long.slice(0, 80)}…)`), r5.text);
+});
+
+test("C5 edge: while review pieces are still pending, R5 still prints the findings left open by earlier rounds", () => {
+  const changed = ["src/a.ts", "tests/a.test.ts"];
+  const edit = { seq: 10, kind: "edit", path: "src/a.ts", agent: null };
+  const h1 = { id: "H1", role: "reviewer", file: "review-1.md", actOn: [{ id: "H1.1", text: "the guard misses a null tier", closed: null }] };
+  const r5 = evaluate(clean({ changed, events: [edit], reviews: ["review-1.md"], ledger: { huddles: [h1] } })).find((u) => u.rule === "R5");
+  assert.ok(r5, "R5 fires: no reviewer pass after the last edit");
+  assert.match(r5.text, /H1\.1 \(the guard misses a null tier\)/);
+});
+
 test("R10: migration-number requires CLAUDE.md's next number to be max+1 when a migration is added; claude-md-budget caps CLAUDE.md", () => {
   assert.ok(!ids(clean({ changed: ["src/a.ts", "tests/a.test.ts"] })).includes("R10"));
   write(repo, "supabase/migrations/0003_c.sql", "z");

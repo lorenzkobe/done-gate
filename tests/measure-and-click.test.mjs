@@ -249,7 +249,8 @@ test("C5 refused: a shell command or an edit-tool write naming <run>/base/ is re
     assert.ok(fence({ tool_name: "Bash", tool_input: { command: cmd } }), cmd);
   }
   assert.equal(fence({ tool_name: "Bash", tool_input: { command: `ls ${baseDir}` } }), null, "listing the directory is fine");
-  assert.equal(fence({ tool_name: "Bash", tool_input: { command: `touch ${baseDir}line.txt` } }), null, "a name that only starts with base is not the copies");
+  assert.equal(fence({ tool_name: "Write", tool_input: { file_path: path.join(repo, `${baseDir}line.txt`) } }), null, "a name that only starts with base is not the copies");
+  assert.ok(fence({ tool_name: "Bash", tool_input: { command: `touch ${baseDir}line.txt` } }), "a shell write anywhere in the state dir is refused");
 
   assert.equal(fence({ tool_name: "Bash", tool_input: { command: `cat ${rel}` } }), null, "reading a copy is fine");
   assert.equal(fence({ tool_name: "Edit", tool_input: { file_path: path.join(repo, "src/a.ts") } }), null, "source stays writable");

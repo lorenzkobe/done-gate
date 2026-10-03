@@ -95,10 +95,10 @@ const NEW_KIND = "performance";
 
 const PLAYBOOKS_BEFORE = {
   feature: ["context", "plan", "cases", "skeptic", "tests", "implement", "verify", "driver", "schema", "review", "close"],
-  bugfix: ["repro", "rootcause", "context", "plan", "cases", "skeptic", "tests", "implement", "verify", "driver", "schema", "review", "close"],
+  bugfix: ["repro", "context", "rootcause", "plan", "cases", "skeptic", "tests", "implement", "verify", "driver", "schema", "review", "close"],
   refactor: ["context", "plan", "cases", "skeptic", "tests", "verify-before", "implement", "verify", "driver", "schema", "review", "close"],
   plan: ["context", "plan", "skeptic", "implement", "close"],
-  investigation: [null, null],
+  investigation: [null, null, null, null],
 };
 
 // ---------------------------------------------------------------------------

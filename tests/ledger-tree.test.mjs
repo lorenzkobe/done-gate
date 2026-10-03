@@ -580,10 +580,10 @@ const PLAYBOOK_FILE = path.join(pluginRoot, "skills", "gate", "playbooks.md");
 // key lists exactly as the task states them; `null` is an unkeyed step
 const EXPECTED = {
   feature: ["context", "plan", "cases", "skeptic", "tests", "implement", "verify", "driver", "schema", "review", "close"],
-  bugfix: ["repro", "rootcause", "context", "plan", "cases", "skeptic", "tests", "implement", "verify", "driver", "schema", "review", "close"],
+  bugfix: ["repro", "context", "rootcause", "plan", "cases", "skeptic", "tests", "implement", "verify", "driver", "schema", "review", "close"],
   refactor: ["context", "plan", "cases", "skeptic", "tests", "verify-before", "implement", "verify", "driver", "schema", "review", "close"],
   plan: ["context", "plan", "skeptic", "implement", "close"],
-  investigation: [null, null],
+  investigation: [null, null, null, null],
 };
 const NAMES = Object.keys(EXPECTED);
 

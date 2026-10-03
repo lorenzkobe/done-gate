@@ -8,7 +8,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { briefOf, caseOpen, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS } from "./rules.mjs";
+import { briefOf, caseOpen, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS } from "./rules.mjs";
 import { assess, buildState, readVerify, reviewFiles, readVerifyStarted } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { withoutRepos } from "./tree.mjs";
@@ -345,7 +345,7 @@ export const verbs = {
         const full = path.join(dir, last.file);
         if (!existsSync(full) || unfinishedFile(full)) throw new UsageError(`step {skeptic}: ${last.file} is not finished. Run \`gate brief skeptic\` again and spawn a fresh helper; its packet continues from the file.`);
         const openItems = huddles.flatMap((h) => h.actOn.filter((a) => !a.closed));
-        if (openItems.length) throw new UsageError(`step {skeptic}: Act-on item(s) still open: ${openItems.map((a) => a.id).join(", ")}. Answer each, then \`gate huddle resolve <id> --evidence <pointer>\`.`);
+        if (openItems.length) throw new UsageError(`step {skeptic}: Act-on item(s) still open: ${openItems.map(openItem).join(", ")}. Answer each, then \`gate huddle resolve <id> --evidence <pointer>\`.`);
       }
       Object.assign(step, { state, note: note || null, evidence: evidence ?? null, seq: nextSeq() });
     });

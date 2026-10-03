@@ -118,10 +118,10 @@ test("C2 refused: a missing part, no resolving pointer under Traced (prose, a mi
 // C3 happy — the playbooks
 // ---------------------------------------------------------------------------
 
-test("C3 happy: feature, refactor and plan open with {context}; bugfix has it as step 3; no {read} step remains; skipping it is refused", () => {
+test("C3 happy: feature, refactor and plan open with {context}; bugfix has it as step 2, after the repro; no {read} step remains; skipping it is refused", () => {
   const text = readFileSync(path.join(pluginRoot, "skills", "gate", "playbooks.md"), "utf8");
   assert.doesNotMatch(text, /\{read\}/, "a playbook still has a {read} step");
-  for (const [playbook, n] of [["feature", 1], ["refactor", 1], ["plan", 1], ["bugfix", 3]]) {
+  for (const [playbook, n] of [["feature", 1], ["refactor", 1], ["plan", 1], ["bugfix", 2]]) {
     const repo = opened(`ctx-c3-${playbook}`, { playbook, task: false });
     const steps = ledgerOf(repo).steps;
     const ctx = steps.find((s) => s.key === "context");

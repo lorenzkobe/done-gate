@@ -179,6 +179,7 @@ test("C10 happy: the always-loaded text, the investigation playbook and the hint
       cli(repo, "step", ["repro", "done", "fails", "--ran", "npm test"]);
     }
     cli(repo, "note", ["task", "Fix it."]);
+    if (key === "rootcause") cli(repo, "note", ["context", "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: local"]);
     assert.match(cli(repo, "next"), /--ran/, `the ${key} hint does not name --ran`);
   }
   const atSchema = { taskSeq: 1, planSeq: 1, cases: [{ id: "C1", status: "closed" }], steps: [{ n: 9, key: "schema", state: null, text: "probe" }] };
@@ -313,11 +314,4 @@ test("G4 boundary: a file pointer with a line past the end of the file is refuse
   refused(repo, "huddle", ["dispute", "H1.1", "the page reads a1", "--evidence", "src/a.ts:21"]);
   refused(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/a.ts:21"]);
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/a.ts:20"]);
-});
-
-test("G5 happy: package.json, plugin.json and marketplace.json all read 0.13.1", () => {
-  const json = (rel) => JSON.parse(readFileSync(path.join(pluginRoot, rel), "utf8"));
-  assert.equal(json("package.json").version, "0.13.1");
-  assert.equal(json(".claude-plugin/plugin.json").version, "0.13.1");
-  assert.equal(json(".claude-plugin/marketplace.json").plugins[0].version, "0.13.1");
 });

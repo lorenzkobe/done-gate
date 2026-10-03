@@ -81,6 +81,44 @@ test("C1 a 1200-line single-file diff: the whole file is refused and the first r
   assert.deepEqual(ledgerOf(repo).seen["review-1.md"].files, [`${BIG}:1-400`]);
 });
 
+test("C1 reported-surface: a sliced piece keeps its slice inline but lists a 3000-line changed test by path and line count", () => {
+  const repo = opened("rr-lean-big-test");
+  bigEdit(repo);
+  edit(repo, "tests/huge.test.ts", Array.from({ length: 3000 }, (_, i) => `test('h${i}', () => {});`).join("\n") + "\n");
+  const packet = packetOf(cli(repo, "brief", ["reviewer", "--files", `${BIG}:1-400`]));
+  assert.ok(packet.includes("+export const big399 = 399;"), "the slice is inlined");
+  assert.ok(!packet.includes("test('h2999'"), "the big test is not inlined");
+  assert.match(packet, /tests\/huge\.test\.ts \(test, 3000 lines now\)/);
+  assert.ok(Buffer.byteLength(packet) < 60000, `packet is ${Buffer.byteLength(packet)} bytes`);
+});
+
+test("C4 boundary: many small changed tests that add up past the cap are listed, not inlined, beside a slice", () => {
+  const repo = opened("rr-lean-many-tests");
+  bigEdit(repo);
+  for (let t = 0; t < 12; t++) edit(repo, `tests/t${t}.test.ts`, Array.from({ length: 40 }, (_, i) => `test('t${t}x${i}', () => {});`).join("\n") + "\n");
+  const packet = packetOf(cli(repo, "brief", ["reviewer", "--files", `${BIG}:1-400`]));
+  assert.ok(!packet.includes("test('t11x39'"), "the tests are not inlined");
+  assert.match(packet, /tests\/t11\.test\.ts \(test, 40 lines now\)/);
+});
+
+test("C4 boundary: a piece of a slice plus a whole source file keeps that file inline while a big test is listed", () => {
+  const repo = opened("rr-lean-mixed", { "src/b.ts": "export const b = 0;\n" });
+  bigEdit(repo);
+  edit(repo, "src/b.ts", body(30, "bee"));
+  edit(repo, "tests/huge.test.ts", Array.from({ length: 400 }, (_, i) => `test('h${i}', () => {});`).join("\n") + "\n");
+  const packet = packetOf(cli(repo, "brief", ["reviewer", "--files", `${BIG}:1-300,src/b.ts`]));
+  assert.ok(packet.includes("+export const bee29 = 29;"), "the piece's whole file is inline");
+  assert.ok(!packet.includes("test('h399'"), "the big test is listed");
+  assert.match(packet, /tests\/huge\.test\.ts \(test, 400 lines now\)/);
+});
+
+test("C2 happy: a sliced piece with a small changed test still inlines that test's diff", () => {
+  const repo = opened("rr-lean-small-test");
+  bigEdit(repo);
+  const packet = packetOf(cli(repo, "brief", ["reviewer", "--files", `${BIG}:1-400`]));
+  assert.ok(packet.includes("+test('big', () => {});"), "the small test diff travels inline");
+});
+
 test("C2 three clean range rounds covering every changed line pass R5; with 801-1200 unseen, R5 names the span and prints its --files", () => {
   const repo = opened("rr-c2");
   bigEdit(repo);

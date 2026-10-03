@@ -11,6 +11,13 @@ import { ancestorPids, pidsDir } from "./context.mjs";
 // forge its evidence, so the deny is unconditional and every attempt is logged.
 const EVIDENCE_FILES = new Set(["events.jsonl", "verify.json", "verify.started.json", "decisions.tsv", "ledger.json", "blocks.json", "state.json", "gate-error.log", "current-session"]);
 const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(events\.jsonl|verify\.json|verify\.started\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json|current-session|pids\/\d+|brief-[a-z0-9-]+-\d+\.md|(?:review2?|skeptic|arbiter|worker)-\d+\.md|runs\/[^/\s]+\/base(?![\w.-]))/;
+// a command that writes and names the state dir in any spelling (`cd .claude && cd gate`, `D=.claude/gate; cd $D`,
+// pushd) can reach evidence through a relative path; gate.json is ordinary config
+const namesGateDir = (text) => {
+  // a commit message only mentions the path
+  const t = text.replace(/\.claude\/gate\.json/g, "").replace(/(\bgit\b[^;&|]*\scommit\b[^;&|]*?\s-[a-zA-Z]*m)\s*("[^"]*"|'[^']*')/g, "$1");
+  return /\.claude["']?\/(?:\.\/)*["']?gate\b/.test(t) || (/(?:^|[\s;&|])(?:cd|pushd)\s+["']?[^\s;&|]*\.claude["']?\/?(?=[\s;&|]|$)/.test(t) && /(?:^|[\s/"'])gate(?=[/\s;&|"']|$)/.test(t));
+};
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const HELPER_ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter"];
 // Shell analysis for the Bash fence. Two readers of one parse: `readsOnly` (may a command
@@ -28,7 +35,7 @@ const INLINE_FLAG = /^-[a-zA-Z]*[ecpEr]$|^--eval$|^--print$/;
 const INLINE_WRITE = /\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|rename(?:Sync)?|unlink(?:Sync)?|rm(?:Sync)?|rmdir(?:Sync)?|mkdir(?:Sync)?|copyFile(?:Sync)?|truncate(?:Sync)?|createWriteStream|open\s*\([^)]*["'][wa][+]?["'])|os\.(?:remove|rename|unlink|makedirs|mkdir)|shutil\.|file_put_contents|fopen|fwrite|unlink/;
 const SCRATCH = /(?:^|\/)(?:tests\/\.tmp|tmp|scratchpad)(?:\/|$)|^\/private\/tmp\//;
 // Programs that only read their arguments; the flags that turn one into a writer.
-const READ_ONLY = new Set(["cat", "ls", "head", "tail", "grep", "egrep", "fgrep", "rg", "sed", "wc", "find", "diff", "stat", "file", "jq", "less", "more", "sort", "uniq", "cut", "tr", "column", "echo", "printf", "cd", "pwd", "test", "[", "true", "tree", "du", "date", "which", "type"]);
+const READ_ONLY = new Set(["ps", "awk", "cat", "ls", "head", "tail", "grep", "egrep", "fgrep", "rg", "sed", "wc", "find", "diff", "stat", "file", "jq", "less", "more", "sort", "uniq", "cut", "tr", "column", "echo", "printf", "cd", "pwd", "test", "[", "true", "tree", "du", "date", "which", "type"]);
 const WRITING_FLAG = {
   sed: /^-[a-zA-Z]*[iI]|^--in-place/,
   sort: /^-[a-zA-Z]*o|^--o|^--compress/,
@@ -37,6 +44,9 @@ const WRITING_FLAG = {
   git: /^--output/,
   rg: /^--pre/,
   perl: /^-[a-zA-Z]*i/,
+  // print or printf into a file or a command, system(), a command piped to getline or a
+  // coprocess, or an in-place, script-file or --exec run (flags glued or not)
+  awk: /^-[ifE]|^--(?:include|file|exec)|\bprintf?\b[^;}]*[>|]|system\s*\(|\|&|\|\s*getline/,
 };
 // what each writing program writes to: every path argument, or only the last one
 const WRITERS = { tee: "args", rm: "args", rmdir: "args", touch: "args", mkdir: "args", truncate: "args", mv: "args", ln: "last", cp: "last", install: "last", rsync: "last", scp: "last" };
@@ -170,7 +180,8 @@ function shift(seg) {
   let pathChanged = false;
   while (words.length && !words[0].quoted && (/^[A-Za-z_]\w*=/.test(words[0].text) || words[0].text === "rtk" || KEYWORDS.has(words[0].text))) {
     if (/^PATH=/.test(words[0].text)) pathChanged = true; // a planted binary could stand in for cat
-    words.shift();
+    // `rtk proxy <cmd>` runs the command unfiltered
+    if (words.shift().text === "rtk" && words[0]?.text === "proxy" && !words[0].quoted) words.shift();
   }
   if (words.length && !words[0].quoted && HEADERS.has(words[0].text)) return { words: [], pathChanged };
   return { words, pathChanged };
@@ -208,6 +219,17 @@ function sedScripts(args) {
 const writingFlag = (program, args) =>
   (Boolean(WRITING_FLAG[program]) && args.some((a) => WRITING_FLAG[program].test(a.text))) || (program === "sed" && sedScripts(args).some((t) => SED_W.test(t)));
 
+// What `$(($(cmd) - 1))` leaves once the substitution is cut out: `- 1`. Numbers and + - %
+// only: a name could be a program (`$X - *`) and * is a glob.
+function arithmetic(words) {
+  return words.every((w) => !w.quoted && /^(?:\d+|[-+%])$/.test(w.text));
+}
+
+function gitReads(args) {
+  const [verb, sub] = (args[0]?.text === "-C" ? args.slice(2) : args).map((a) => a.text);
+  return GIT_READ.has(verb) || (verb === "stash" && (sub === "list" || sub === "show"));
+}
+
 // Every segment starts with a read-only program, nothing is redirected to a file, and inline
 // code names no write. `node …/gate.mjs` is the gate's own CLI; `sh -c` is read as a command.
 export function readsOnly(raw) {
@@ -222,12 +244,13 @@ export function readsOnly(raw) {
     if (!words.length) return true;
     const [first, ...args] = words;
     const program = first.text;
+    if (arithmetic(words)) return true;
     if (program === "node" && /gate\.mjs$/.test(args[0]?.text ?? "")) return true;
     if (SHELLS.has(program) && args.some((a) => !a.quoted && /^-[a-zA-Z]*c/.test(a.text))) return readsOnly(args.filter((a) => a.quoted).map((a) => a.text).join("\n"));
     const code = inlineCode(program, args, raw);
     if (code !== null) return !INLINE_WRITE.test(code) && !writingFlag(program, args);
     if (writingFlag(program, args)) return false;
-    if (program === "git") return GIT_READ.has(args[0]?.text === "-C" ? args[2]?.text : args[0]?.text);
+    if (program === "git") return gitReads(args);
     return READ_ONLY.has(program);
   });
 }
@@ -256,6 +279,20 @@ export function inlineWrites(raw) {
 // writes, a git command, an extract into an unknown directory). Variables set in the same
 // command and `cd` are followed, so `S=/tmp/x; echo > $S/a` and `cd tests/.tmp && cp a ./b`
 // resolve.
+// A command that writes, but only under scratch paths: every program in it is one the fence
+// knows (a reader, or a writer whose targets it can read) and every target is scratch. It
+// cannot have written source.
+export function scratchOnly(raw) {
+  const known = segments(withoutHeredocs(raw)).every((seg) => {
+    const { words } = shift(seg);
+    // mv and rsync can delete what they read from, which no target list shows
+    return !words.length || READ_ONLY.has(words[0].text) || (Boolean(WRITERS[words[0].text]) && !["mv", "rsync"].includes(words[0].text));
+  });
+  if (!known || inlineWrites(raw)) return false;
+  const { outside, blind } = shellWrites(raw);
+  return !outside.length && !blind.length;
+}
+
 export function shellWrites(raw) {
   const vars = {};
   let cwd = "";
@@ -285,6 +322,7 @@ export function shellWrites(raw) {
           continue;
         }
         if (!words.length && !w.quoted && (w.text === "rtk" || KEYWORDS.has(w.text))) continue;
+        if (!words.length && !w.quoted && w.text === "proxy" && seg[seg.indexOf(w) - 1]?.text === "rtk") continue;
         if (!words.length && !w.quoted && HEADERS.has(w.text)) break;
         words.push(w);
       }
@@ -310,7 +348,7 @@ export function shellWrites(raw) {
       }
       if (program === "git") {
         const verb = args[0]?.text === "-C" ? args[2]?.text : args[0]?.text;
-        if (GIT_WRITE.has(verb)) blind.push(`git ${verb} changes the repo`);
+        if (GIT_WRITE.has(verb) && !gitReads(args)) blind.push(`git ${verb} changes the repo`);
         continue;
       }
       if (program === "xargs") {
@@ -446,7 +484,7 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
     const cmd = String(input.tool_input?.command ?? "");
     // a heredoc that quotes an evidence path is text; the command around it is what runs,
     // unless the heredoc feeds an interpreter whose code writes
-    if ((EVIDENCE_IN_COMMAND.test(withoutHeredocs(cmd)) && !readsOnly(cmd)) || (EVIDENCE_IN_COMMAND.test(cmd) && inlineWrites(cmd))) {
+    if (((EVIDENCE_IN_COMMAND.test(withoutHeredocs(cmd)) || namesGateDir(withoutHeredocs(cmd))) && !readsOnly(cmd)) || (EVIDENCE_IN_COMMAND.test(cmd) && inlineWrites(cmd))) {
       return { deny: true, reason: "done-gate: that command writes gate evidence files (.claude/gate/...). Evidence is written only by `gate` verbs; read it with cat, grep or `gate report`.", paths: [] };
     }
     // Helpers write only through the edit tools, where the role rules apply; a shell write
@@ -469,16 +507,15 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
     }
   }
   const role = (r) => agentType === `done-gate:${r}` || agentType === r;
-  // at a delegated size (policy.delegatesAt, large by default) source and tests belong to the
-  // worker and QA, and so does any other agent the lead might spawn instead of a worker. A "delegate"
+  // at a delegated size (policy.delegatesAt, large by default) the lead hands source to a helper:
+  // a worker, or any implementer it spawns; the reading roles stay fenced below. A "delegate"
   // waiver (R16 honours the same key) lifts this fence too.
   const delegateWaived = Boolean(ledger) && (ledger.waivers ?? []).some((w) => w.key === "delegate");
-  const size = !role("worker") && !role("qa") && ledger && !delegateWaived ? leadDelegates(ledger) : null;
+  const size = !input.agent_id && ledger && !delegateWaived ? leadDelegates(ledger) : null;
   if (size) {
     const owned = paths.filter((p) => config.isSource(p));
     if (owned.length) {
-      const who = agentType === null ? "the lead does not edit source" : `${agentType} is not a worker`;
-      return { deny: true, delegate: true, reason: `done-gate: size ${size}: ${who}; ${owned.join(", ")} belongs to a worker. Run \`gate brief worker\` and spawn done-gate:worker with the prompt it prints (or re-plan with \`gate note plan --files\` if this is really one small file).`, paths };
+      return { deny: true, delegate: true, reason: `done-gate: size ${size}: the lead does not edit source; ${owned.join(", ")} belongs to a helper. Run \`gate brief worker\` and spawn done-gate:worker with the prompt it prints (or re-plan with \`gate note plan --files\` if this is really one small file).`, paths };
     }
   }
   if (role("skeptic")) {

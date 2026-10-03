@@ -310,8 +310,8 @@ export function applyPrediction(ledger, policy, config, paths, declared = null) 
   tier.predictedFiles = paths;
   // R16 counts the lead's source edits from the moment the task became a delegated size;
   // a later re-prediction never moves that mark forward and erases a standing finding
-  if (delegated && (!wasDelegated || tier.predictedSeq === null)) tier.predictedSeq = nextSeq();
-  if (!delegated) tier.predictedSeq = null;
+  if (delegated && tier.predictedSeq === null) tier.predictedSeq = nextSeq();
+  if (!delegated && !delegatedTier(policy, tier.measured?.tier)) tier.predictedSeq = null;
   const required = requiredSteps(policy, pred.tier, ledger);
   tier.autoNa = [];
   for (const key of optionalSteps(ledger)) {

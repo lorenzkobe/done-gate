@@ -219,7 +219,10 @@ key.
   fresh worker would only lose it. At size large (`policy.delegatesAt` in `models.json`; a
   plan naming more than ten files) the lead's own `Edit`/`Write` on source or tests is
   refused and it is told to brief a worker per piece. A shell edit (`sed -i`, a heredoc) slips past this fence; the
-  Stop hook's R16 catches it after the fact from the event log.
+  Stop hook's R16 catches it after the fact from the event log. Any helper the lead spawns
+  may edit (a worker, or an implementer of its own); a shell change counts as the helper's
+  when every file that moved lies in a helper command's run and in none of the lead's. R16
+  counts from the moment the task became large, so edits made while it was smaller stand.
 - **A new control is clicked, not just loaded.** A case of kind `click` (one per new or
   changed link, button or tab; the skeptic and the reviewer ask for them) cannot be closed
   with a test. `gate case close <id> --click events#<seq>` takes that click when it came after

@@ -113,15 +113,11 @@ function header(state, role, round) {
   const out = [`# Brief: ${role} round ${round} — ${ledger.slug}`, ""];
   out.push("## Task", "", section(md, "Task") || "_not written_", "");
   out.push("## Plan", "", section(md, "Plan") || "_not written_", "");
-  out.push("## Context", "", section(md, "Context") || "_not written_", "");
-  out.push("## Cases", "");
-  if (ledger.playbook === "bugfix") {
-    const reported = ledger.cases.find((c) => c.kind === "reported-surface");
-    if (reported) out.push(`Start with ${reported.id}: ${reported.case}`, "");
-  }
-  out.push(...caseTable(ledger, lastEditSeq(state, state.config, ledger)), "");
-  out.push("## Tier", "", ...renderTierBlock(ledger, state.policy, state.tier?.measured ?? null), "");
-  out.push("## Tests", "", `globs: ${testGlobs(state)}`, `framework: ${detectFramework(state.root)}`, "");
+  // the arbiter rules on one finding from the cited code, the plan and the cases
+  if (role !== "arbiter") out.push("## Context", "", section(md, "Context") || "_not written_", "");
+  out.push("## Cases", "", ...caseTable(ledger, lastEditSeq(state, state.config, ledger)), "");
+  if (role === "worker") out.push("## Tier", "", ...renderTierBlock(ledger, state.policy, state.tier?.measured ?? null), "");
+  if (role === "qa" || role === "worker") out.push("## Tests", "", `globs: ${testGlobs(state)}`, `framework: ${detectFramework(state.root)}`, "");
   if (state.config.helperNote) out.push("## Standing note", "", state.config.helperNote, "");
   return out;
 }
@@ -208,17 +204,23 @@ function testCommands(state) {
 
 // The diff is inlined while it is short; past the cap the helper gets the file list with line
 // counts and reads what it needs, instead of a packet it cannot hold.
-function diffOrFiles(state, heading = "Diff", files = state.changed ?? [], ranges = new Map()) {
-  const diff = unifiedDiff(state, { cap: Infinity, files, ranges });
+function diffOrFiles(state, heading = "Diff", files = state.changed ?? [], ranges = new Map(), own = new Set()) {
+  if (!files.length) return [`## ${heading}`, "", unifiedDiff(state, { files }), ""];
+  // a sliced piece's own files are sized for one read and inlined whatever their length; the
+  // files that travel with it (tests, docs) still face the cap
+  const sliced = ranges.size ? files.filter((p) => own.has(p)) : [];
+  const rest = files.filter((p) => !sliced.includes(p));
+  const out = sliced.length ? [`## ${heading}`, "", unifiedDiff(state, { cap: Infinity, files: sliced, ranges }), ""] : [];
+  if (!rest.length) return out;
+  const diff = unifiedDiff(state, { cap: Infinity, files: rest });
   const lines = diff.split("\n").length;
-  // a sliced piece is already sized for one read: it is inlined whatever its length
-  if (lines <= DIFF_CAP || ranges.size) return [`## ${heading}`, "", diff, ""];
-  const changed = files;
+  if (lines <= DIFF_CAP) return [...out, `## ${sliced.length ? "Diff of the other changed files" : heading}`, "", diff, ""];
   const kind = (p) => (state.config.isTest(p) ? "test" : state.config.isSource(p) ? "source" : "other");
   return [
-    `## Changed files (diff too long to inline: ${lines} lines)`,
+    ...out,
+    `## ${sliced.length ? "Other changed files" : "Changed files"} (diff too long to inline: ${lines} lines)`,
     "",
-    ...changed.map((p) => `- ${p} (${kind(p)}, ${state.now?.files?.[p]?.l ?? "?"} lines now)`),
+    ...rest.map((p) => `- ${p} (${kind(p)}, ${state.now?.files?.[p]?.l ?? "?"} lines now)`),
     "",
     "Read the files you need with the Read tool; `git diff` in the repo shows the change.",
     "",
@@ -275,7 +277,7 @@ export function renderPacket(state, role, { round, n, item = null, piece = null,
     const scopeSet = new Set(reviewScope(state));
     const paths = piece ? new Set(piece.files.map(pathOf)) : null;
     const shown = piece ? (state.changed ?? []).filter((p) => paths.has(p) || !scopeSet.has(p)) : state.changed ?? [];
-    out.push(...diffOrFiles(state, "Diff", shown, ranges));
+    out.push(...diffOrFiles(state, "Diff", shown, ranges, paths ?? new Set()));
     const closers = new Map();
     for (const c of state.ledger.cases) if (c.status === "closed" && c.test) closers.set(c.test, [...(closers.get(c.test) ?? []), c.id]);
     const sharedTests = [...closers].filter(([, ids]) => ids.length > 1);

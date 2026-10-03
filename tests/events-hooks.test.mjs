@@ -49,6 +49,35 @@ test("Bash is attribution only: a truncated command, never a path", () => {
   assert.equal(e.path, undefined);
 });
 
+const failed = (tool_name, tool_input, tool_error) => ({ session_id: "S1", cwd: "/repo", hook_event_name: "PostToolUseFailure", tool_name, tool_input, tool_error, tool_error_type: "execution_failed" });
+
+test("C1 reported-surface: a failed Bash call is logged as a command with its exit code, and closes a repro step with --ran", () => {
+  const [e] = eventsFromHookInput(failed("Bash", { command: "npm test" }, "Exit code 1\nFAIL tests/a.test.ts"), "/repo");
+  assert.equal(e.kind, "command");
+  assert.equal(e.cmd, "npm test");
+  assert.equal(e.exit, 1);
+  assert.equal(eventsFromHookInput(failed("Bash", { command: "false" }, "Error: Exit code: 127"), "/repo")[0].exit, 127);
+
+  const repo = makeRepo("failed-run-repro");
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  const cli = (...args) => spawnSync(process.execPath, [gate, ...args], { input: "", encoding: "utf8", env });
+  cli("open", "red-run", "bugfix");
+  cli("note", "task", "A bug. [inferred]");
+  spawnSync(process.execPath, [gate, "log"], { input: JSON.stringify({ ...failed("Bash", { command: "npm test -- tests/a.test.ts" }, "Exit code 1"), cwd: repo }), encoding: "utf8", env });
+  const r = cli("step", "repro", "done", "the test fails red (src/a.ts:1)", "--ran", "npm test -- tests/a.test.ts");
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test("C2 edge: a failed Bash call with no exit code in its error (denied, interrupted, timed out) logs nothing, nor does a failed Edit or browser call", () => {
+  assert.deepEqual(eventsFromHookInput(failed("Bash", { command: "npm test" }, "Command timed out"), "/repo"), []);
+  assert.deepEqual(eventsFromHookInput(failed("Bash", { command: "rm x" }, "done-gate: that command writes gate evidence files"), "/repo"), []);
+  assert.deepEqual(eventsFromHookInput(failed("Edit", { file_path: "/repo/src/a.ts" }, "String not found"), "/repo"), []);
+  assert.deepEqual(eventsFromHookInput(failed("mcp__claude-in-chrome__computer", { action: "left_click", ref: "ref_1" }, "no such element"), "/repo"), []);
+  const hooks = JSON.parse(readFileSync(path.join(root, "hooks", "hooks.json"), "utf8")).hooks;
+  assert.ok((hooks.PostToolUseFailure ?? []).some((h) => /Bash/.test(h.matcher) && h.hooks.some((x) => /gate\.mjs" log/.test(x.command))), "hooks.json registers PostToolUseFailure for Bash");
+});
+
 test("Agent, Skill and Chrome tools map to agent, skill and browser kinds", () => {
   assert.deepEqual(pick(eventsFromHookInput(stdin("agent"), "/repo")[0]), {
     session: "S1", agent: null, agentType: null, kind: "agent", tool: "Agent", spawned: "done-gate:reviewer",

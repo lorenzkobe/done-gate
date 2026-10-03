@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { toPosixRel } from "./paths.mjs";
 // guard.mjs imports this module back: both sides only call each other inside functions
-import { gitWrites, readsOnly } from "./guard.mjs";
+import { gitWrites, readsOnly, scratchOnly } from "./guard.mjs";
 
 // Wall-clock microseconds, strictly increasing within a process. Orders events across
 // parallel hook processes by wall clock without a shared counter file (which would race).
@@ -59,9 +59,17 @@ export function eventsFromHookInput(input, root, repos = []) {
     return [{ ...b(), kind: "prompt", text: text.slice(0, TEXT_LIMIT), ...(handback ? { handback: true } : {}) }];
   }
   if (event === "SessionStart") return [{ ...b(), kind: "session-start", source: input.session_start_source ?? null }];
+  const tool = input.tool_name ?? "";
+  // PostToolUse fires only on success; a failed Bash call (a red test run) arrives here. Only
+  // one that ran and exited non-zero counts: a denied or interrupted call ran nothing.
+  if (event === "PostToolUseFailure") {
+    const code = /exit code:?\s*(\d+)/i.exec(String(input.tool_error ?? ""));
+    if (tool !== "Bash" || !code) return [];
+    const cmd = String(input.tool_input?.command ?? "");
+    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: Number(code[1]), ...(gitWrites(cmd) ? { git: true } : {}), ...(readsOnly(cmd) ? { readOnly: true } : {}) }];
+  }
   if (event !== "PostToolUse") return [];
 
-  const tool = input.tool_name ?? "";
   if (EDIT_TOOLS.has(tool)) {
     return editPaths(input, root, repos).map((p) => ({ ...b(), kind: "edit", tool, path: p }));
   }
@@ -73,7 +81,8 @@ export function eventsFromHookInput(input, root, repos = []) {
     // run may have moved HEAD itself, readOnly when the command cannot have written source
     const git = gitWrites(cmd);
     const readOnly = readsOnly(cmd);
-    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...(background ? { background: true } : {}), ...(git ? { git: true } : {}), ...(readOnly ? { readOnly: true } : {}) }];
+    const scratch = !readOnly && scratchOnly(cmd);
+    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...(background ? { background: true } : {}), ...(git ? { git: true } : {}), ...(readOnly ? { readOnly: true } : {}), ...(scratch ? { scratch: true } : {}) }];
   }
   if (tool === "Agent" || tool === "Task") {
     return [{ ...b(), kind: "agent", tool, spawned: input.tool_input?.subagent_type ?? null }];
@@ -145,7 +154,8 @@ export const verbs = {
     // Subagents are skipped: their edits carry an agent event, and the next assess dates
     // the change to it; skipping keeps helper tool calls from racing the main session.
     let warning = null;
-    if (ctx.input?.hook_event_name === "PostToolUse" && WRITING_TOOLS.has(ctx.input.tool_name) && ctx.session && !ctx.input.agent_id) {
+    const failedBash = ctx.input?.hook_event_name === "PostToolUseFailure" && events.length > 0;
+    if ((failedBash || (ctx.input?.hook_event_name === "PostToolUse" && WRITING_TOOLS.has(ctx.input.tool_name))) && ctx.session && !ctx.input.agent_id) {
       try {
         const { stampNow } = await import("./assess.mjs");
         warning = stampNow(ctx, events);
@@ -154,6 +164,6 @@ export const verbs = {
       }
     }
     // additionalContext is the one hook output the model reads after a tool call
-    ctx.out(warning ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: warning } } : SILENT);
+    ctx.out(warning ? { hookSpecificOutput: { hookEventName: ctx.input.hook_event_name, additionalContext: warning } } : SILENT);
   },
 };

@@ -48,12 +48,10 @@ line: follow it. `gate check` lists what is unmet (R1-R10, R13, R15, R16). You a
 ## Rules throughout
 
 - Two readings of the ask: `AskUserQuestion` before step 2.
-- A helper's self-report is never evidence; only `gate verify`, hook events and its file
-  count. One that stops with its file unfinished: `gate brief <role>` again; a fresh
+- A helper that stops with its file unfinished: `gate brief <role>` again; a fresh
   helper continues from the file.
 - Waiting for a helper ends the turn; its hand-back wakes you. A run a dead session left open: `gate abandon <slug> "<reason>"`.
 - Ceiling: ten helpers per task.
 - A step you cannot do: ask the user, then `gate waive <key> "<why>"`.
 - Never hand-edit `.claude/gate/runs/**` except `ledger.md`. No commits unless asked; the
   repo's CLAUDE.md wins.
-- Need the user mid-task? `AskUserQuestion`, or a final line `PAUSED: <need>`.

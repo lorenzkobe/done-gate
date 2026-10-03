@@ -1,15 +1,6 @@
 # Playbooks
 
-One section per playbook. `gate open <slug> <name>` copies that section's numbered steps
-into the ledger. A step that does not apply is closed `N/A (reason)`, never deleted.
-Steps with a `{key}` have script or agent evidence and can only be `DONE` or `WAIVED`,
-never `SKIPPED`.
-
-No slop: no comment that restates the code or narrates the change; no hedging names (helper, util, data2, newX, handleStuff); no guard or try/catch with no case behind it; no docstring on a trivial function; no TODO that names no task, console.log or commented-out code; no emojis. Nor a comment that numbers the steps (`// Step 1`), labels a block (`// main logic`), echoes a signature (`@param price the price`) or marks an end (`} // end if`), nor a banner comment. A comment says why, in one line, two when the second carries a new fact, or it goes. Keep the comment that explains a business rule, a workaround, a concurrency or security constraint, or an API contract. `gate check` scans the diff for the greppable ones (R10).
-
 ## feature
-
-You own the design and the diff. Plan, build, verify, get reviewed.
 
 1. Understand first: trace the code the task touches (entry points, callers, data flow; `grep -a` for callers), list what depends on it, and research better ways when the problem is a known one (docs, context7, web); write it with `gate note context`. {context}
 2. Write Task and Plan in ledger.md (`gate note task|plan`); include the data/cost plan when data is touched, and the performance plan: the hot paths touched, the data sizes they see, the cost shape of the main operation (one pass, one query), or "no hot path" in one line. {plan}
@@ -25,12 +16,9 @@ You own the design and the diff. Plan, build, verify, get reviewed.
 
 ## bugfix
 
-Be scientific. Every shipped line traces to runtime evidence. "Might help" is a hypothesis,
-not a fix. "Inconclusive" or the wrong surface is not a pass.
-
 1. Reproduce on the real surface FIRST with the /verify driver or the failing command; close it on that run (`gate step repro done "<what failed>" --ran "<part of the command or url>"`). {repro}
-2. Root cause with runtime evidence: form hypotheses, rule each out with a run, no belt-and-suspenders; close it on the run that showed the cause, the note naming the line at fault as file:line (`--ran`). {rootcause}
-3. Understand first: trace the code the task touches (entry points, callers, data flow; `grep -a` for callers), list what depends on it, and research better ways when the problem is a known one (docs, context7, web); write it with `gate note context`. {context}
+2. Understand first: trace the code the task touches (entry points, callers, data flow; `grep -a` for callers), list what depends on it, and research better ways when the problem is a known one (docs, context7, web); write it with `gate note context`. {context}
+3. Root cause with runtime evidence: form hypotheses, rule each out with a run, no belt-and-suspenders; close it on the run that showed the cause, the note naming the line at fault as file:line (`--ran`). {rootcause}
 4. Write Task and Plan in ledger.md (`gate note task|plan`); name the hot path the fix touches, the data sizes it sees and its cost shape, or "no hot path" in one line. {plan}
 5. Write the case table; row 1 is the repro, kind `reported-surface`; a performance row when the fix sits on a hot path; a `click` row per link, button or tab the fix changes. {cases}
 6. Design huddle: spawn the skeptic on the plan, answer every finding, amend the plan (N/A below standard). {skeptic}
@@ -43,8 +31,6 @@ not a fix. "Inconclusive" or the wrong surface is not a pass.
 13. `gate close`, then paste the report. {close}
 
 ## refactor
-
-Behaviour-preserving. The tests that pin the behaviour exist BEFORE anything moves.
 
 1. Understand first: trace the code the task touches (entry points, callers, data flow; `grep -a` for callers), list what depends on it, and research better ways when the problem is a known one (docs, context7, web); write it with `gate note context`. {context}
 2. Write Task and Plan (`gate note task|plan`): what moves, what must not change, and the hot paths whose data sizes and cost shape must not grow, or "no hot path" in one line. {plan}
@@ -61,8 +47,6 @@ Behaviour-preserving. The tests that pin the behaviour exist BEFORE anything mov
 
 ## plan
 
-Produces a spec or plan document, no source edits. The skeptic is mandatory.
-
 1. Understand first: trace the code the task touches (entry points, callers, data flow; `grep -a` for callers), list what depends on it, and research better ways when the problem is a known one (docs, context7, web); write it with `gate note context`. {context}
 2. Write Task and Plan (`gate note task|plan`): goal, constraints, open decisions. {plan}
 3. Design huddle: spawn the skeptic; answer every finding; amend. {skeptic}
@@ -71,11 +55,7 @@ Produces a spec or plan document, no source edits. The skeptic is mandatory.
 
 ## investigation
 
-Read-only. No ledger is required because nothing changes; the gate stays silent.
-
 1. Read the code and, where it is cheap, run it: an answer from running code outranks one from reading it.
 2. End with a recommendation, not a survey of options.
-
-Every claim in the answer cites what you ran or read (a command and its output, a `file:line`); one you did not check is labelled "unverified", never stated as fact.
-
-A security or exposure finding cites the deployed state or the handler code; one read off a config file alone is labelled "from config, unverified".
+3. Every claim in the answer cites what you ran or read (a command and its output, a `file:line`); one you did not check is labelled "unverified", never stated as fact.
+4. A security or exposure finding cites the deployed state or the handler code; one read off a config file alone is labelled "from config, unverified".

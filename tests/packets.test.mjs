@@ -75,7 +75,8 @@ const TASK_TEXT = "Give helpers a generated packet. [inferred]";
 const PLAN_TEXT = "Touch one module and nothing else.";
 
 // The header sections every packet carries, in the order the spec lists them.
-const HEADER_SECTIONS = ["Task", "Plan", "Context", "Cases", "Tier", "Tests", "You may write"];
+// each role reads what it can use: the tier is the worker's, the tests globs QA's and the worker's
+const HEADER_SECTIONS = { skeptic: ["Task", "Plan", "Context", "Cases", "You may write"], qa: ["Task", "Plan", "Context", "Cases", "Tests", "You may write"], reviewer: ["Task", "Plan", "Context", "Cases", "You may write"], "reviewer-2": ["Task", "Plan", "Context", "Cases", "You may write"] };
 
 // The requirements pin "the plan's files" as a section, not its exact wording: the skeptic
 // packet calls it `## Files`, the QA packet `## Files the implementer will touch`.
@@ -164,7 +165,7 @@ test("C1 happy: `gate brief <role>` writes brief-<role>-1.md in the run dir and 
 // C2
 // ---------------------------------------------------------------------------
 
-test("C2 happy: every packet starts with Task, Plan, the case table, the tier block, the tests globs with the detected framework, and what the helper may write", () => {
+test("C2 happy: every packet starts with Task, Plan, Context and the case table; QA's adds the tests globs with the detected framework; then what the helper may write", () => {
   const repo = openedLarge("packets-c2");
   // review-1.md exists so reviewer-2 has something to embed; it does not change the header.
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n\n_none_\n");
@@ -176,8 +177,8 @@ test("C2 happy: every packet starts with Task, Plan, the case table, the tier bl
     assert.match(first, new RegExp(`^# Brief: ${role} round \\d+ — ${slug}$`), `${role}: bad title line "${first}"`);
 
     const order = headings(text);
-    const header = order.slice(0, HEADER_SECTIONS.length);
-    assert.deepEqual(header, HEADER_SECTIONS, `${role}: header sections are wrong or out of order (got ${order.join(", ")})`);
+    const header = order.slice(0, HEADER_SECTIONS[role].length);
+    assert.deepEqual(header, HEADER_SECTIONS[role], `${role}: header sections are wrong or out of order (got ${order.join(", ")})`);
 
     assert.ok(section(text, "Task").includes(TASK_TEXT), `${role}: Task section does not quote ledger.md`);
     assert.ok(section(text, "Plan").includes(PLAN_TEXT), `${role}: Plan section does not quote ledger.md`);
@@ -188,12 +189,12 @@ test("C2 happy: every packet starts with Task, Plan, the case table, the tier bl
     assert.ok(cases.includes("renders the packet"), `${role}: C1's text is missing from the case table`);
     assert.ok(cases.includes("happy") && cases.includes("refused"), `${role}: case kinds are missing`);
 
-    assert.match(section(text, "Tier"), /^tier:/m, `${role}: Tier section has no line starting "tier:"`);
-
-    const tests = section(text, "Tests");
-    for (const glob of TESTS_GLOBS) assert.ok(tests.includes(glob), `${role}: tests glob ${glob} missing from the Tests section:\n${tests}`);
-    // makeRepo's package.json has no test framework and its test script is "true".
-    assert.match(tests, /^framework: unknown$/m, `${role}: no "framework: <name>" line:\n${tests}`);
+    if (role === "qa") {
+      const tests = section(text, "Tests");
+      for (const glob of TESTS_GLOBS) assert.ok(tests.includes(glob), `${role}: tests glob ${glob} missing from the Tests section:\n${tests}`);
+      // makeRepo's package.json has no test framework and its test script is "true".
+      assert.match(tests, /^framework: unknown$/m, `${role}: no "framework: <name>" line:\n${tests}`);
+    }
 
     const may = section(text, "You may write");
     if (role === "skeptic") {
@@ -210,6 +211,9 @@ test("C2 happy: every packet starts with Task, Plan, the case table, the tier bl
       assert.equal(m[1], path.join(runDir(repo), `${prefix}-${m[2]}.md`), `${role} may write: the review path is not absolute`);
     }
   }
+  const worker = packet(repo, "worker").text;
+  assert.match(section(worker, "Tier"), /^tier:/m, "the worker's packet keeps the tier block");
+  assert.match(section(worker, "Tests"), /^framework: /m, "the worker's packet keeps the tests globs and framework");
 });
 
 // ---------------------------------------------------------------------------
@@ -284,13 +288,9 @@ test("C4 refused: the QA packet contains no line starting with @@, + or -, lists
     ],
   });
   const bugText = packet(bug, "qa").text;
-  const startWith = lines(bugText).find((l) => /^##\s+Start with\b/.test(l) || /start with/i.test(l));
   const caseRows = lines(section(bugText, "Cases")).filter((l) => /^\|\s*C\d+\s*\|/.test(l));
-  const firstRowIsReported = /reported-surface/.test(caseRows[0] ?? "");
-  assert.ok(
-    firstRowIsReported || (startWith && /C\d+/.test(startWith)),
-    `the bugfix QA packet neither orders the reported-surface case first nor names it in a "Start with" line:\n${bugText.slice(0, 2000)}`,
-  );
+  assert.match(caseRows[0] ?? "", /reported-surface/, `the bugfix QA packet does not order the reported-surface case first:\n${bugText.slice(0, 2000)}`);
+  assert.doesNotMatch(bugText, /^Start with C\d+:/m, "the first case row already says where to start");
 });
 
 // ---------------------------------------------------------------------------

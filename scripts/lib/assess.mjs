@@ -4,7 +4,7 @@ import { loadConfig } from "./config.mjs";
 import { readEvents } from "./events.mjs";
 import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
 import { delegatedTier, leadDelegates, measure, policyFor, reconcileTier, tiered } from "./size.mjs";
-import { implementationHash } from "./rules.mjs";
+import { implementationHash, writersOf } from "./rules.mjs";
 import { nextSeq } from "./events.mjs";
 import { evaluate } from "./rules.mjs";
 import { ensureSession, loadSession, saveSession } from "./session-state.mjs";
@@ -52,10 +52,11 @@ export function stampSourceChange(ledger, hash, events, tree = null) {
   const cause = events.filter((e) => (e.kind === "edit" || e.kind === "command") && e.seq > prev).pop();
   ledger.lastSourceHash = hash;
   ledger.lastSourceChangeSeq = first ? 0 : (cause?.seq ?? nextSeq());
-  // a change no edit-tool event accounts for came through the shell (sed, a heredoc, git
-  // apply); R16 reads this list at a size where only workers may edit
+  // a change no edit-tool event explains came through the shell; R16 reads this list. A lead
+  // writing command since the last stamp keeps it the lead's unless the file times clear it.
   if (!first && !events.some((e) => e.kind === "edit" && e.seq > prev)) {
-    const entry = { seq: ledger.lastSourceChangeSeq, cmd: cause?.kind === "command" ? cause.cmd ?? null : null, agentType: cause?.agentType ?? null };
+    const leadWrote = events.some((e) => e.kind === "command" && e.seq > prev && !e.agent && !e.readOnly && !e.scratch);
+    const entry = { seq: ledger.lastSourceChangeSeq, cmd: cause?.kind === "command" ? cause.cmd ?? null : null, agentType: leadWrote ? null : cause?.agentType ?? null };
     // the files it may cover, and whether any command of this run since the last stamp could
     // have written them: with none, the change is another session's and may be absorbed later
     if (tree) {
@@ -64,6 +65,11 @@ export function stampSourceChange(ledger, hash, events, tree = null) {
       entry.writes = events.some((e) => e.kind === "command" && e.seq > prev && !e.readOnly);
       entry.prev = prev;
       entry.prevHash = prevHash;
+      // a subagent's write is first seen at the lead's next call: it is the subagent's when every
+      // file that moved lies in a subagent command's run and in none of the lead's (seq is in µs)
+      const moved = entry.paths.map((p) => tree.now.files[p]?.m).filter((m) => m !== undefined && m >= prev / 1000 - 1000);
+      const writers = moved.map((m) => writersOf(events, prev, m));
+      if (writers.length && writers.every((w) => w.length && w.every((e) => e.agent))) entry.agentType = writers.at(-1).at(-1).agentType;
     }
     ledger.unexplainedChanges = [...(ledger.unexplainedChanges ?? []), entry];
   }
@@ -165,6 +171,14 @@ function settleAtHead(root, ledger, now) {
   return settled;
 }
 
+// R16 counts the lead's edits from the moment the task became a size where the lead
+// delegates; a prediction sets that mark, and so does the first measurement that crosses.
+function markDelegated(ledger, policy, crossed = false) {
+  if (ledger.tier?.predictedSeq != null || delegatedTier(policy, ledger.tier?.predicted) || (!crossed && !leadDelegates(ledger, policy))) return false;
+  ledger.tier.predictedSeq = nextSeq();
+  return true;
+}
+
 const plural = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 // Tells the lead at the edit that crosses into the delegated size, once per run; the
@@ -194,7 +208,10 @@ export function stampNow(ctx, logged = []) {
   let changed = hash !== ledger.lastSourceHash && absorbForeign(ctx.root, ledger, now, config, events);
   if (stampSourceChange(ledger, hash, events, { now, config })) changed = true;
   const warning = sizeWarning(ctx.root, ledger, config, now, logged);
-  if (warning) ledger.tierWarned = true;
+  if (warning) {
+    ledger.tierWarned = true;
+    markDelegated(ledger, policyFor(ledger), true);
+  }
   if (changed || warning) saveLedger(dir, ledger);
   return warning;
 }
@@ -245,7 +262,10 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
     if (tiered(current.ledger)) {
       const measured = measure({ config, policy, diff, baseline, now, root: ctx.root, dir: current.dir, repos });
       if (reconcileTier(current.ledger, policy, measured).length) flipped = true;
+      // a new measured size is kept: a later re-prediction reads it
+      if (current.ledger.tier?.measured?.tier !== measured.tier) flipped = true;
       current.ledger.tier = { ...current.ledger.tier, measured };
+      if (markDelegated(current.ledger, policy)) flipped = true;
       tier = current.ledger.tier;
     }
     if (flipped) saveLedger(current.dir, current.ledger);

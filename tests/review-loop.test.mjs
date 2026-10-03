@@ -449,6 +449,13 @@ test("C7 happy: gate brief arbiter --item H1.2 writes a packet with the finding,
 
   const { text } = packet(repo, "arbiter", ["--item", "H1.2"]);
   assert.ok(text.includes(FIND_2), `the packet does not carry the finding:\n${text}`);
+  assert.match(text, /^## Task$/m, "the arbiter still reads the Task");
+  for (const h of ["Context", "Tier", "Tests"]) assert.doesNotMatch(text, new RegExp(`^## ${h}$`, "m"), `C4: the arbiter packet carries no ${h}`);
+  for (const h of ["Plan", "Cases"]) assert.match(text, new RegExp(`^## ${h}$`, "m"), `C4: a dispute may cite the ${h}`);
+  const review = packet(repo, "reviewer").text;
+  for (const h of ["Tier", "Tests"]) assert.doesNotMatch(review, new RegExp(`^## ${h}$`, "m"), `C4: the reviewer packet carries no ${h}`);
+  assert.match(review, /^## Cases$/m, "the reviewer still reads the cases");
+  assert.doesNotMatch(review, /^Start with C\d+:/m, "C4: no Start-with line");
   assert.ok(text.includes(WHY), `the packet does not carry the implementer's why:\n${text}`);
   assert.ok(text.includes(EVIDENCE), `the packet does not carry the dispute's evidence pointer:\n${text}`);
   assert.ok(text.includes(UPHELD_REASON), `the packet does not carry the reviewer's upheld reason:\n${text}`);

@@ -104,6 +104,53 @@ test("C8 edge: a w command in the sed script is still a write, as the script or 
   }
 });
 
+test("C3 reported-surface: awk, ps, rtk proxy, git stash list and the $((...)) remainder on gate files are read-only", () => {
+  for (const cmd of [
+    "awk '/^## Contract/,0' .claude/gate/runs/2026-09-27-x/brief-qa-1.md",
+    "awk '$1 > 5 { print $2 }' .claude/gate/runs/2026-09-27-x/decisions.tsv",
+    "ps -p 3 -o pid,command; cat .claude/gate/runs/2026-09-27-x/verify.json",
+    "rtk proxy grep -n Act .claude/gate/runs/2026-09-27-x/brief-worker-1.md",
+    "git stash list; cat .claude/gate/runs/2026-09-27-x/ledger.json",
+    "n=$(($(wc -l < .claude/gate/runs/2026-09-27-x/decisions.tsv) - 1)); echo $n",
+    "cd ~/.claude/plugins/cache/done-gate && npm run reinstall",
+    "git add .claude/gate.json && git commit -m config",
+    'git commit -qm "the fence refuses .claude/gate writes"',
+  ]) assert.equal(decide(bash(cmd), repo, cfg).deny, false, cmd);
+});
+
+test("C4 refused: awk that writes and git stash push are still writes", () => {
+  for (const cmd of [
+    `awk '{ print > "x" }' ${EVIDENCE}`,
+    `awk '{ print >> "x" }' ${EVIDENCE}`,
+    `awk 'BEGIN { system("rm x") }' ${EVIDENCE}`,
+    `awk -i inplace '{ print }' ${EVIDENCE}`,
+    `awk '{ print | "sh" }' ${EVIDENCE}`,
+    `git stash; cat ${EVIDENCE}`,
+    `rtk proxy rm ${EVIDENCE}`,
+    `awk 'BEGIN { "date" | getline d }' ${EVIDENCE}`,
+    "cd .claude/gate/runs/x && rm *",
+    "cd .claude && cd gate/runs/x && rm *",
+    "pushd .claude/gate/runs/x && rm *",
+    "cd .claude && rm -rf gate",
+    "cd .claude/ && rm -rf ./gate",
+    "cd .claude; find gate -delete",
+    "cd .claude && cd gate && rm -rf runs",
+    "D=.claude/gate/runs/x; cd $D && rm *",
+    "cd ./.claude/./gate/runs/x && rm *",
+    "cd \".claude\"/gate/runs/x && rm *",
+    "cd /repo/.claude/gate; truncate -s0 runs/x/ledger.json",
+    `awk -f/tmp/s.awk ${EVIDENCE}`,
+    `awk -E /tmp/s.awk ${EVIDENCE}`,
+    `awk -iinplace 1 ${EVIDENCE}`,
+    `awk 'BEGIN { "rm x" |& getline }' ${EVIDENCE}`,
+  ]) assert.equal(decide(bash(cmd), repo, cfg).deny, true, cmd);
+  const helper = (cmd) => decide(bash(cmd, { agent_id: "A1", agent_type: "done-gate:reviewer" }), repo, cfg).deny;
+  assert.equal(helper("rtk proxy rm src/a.ts"), true, "a helper's rtk proxy rm outside scratch is a write");
+  assert.equal(helper("cp src/a.ts src/b.ts"), true, "premise: a helper's plain repo write is denied");
+  assert.equal(readsOnly("git stash push -m x"), false);
+  for (const cmd of ["rm - x", "mv + y", "npm test -- badge", "run-tests", "/usr/bin/git commit -m x", "X=rm; $X - *", "shred - *", "n + 1"]) assert.equal(readsOnly(cmd), false, `the arithmetic rule never covers a writer: ${cmd}`);
+});
+
 test("C6 commands that write an evidence path are still denied", () => {
   for (const cmd of [
     `sed -i '' 's/a/b/' ${EVIDENCE}`,

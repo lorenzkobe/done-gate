@@ -304,6 +304,7 @@ test("C6 refused: gate step skeptic done is refused with no recorded skeptic hud
   cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
   const open = refused(repo, "step", done);
   assert.ok(open.stderr.includes("H1.1"), `the refusal does not name the open item: ${open.stderr}`);
+  assert.ok(open.stderr.includes(`H1.1 (${FIND_1.slice(0, 80)}`), `the refusal prints the item's text: ${open.stderr}`);
   assert.equal(stepOf(repo, "skeptic").state ?? null, null, "the step closed with an open Act-on item");
 
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/a.ts:1"]);

@@ -196,7 +196,7 @@ test("C8 performance: one diff read per file per assess; the slop check and chan
 });
 
 test("C9 happy: the prompt files name the new patterns and the keep-list; README's R10 row names slop", () => {
-  const prompts = ["skills/gate/playbooks.md", "skills/gate/SKILL.md", "agents/worker.md", "agents/reviewer.md", "agents/reviewer-2.md"];
+  const prompts = ["skills/gate/SKILL.md", "agents/worker.md", "agents/reviewer.md", "agents/reviewer-2.md"];
   for (const rel of prompts) {
     const text = readFileSync(path.join(pluginRoot, rel), "utf8").replace(/\s+/g, " ");
     for (const re of [/banner/i, /step/i, /label/i, /marks an end|end marker|end if/i, /signature|@param/i, /two at most|two when/i, /workaround/i]) {

@@ -157,6 +157,20 @@ test("C13 refused: a change no session's events explain stays this session's R1,
   assert.match(stop(repo).json?.reason ?? "", /R1/);
 });
 
+test("C5 reported-surface: a stop block identical to the previous one prints a short version; a changed list prints in full", () => {
+  const repo = makeRepo("stop-repeat-short");
+  start(repo);
+  write(repo, "src/a.ts", "changed\n");
+  const first = stop(repo).json.reason;
+  const again = stop(repo).json.reason;
+  assert.match(again, /same 1 unmet as the last stop/);
+  assert.match(again, /R1 — /);
+  assert.match(again, /gate check/);
+  assert.ok(again.length < first.length, `repeat ${again.length} vs first ${first.length}`);
+  write(repo, "src/b.ts", "new file\n");
+  assert.doesNotMatch(stop(repo).json.reason, /same \d+ unmet/, "a changed list prints in full");
+});
+
 test("C17 reported-surface: a file another session deleted with a shell command is not this session's R1 when this session wrote nothing", () => {
   const repo = makeRepo("stop-r1-foreign-rm");
   start(repo);

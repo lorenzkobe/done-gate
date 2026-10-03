@@ -7,7 +7,7 @@ import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
 import { readEvents } from "./events.mjs";
 import { effectiveTier, policyFor, renderTierBlock, requires, tiered, tierOf } from "./size.mjs";
-import { clickStale, drivenAfter, driverCommand, isRole, lastEditSeq, hasContextStep, lateOrder, tracedPointers, verifyWhere } from "./rules.mjs";
+import { clickStale, contextPart, drivenAfter, driverCommand, isRole, lastEditSeq, hasContextStep, lateOrder, tracedPointers, verifyWhere } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 
 function tailLines(file, n) {
@@ -289,7 +289,7 @@ function contextSummary(state) {
   const ctx = section(ledgerMd(state.dir), "Context");
   if (!ctx || !hasContextStep(state.ledger)) return "";
   const pointers = tracedPointers(ctx, state.root, state.repos).length;
-  const research = /^\s*Research:\s*(.*)$/mi.exec(ctx)?.[1]?.trim() ?? "";
+  const research = contextPart(ctx, "Research") ?? "";
   const researched = /^none needed/i.test(research) ? "research not needed" : research ? "research noted" : "no research line";
   return ` Understood first: ${plural(pointers, "pointer")} traced, ${researched}.`;
 }

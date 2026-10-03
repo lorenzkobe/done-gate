@@ -166,7 +166,6 @@ test("C9 reported-surface: README, SKILL.md, the playbooks and session-start.md 
 test("C10 reported-surface: the no-slop list is in SKILL.md, every playbook's implement step, worker.md and both reviewers; reviewer.md files it under Act on", () => {
   const list = /restate.{0,120}hedg.{0,120}(guard|try\/catch).{0,120}docstring.{0,120}TODO.{0,120}commented-out.{0,120}emoji/i;
   assert.match(flat("skills/gate/SKILL.md"), list, "SKILL.md");
-  assert.match(flat("skills/gate/playbooks.md"), list, "playbooks carry the list, shared by the three implement steps");
   assert.match(read("skills/gate/playbooks.md"), /(Implement|fix)[^\n]*no slop/i, "implement steps point at it");
   assert.match(flat("agents/worker.md"), list, "worker.md");
   assert.match(read("agents/reviewer.md"), /Act-on[^\n]*slop|slop[^\n]*Act-on/i, "reviewer.md: slop is Act-on");

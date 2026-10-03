@@ -8,6 +8,7 @@ import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadPolicy } from "../scripts/lib/size.mjs";
 import { nextHint } from "../scripts/lib/next.mjs";
+import { scratchOnly } from "../scripts/lib/guard.mjs";
 
 // lead-implements: the lead edits source at small and standard; the worker hand-off, the
 // fence and R16 apply at tier large only. Cases C1–C8 of the task's case table.
@@ -124,6 +125,99 @@ test("C3 boundary: a small task that grows to a measured large fences the lead's
 // ---------------------------------------------------------------------------
 // C4 refused — gate brief worker below large
 // ---------------------------------------------------------------------------
+
+// a tool call as the PostToolUse hook sends it, from the lead or from a subagent
+const logged = (repo, payload) => hook(repo, "log", { hook_event_name: "PostToolUse", tool_response: { exit_code: 0 }, ...payload });
+const worker = { agent_id: "W1", agent_type: "done-gate:worker" };
+const big = (n) => Array.from({ length: n }, (_, k) => `export const v${k} = ${k};`).join("\n") + "\n";
+
+test("C1 reported-surface: a worker's shell write followed by a lead command that writes only scratch does not raise R16", () => {
+  const repo = opened("li-credit-shell", LARGE_FILES);
+  hook(repo, "log", { hook_event_name: "SubagentStart", ...worker });
+  write(repo, "src/f0.ts", "export const x = 2;\n");
+  logged(repo, { tool_name: "Bash", tool_input: { command: "python3 fix.py" }, ...worker });
+  hook(repo, "log", { hook_event_name: "SubagentStop", ...worker });
+  logged(repo, { tool_name: "Bash", tool_input: { command: "S=/tmp/x; mkdir -p $S" } });
+  assert.deepEqual(r16(repo), []);
+});
+
+test("C2 reported-surface: an Edit by a general-purpose implementer subagent at size large does not raise R16", () => {
+  const repo = opened("li-credit-implementer", LARGE_FILES);
+  write(repo, "src/f1.ts", "export const x = 3;\n");
+  logged(repo, { tool_name: "Edit", tool_input: { file_path: path.join(repo, "src/f1.ts") }, agent_id: "G1", agent_type: "general-purpose" });
+  assert.deepEqual(r16(repo), []);
+});
+
+test("C3 reported-surface: the lead's edits at predicted standard do not raise R16 when the task later measures large; a lead edit after that does", () => {
+  const repo = opened("li-credit-flip", STANDARD_FILES);
+  // 150 + 150 lines stay standard; the third edit is the one that crosses 400
+  for (const [i, n] of [[0, 150], [1, 150], [2, 300]]) {
+    write(repo, `src/f${i}.ts`, big(n));
+    leadEdit(repo, `src/f${i}.ts`);
+  }
+  assert.match(cli(repo, "size").stdout, /measured large/, "premise: the task measures large");
+  assert.deepEqual(r16(repo), [], "edits made at standard are the lead's to make");
+  write(repo, "src/f3.ts", "export const late = 1;\n");
+  leadEdit(repo, "src/f3.ts");
+  assert.match(r16(repo).join("\n"), /the lead edited src\/f3\.ts/);
+});
+
+test("C4 refused: at predicted large the lead's own Edit and a lead shell write with no subagent writer still raise R16", () => {
+  const repo = opened("li-credit-lead", LARGE_FILES);
+  write(repo, "src/f0.ts", "export const x = 4;\n");
+  leadEdit(repo, "src/f0.ts");
+  assert.match(r16(repo).join("\n"), /the lead edited src\/f0\.ts/);
+  const shell = opened("li-credit-lead-shell", LARGE_FILES);
+  write(shell, "src/f2.ts", "export const x = 5;\n");
+  logged(shell, { tool_name: "Bash", tool_input: { command: "sed -i '' 's/1/5/' src/f2.ts" } });
+  assert.match(r16(shell).join("\n"), /no worker edit behind it/);
+});
+
+test("C5 refused: a lead sed beside a reviewer's npm test in the same window is still the lead's shell edit", () => {
+  const repo = opened("li-credit-concurrent", LARGE_FILES);
+  const reviewer = { agent_id: "R1", agent_type: "done-gate:reviewer" };
+  hook(repo, "log", { hook_event_name: "SubagentStart", ...reviewer });
+  write(repo, "src/f2.ts", "export const x = 6;\n");
+  logged(repo, { tool_name: "Bash", tool_input: { command: "npm test" }, ...reviewer });
+  logged(repo, { tool_name: "Bash", tool_input: { command: "sed -i '' 's/1/6/' src/f2.ts" } });
+  assert.match(r16(repo).join("\n"), /no worker edit behind it/);
+});
+
+test("C6 edge: re-predicting standard after the task measured large keeps the mark, so a standing R16 stays", () => {
+  const repo = opened("li-credit-repredict", STANDARD_FILES);
+  for (const [i, n] of [[0, 150], [1, 150], [2, 300]]) {
+    write(repo, `src/f${i}.ts`, big(n));
+    leadEdit(repo, `src/f${i}.ts`);
+  }
+  cli(repo, "size");
+  write(repo, "src/f3.ts", "export const late = 1;\n");
+  leadEdit(repo, "src/f3.ts");
+  assert.match(r16(repo).join("\n"), /src\/f3\.ts/);
+  cli(repo, "note", ["plan", "Re-planned.", "--files", STANDARD_FILES.join(",")]);
+  assert.match(r16(repo).join("\n"), /src\/f3\.ts/, "the re-prediction did not move the mark");
+  cli(repo, "note", ["plan", "Re-planned large.", "--files", LARGE_FILES.join(",")]);
+  assert.match(r16(repo).join("\n"), /src\/f3\.ts/, "a re-prediction to large did not move it either");
+});
+
+test("C8 refused: a lead's background writing command beside a reviewer's npm test keeps the change the lead's", () => {
+  const repo = opened("li-credit-background", LARGE_FILES);
+  logged(repo, { tool_name: "Bash", tool_input: { command: "npx prettier --write src", run_in_background: true } });
+  write(repo, "src/f2.ts", "export const x = 7;\n");
+  logged(repo, { tool_name: "Bash", tool_input: { command: "npm test" }, agent_id: "R1", agent_type: "done-gate:reviewer" });
+  assert.match(r16(repo).join("\n"), /no worker edit behind it/);
+});
+
+test("C9 edge: mv and rsync are never scratch-only, since they can remove the source they read", () => {
+  for (const cmd of ["mv src/a.ts /tmp/x/", "rsync --remove-source-files src/ /tmp/x/"]) assert.equal(scratchOnly(cmd), false, cmd);
+  assert.equal(scratchOnly("S=/tmp/x; mkdir -p $S && cp src/a.ts $S/"), true);
+});
+
+test("C7 happy: at size large the fence lets a general-purpose implementer edit source; the lead and a reviewer stay fenced", () => {
+  const repo = opened("li-credit-fence", LARGE_FILES);
+  assert.equal(fence(repo, "Edit", "src/f0.ts", { agent_id: "G1", agent_type: "general-purpose" }), null);
+  assert.ok(fence(repo, "Edit", "src/f0.ts"), "the lead is fenced");
+  assert.ok(fence(repo, "Edit", "src/f0.ts", { agent_id: "R1", agent_type: "done-gate:reviewer" }), "a reviewer is fenced");
+});
 
 test("C4 refused: gate brief worker below tier large is refused and says to implement yourself; at large it writes the packet", () => {
   const standard = opened("li-c4-standard", STANDARD_FILES);

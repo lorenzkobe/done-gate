@@ -38,9 +38,10 @@ function helperRunning(events, session, now = Date.now()) {
   return starts.some((st) => now - Date.parse(st.ts ?? 0) < HELPER_MAX_MS && !mine.some((e) => e.kind === "subagent-stop" && e.agent === st.agent && e.seq > st.seq));
 }
 
-function renderReason(unmet, { ledgerOpen }) {
-  const lines = [`done-gate: the turn cannot end yet — ${unmet.length} unmet:`];
-  unmet.forEach((u, i) => lines.push(`${i + 1}. ${u.rule} — ${u.text}`));
+function renderReason(unmet, { ledgerOpen, repeat = false }) {
+  // the full text went out with the last block; a repeat names each item and points at it
+  const lines = [repeat ? `done-gate: the turn cannot end yet — the same ${unmet.length} unmet as the last stop (\`gate check\` prints them in full):` : `done-gate: the turn cannot end yet — ${unmet.length} unmet:`];
+  unmet.forEach((u, i) => lines.push(`${i + 1}. ${u.rule} — ${repeat && u.text.length > 120 ? `${u.text.slice(0, 120)}…` : u.text}`));
   if (ledgerOpen) {
     lines.push("");
     lines.push("Need the user? Ask with AskUserQuestion, or end your message with a final line `PAUSED: <what you need>` and the turn will end.");
@@ -108,6 +109,6 @@ export const verbs = {
       clearBlocks(ctx);
       return;
     }
-    block(ctx, renderReason(unmet, { ledgerOpen }), unmet.map((u) => u.rule));
+    block(ctx, renderReason(unmet, { ledgerOpen, repeat: count > 1 }), unmet.map((u) => u.rule));
   },
 };
