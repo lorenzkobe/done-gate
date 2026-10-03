@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isDraft, parseFindings } from "../scripts/lib/rules.mjs";
-import { decide } from "../scripts/lib/guard.mjs";
+import { decide, readsOnly } from "../scripts/lib/guard.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { makeRepo, gate } from "./helpers.mjs";
 
@@ -84,6 +84,23 @@ test("C5 read-only commands on an evidence file pass the fence", () => {
     `perl -pe 's/a/b/' ${EVIDENCE}`,
   ]) {
     assert.equal(decide(bash(cmd), repo, cfg).deny, false, cmd);
+  }
+});
+
+test("C7 reported-surface: sed -n on a path holding /w is read-only, on an evidence file and in source", () => {
+  const worker = ".claude/gate/runs/2026-09-27-x/worker-1.md";
+  for (const cmd of [
+    `sed -n 1,40p ${worker}`,
+    `grep -n Replies ${worker}; sed -n '10,20p' ${worker}`,
+    `sed -n "/^## Replies/,/^## /p" ${worker}`,
+    `sed -e 's/a/b/' ${worker}`,
+  ]) assert.equal(decide(bash(cmd), repo, cfg).deny, false, cmd);
+  for (const cmd of ["sed -n 1,40p src/web.ts", "sed -n 5p src/www/index.ts", "sed -ne 3p src/web.ts", "sed -n -f script.sed src/web.ts"]) assert.equal(readsOnly(cmd), true, cmd);
+});
+
+test("C8 edge: a w command in the sed script is still a write, as the script or an -e value", () => {
+  for (const cmd of ["sed -n '1w out.txt' src/a.ts", "sed -e 's/a/b/w out.txt' src/a.ts", "sed -ne '/x/w out.txt' src/web.ts", "sed --expression='1w out.txt' src/a.ts"]) {
+    assert.equal(readsOnly(cmd), false, cmd);
   }
 });
 

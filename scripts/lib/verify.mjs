@@ -155,7 +155,7 @@ export async function runVerify(ctx, { stepKey = "verify" } = {}) {
     }
     if (scope && greenAt[key] === scope.implementation) {
       ctx.err(`verify: ${name} skipped (green on this implementation already)`);
-      commands.push({ ...row, skipped: "only tests or docs changed since it was last green", ms: 0 });
+      commands.push({ ...row, skipped: "already green on this code", ms: 0 });
       continue;
     }
     ctx.err(`verify: ${name} (timeout ${entry.timeout}s)`);

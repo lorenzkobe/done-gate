@@ -47,7 +47,7 @@ function hintOf(ledger, after) {
   const blank = ledger.steps.filter((s) => !s.state);
   const step = blank[0];
   const open = ledger.cases.filter((c) => c.status !== "closed" || clickStale(c, after));
-  const closeCases = `next: close ${open.map((c) => c.id).join(", ")} with \`gate case close C<n> --test <file:name>\` or \`--na "<reason>"\`${open.some((c) => c.kind === "click") ? "; a click case: click the control in the real app after the last edit, then `gate case close C<n> --click`" : ""}`;
+  const closeCases = `next: close ${open.map((c) => c.id).join(", ")} with \`gate case close C<n> --test <file:name>\` or \`--na "<reason>"\`${open.some((c) => c.kind === "click") ? "; a click case: click the control in the real app after the last edit, then `gate case close C<n> --click` (with more than one click case open: `--click events#<seq>`)" : ""}`;
   // open cases come before the close step: closing with a blank case would only bounce off R8
   if (open.length && (!step || step.key === "close")) return only(closeCases);
   if (step) {

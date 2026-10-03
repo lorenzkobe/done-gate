@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { readEvents } from "./events.mjs";
@@ -199,6 +199,17 @@ export function stampNow(ctx, logged = []) {
   return warning;
 }
 
+// The events of every other session in this repo that logged anything since this one started:
+// R1 asks them whether a change this session never made is theirs.
+function otherSessionsEvents(stateDir, self, since) {
+  const dir = path.join(stateDir, "sessions");
+  if (!existsSync(dir)) return [];
+  const from = Date.parse(since ?? 0) || 0;
+  return readdirSync(dir)
+    .filter((s) => s !== self && (statSync(path.join(dir, s, "events.jsonl"), { throwIfNoEntry: false })?.mtimeMs ?? 0) >= from)
+    .map((s) => readEvents(stateDir, s));
+}
+
 export function buildState(ctx, { lastMessage = "" } = {}) {
   const session = ensureSession(ctx.stateDir, ctx.root, ctx.session);
   let current = null;
@@ -219,6 +230,7 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
 
   const sessions = current ? current.ledger.sessions : [ctx.session];
   const events = sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
+  const otherEvents = current ? [] : otherSessionsEvents(ctx.stateDir, ctx.session, session.startedAt);
   // before the diff is taken, so another session's commit never shows as this task's change
   const settled = current ? settleAtHead(ctx.root, current.ledger, now) : false;
   const absorbed = (current ? absorbForeign(ctx.root, current.ledger, now, config, events) : false) || settled;
@@ -268,6 +280,7 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
     verify,
     verifyStarted: current ? readVerifyStarted(current.dir) : null,
     events,
+    otherEvents,
     reviews: current ? reviewFiles(current.dir) : [],
     lastMessage,
   };

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync, spawn } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync, existsSync, utimesSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, write, gate } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
@@ -119,6 +119,90 @@ test("`gate check` prints the same unmet list without blocking anything", () => 
   const r = run(repo, "check", {});
   assert.match(r.stdout, /R1/);
 });
+
+// A tool call as the PostToolUse hook reports it, for any session.
+const logged = (repo, session, tool_name, tool_input) =>
+  run(repo, "log", { hook_event_name: "PostToolUse", tool_name, tool_input, tool_response: { exit_code: 0 } }, [], session);
+const editIn = (repo, session, rel, content) => {
+  write(repo, rel, content);
+  logged(repo, session, "Edit", { file_path: path.join(repo, rel) });
+};
+
+test("C1 reported-surface: with no ledger, a source file only another session edited is not this session's R1", () => {
+  const repo = makeRepo("stop-r1-foreign-edit");
+  start(repo);
+  start(repo, "S2");
+  editIn(repo, "S2", "src/a.ts", "changed by S2\n");
+  assert.equal(stop(repo).json, null, "S1 changed nothing");
+  assert.match(stop(repo, "done.", "S2").json?.reason ?? "", /R1/, "S2 owns its edit");
+});
+
+test("C12 reported-surface: a file whose mtime sits in another session's writing command is not this session's R1", () => {
+  const repo = makeRepo("stop-r1-foreign-cmd");
+  start(repo);
+  start(repo, "S2");
+  write(repo, "src/a.ts", "restored by S2's checkout\n");
+  logged(repo, "S2", "Bash", { command: "git checkout -- src/a.ts" });
+  assert.equal(stop(repo).json, null);
+});
+
+test("C13 refused: a change no session's events explain stays this session's R1, though another session ran a command earlier", () => {
+  const repo = makeRepo("stop-r1-untraced");
+  start(repo);
+  start(repo, "S2");
+  logged(repo, "S2", "Bash", { command: "npm run gen" });
+  const later = new Date(Date.now() + 5000);
+  write(repo, "src/a.ts", "changed with no event\n");
+  utimesSync(path.join(repo, "src/a.ts"), later, later);
+  assert.match(stop(repo).json?.reason ?? "", /R1/);
+});
+
+test("C17 reported-surface: a file another session deleted with a shell command is not this session's R1 when this session wrote nothing", () => {
+  const repo = makeRepo("stop-r1-foreign-rm");
+  start(repo);
+  start(repo, "S2");
+  rmSync(path.join(repo, "src/a.ts"));
+  logged(repo, "S2", "Bash", { command: "rm src/a.ts" });
+  logged(repo, "S1", "Bash", { command: "ls src" });
+  assert.equal(stop(repo).json, null);
+  logged(repo, "S1", "Bash", { command: "npm run gen" });
+  assert.match(stop(repo).json?.reason ?? "", /R1/, "once this session wrote too, the deletion may be its own");
+});
+
+test("C2 happy: a file this session edited still blocks with R1", () => {
+  const repo = makeRepo("stop-r1-own-edit");
+  start(repo);
+  editIn(repo, "S1", "src/a.ts", "changed by S1\n");
+  assert.match(stop(repo).json?.reason ?? "", /R1/);
+});
+
+test("C3 edge: a file in this session's own writing command stays its R1, though another session's command also spans it", () => {
+  const repo = makeRepo("stop-r1-own-cmd");
+  start(repo);
+  start(repo, "S2");
+  write(repo, "src/a.ts", "generated\n");
+  logged(repo, "S2", "Bash", { command: "npm run gen" });
+  logged(repo, "S1", "Bash", { command: "node gen.mjs" });
+  assert.match(stop(repo).json?.reason ?? "", /R1/);
+});
+
+test("C4 edge: a read-only command of this session does not make another session's edit its own", () => {
+  const repo = makeRepo("stop-r1-own-read");
+  start(repo);
+  start(repo, "S2");
+  editIn(repo, "S2", "src/a.ts", "changed by S2\n");
+  logged(repo, "S1", "Bash", { command: "cat src/a.ts" });
+  assert.equal(stop(repo).json, null);
+});
+
+test("C14 edge: a file both sessions edited stays this session's R1", () => {
+  const repo = makeRepo("stop-r1-both");
+  start(repo);
+  start(repo, "S2");
+  editIn(repo, "S2", "src/a.ts", "changed by S2\n");
+  editIn(repo, "S1", "src/a.ts", "then by S1\n");
+  assert.match(stop(repo).json?.reason ?? "", /R1/);
+});
 }
 
 // ===== from tests/stdin-hang.test.mjs =====
@@ -225,6 +309,27 @@ test("C4 boundary: a non-hook verb ignores a cwd piped on stdin and uses CLAUDE_
   const other = makeRepo("stdin-root-other");
   const r = cli(repo, "doctor", [], JSON.stringify({ cwd: other }));
   const line = r.stdout.split("\n").find((l) => l.startsWith("repo: "));
+  assert.equal(line, `repo: ${repo}`);
+});
+
+// The model's shell: no CLAUDE_PROJECT_DIR, the verb run from wherever the shell stands.
+function fromFolder(repo, rel, args) {
+  const e = env(repo);
+  delete e.CLAUDE_PROJECT_DIR;
+  return spawnSync(process.execPath, [gate, ...args], { cwd: path.join(repo, rel), input: "", encoding: "utf8", env: e });
+}
+
+test("C10 reported-surface: a shell verb run from a subfolder resolves file:line pointers against the project root", () => {
+  const repo = makeRepo("root-subfolder", { "supabase/migrations/004_setup.sql": Array.from({ length: 30 }, (_, i) => `-- ${i}`).join("\n") + "\n" });
+  cli(repo, "open", ["root-sub", "feature"]);
+  const r = fromFolder(repo, "supabase/migrations", ["note", "context", "Traced: supabase/migrations/004_setup.sql:13 tables\nRelated: tests/a.test.ts\nResearch: none needed: local"]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /context noted/);
+});
+
+test("C11 boundary: the walk-up stops at the nearest .git, so a repo under tests/.tmp never takes the outer repo's root", () => {
+  const repo = makeRepo("root-walk-stop");
+  const line = fromFolder(repo, "src", ["doctor"]).stdout.split("\n").find((l) => l.startsWith("repo: "));
   assert.equal(line, `repo: ${repo}`);
 });
 

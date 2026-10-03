@@ -8,7 +8,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { briefOf, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS } from "./rules.mjs";
+import { briefOf, caseOpen, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS } from "./rules.mjs";
 import { assess, buildState, readVerify, reviewFiles, readVerifyStarted } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { withoutRepos } from "./tree.mjs";
@@ -66,12 +66,19 @@ export function positional(args) {
   const out = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith("--")) {
-      if (!BARE_FLAGS.has(args[i])) i += 1;
+      // --click may name its event: `--click events#<seq>`
+      if (!BARE_FLAGS.has(args[i]) || (args[i] === "--click" && /^events#\d+$/.test(args[i + 1] ?? ""))) i += 1;
       continue;
     }
     out.push(args[i]);
   }
   return out;
+}
+
+// A click event as the lead would recognise it: what it did, then its pointer.
+function clickLine(e) {
+  const what = e.kind === "command" ? `\`${e.cmd}\`` : [e.action, e.target, e.url, e.actions?.map((a) => [a.action, a.target].filter(Boolean).join(" ")).join(", ")].filter(Boolean).join(" ");
+  return `${what} (events#${e.seq})`;
 }
 
 function open(ctx) {
@@ -238,7 +245,10 @@ export const verbs = {
       const testPtr = flag(rest, "--test");
       const na = flag(rest, "--na");
       const byClick = rest.includes("--click");
-      if (!id || (!testPtr && !na && !byClick)) throw new UsageError("usage: gate case close <id> --test <file:testname> | --click | --na <reason>");
+      const afterClick = flag(rest, "--click");
+      const named = byClick ? /^events#(\d+)$/.exec(afterClick ?? "") : null;
+      if (byClick && !named && /^(?:events#|\d)/.test(afterClick ?? "")) throw new UsageError(`--click names a click as events#<seq>, not "${afterClick}"`);
+      if (!id || (!testPtr && !na && !byClick)) throw new UsageError("usage: gate case close <id> --test <file:testname> | --click [events#<seq>] | --na <reason>");
       const kind = open(ctx).ledger.cases.find((c) => c.id === id)?.kind;
       if (kind === "click" && testPtr) throw new UsageError(`${id} is a click case: a test does not close it. Click the control in the real app after the last edit, then \`gate case close ${id} --click\` (or \`--na "<reason>"\`).`);
       if (byClick && kind && kind !== "click") throw new UsageError(`${id} is a ${kind} case: --click closes a click case only`);
@@ -252,14 +262,22 @@ export const verbs = {
         if (state) {
           // one event closes one case: two controls need two clicks
           const held = new Set(ledger.cases.filter((c) => c.id !== id && c.event).map((c) => c.event));
-          event = clickEvents(state, lastEditSeq(state, state.config, state.ledger)).filter((e) => !held.has(`events#${e.seq}`)).pop();
+          const after = lastEditSeq(state, state.config, state.ledger);
+          const free = clickEvents(state, after).filter((e) => !held.has(`events#${e.seq}`));
+          // one click case open: every click since the edit was on its way to that control
+          const openClicks = ledger.cases.filter((c) => c.kind === "click" && caseOpen(c, after)).length;
+          if (named) {
+            event = free.find((e) => e.seq === Number(named[1]));
+            if (!event) throw new UsageError(`${id}: events#${named[1]} is not a click of yours after the last edit that no other case holds.${free.length ? ` Unclaimed: ${free.map(clickLine).join("; ")}.` : ""}`);
+          } else if (free.length > 1 && openClicks > 1) {
+            throw new UsageError(`${id}: ${free.length} clicks after the last edit are unclaimed, and the gate cannot tell which one was this case's control: ${free.map(clickLine).join("; ")}. Name it: \`gate case close ${id} --click events#<seq>\`.`);
+          } else event = free.pop();
           if (!event) throw new UsageError(`${id}: no click of yours after the last edit that another case does not already hold. Click the link, button or tab in the real app (left_click or form_input; navigate, screenshot, javascript_tool and a helper's click do not count)${driverCommand(state.config) !== null ? `, or run \`${driverCommand(state.config)}\` green` : ""}, then run this again.`);
         }
         Object.assign(row, { test: testPtr ?? null, na: na ?? null, ...(row.kind === "click" ? { event: event ? `events#${event.seq}` : null } : {}), status: "closed", closedSeq: nextSeq() });
         return event;
       });
-      const what = taken?.kind === "command" ? `\`${taken.cmd}\`` : [taken?.action, taken?.target, taken?.url, taken?.actions?.map((a) => [a.action, a.target].filter(Boolean).join(" ")).join(", ")].filter(Boolean).join(" ");
-      ctx.out(taken ? `${id} closed by ${what} (events#${taken.seq})` : `${id} closed`);
+      ctx.out(taken ? `${id} closed by ${clickLine(taken)}` : `${id} closed`);
       if (shared.length) ctx.out(`note: ${testPtr} also closes ${shared.join(", ")}; the reviewer is asked whether it can fail for each case on its own`);
       printNext(ctx);
       return;

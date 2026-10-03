@@ -355,6 +355,21 @@ test("C5 happy: the full report prints the skipped command with its reason and t
   assert.match(checks, /green/i, `the green checks sit on the same line: ${JSON.stringify(checks)}`);
 });
 
+test("C9 reported-surface: a build already green on this same code is reported as such, not as a test-only change", () => {
+  const repo = repoWithVerify("when-c9", [
+    { cmd: `${NODE} -e "process.exit(0)" # npm run lint`, when: "always" },
+    { cmd: `${NODE} -e "process.exit(0)" # npm run build`, when: "source" },
+  ]);
+  write(repo, "src/a.ts", "/** a docstring edit */\nexport const a = 1;\n");
+  cli(repo, "verify");
+  cli(repo, "verify");
+  const brief = cli(repo, "report", ["--brief"]).stdout;
+  const checks = lines(brief).find((l) => /build/i.test(l) && /skipped/.test(l));
+  assert.ok(checks, `the brief names the skipped build:\n${brief}`);
+  assert.match(checks, /skipped \(already green on this code\)/);
+  assert.doesNotMatch(checks, /test-only/);
+});
+
 // ---------------------------------------------------------------------------
 // C6
 // ---------------------------------------------------------------------------

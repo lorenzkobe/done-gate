@@ -222,8 +222,11 @@ key.
   Stop hook's R16 catches it after the fact from the event log.
 - **A new control is clicked, not just loaded.** A case of kind `click` (one per new or
   changed link, button or tab; the skeptic and the reviewer ask for them) cannot be closed
-  with a test. `gate case close <id> --click` takes the lead's newest click after the last
-  source edit that no other click case holds and stores it on the case as `events#<seq>`:
+  with a test. `gate case close <id> --click events#<seq>` takes that click when it came after
+  the last source edit and no other click case holds it, and stores it on the case. Plain
+  `--click` takes the newest such click only while one click case is open; with more open
+  and more than one unclaimed click it refuses and lists them, since it cannot tell which
+  control each was on. A click is:
   a `left_click`, `double_click`, `triple_click`, `right_click` or `form_input` in Chrome,
   alone or inside a `browser_batch`, or a green run of the `cmd:` driver. Loading the page,
   a screenshot, `javascript_tool` and a helper's click do not count. One click closes one
@@ -243,6 +246,10 @@ key.
   command that writes (any subcommand that is not read-only) and changed nothing through the shell, a file those commits changed that is clean
   against HEAD and that this run never edited is folded into the baseline: not sized, not
   reviewed, not scanned. The report says how many files from other commits were left out.
+- **Another session's edits do not need your ledger.** With no ledger open, R1 leaves out a
+  source file that another session's events account for (its edit of the file, or a writing
+  command whose run holds the file's mtime) and this session's do not. A change no session's
+  events explain stays this session's.
 - **Outgrowing the size is said at the edit.** The first lead edit that takes a run
   predicted below large into it gets a note from the log hook with the measured size and
   `gate brief worker`; the fence refuses the lead's edits from the next gate verb on. Once
@@ -304,7 +311,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `open <slug> <feature\|bugfix\|refactor\|plan\|investigation> [--repo <path>]` | start a ledger with the playbook's steps; `--repo` (repeatable, anywhere among the arguments) adds a further git repo to the run; on a slug whose run is open it joins that run and declares the repo late |
 | `repo add <path>` | add a further git repo to the open run, measured from its HEAD |
 | `note task\|context\|plan "…"` · `note plan "…" --files a,b` · `note caveat "…"` | write the prose sections (stamps the order for R2); Context is Traced (file:line pointers), Related, Research; `--files` predicts the size; a caveat is something the run could not show, printed in both reports |
-| `case add "…" --kind <kind>` · `case add --batch <file>` · `case amend C1 "…"` · `case close C1 --test file:name \| --click \| --na "…"` | the case table; kinds: happy, edge, refused, boundary, idempotent, reported-surface, performance, click; `--batch` reads one case per line as `<kind><TAB><text>`, adds all or none and prints one `next:` line; `amend` replaces a case's text and reopens it; `--click` closes a click case with the lead's newest click after the last edit and prints it |
+| `case add "…" --kind <kind>` · `case add --batch <file>` · `case amend C1 "…"` · `case close C1 --test file:name \| --click [events#<seq>] \| --na "…"` | the case table; kinds: happy, edge, refused, boundary, idempotent, reported-surface, performance, click; `--batch` reads one case per line as `<kind><TAB><text>`, adds all or none and prints one `next:` line; `amend` replaces a case's text and reopens it; `--click` closes a click case with the named click, or with the only unclaimed click, or with the newest one while only one click case is open, and prints it |
 | `step <key\|n> done\|skipped\|na "…" [--evidence ptr \| --ran "<text>"]` | close a playbook step (not the close step: `gate close` does that); the pointer must resolve; `repro`, `rootcause` and `schema` close only on a recorded run (`--ran` picks the newest command, browser call or skill after the run opened whose text contains it), and `rootcause` names the line at fault as `file:line` in its note |
 | `next` | the full `next:` hint; after a verb it is printed in full the first time a step is hinted and in a short form afterwards, and in full again once a session joins the run (clear, resume, compact, `gate attach`) |
 | `huddle add <role> --file review-1.md` · `acton` · `resolve` · `dispute` | reviewer rounds and Act-on items; `add` prints each recorded id with its finding |

@@ -230,16 +230,19 @@ function checksLine(verify) {
   if (!verify) return "Checks not run yet.";
   const ok = [];
   const bad = [];
-  const skipped = [];
+  const testOnly = [];
+  const greenHere = [];
   for (const c of verify.commands) {
     const name = `${plainCommand(c.cmd)}${verifyWhere(c)}`;
-    if (c.skipped) skipped.push(name);
+    // verify.json files written before the second reason was renamed carry the old text
+    if (c.skipped) (c.skipped.startsWith("no implementation change") ? testOnly : greenHere).push(name);
     else (c.exit === 0 && !c.timedOut ? ok : bad).push(name);
   }
   const parts = [];
   if (ok.length) parts.push(`${ok.join(", ")} green`);
   if (bad.length) parts.push(`${bad.join(", ")} failed`);
-  if (skipped.length) parts.push(`${skipped.join(", ")} skipped (test-only change)`);
+  if (testOnly.length) parts.push(`${testOnly.join(", ")} skipped (test-only change)`);
+  if (greenHere.length) parts.push(`${greenHere.join(", ")} skipped (already green on this code)`);
   if (!parts.length) return "Checks not run yet.";
   return `${cap(parts.join("; "))}.`;
 }

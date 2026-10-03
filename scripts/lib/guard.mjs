@@ -30,9 +30,7 @@ const SCRATCH = /(?:^|\/)(?:tests\/\.tmp|tmp|scratchpad)(?:\/|$)|^\/private\/tmp
 // Programs that only read their arguments; the flags that turn one into a writer.
 const READ_ONLY = new Set(["cat", "ls", "head", "tail", "grep", "egrep", "fgrep", "rg", "sed", "wc", "find", "diff", "stat", "file", "jq", "less", "more", "sort", "uniq", "cut", "tr", "column", "echo", "printf", "cd", "pwd", "test", "[", "true", "tree", "du", "date", "which", "type"]);
 const WRITING_FLAG = {
-  // a w command sits at the start of a script or after an address (`/x/w f`, `1w f`, `$w f`)
-  // or as an s flag
-  sed: /^-[a-zA-Z]*[iI]|^--in-place|(?:^|[/\d$}])[wW]\s*\S/,
+  sed: /^-[a-zA-Z]*[iI]|^--in-place/,
   sort: /^-[a-zA-Z]*o|^--o|^--compress/,
   tree: /^-o/,
   find: /^-(?:delete|exec|execdir|ok|okdir|fprint|fls)/,
@@ -189,8 +187,26 @@ function inlineCode(program, args, raw) {
   return `${code.join("\n")}\n${stdin ? heredocBodies(raw) : ""}`;
 }
 
+// a w command sits at the start of a sed script or after an address (`/x/w f`, `1w f`, `$w f`)
+// or as an s flag
+const SED_W = /(?:^|[/\d$}])[wW]\s*\S/;
+
+// The scripts a sed call runs: its -e values, else its first operand. Only these can hold a
+// w command; the file operands are paths, where `/w` is a folder or file name.
+function sedScripts(args) {
+  const given = [];
+  for (let i = 0; i < args.length; i++) {
+    const t = args[i].text;
+    if (!args[i].quoted && (/^-[a-zA-Z]*e$/.test(t) || t === "--expression") && args[i + 1]) given.push(args[++i].text);
+    else if (t.startsWith("--expression=")) given.push(t.slice("--expression=".length));
+  }
+  if (given.length || args.some((a) => !a.quoted && /^(?:-[a-zA-Z]*f$|--file)/.test(a.text))) return given;
+  return pathArgs(args).slice(0, 1).map((a) => a.text);
+}
+
 // a sed script is usually quoted, so quoting does not hide a flag here
-const writingFlag = (program, args) => Boolean(WRITING_FLAG[program]) && args.some((a) => WRITING_FLAG[program].test(a.text));
+const writingFlag = (program, args) =>
+  (Boolean(WRITING_FLAG[program]) && args.some((a) => WRITING_FLAG[program].test(a.text))) || (program === "sed" && sedScripts(args).some((t) => SED_W.test(t)));
 
 // Every segment starts with a read-only program, nothing is redirected to a file, and inline
 // code names no write. `node …/gate.mjs` is the gate's own CLI; `sh -c` is read as a command.
@@ -313,7 +329,7 @@ export function shellWrites(raw) {
         const files = pathArgs(args, ["-e", "-f", "--expression", "--file"]);
         for (const a of flag(/^-[ef]$|^--expression|^--file/) ? files : files.slice(1)) target(a.text, "sed -i on");
       }
-      if (program === "sed" && args.some((a) => /(?:^|[/\d$}])[wW]\s*\S/.test(a.text))) blind.push("sed w writes a file named in its script");
+      if (program === "sed" && sedScripts(args).some((t) => SED_W.test(t))) blind.push("sed w writes a file named in its script");
       if (program === "dd") for (const a of args) if (/^of=/.test(a.text)) target(a.text.slice(3), "dd of=");
       if (program === "tar" && (flag(/^-[a-zA-Z]*x|^--extract/) || /^[a-z]*x/.test(args[0]?.text ?? ""))) {
         const c = args.findIndex((a) => a.text === "-C");

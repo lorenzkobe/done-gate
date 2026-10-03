@@ -769,7 +769,7 @@ function clickRepo(name, config = GATE_JSON) {
 }
 const caseOf = (repo, id) => ledgerOf(repo).cases.find((c) => c.id === id);
 
-test("C22 refused: gate case close <id> --click takes the newest lead left_click after the last implementation edit and prints it; navigate, screenshot, javascript_tool, a helper's click, an older click and --test are refused", () => {
+test("C22 refused: gate case close <id> --click takes the one unclaimed lead left_click after the last implementation edit and prints it; navigate, screenshot, javascript_tool, a helper's click, an older click and --test are refused", () => {
   const repo = clickRepo("mc-c22");
   click(repo, "ref_1"); // before the edit
   edit(repo, "src/a.ts", lines(21, "a"));
@@ -786,15 +786,75 @@ test("C22 refused: gate case close <id> --click takes the newest lead left_click
   refused(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:chip"]);
   assert.equal(caseOf(repo, "C1").status, "open");
 
-  click(repo, "ref_11");
   click(repo, "ref_12");
-  const newest = lastBrowser(repo);
+  const only = lastBrowser(repo);
   const out = cli(repo, "case", ["close", "C1", "--click"]);
   assert.match(out, /left_click/);
   assert.match(out, /ref_12/);
   const row = caseOf(repo, "C1");
   assert.equal(row.status, "closed");
-  assert.equal(row.event, `events#${newest.seq}`);
+  assert.equal(row.event, `events#${only.seq}`);
+});
+
+test("C6 refused: with two click cases open, plain --click and two unclaimed clicks refuses and lists both by seq; it never guesses", () => {
+  const repo = clickRepo("mc-c6-two");
+  cli(repo, "case", ["add", "the menu opens", "--kind", "click"]);
+  edit(repo, "src/a.ts", lines(21, "a"));
+  click(repo, "ref_11");
+  const first = lastBrowser(repo);
+  click(repo, "ref_12");
+  const second = lastBrowser(repo);
+  const err = refused(repo, "case", ["close", "C1", "--click"]);
+  assert.match(err, new RegExp(`ref_11 \\(events#${first.seq}\\)`));
+  assert.match(err, new RegExp(`ref_12 \\(events#${second.seq}\\)`));
+  assert.match(err, /--click events#<seq>/);
+  assert.equal(caseOf(repo, "C1").status, "open");
+});
+
+test("C16 happy: with one click case open, plain --click takes the newest unclaimed click though a form_input came first", () => {
+  const repo = clickRepo("mc-c16-one");
+  edit(repo, "src/a.ts", lines(21, "a"));
+  chrome(repo, "form_input", { ref: "ref_3", value: "Table 4" });
+  click(repo, "ref_4");
+  const submit = lastBrowser(repo);
+  assert.match(cli(repo, "case", ["close", "C1", "--click"]), /C1 closed by left_click ref_4/);
+  assert.equal(caseOf(repo, "C1").event, `events#${submit.seq}`);
+});
+
+test("C15 edge: --click events#<seq> before the id still names the case", () => {
+  const repo = clickRepo("mc-c15-first");
+  cli(repo, "case", ["add", "the menu opens", "--kind", "click"]);
+  edit(repo, "src/a.ts", lines(21, "a"));
+  click(repo, "ref_7");
+  const first = lastBrowser(repo);
+  click(repo, "ref_8");
+  assert.match(cli(repo, "case", ["close", "--click", `events#${first.seq}`, "C1"]), /C1 closed by left_click ref_7/);
+});
+
+test("C5 reported-surface: --click events#<seq> closes on that click; a seq that is not an unclaimed click after the last edit is refused", () => {
+  const repo = clickRepo("mc-c5-named");
+  cli(repo, "case", ["add", "the menu opens", "--kind", "click"]);
+  click(repo, "ref_1");
+  const beforeEdit = lastBrowser(repo);
+  edit(repo, "src/a.ts", lines(21, "a"));
+  click(repo, "ref_47");
+  const staffYes = lastBrowser(repo);
+  click(repo, "ref_9");
+  const tableDelete = lastBrowser(repo);
+  chrome(repo, "navigate", { url: "https://example.com/admin" });
+  const nav = lastBrowser(repo);
+
+  refused(repo, "case", ["close", "C1", "--click", `events#${beforeEdit.seq}`]);
+  refused(repo, "case", ["close", "C1", "--click", `events#${nav.seq}`]);
+  refused(repo, "case", ["close", "C1", "--click", "events#1"]);
+  refused(repo, "case", ["close", "C1", "--click", String(tableDelete.seq)]);
+  refused(repo, "case", ["close", "C1", "--click", `events#${tableDelete.seq}a`]);
+
+  assert.match(cli(repo, "case", ["close", "C1", "--click", `events#${tableDelete.seq}`]), /C1 closed by left_click ref_9/);
+  assert.equal(caseOf(repo, "C1").event, `events#${tableDelete.seq}`);
+  refused(repo, "case", ["close", "C2", "--click", `events#${tableDelete.seq}`]);
+  assert.match(cli(repo, "case", ["close", "C2", "--click"]), /C2 closed by left_click ref_47/, "one click left: plain --click takes it");
+  assert.equal(caseOf(repo, "C2").event, `events#${staffYes.seq}`);
 });
 
 test("C14 idempotent: a click case closed, then a source edit: gate check lists the case as open again until a newer click closes it", () => {

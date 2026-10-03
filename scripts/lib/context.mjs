@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 // ledger.mjs imports this module back: both sides only call each other inside functions
 import { currentLedger, isDone } from "./ledger.mjs";
@@ -13,8 +13,15 @@ export function stateDirFor(root) {
   return process.env.DONE_GATE_STATE_DIR ?? path.join(root, ".claude", "gate");
 }
 
+// The model's shell carries no CLAUDE_PROJECT_DIR and may stand in a subfolder: the root is
+// the nearest folder up that holds the gate's state or config, or else a .git.
 export function projectRootFrom(input) {
-  return path.resolve(process.env.CLAUDE_PROJECT_DIR ?? input?.cwd ?? process.cwd());
+  if (process.env.CLAUDE_PROJECT_DIR) return path.resolve(process.env.CLAUDE_PROJECT_DIR);
+  const start = path.resolve(input?.cwd ?? process.cwd());
+  for (let dir = start; ; dir = path.dirname(dir)) {
+    if ([".claude/gate", ".claude/gate.json", ".git"].some((m) => existsSync(path.join(dir, m)))) return dir;
+    if (dir === path.dirname(dir)) return start;
+  }
 }
 
 // Verbs run from the model's shell carry no hook payload. Claude Code exposes the session id

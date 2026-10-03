@@ -629,6 +629,36 @@ export function lateOrder(state) {
   return { late, path: firstEdit.path };
 }
 
+// A file's mtime may land just after the PostToolUse stamp of the command that wrote it.
+const WRITE_SLACK_MS = 1000;
+
+// A writing command's run spans from the same agent's previous event to its stamp; a background
+// one runs on past it. A deleted file has no mtime, so any writing command may have removed it.
+function explains(events, since, file, mtime) {
+  const last = new Map();
+  for (const e of events) {
+    const t = Date.parse(e.ts);
+    const before = last.get(e.agent ?? "") ?? -Infinity;
+    last.set(e.agent ?? "", t);
+    if (e.seq <= since) continue;
+    if (e.kind === "edit" && e.path === file) return true;
+    if (e.kind === "command" && !e.readOnly && (mtime === undefined || (mtime >= before && mtime <= (e.background ? Infinity : t + WRITE_SLACK_MS)))) return true;
+  }
+  return false;
+}
+
+// With no ledger open, a source change is this session's unless another session's events
+// account for it and this session's do not; a change nobody's events explain stays its own.
+function ownChanges(state, paths) {
+  const since = state.session?.baselineSeq ?? 0;
+  const others = state.otherEvents ?? [];
+  if (!others.length) return paths;
+  return paths.filter((p) => {
+    const mtime = state.now?.files?.[p]?.m;
+    return explains(state.events ?? [], since, p, mtime) || !others.some((events) => explains(events, since, p, mtime));
+  });
+}
+
 // Pure: state in, unmet rules out. Every item says what to do next.
 export function evaluate(state) {
   const { config, ledger, changed, now, verify } = state;
@@ -639,10 +669,11 @@ export function evaluate(state) {
   for (const text of checkFailures) unmet.push({ rule: "R10", text });
 
   if (!ledger) {
-    if (src.length) {
+    const own = ownChanges(state, src);
+    if (own.length) {
       unmet.push({
         rule: "R1",
-        text: `source changed (${list(src)}) but no ledger is open for this session. Run \`gate open <slug> <feature|bugfix|refactor|plan>\` (or \`gate attach <slug>\`), write Task, Plan and the case table, then continue.`,
+        text: `source changed (${list(own)}) but no ledger is open for this session. Run \`gate open <slug> <feature|bugfix|refactor|plan>\` (or \`gate attach <slug>\`), write Task, Plan and the case table, then continue.`,
       });
     }
     return unmet;
@@ -765,7 +796,7 @@ export function evaluate(state) {
 
   // R8: nothing blank
   const openCases = (ledger.cases ?? []).filter((c) => caseOpen(c, after));
-  if (openCases.length) unmet.push({ rule: "R8", text: `case(s) not closed: ${openCases.map((c) => c.id).join(", ")}. \`gate case close <id> --test <file:name>\` or \`--na <reason>\`${openCases.some((c) => c.kind === "click") ? "; a click case: click the control in the real app after the last edit, then `gate case close <id> --click`" : ""}.` });
+  if (openCases.length) unmet.push({ rule: "R8", text: `case(s) not closed: ${openCases.map((c) => c.id).join(", ")}. \`gate case close <id> --test <file:name>\` or \`--na <reason>\`${openCases.some((c) => c.kind === "click") ? "; a click case: click the control in the real app after the last edit, then `gate case close <id> --click` (with more than one click case open: `--click events#<seq>`)" : ""}.` });
   const blankSteps = (ledger.steps ?? []).filter((s) => !s.state);
   if (blankSteps.length) {
     const how = [];
