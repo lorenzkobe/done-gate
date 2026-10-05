@@ -326,7 +326,7 @@ export const verbs = {
         const runs = ranEvents(gateState);
         if (ran !== undefined && ran !== null && ran.trim().length < 4) throw new UsageError("--ran needs at least four characters of the command or url, enough to name one run");
         by = (ran ? runs.filter((e) => ranText(e).includes(ran)).pop() : runs.find((e) => `events#${e.seq}` === evidence)) ?? null;
-        if (!by) throw new UsageError(`step {${step.key}} closes on a run the gate recorded, not on a note: run it (the Bash tool, the browser or the /verify driver) after this run opened, then \`gate step ${step.key} done "<what it showed>" --ran "<part of the command or url>"\` (the gate keeps the first 200 characters of a command; a background run, a read of the code and a memory or docs lookup do not count)`);
+        if (!by) throw new UsageError(`step {${step.key}} closes on a run the gate recorded, not on a note: run it (the Bash tool, the browser or the /verify driver) after this run opened, then \`gate step ${step.key} done "<what it showed>" --ran "<part of the command or url>"\` (the gate keeps the first 200 characters of a command; a background run, a read of the code and a memory, docs or code-search lookup do not count)`);
         if (step.key === "rootcause" && !tracedPointers(note, ctx.root, ctx.repos).some((p) => p.exists)) {
           throw new UsageError("step {rootcause}: the note names the line at fault as a file:line that resolves; a cause with no line is a guess");
         }

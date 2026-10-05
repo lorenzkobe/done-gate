@@ -403,7 +403,7 @@ Facts over assumptions: the context note is refused when a Traced `file:line` do
 (missing file, or a line past its end) or when Related names no existing file and is not
 "none: `<the search you ran>`"; a helper finding whose `file:line` does not resolve is recorded
 with a note to check it first; in read-only work a claim cites what was run or read, or is
-labelled "unverified". A memory, docs or search MCP lookup is not a run. An evidence pointer
+labelled "unverified". A memory, docs or code-search MCP lookup is not a run. An evidence pointer
 is checked: `ledger.md#<section>` needs text under that heading, `ledger.json#<key>` needs a record under one of the run's lists (cases, huddles, waivers, pauses, blast, caveats),
 `file:<number>` needs the line inside the file.
 

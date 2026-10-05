@@ -222,8 +222,8 @@ export function namesFile(text, root, repos = []) {
 }
 
 const RUN_KINDS = new Set(["command", "browser", "skill", "tool"]);
-// MCP servers that hold notes and documentation, never the system under test.
-const NOTES_SERVER = /(?:^|[_.-])(?:mem|mem0|memory|docs?|context7|search|exa|tavily|deepwiki)(?:$|[_.-])/i;
+// MCP servers that hold notes, documentation or a code index, never the system under test.
+const NOTES_SERVER = /(?:^|[_.-])(?:mem|mem0|memory|mempalace|mempalace|socraticode|docs?|context7|search|exa|tavily|deepwiki)(?:$|[_.-])/i;
 const notesTool = (e) => e.kind === "tool" && e.tool.startsWith("mcp__") && NOTES_SERVER.test(e.tool.slice(5, e.tool.lastIndexOf("__")));
 const GATE_CALL = /gate\.mjs["']?\s+(\S+)/;
 const GATE_RUNS = new Set(["check", "verify", "report", "size", "doctor", "close"]);

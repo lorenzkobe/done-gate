@@ -531,3 +531,19 @@ test("C5 edge: README's rule table lists exactly R1-R10, R13, R15 and R16 — th
 // pin the same facts twice, so C6 is covered by re-running those two files unchanged.
 // ---------------------------------------------------------------------------
 }
+
+test("helpers look things up with a code-search or memory MCP tool when the session has one, never write through it, fall back to grep and Read, and QA gets memory search only", () => {
+  const body = (role) => readFileSync(path.join(pluginRoot, "agents", `${role}.md`), "utf8").replace(/^---\n[\s\S]*?\n---\n/, "");
+  for (const role of ["skeptic", "reviewer", "reviewer-2", "worker", "qa"]) {
+    const md = body(role);
+    assert.match(md, /ToolSearch/, `agents/${role}.md does not say deferred tools load through ToolSearch`);
+    assert.match(md, /never add, write, update, delete, mine or re-index/, `agents/${role}.md does not keep the helper to lookups`);
+    assert.match(md, /empty result[^.]*not indexed[^.]*grep and Read/, `agents/${role}.md has no grep-and-Read fallback for an empty result`);
+  }
+  for (const role of ["skeptic", "reviewer", "reviewer-2", "worker"]) {
+    assert.match(body(role), /code-search or memory MCP tool/, `agents/${role}.md does not point the helper at a code-search or memory tool`);
+  }
+  assert.match(body("qa"), /memory MCP tool/, "agents/qa.md does not point QA at a memory tool");
+  assert.match(body("qa"), /no code search/, "agents/qa.md lets QA code-search, which returns the new implementation");
+  assert.doesNotMatch(body("arbiter"), /MCP tool/, "agents/arbiter.md settles from cited code and needs no search line");
+});

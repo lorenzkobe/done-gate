@@ -263,13 +263,31 @@ test("G1 refused: a memory-search or docs MCP call does not close repro or rootc
   logged(repo, { tool_name: "mcp__claude_ai_Claude_Docs__read", tool_input: { id: "badge null venue" } });
   logged(repo, { tool_name: "mcp__context7__get-library-docs", tool_input: { topic: "badge null venue" } });
   const lookup = logged(repo, { tool_name: "mcp__plugin_claude-mem_mcp-search__search", tool_input: { query: "badge null venue" } });
-  assert.match(refused(repo, "step", ["repro", "done", "fails", "--ran", "badge null venue"]), /memory or docs lookup/);
+  assert.match(refused(repo, "step", ["repro", "done", "fails", "--ran", "badge null venue"]), /memory, docs or code-search lookup/);
   refused(repo, "step", ["repro", "done", "fails", "--evidence", `events#${lookup}`]);
   logged(repo, { tool_name: "mcp__elasticsearch__search", tool_input: { query: "venue in the index" } });
   cli(repo, "step", ["rootcause", "done", "src/a.ts:3 writes null", "--ran", "venue in the index"]);
   const seq = logged(repo, { tool_name: "mcp__supabase__execute_sql", tool_input: { query: "select badge null venue" } });
   cli(repo, "step", ["repro", "done", "fails", "--ran", "badge null venue"]);
   assert.equal(stepOf(repo, "repro").evidence, `events#${seq}`);
+});
+
+test("G1b refused: a MemPalace or SocratiCode lookup closes neither repro nor rootcause; a server that only contains those words still does", () => {
+  const repo = opened("hf-g1b");
+  const palace = logged(repo, { tool_name: "mcp__mempalace__mempalace_search", tool_input: { query: "badge null venue" } });
+  assert.match(refused(repo, "step", ["repro", "done", "fails", "--ran", "badge null venue"]), /memory, docs or code-search lookup/);
+  refused(repo, "step", ["repro", "done", "fails", "--evidence", `events#${palace}`]);
+  logged(repo, { tool_name: "mcp__socraticode__codebase_search", tool_input: { query: "venue writer" } });
+  refused(repo, "step", ["rootcause", "done", "src/a.ts:3 writes null", "--ran", "venue writer"]);
+  const db = logged(repo, { tool_name: "mcp__supabase__execute_sql", tool_input: { query: "select badge null venue" } });
+  cli(repo, "step", ["repro", "done", "fails", "--ran", "badge null venue"]);
+  assert.equal(stepOf(repo, "repro").evidence, `events#${db}`);
+  const near = logged(repo, { tool_name: "mcp__socraticodes__q", tool_input: { query: "venue near miss" } });
+  cli(repo, "step", ["rootcause", "done", "src/a.ts:3 writes null", "--ran", "venue near miss"]);
+  assert.equal(stepOf(repo, "rootcause").evidence, `events#${near}`);
+  const palaceX = logged(repo, { tool_name: "mcp__mempalacex__q", tool_input: { query: "venue other miss" } });
+  cli(repo, "step", ["rootcause", "done", "src/a.ts:3 writes null", "--ran", "venue other miss"]);
+  assert.equal(stepOf(repo, "rootcause").evidence, `events#${palaceX}`);
 });
 
 function plannedFeature(name) {

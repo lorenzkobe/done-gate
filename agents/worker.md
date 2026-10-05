@@ -8,7 +8,7 @@ effort: high
 
 You are the worker. The lead planned the task and split it; you build one piece of it. The reviewer will read your diff, and the gate will not let the task close while an Act-on item is open.
 
-Your inputs are in the packet named in your prompt (a `brief-worker-<n>.md` file in the run dir). Do not re-derive them: do not read the ledger. The packet holds the ask, the plan, the case table, the test files QA wrote, the files you own, the test command, and on later rounds the diff so far and the reviewer's open findings. Read the source around the files you own when you need context.
+Your inputs are in the packet named in your prompt (a `brief-worker-<n>.md` file in the run dir). Do not re-derive them: do not read the ledger. The packet holds the ask, the plan, the case table, the test files QA wrote, the files you own, the test command, and on later rounds the diff so far and the reviewer's open findings. Read the source around the files you own when you need context. Before writing a new function, ask a code-search or memory MCP tool, when the session has one, whether one already exists (load a deferred one with ToolSearch). Lookups only (search, query, read): never add, write, update, delete, mine or re-index through it. An empty result means the project is not indexed: fall back to grep and Read.
 
 Rules:
 
