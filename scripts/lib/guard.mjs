@@ -35,7 +35,7 @@ const INLINE_FLAG = /^-[a-zA-Z]*[ecpEr]$|^--eval$|^--print$/;
 const INLINE_WRITE = /\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|rename(?:Sync)?|unlink(?:Sync)?|rm(?:Sync)?|rmdir(?:Sync)?|mkdir(?:Sync)?|copyFile(?:Sync)?|truncate(?:Sync)?|createWriteStream|open\s*\([^)]*["'][wa][+]?["'])|os\.(?:remove|rename|unlink|makedirs|mkdir)|shutil\.|file_put_contents|fopen|fwrite|unlink/;
 const SCRATCH = /(?:^|\/)(?:tests\/\.tmp|tmp|scratchpad)(?:\/|$)|^\/private\/tmp\//;
 // Programs that only read their arguments; the flags that turn one into a writer.
-const READ_ONLY = new Set(["ps", "awk", "cat", "ls", "head", "tail", "grep", "egrep", "fgrep", "rg", "sed", "wc", "find", "diff", "stat", "file", "jq", "less", "more", "sort", "uniq", "cut", "tr", "column", "echo", "printf", "cd", "pwd", "test", "[", "true", "tree", "du", "date", "which", "type"]);
+const READ_ONLY = new Set(["ps", "awk", "cat", "ls", "head", "tail", "grep", "egrep", "fgrep", "rg", "sed", "wc", "find", "diff", "stat", "file", "jq", "less", "more", "sort", "uniq", "cut", "tr", "column", "paste", "echo", "printf", "cd", "pwd", "test", "[", "true", "continue", "break", "tree", "du", "date", "which", "type"]);
 const WRITING_FLAG = {
   sed: /^-[a-zA-Z]*[iI]|^--in-place/,
   sort: /^-[a-zA-Z]*o|^--o|^--compress/,
@@ -60,20 +60,25 @@ function heredocBodies(raw) {
   return [...String(raw).matchAll(HEREDOC)].map((m) => m[4]).join("\n");
 }
 
-// Segments of tokens {text, quoted}. `2>&1` and `&>` stay one token; `&` alone splits.
+// Segments of tokens {text, quoted, assign, redir}; assign marks `name="value"`, whose name is bare,
+// and redir a token opened by a bare `>`, whose target may be quoted. `2>&1` and `&>` stay one token; `&` alone splits.
 export function segments(text) {
   const out = [];
   let seg = [];
   let tok = "";
   let has = false;
   let quoted = false;
+  let assign = false;
+  let redir = false;
   let quote = null;
   let resume = null; // the double quote a `$(` or backtick interrupted
   const push = () => {
-    if (has) seg.push({ text: tok, quoted });
+    if (has) seg.push({ text: tok, quoted, redir, assign: assign || (!quoted && /^[A-Za-z_]\w*=/.test(tok)) });
     tok = "";
     has = false;
     quoted = false;
+    assign = false;
+    redir = false;
   };
   const cut = () => {
     push();
@@ -102,7 +107,13 @@ export function segments(text) {
       quoted = true;
       continue;
     }
+    // a redirect glued to the word before it (`echo x>file`) is its own token
+    if (c === ">") {
+      if (has && (quoted || !/^(?:\d*|&)>*$/.test(tok))) push();
+      redir = true;
+    }
     if (c === '"' || c === "'") {
+      if (!quoted && /^[A-Za-z_]\w*=/.test(tok)) assign = true;
       quote = c;
       has = true;
       quoted = true;
@@ -148,7 +159,7 @@ export function segments(text) {
 // The redirect target a token opens: "" when the next token is the target, null when the
 // token is no redirect or duplicates a stream (`2>&1`).
 function redirect(w) {
-  if (w.quoted) return null;
+  if (w.quoted && !w.redir) return null;
   const m = /^(?:\d*|&)>{1,2}(.*)$/.exec(w.text);
   if (!m || m[1].startsWith("&")) return null;
   return m[1];
@@ -173,18 +184,21 @@ function pathArgs(args, consuming = []) {
 
 // Leading `NAME=value` words, the rtk wrapper and shell keywords are not the program; a
 // `for`/`case` header and a closing `done`/`fi` run nothing.
+const PAGER_OFF = /^\w*PAGER=(?:cat|less|more)?$/;
+const RUNS_COMMAND = /^(?:\w*PAGER|\w*EDITOR|VISUAL|LESSOPEN|LESSCLOSE|GIT_EXTERNAL_DIFF|GIT_SSH(?:_COMMAND)?|BROWSER)=/;
 const KEYWORDS = new Set(["do", "then", "else", "elif", "if", "while", "until", "!", "time", "{", "}"]);
 const HEADERS = new Set(["for", "case", "select", "done", "fi", "esac", "in"]);
 function shift(seg) {
   const words = seg.filter((w, i) => w.text !== "" || seg.slice(0, i).some((x) => x.text !== ""));
-  let pathChanged = false;
-  while (words.length && !words[0].quoted && (/^[A-Za-z_]\w*=/.test(words[0].text) || words[0].text === "rtk" || KEYWORDS.has(words[0].text))) {
-    if (/^PATH=/.test(words[0].text)) pathChanged = true; // a planted binary could stand in for cat
+  let envChanged = false;
+  while (words.length && (words[0].assign || (!words[0].quoted && (words[0].text === "rtk" || KEYWORDS.has(words[0].text))))) {
+    if (/^PATH=/.test(words[0].text)) envChanged = true; // a planted binary could stand in for cat
+    if (words[0].assign && RUNS_COMMAND.test(words[0].text) && !PAGER_OFF.test(words[0].text)) envChanged = true; // as a prefix or exported already, it makes a reader run a command
     // `rtk proxy <cmd>` runs the command unfiltered
     if (words.shift().text === "rtk" && words[0]?.text === "proxy" && !words[0].quoted) words.shift();
   }
-  if (words.length && !words[0].quoted && HEADERS.has(words[0].text)) return { words: [], pathChanged };
-  return { words, pathChanged };
+  if (words.length && !words[0].quoted && HEADERS.has(words[0].text)) return { words: [], envChanged };
+  return { words, envChanged };
 }
 
 // Inline code an interpreter runs: its -e/-c argument, or its stdin when the command feeds it
@@ -234,8 +248,8 @@ function gitReads(args) {
 // code names no write. `node …/gate.mjs` is the gate's own CLI; `sh -c` is read as a command.
 export function readsOnly(raw) {
   return segments(withoutHeredocs(raw)).every((seg) => {
-    const { words, pathChanged } = shift(seg);
-    if (pathChanged) return false;
+    const { words, envChanged } = shift(seg);
+    if (envChanged) return false;
     for (let i = 0; i < words.length; i++) {
       const target = redirect(words[i]);
       if (target === null) continue;
@@ -316,7 +330,7 @@ export function shellWrites(raw) {
     for (const seg of segments(withoutHeredocs(text))) {
       const words = [];
       for (const w of seg) {
-        const assign = !words.length && !w.quoted ? /^([A-Za-z_]\w*)=(.*)$/.exec(w.text) : null;
+        const assign = !words.length && w.assign ? /^([A-Za-z_]\w*)=(.*)$/.exec(w.text) : null;
         if (assign) {
           vars[assign[1]] = expand(assign[2]);
           continue;
