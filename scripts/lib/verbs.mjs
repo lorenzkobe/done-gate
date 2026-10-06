@@ -8,7 +8,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { briefOf, caseOpen, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS } from "./rules.mjs";
+import { briefOf, caseOpen, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE } from "./rules.mjs";
 import { assess, buildState, readVerify, reviewFiles, readVerifyStarted } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { withoutRepos } from "./tree.mjs";
@@ -75,6 +75,14 @@ export function positional(args) {
   return out;
 }
 
+// A helper file is recorded only when every helper that wrote it searched first.
+function refuseSkipped(ctx, dir, ledger, file) {
+  if (!ledger.lookups) return;
+  const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
+  const skipped = skippedLookups({ ledger, dir, root: ctx.root, events }, file);
+  if (skipped.length) throw new UsageError(`${file} was written by ${skipped.map(skippedText).join(", ")} without searching first; nothing recorded. Send it back (SendMessage) to search, e.g. ${LOOKUP_KINDS.map((k) => LOOKUP_EXAMPLE[k]).join(" and ")}, and recheck its file.`);
+}
+
 // A click event as the lead would recognise it: what it did, then its pointer.
 function clickLine(e) {
   const what = e.kind === "command" ? `\`${e.cmd}\`` : [e.action, e.target, e.url, e.actions?.map((a) => [a.action, a.target].filter(Boolean).join(" ")).join(", ")].filter(Boolean).join(" ");
@@ -134,6 +142,29 @@ function checkContext(text, root, repos) {
   }
 }
 
+// The kinds the lead declares missing (--no-code / --no-memory "<why>"). Refused while a kind is
+// neither declared nor searched by the lead itself since the user's message.
+function checkLookups(ctx, ledger, rest) {
+  const declared = {};
+  for (const kind of LOOKUP_KINDS) {
+    const name = `--no-${kind}`;
+    if (!rest.includes(name)) continue;
+    const why = flag(rest, name);
+    if (!why?.trim() || why.startsWith("--")) throw new UsageError(`${name} needs the tool and why, e.g. ${name} "<tool>: not installed" or "<tool>: not indexed"`);
+    declared[kind] = why.trim();
+  }
+  if (!ledger.lookups) return declared;
+  const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
+  const found = leadLookups(ledger, events);
+  const missing = LOOKUP_KINDS.filter((k) => !found[k].size && !declared[k] && !ledger.lookupGap?.[k]);
+  if (missing.length) {
+    const what = missing.map((k) => `${k} (e.g. ${LOOKUP_EXAMPLE[k]})`).join(" and ");
+    const flags = missing.map((k) => `--no-${k} "<tool>: not installed|not indexed"`).join(" and ");
+    throw new UsageError(`search the ${what} yourself before \`gate note context\` (a subagent's or Explore's search does not count), or pass ${flags} when the tool is missing or the project is not indexed.`);
+  }
+  return declared;
+}
+
 export const outsideRepos = (given) => `"${given}" is outside this repo and every declared repo: declare its repo with \`gate repo add <dir>\`, then name the file again`;
 
 export const verbs = {
@@ -155,7 +186,11 @@ export const verbs = {
       printNext(ctx);
       return;
     }
-    if (section === "context") checkContext(text, ctx.root, ctx.repos);
+    let gap = {};
+    if (section === "context") {
+      checkContext(text, ctx.root, ctx.repos);
+      gap = checkLookups(ctx, open(ctx).ledger, rest);
+    }
     const named = section === "plan" ? (files ?? "").split(",").map((f) => f.trim()).filter(Boolean) : [];
     const outside = named.filter((f) => toPosixRel(ctx.root, f, ctx.repos) === null);
     if (outside.length && outside.length === named.length) throw new UsageError(`--files: ${outsideRepos(outside.join(", "))}`);
@@ -172,6 +207,7 @@ export const verbs = {
       if (section === "task") ledger.taskSeq = seq;
       if (section === "context") {
         ledger.contextSeq = seq;
+        if (Object.keys(gap).length) ledger.lookupGap = { ...ledger.lookupGap, ...gap };
         markStep(ledger, "context", { state: "DONE", evidence: "ledger.md#context", note: "Context written" });
       }
       if (section === "plan") {
@@ -319,6 +355,7 @@ export const verbs = {
       if (state === "SKIPPED" && step.key && EVIDENCED_KEYS.has(step.key)) {
         throw new UsageError(`step {${step.key}} has script/agent evidence and cannot be SKIPPED — ${Object.hasOwn(NO_WAIVER, step.key) ? `it has no waiver either. ${NO_WAIVER[step.key]}.` : `do it, or get the user's waiver with \`gate waive ${step.key} "<reason>"\``}`);
       }
+      if (step.key === "context" && ledger.lookups) throw new UsageError('step {context} is closed by `gate note context "Traced: … · Related: … · Research: …"` after you search the code and memory yourself; run that instead.');
       if (state === "N/A" && (step.key === "repro" || step.key === "rootcause")) {
         throw new UsageError(`step {${step.key}} cannot be N/A: a bug fix with no ${step.key === "repro" ? "reproduction" : "root cause"} is a guess. Do it, or get the user's waiver with \`gate waive ${step.key} "<reason>"\``);
       }
@@ -384,6 +421,7 @@ export const verbs = {
             ? `${file} is a draft: the helper has not finished (every bullet reads "unverified"). Nothing recorded. Run \`gate brief ${role}\` again and spawn a fresh helper for the same round.`
             : `${file} is unfinished: a section still reads "- unverified". Nothing recorded. Run \`gate brief ${role}\` again and spawn a fresh helper; its packet continues from the file.`);
         }
+        refuseSkipped(ctx, dir, ledger, file);
       }
       const same = (a, b) => String(a).toLowerCase().replace(/\s+/g, " ").trim() === String(b).toLowerCase().replace(/\s+/g, " ").trim();
       const { id, answered, added } = withLedger(ctx, (ledger, dir) => {
@@ -513,8 +551,9 @@ export const verbs = {
     if (action === "reply") {
       const file = flag(rest, "--file");
       if (!file || !/^worker-\d+\.md$/.test(file)) throw new UsageError("usage: gate huddle reply --file worker-<n>.md (the worker's own file in the run dir)");
-      const { dir } = open(ctx);
+      const { dir, ledger } = open(ctx);
       if (!existsSync(path.join(dir, file))) throw new UsageError(`gate huddle reply: ${file} does not exist in the run dir; the worker must write it first`);
+      refuseSkipped(ctx, dir, ledger, file);
       const text = readFileSync(path.join(dir, file), "utf8");
       const replies = parseReplies(text);
       const shape = "'H<k>.<i> — fixed: <ptr>' or 'H<k>.<i> — disagree: <why> — <ptr>'";

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, doneArgs } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, doneArgs, lookedUp } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { pointerResolver } from "../scripts/lib/rules.mjs";
@@ -1653,6 +1653,7 @@ test("C6 happy: the skeptic hint names `gate huddle add skeptic --file skeptic-<
 
   const repo = committed("skeptic-hints");
   cli(repo, "open", ["skeptic-hints", "feature"]);
+  lookedUp(repo);
   cli(repo, "note", ["task", "Pin the hints. [inferred]"]);
   const afterPlan = hintOf(cli(repo, "note", ["plan", "Two modules.", "--files", "src/a.ts,src/app/page.tsx"]).stdout);
   assert.match(afterPlan, /^next: /, afterPlan);

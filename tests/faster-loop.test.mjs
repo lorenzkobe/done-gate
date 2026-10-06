@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 
@@ -58,6 +58,7 @@ function committed(name, files) {
 function opened(name, { files = {}, planFiles = "src/a.ts" } = {}) {
   const repo = committed(name, files);
   cli(repo, "open", [name, "feature"]);
+  lookedUp(repo);
   cli(repo, "note", ["task", "Add a badge. [inferred]"]);
   cli(repo, "note", ["context", "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: tiny"]);
   cli(repo, "note", ["plan", "One module. No hot path.", "--files", planFiles]);

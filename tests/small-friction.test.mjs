@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, here, pluginRoot } from "./helpers.mjs";
+import { makeRepo, write, gate, here, pluginRoot, lookedUp } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
@@ -72,6 +72,7 @@ function repoOf(name, files = {}) {
 function opened(name, files = {}, playbook = "feature") {
   const repo = repoOf(name, files);
   cli(repo, "open", ["t", playbook]);
+  lookedUp(repo);
   return repo;
 }
 function planned(name, files = {}, planArgs = ["--files", "src/a.ts"]) {
@@ -275,6 +276,7 @@ test("C8 reported-surface: the brief For-you line drops pauses and blocked write
   const repo = repoOf("sf-c8");
   sessionStart(repo, "S1");
   cli(repo, "open", ["t", "feature"]);
+  lookedUp(repo);
   cli(repo, "note", ["task", "Do the thing. [inferred]"]);
   cli(repo, "note", ["context", CONTEXT]);
   cli(repo, "note", ["plan", "One constant changes.", "--files", "src/a.ts"]);

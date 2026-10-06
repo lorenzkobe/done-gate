@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync, execSync, execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, here, pluginRoot, doneArgs } from "./helpers.mjs";
+import { makeRepo, write, gate, here, pluginRoot, doneArgs, lookedUp } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { evaluate } from "../scripts/lib/rules.mjs";
@@ -22,6 +22,7 @@ const runDir = (repo) => path.join(repo, ".claude", "gate", "runs", (({ current,
 test("report renders every section, the summary counts, and embeds the reviewer's file verbatim", () => {
   const repo = makeRepo("report-render");
   cli(repo, "open", ["badge", "feature"]);
+  lookedUp(repo);
   cli(repo, "note", ["task", "Add a badge. [inferred]"]);
   cli(repo, "note", ["context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   cli(repo, "note", ["plan", "One component."]);
@@ -155,6 +156,7 @@ const STANDARD_UNMET = 3;
 function standardFixture(name, { gateJson = null } = {}) {
   const repo = makeRepo(name, gateJson ? { ".claude/gate.json": JSON.stringify(gateJson) } : {});
   cli(repo, "open", ["badge", "feature"]);
+  lookedUp(repo);
   cli(repo, "note", ["task", "Add a badge to the venue card. [inferred]"]);
   cli(repo, "note", ["context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   cli(repo, "note", ["plan", "One component, no data change."]);
@@ -162,7 +164,6 @@ function standardFixture(name, { gateJson = null } = {}) {
   cli(repo, "case", ["add", "hidden when the venue has no rating", "--kind", "edge"]);
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:renders the badge"]);
   cli(repo, "case", ["close", "C2", "--na", "covered by C1's fixture"]);
-  cli(repo, "step", ["context", "done", "traced it", "--evidence", "ledger.md"]);
   cli(repo, "step", ["schema", "skipped", "no schema files"]);
   cli(repo, "waive", ["driver", "skip the phone pass this time, chrome is disconnected"]);
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n- null venue crashes\n");
@@ -179,6 +180,7 @@ function standardFixture(name, { gateJson = null } = {}) {
 function cleanClosingFixture(name, slug = "tidy", before = () => {}) {
   const repo = makeRepo(name);
   cli(repo, "open", [slug, "plan"]);
+  lookedUp(repo);
   cli(repo, "note", ["task", "Write the spec. [inferred]"]);
   cli(repo, "note", ["context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   cli(repo, "note", ["plan", "One document."]);
@@ -186,7 +188,6 @@ function cleanClosingFixture(name, slug = "tidy", before = () => {}) {
   cli(repo, "case", ["add", "spec covers the happy path", "--kind", "happy"]);
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:refused"]);
   cli(repo, "case", ["close", "C2", "--test", "tests/a.test.ts:happy"]);
-  cli(repo, "step", ["context", "done", "traced it", "--evidence", "ledger.md"]);
   writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
   cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
   cli(repo, "step", ["skeptic", "done", "no findings", "--evidence", "ledger.md"]);
@@ -439,13 +440,14 @@ function c11Fixture(name, bin) {
     return r;
   };
   go("open", ["stable", "feature"]);
+  lookedUp(repo);
   go("note", ["task", "Add a badge. [inferred]"]);
   go("note", ["plan", "One component."]);
   go("case", ["add", "renders badge", "--kind", "happy"]);
   go("case", ["add", "hidden with no rating", "--kind", "edge"]);
   go("case", ["close", "C1", "--test", "tests/a.test.ts:renders"]);
   go("case", ["close", "C2", "--na", "covered by C1"]);
-  go("step", ["context", "done", "traced it", "--evidence", "ledger.md"]);
+  go("note", ["context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   go("step", ["schema", "skipped", "no schema files"]);
   go("waive", ["driver", "skip the phone pass"]);
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n- null venue crashes\n");
@@ -758,14 +760,15 @@ function closeEveryStep(repo) {
     writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
     cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
   }
-  // {close} is closed by `gate close`, never by hand
-  for (const key of keys.filter((k) => k !== "close")) cli(repo, "step", doneArgs(repo, key, key, `did ${key}`, "docs/notes.md"));
+  // {close} is closed by `gate close` and {context} by `gate note context`, never by hand
+  for (const key of keys.filter((k) => k !== "close" && k !== "context")) cli(repo, "step", doneArgs(repo, key, key, `did ${key}`, "docs/notes.md"));
 }
 
 // An opened feature run whose plan and case table predate the first source edit.
 function opened(name, slug = name, { source = "src/a.ts" } = {}) {
   const repo = committed(name);
   cli(repo, "open", [slug, "feature"]);
+  lookedUp(repo);
   cli(repo, "note", ["task", "Add a badge to the venue card. [inferred]"]);
   cli(repo, "note", ["context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   cli(repo, "note", ["plan", "One module.", "--files", source]);
@@ -800,6 +803,7 @@ function closedRun(name, slug = name) {
 function noSourceRun(name, slug = name) {
   const repo = committed(name);
   cli(repo, "open", [slug, "plan"]);
+  lookedUp(repo);
   cli(repo, "note", ["task", "Write the spec. [inferred]"]);
   cli(repo, "note", ["context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   cli(repo, "note", ["plan", "One document."]);

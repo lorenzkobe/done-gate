@@ -4,7 +4,7 @@ import { execFileSync, spawnSync, execSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, here, doneArgs } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, doneArgs, lookedUp } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
@@ -1170,6 +1170,9 @@ function closedTieredFixture(name, slug = "shipped") {
   openTiered(repo, { slug, files: "src/a.ts,src/b.ts" });
   cli(repo, "case", ["add", "shows the size", "--kind", "happy"]);
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:shows the size"]);
+  // {context} closes only through `gate note context`, after the lead's lookups
+  lookedUp(repo);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   // DONE, not N/A: an optional step left N/A is reopened the moment the tier is reconciled
   const steps = loadLedger(runDir(repo)).steps;
   writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
@@ -1689,6 +1692,7 @@ test("C3 boundary: an old ledger.json carrying blast rows, a {blast} step and ti
     },
   ];
   stepOf(old, "skeptic").state = null; // reopened by the old R14 plumbing
+  delete old.lookups; // stamped from 0.16.0 on
   old.tier = { ...old.tier, reopened: ["skeptic"] };
   writeLedger(repo, old);
 
@@ -1746,13 +1750,14 @@ test("C3 boundary: an old ledger.json carrying blast rows, a {blast} step and ti
 function cleanClosingFixture(name, slug = "tidy") {
   const repo = makeRepo(name);
   cli(repo, "open", [slug, "plan"]);
+  lookedUp(repo);
   cli(repo, "note", ["task", "Write the spec. [inferred]"]);
   cli(repo, "note", ["plan", "One document."]);
   cli(repo, "case", ["add", "spec covers the refused side", "--kind", "refused"]);
   cli(repo, "case", ["add", "spec covers the happy path", "--kind", "happy"]);
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:refused"]);
   cli(repo, "case", ["close", "C2", "--test", "tests/a.test.ts:happy"]);
-  cli(repo, "step", ["context", "done", "traced it", "--evidence", "ledger.md"]);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
   cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
   cli(repo, "step", ["skeptic", "done", "no findings", "--evidence", "ledger.md"]);

@@ -485,7 +485,7 @@ test("C4 happy: hooks/session-start.md says the lead never edits source at stand
 // C5 — README's tables: exactly the live rules, and the two new verbs
 // ---------------------------------------------------------------------------
 
-test("C5 edge: README's rule table lists exactly R1-R10, R13, R15 and R16 — the ids scripts/lib/rules.mjs can emit — and the verbs table names huddle reply and brief worker", () => {
+test("C5 edge: README's rule table lists exactly R1-R10, R13 and R15-R17 — the ids scripts/lib/rules.mjs can emit — and the verbs table names huddle reply and brief worker", () => {
   const md = read(README);
 
   // every line that opens a rule row, in the order README lists them
@@ -495,7 +495,7 @@ test("C5 edge: README's rule table lists exactly R1-R10, R13, R15 and R16 — th
 
   const expected = [
     "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10",
-    "R13", "R15", "R16",
+    "R13", "R15", "R16", "R17",
   ];
   assert.deepEqual(listed, expected, `README.md's rule table rows:\n${listed.join(", ")}`);
 
@@ -532,18 +532,37 @@ test("C5 edge: README's rule table lists exactly R1-R10, R13, R15 and R16 — th
 // ---------------------------------------------------------------------------
 }
 
-test("helpers look things up with a code-search or memory MCP tool when the session has one, never write through it, fall back to grep and Read, and QA gets memory search only", () => {
+// search-first C18: the lead's understand-first steps and every helper but QA search the code
+// and the memory first, before grep (SocratiCode and MemPalace named as examples), make lookups
+// only, and confirm a hit with grep/Read before citing it; QA searches memory only.
+test("C18 reported-surface: the lead playbook and the skeptic, reviewer, reviewer-2, worker and arbiter search code and memory first, before grep; QA searches memory only; SKILL.md stays under 4096 bytes", () => {
   const body = (role) => readFileSync(path.join(pluginRoot, "agents", `${role}.md`), "utf8").replace(/^---\n[\s\S]*?\n---\n/, "");
-  for (const role of ["skeptic", "reviewer", "reviewer-2", "worker", "qa"]) {
+  const LOOKUPS_ONLY = /lookups only|never add, write, update, delete, mine or re-index/i;
+  const CONFIRM = /confirm[^.]*grep[^.]*Read|grep\/Read/i;
+  for (const role of ["skeptic", "reviewer", "reviewer-2", "worker", "arbiter"]) {
     const md = body(role);
+    assert.match(md, /SocratiCode/, `agents/${role}.md does not name SocratiCode as the code-search example`);
+    assert.match(md, /MemPalace/, `agents/${role}.md does not name MemPalace as the memory example`);
+    assert.match(md, /before grep/i, `agents/${role}.md does not say to search before grep`);
+    assert.match(md, LOOKUPS_ONLY, `agents/${role}.md does not keep the helper to lookups`);
+    assert.match(md, CONFIRM, `agents/${role}.md does not say to confirm a hit with grep/Read`);
     assert.match(md, /ToolSearch/, `agents/${role}.md does not say deferred tools load through ToolSearch`);
-    assert.match(md, /never add, write, update, delete, mine or re-index/, `agents/${role}.md does not keep the helper to lookups`);
-    assert.match(md, /empty result[^.]*not indexed[^.]*grep and Read/, `agents/${role}.md has no grep-and-Read fallback for an empty result`);
   }
-  for (const role of ["skeptic", "reviewer", "reviewer-2", "worker"]) {
-    assert.match(body(role), /code-search or memory MCP tool/, `agents/${role}.md does not point the helper at a code-search or memory tool`);
+  const qa = body("qa");
+  assert.match(qa, /MemPalace|memory MCP tool/, "agents/qa.md does not point QA at a memory tool");
+  assert.match(qa, /no code search/, "agents/qa.md lets QA code-search, which returns the new implementation");
+  assert.match(qa, LOOKUPS_ONLY, "agents/qa.md does not keep QA to lookups");
+
+  // the lead: every "Understand first" step of the playbooks
+  const playbooks = readFileSync(path.join(pluginRoot, "skills", "gate", "playbooks.md"), "utf8");
+  const steps = playbooks.split("\n").filter((l) => /Understand first/i.test(l));
+  assert.ok(steps.length >= 4, `expected the four Understand-first steps, found ${steps.length}`);
+  for (const step of steps) {
+    assert.match(step, /SocratiCode/, step);
+    assert.match(step, /MemPalace/, step);
+    assert.match(step, CONFIRM, step);
+    assert.match(step, /--no-code/, step);
+    assert.match(step, /--no-memory/, step);
   }
-  assert.match(body("qa"), /memory MCP tool/, "agents/qa.md does not point QA at a memory tool");
-  assert.match(body("qa"), /no code search/, "agents/qa.md lets QA code-search, which returns the new implementation");
-  assert.doesNotMatch(body("arbiter"), /MCP tool/, "agents/arbiter.md settles from cited code and needs no search line");
+  assert.ok(statSync(path.join(pluginRoot, "skills", "gate", "SKILL.md")).size < 4096, "SKILL.md is 4096 bytes or more");
 });

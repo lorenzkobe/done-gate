@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, lookedUp } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { eventsFromHookInput } from "../scripts/lib/events.mjs";
 
@@ -40,6 +40,7 @@ function opened(name, files = {}) {
   execFileSync("git", ["add", "-A"], { cwd: repo });
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
   cli(repo, "open", [name, "feature"]);
+  lookedUp(repo);
   cli(repo, "note", ["task", "Add a screen. [inferred]"]);
   cli(repo, "note", ["context", "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: local"]);
   cli(repo, "note", ["plan", "One screen.", "--files", "src/app/page.tsx"]);

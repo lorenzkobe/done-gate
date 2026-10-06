@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 
 const NODE = JSON.stringify(process.execPath);
@@ -116,6 +116,7 @@ test("C9 happy: one session end to end — session start, a blocked stop, open, 
   assert.ok(!/R1\b/.test(afterOpen.json.reason), `R1 should be met once a ledger is open:\n${afterOpen.json.reason}`);
 
   // ---- the task ------------------------------------------------------------
+  lookedUp(repo, { session: SESSION });
   sh(repo, ["note", "task", "Make a() return 2. [inferred]"]);
   sh(repo, ["note", "context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   sh(repo, ["note", "plan", "One file, one constant.", "--files", "src/a.ts"]);

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, lookedUp } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadPolicy, tierFor, predictTier, OPTIONAL_STEPS, optionalSteps, requiredSteps } from "../scripts/lib/size.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
@@ -49,6 +49,7 @@ function opened(name, { playbook = "feature", files = {}, planFiles = "src/a.ts"
     write(repo, dirty[0], dirty[1]);
   }
   cli(repo, "open", [name, playbook]);
+  lookedUp(repo);
   cli(repo, "note", ["task", "Add a badge. [inferred]"]);
   cli(repo, "note", ["context", "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: tiny"]);
   const out = cli(repo, "note", ["plan", "One module. No hot path.", "--files", planFiles]);
@@ -231,6 +232,7 @@ test("C16 edge: an open ledger carrying the old note 'tier small (predicted)' is
 test("C17 refused: an untiered plan ledger with source edits still gets R5; a tiered ledger with no prediction is judged by measurement", () => {
   const plan = committed("tiny-c17-plan", { "src/a.ts": "export const a = 1;\n" });
   cli(plan, "open", ["spec", "plan"]);
+  lookedUp(plan);
   cli(plan, "note", ["task", "Write the spec. [inferred]"]);
   cli(plan, "note", ["context", "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: tiny"]);
   cli(plan, "note", ["plan", "Spec only."]);
@@ -239,6 +241,7 @@ test("C17 refused: an untiered plan ledger with source edits still gets R5; a ti
 
   const unpredicted = committed("tiny-c17-unpredicted", { "src/a.ts": "export const a = 1;\n" });
   cli(unpredicted, "open", ["badge", "feature"]);
+  lookedUp(unpredicted);
   cli(unpredicted, "note", ["task", "Add a badge. [inferred]"]);
   cli(unpredicted, "note", ["context", "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: tiny"]);
   cli(unpredicted, "note", ["plan", "No files named."]);

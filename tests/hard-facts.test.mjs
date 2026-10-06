@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { makeRepo, gate, pluginRoot } from "./helpers.mjs";
+import { makeRepo, gate, pluginRoot, lookedUp } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
@@ -52,6 +52,7 @@ function committed(name) {
 function opened(name, playbook = "bugfix") {
   const repo = committed(name);
   cli(repo, "open", ["t", playbook]);
+  lookedUp(repo);
   return repo;
 }
 const context = ({ traced = "src/a.ts:1 exports a, read by src/app/page.tsx:1", related = "tests/a.test.ts pins a" } = {}) =>
@@ -259,10 +260,10 @@ test("C16 boundary: --ran text past the 200 characters the gate keeps of a comma
 
 test("G1 refused: a memory-search or docs MCP call does not close repro or rootcause; a database MCP call still does", () => {
   const repo = opened("hf-g1");
-  logged(repo, { tool_name: "mcp__plugin_claude-mem_mcp-search__search", tool_input: { query: "badge null venue" } });
+  logged(repo, { tool_name: "mcp__mempalace__mempalace_search", tool_input: { query: "badge null venue" } });
   logged(repo, { tool_name: "mcp__claude_ai_Claude_Docs__read", tool_input: { id: "badge null venue" } });
   logged(repo, { tool_name: "mcp__context7__get-library-docs", tool_input: { topic: "badge null venue" } });
-  const lookup = logged(repo, { tool_name: "mcp__plugin_claude-mem_mcp-search__search", tool_input: { query: "badge null venue" } });
+  const lookup = logged(repo, { tool_name: "mcp__mempalace__mempalace_search", tool_input: { query: "badge null venue" } });
   assert.match(refused(repo, "step", ["repro", "done", "fails", "--ran", "badge null venue"]), /memory, docs or code-search lookup/);
   refused(repo, "step", ["repro", "done", "fails", "--evidence", `events#${lookup}`]);
   logged(repo, { tool_name: "mcp__elasticsearch__search", tool_input: { query: "venue in the index" } });

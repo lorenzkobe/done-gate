@@ -76,7 +76,8 @@ const PLAN_TEXT = "Touch one module and nothing else.";
 
 // The header sections every packet carries, in the order the spec lists them.
 // each role reads what it can use: the tier is the worker's, the tests globs QA's and the worker's
-const HEADER_SECTIONS = { skeptic: ["Task", "Plan", "Context", "Cases", "You may write"], qa: ["Task", "Plan", "Context", "Cases", "Tests", "You may write"], reviewer: ["Task", "Plan", "Context", "Cases", "You may write"], "reviewer-2": ["Task", "Plan", "Context", "Cases", "You may write"] };
+// Lookups: what to search before grep (search-first, 0.16.0)
+const HEADER_SECTIONS = { skeptic: ["Task", "Plan", "Context", "Lookups", "Cases", "You may write"], qa: ["Task", "Plan", "Context", "Lookups", "Cases", "Tests", "You may write"], reviewer: ["Task", "Plan", "Context", "Lookups", "Cases", "You may write"], "reviewer-2": ["Task", "Plan", "Context", "Lookups", "Cases", "You may write"] };
 
 // The requirements pin "the plan's files" as a section, not its exact wording: the skeptic
 // packet calls it `## Files`, the QA packet `## Files the implementer will touch`.

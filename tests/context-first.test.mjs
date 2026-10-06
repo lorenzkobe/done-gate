@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, lookedUp } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { nextHint } from "../scripts/lib/next.mjs";
@@ -57,6 +57,7 @@ function opened(name, { playbook = "feature", files = ["src/a.ts"], task = true 
   execFileSync("git", ["add", "-A"], { cwd: repo });
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
   cli(repo, "open", [name, playbook]);
+  lookedUp(repo);
   if (task) cli(repo, "note", ["task", "Do the thing. [inferred]"]);
   return repo;
 }

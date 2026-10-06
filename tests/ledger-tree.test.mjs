@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync, execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync, utimesSync, readdirSync, writeFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, gate, write, pluginRoot, doneArgs } from "./helpers.mjs";
+import { makeRepo, gate, write, pluginRoot, doneArgs, lookedUp } from "./helpers.mjs";
 import { loadSession, ensureSession } from "../scripts/lib/session-state.mjs";
 import { openLedger, attachLedger, currentLedger, loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadConfig, matchGlob, matchAny, DEFAULTS } from "../scripts/lib/config.mjs";
@@ -721,6 +721,7 @@ test("C5 edge: after the case table the hint names {context}/{repro}; the {imple
   assert.match(afterBugCases, /`gate step repro done/, `the first blank bugfix step is {repro}:\n${afterBugCases}`);
 
   // walk the feature run to {implement}: {skeptic} is auto-N/A at tier small
+  lookedUp(feature);
   cli(feature, "note", ["context", CONTEXT]);
   const afterQa = hintOf(cli(feature, "step", ["tests", "done", "wrote the tests, red first", "--evidence", "tests/a.test.ts"]).stdout);
   assert.equal(stepOf(ledgerOf(feature), "skeptic").state, "N/A", "premise: tier small auto-N/As {skeptic}");
@@ -904,6 +905,7 @@ function opened(name, { playbook = "feature", planFiles = "src/a.ts", extra = {}
   const repo = committed(name, extra);
   cli(repo, "open", [name, playbook]);
   cli(repo, "note", ["task", "Pin the next hint. [inferred]"]);
+  lookedUp(repo);
   cli(repo, "note", ["context", CONTEXT]);
   cli(repo, "note", ["plan", "One module.", "--files", planFiles]);
   return repo;
@@ -922,6 +924,7 @@ test("C1 happy: a fresh feature ledger hints `gate note task`, then `gate note c
 
   const afterTask = hint(repo, "note", ["task", "Add a badge to the venue card. [inferred]"]);
   assert.match(afterTask, /`gate note context/, `a ledger with no Context must ask for it first:\n${afterTask}`);
+  lookedUp(repo);
   const afterContext = hint(repo, "note", ["context", CONTEXT]);
   assert.match(afterContext, /`gate note plan[^`]*--files/, `a ledger with no Plan must ask for the Plan:\n${afterContext}`);
 
@@ -996,8 +999,8 @@ test("C5 boundary: open cases with every step closed hint `gate case close`, not
   const repo = opened("next-c5", { planFiles: "src/a.ts,src/app/page.tsx" }); // standard: nothing auto-N/A
   cli(repo, "case", ["add", "renders the badge", "--kind", "happy"]);
 
-  // Close every step the playbook has except {close} itself.
-  const keys = playbookKeys("feature").filter((k) => !["plan", "cases", "close"].includes(k));
+  // Close every step the playbook has except {close} itself and {context}, which opened() wrote.
+  const keys = playbookKeys("feature").filter((k) => !["context", "plan", "cases", "close"].includes(k));
   let last = "";
   for (const key of keys) last = hint(repo, "step", [key, "na", "not exercised by this fixture"]);
 
@@ -1047,6 +1050,8 @@ test("C6 happy: every mutating verb's last line is the next: hint, and `gate che
 
   for (const [verb, args, opts] of drive) {
     const h = hint(repo, verb, args, opts);
+    // the lead searches code and memory before its Context note
+    if (verb === "open") lookedUp(repo);
     assert.match(h, /^next: \S/, `\`gate ${verb}\`: ${h}`);
   }
   // close is last because it ends the run; it closes only a clean one

@@ -34,6 +34,25 @@ export function write(dir, rel, content) {
   writeFileSync(abs, content);
 }
 
+export const CODE_LOOKUP = "mcp__socraticode__codebase_search";
+export const MEMORY_LOOKUP = "mcp__mempalace__mempalace_search";
+
+// One code-search and one memory lookup, logged the way the PostToolUse hook logs an MCP call:
+// by the lead (no agent) or by a helper (agent id plus done-gate:<role>). The gate asks both of
+// the lead before `gate note context` and of each helper whose file it records.
+export function lookedUp(repo, { agent = null, role = null, session = "S1", tools = [CODE_LOOKUP, MEMORY_LOOKUP] } = {}) {
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: session };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  for (const tool_name of tools) {
+    const payload = {
+      session_id: session, cwd: repo, hook_event_name: "PostToolUse", tool_name,
+      tool_input: { query: "where the change lands" }, tool_response: {},
+      ...(agent ? { agent_id: agent, agent_type: role.includes(":") ? role : `done-gate:${role}` } : {}),
+    };
+    execFileSync(process.execPath, [gate, "log"], { input: JSON.stringify(payload), env });
+  }
+}
+
 const RUN_KEYS = new Set(["repro", "rootcause", "schema"]);
 
 // Arguments that close a step DONE. A step that claims a run (repro, rootcause, schema)

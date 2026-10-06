@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, gate, pluginRoot, doneArgs } from "./helpers.mjs";
+import { makeRepo, gate, pluginRoot, doneArgs, lookedUp } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 
 const read = (rel) => readFileSync(path.join(pluginRoot, rel), "utf8");
@@ -45,6 +45,7 @@ test("C3 happy: session-start carries run-when-cheap and config-alone-is-unverif
 test("C5 reported-surface: the brief says research noted when Context is written on one line with · separators", () => {
   const repo = makeRepo("lt-research-line");
   cli(repo, "open", "lt-research", "feature");
+  lookedUp(repo);
   cli(repo, "note", "task", "A thing. [inferred]");
   cli(repo, "note", "context", "Traced: src/a.ts:1 the entry · Related: tests/a.test.ts · Research: the framework docs on caching");
   assert.match(cli(repo, "report", "--brief"), /research noted/);

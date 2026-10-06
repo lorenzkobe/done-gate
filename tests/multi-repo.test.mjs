@@ -19,7 +19,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, here } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, lookedUp } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
@@ -91,6 +91,7 @@ const prefixOf = (repo, other) => path.relative(repo, other).split(path.sep).joi
 // open (with the declared repos), then task, context and plan
 function openRun(repo, slug, { files = "src/a.ts,src/b.ts", playbook = "feature", repos = [] } = {}) {
   cli(repo, "open", [slug, playbook, ...repos.flatMap((p) => ["--repo", p])]);
+  lookedUp(repo);
   cli(repo, "note", ["task", "Do the thing. [inferred]"]);
   cli(repo, "note", ["context", CONTEXT]);
   return cli(repo, "note", ["plan", "The plan.", "--files", files]);
@@ -322,6 +323,7 @@ test("C3 reported-surface: after 20 new lines in ../other/src/a.py, gate size co
   const other = sibling("mr-c3");
   const p = "../mr-c3-other";
   cli(repo, "open", ["mr-c3", "feature", "--repo", p]);
+  lookedUp(repo);
   cli(repo, "note", ["task", "Do the thing. [inferred]"]);
   cli(repo, "note", ["context", CONTEXT]);
   const planned = cli(repo, "note", ["plan", "The plan.", "--files", `${p}/src/a.py`]);
@@ -652,6 +654,7 @@ test("H3.3 refused: --files naming a file in a sibling nobody declared is refuse
   sibling("mr-h33");
   const given = "../mr-h33-other/src/a.py";
   cli(repo, "open", ["mr-h33", "feature"]);
+  lookedUp(repo);
   cli(repo, "note", ["task", "Do the thing. [inferred]"]);
   cli(repo, "note", ["context", CONTEXT]);
   const plan = refused(repo, "note", ["plan", "The plan.", "--files", given]);

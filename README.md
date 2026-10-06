@@ -156,16 +156,32 @@ attempt to finish.
 | R13 | `.claude/gate.json` or the plugin's `models.json` changed mid-task |
 | R15 | a helper's file lists more findings than the ledger recorded, or a briefed skeptic, reviewer or arbiter stopped before finishing its file |
 | R16 | the lead edited source itself at size large (a worker's job); waivable with `gate waive delegate` |
+| R17 | a skeptic, reviewer, reviewer-2, worker or arbiter that wrote its file or edited source made no code or no memory lookup since the run opened (QA: no memory lookup), less any kind the lead declared missing; waivable with `gate waive lookups` |
 
 Waivers are the only way past a keyed step: the user OKs it, Claude records the reason
 with `gate waive <key> "…"`, and the report lists every waiver. The keys: `driver` (R4),
 `review` (R5), `schema` (R6), `tests` (R7), `review-2` (R9), `slop` (R10), `gate-config`
-(R13), `delegate` (R16), or the key of a step whose waiving clears something. A rule number
+(R13), `delegate` (R16), `lookups` (R17), or the key of a step whose waiving clears something. A rule number
 is taken for its key (`gate waive R16` records `delegate`). Any other key is refused with the
 valid ones listed (`worker` is pointed at `delegate`), and so are `verify`, `verify-before`,
 `context`, `close` and a rule with no waiver (R3): the message says what to run instead.
 `gate waive` prints what the key clears, and the unmet text of R5, R6, R9 and R16 names its
 key.
+
+## Search first
+
+The lead and every helper search the code and the memory through MCP tools before grep:
+a code search (e.g. SocratiCode) and a memory search (e.g. MemPalace), loaded with ToolSearch
+when deferred, and a hit is confirmed with grep or Read before it is cited. Only lookups
+count (search, query, symbol, impact, flow, traverse, find, follow, timeline); a call that
+adds, updates, indexes, lists or reports status does not. `gate note context` is refused
+until the lead itself made both since the user's message that started the task; a lookup by
+a helper or an Explore subagent does not count for the lead. A missing tool or an unindexed
+project is declared with `--no-code "<why>"` or `--no-memory "<why>"`: the report tells you,
+and every helper packet carries it in its Lookups section, so helpers use grep and Read for
+that kind. Helpers are checked at `gate huddle add|reply` and by R17; QA searches memory only,
+since a code search would show it the new implementation. Runs opened before 0.16.0 are not
+checked.
 
 ## Guarantees, and their edges
 
@@ -313,12 +329,12 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | --- | --- |
 | `open <slug> <feature\|bugfix\|refactor\|plan\|investigation> [--repo <path>]` | start a ledger with the playbook's steps; `--repo` (repeatable, anywhere among the arguments) adds a further git repo to the run; on a slug whose run is open it joins that run and declares the repo late |
 | `repo add <path>` | add a further git repo to the open run, measured from its HEAD |
-| `note task\|context\|plan "…"` · `note plan "…" --files a,b` · `note caveat "…"` | write the prose sections (stamps the order for R2); Context is Traced (file:line pointers), Related, Research; `--files` predicts the size; a caveat is something the run could not show, printed in both reports |
+| `note task\|context\|plan "…"` · `note context "…" [--no-code "<why>"] [--no-memory "<why>"]` · `note plan "…" --files a,b` · `note caveat "…"` | write the prose sections (stamps the order for R2); Context is Traced (file:line pointers), Related, Research, and is refused until the lead made a code and a memory lookup, unless `--no-code`/`--no-memory` declares that kind missing with a reason (see Search first); `--files` predicts the size; a caveat is something the run could not show, printed in both reports |
 | `case add "…" --kind <kind>` · `case add --batch <file>` · `case amend C1 "…"` · `case close C1 --test file:name \| --click [events#<seq>] \| --na "…"` | the case table; kinds: happy, edge, refused, boundary, idempotent, reported-surface, performance, click; `--batch` reads one case per line as `<kind><TAB><text>`, adds all or none and prints one `next:` line; `amend` replaces a case's text and reopens it; `--click` closes a click case with the named click, or with the only unclaimed click, or with the newest one while only one click case is open, and prints it |
-| `step <key\|n> done\|skipped\|na "…" [--evidence ptr \| --ran "<text>"]` | close a playbook step (not the close step: `gate close` does that); the pointer must resolve; `repro`, `rootcause` and `schema` close only on a recorded run (`--ran` picks the newest command, browser call or skill after the run opened whose text contains it), and `rootcause` names the line at fault as `file:line` in its note |
+| `step <key\|n> done\|skipped\|na "…" [--evidence ptr \| --ran "<text>"]` | close a playbook step (not the close step: `gate close` does that); the pointer must resolve; `repro`, `rootcause` and `schema` close only on a recorded run (`--ran` picks the newest command, browser call or skill after the run opened whose text contains it), and `rootcause` names the line at fault as `file:line` in its note; on a run opened since 0.16.0, `context` closes only through `gate note context` |
 | `next` | the full `next:` hint; after a verb it is printed in full the first time a step is hinted and in a short form afterwards, and in full again once a session joins the run (clear, resume, compact, `gate attach`) |
-| `huddle add <role> --file review-1.md` · `acton` · `resolve` · `dispute` | reviewer rounds and Act-on items; `add` prints each recorded id with its finding |
-| `huddle reply --file worker-<n>.md` | record a worker's answers: `fixed:` closes an item, `disagree:` disputes it; an unknown id fails and lists the open ones. Worker reply files are their own stream, numbered like their packet (`brief-worker-2.md` asks for `worker-2.md`) |
+| `huddle add <role> --file review-1.md` · `acton` · `resolve` · `dispute` | reviewer rounds and Act-on items; `add` prints each recorded id with its finding and refuses a file whose writer made no lookups (R17) |
+| `huddle reply --file worker-<n>.md` | record a worker's answers: `fixed:` closes an item, `disagree:` disputes it; an unknown id fails and lists the open ones. Worker reply files are their own stream, numbered like their packet (`brief-worker-2.md` asks for `worker-2.md`); a worker with no lookups is refused (R17) |
 | `waive <key\|R<n>> "<reason>"` | record a waiver and print what it clears; it shows in the report |
 | `verify [--step verify-before]` | run the repo's verify commands, then each declared repo's in its own directory, write `verify.json` |
 | `verify --add "<cmd>"` · `verify --drop "<cmd>"` | add a verify command for this run only, or remove one this run added; nothing runs. Added commands run after the config ones at every `gate verify`, with the default timeout, also when the config has none. They live on the ledger, not in gate.json (R13 stays quiet), and `gate doctor` and the report list them as added by this run. An added command that has not run blocks the close (R3); a dropped one stays in the report as dropped by this run |

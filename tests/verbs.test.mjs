@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, lookedUp } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { evaluate, lateOrder } from "../scripts/lib/rules.mjs";
@@ -19,6 +19,7 @@ function cli(repo, verb, args = [], input = "") {
 }
 const runDir = (repo) => path.join(repo, ".claude", "gate", "runs", (({ current, lastClosed }) => current ?? lastClosed)(loadSession(path.join(repo, ".claude", "gate"), "S1")));
 const ledgerOf = (repo) => loadLedger(runDir(repo));
+const CONTEXT = "Traced: src/a.ts:1 exports a0, read by src/app/page.tsx:1\nRelated: tests/a.test.ts pins a\nResearch: none needed: a fixture";
 const opened = (name, playbook = "feature") => {
   const repo = makeRepo(name);
   cli(repo, "open", ["t", playbook]);
@@ -58,12 +59,14 @@ test("case add/close builds the case table; close needs a test pointer or --na",
 
 test("step marks a step DONE/SKIPPED/N-A with a note; evidenced steps refuse SKIPPED; DONE needs --evidence", () => {
   const repo = opened("verbs-step");
-  cli(repo, "step", ["context", "done", "traced it", "--evidence", "ledger.md"]);
+  // only gate note context closes {context} on a stamped ledger, after the lead's lookups
+  lookedUp(repo);
+  cli(repo, "note", ["context", CONTEXT]);
   cli(repo, "step", ["schema", "skipped", "no schema files touched"]);
   cli(repo, "step", ["6", "na", "nothing to implement in this fixture"]);
   const steps = ledgerOf(repo).steps;
   assert.equal(steps.find((s) => s.key === "context").state, "DONE");
-  assert.equal(steps.find((s) => s.key === "context").evidence, "ledger.md");
+  assert.equal(steps.find((s) => s.key === "context").evidence, "ledger.md#context");
   assert.equal(steps.find((s) => s.key === "schema").state, "SKIPPED");
   assert.equal(steps.find((s) => s.n === 6).state, "N/A");
   const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
@@ -115,7 +118,8 @@ test("close closes a clean run itself, marks the close step and clears the sessi
   const repo = opened("verbs-close", "plan");
   cli(repo, "note", ["task", "t"]);
   cli(repo, "note", ["plan", "p"]);
-  cli(repo, "step", ["context", "done", "traced it", "--evidence", "ledger.md"]);
+  lookedUp(repo);
+  cli(repo, "note", ["context", CONTEXT]);
   write(runDir(repo), "skeptic-1.md", "# Skeptic 1\n\n## Act on\n- none\n");
   cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
   cli(repo, "step", ["skeptic", "done", "no findings", "--evidence", "ledger.md"]);

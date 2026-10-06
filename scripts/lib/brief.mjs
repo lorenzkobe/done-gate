@@ -7,7 +7,7 @@ import { leadDelegates, renderTierBlock, tierMax, tierOf } from "./size.mjs";
 import { baseCopy, fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs";
 import { ROLES, flag, outsideRepos, positional } from "./verbs.mjs";
 import { repoPath, toPosixRel } from "./paths.mjs";
-import { REVIEW_CAP, capUnitsOf, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify } from "./rules.mjs";
+import { LOOKUP_EXAMPLE, REVIEW_CAP, capUnitsOf, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { nextSeq } from "./events.mjs";
@@ -115,10 +115,24 @@ function header(state, role, round) {
   out.push("## Plan", "", section(md, "Plan") || "_not written_", "");
   // the arbiter rules on one finding from the cited code, the plan and the cases
   if (role !== "arbiter") out.push("## Context", "", section(md, "Context") || "_not written_", "");
+  if (ledger.lookups) out.push("## Lookups", "", ...lookupLines(state, role), "");
   out.push("## Cases", "", ...caseTable(ledger, lastEditSeq(state, state.config, ledger)), "");
   if (role === "worker") out.push("## Tier", "", ...renderTierBlock(ledger, state.policy, state.tier?.measured ?? null), "");
   if (role === "qa" || role === "worker") out.push("## Tests", "", `globs: ${testGlobs(state)}`, `framework: ${detectFramework(state.root)}`, "");
   if (state.config.helperNote) out.push("## Standing note", "", state.config.helperNote, "");
+  return out;
+}
+
+// No bullets: a QA packet holds no line that reads like a diff.
+function lookupLines(state, role) {
+  const { ledger } = state;
+  const used = leadLookups(ledger, state.events ?? []);
+  const kinds = role === "qa" ? ["memory"] : ["code", "memory"];
+  const out = kinds.map((k) => ledger.lookupGap?.[k]
+    ? `${k}: the lead declared "${ledger.lookupGap[k]}"; use grep and Read for it.`
+    : `${k}: search it first, before grep, with ${used[k].size ? [...used[k]].map((t) => `\`${t}\``).join(", ") : `a ${k}-search tool (e.g. ${LOOKUP_EXAMPLE[k]})`}.`);
+  if (role === "qa") out.push("no code search: your tests come from the requirements, blind to the new code.");
+  out.push("Lookups only (search, query, find); never add, update or re-index. Confirm a hit with grep or Read before citing it; the gate checks that you searched.");
   return out;
 }
 

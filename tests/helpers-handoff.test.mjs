@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, lookedUp } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 
 function envFor(repo, session = "S1") {
@@ -82,7 +82,11 @@ function hook(repo, payload) {
   });
   assert.equal(r.status, 0, r.stderr);
 }
-const start = (repo, id, role) => hook(repo, { hook_event_name: "SubagentStart", agent_id: id, agent_type: `done-gate:${role}` });
+// a started helper searches code and memory first, as its agent file tells it to
+const start = (repo, id, role) => {
+  hook(repo, { hook_event_name: "SubagentStart", agent_id: id, agent_type: `done-gate:${role}` });
+  lookedUp(repo, { agent: id, role });
+};
 const stop = (repo, id, role) => hook(repo, { hook_event_name: "SubagentStop", agent_id: id, agent_type: `done-gate:${role}`, stop_hook_active: false });
 
 const helperFile = (repo, name, body) => writeFileSync(path.join(runDir(repo), name), body);

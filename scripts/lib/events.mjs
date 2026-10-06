@@ -63,6 +63,8 @@ export function eventsFromHookInput(input, root, repos = []) {
   // PostToolUse fires only on success; a failed Bash call (a red test run) arrives here. Only
   // one that ran and exited non-zero counts: a denied or interrupted call ran nothing.
   if (event === "PostToolUseFailure") {
+    // a failed lookup (server down, project not indexed) is still an attempt; it is never a run
+    if (tool.startsWith("mcp__") && !tool.startsWith(CHROME_PREFIX)) return [{ ...b(), kind: "tool", tool, input: JSON.stringify(input.tool_input ?? {}).slice(0, TEXT_LIMIT), failed: true }];
     const code = /exit code:?\s*(\d+)/i.exec(String(input.tool_error ?? ""));
     if (tool !== "Bash" || !code) return [];
     const cmd = String(input.tool_input?.command ?? "");
@@ -154,7 +156,7 @@ export const verbs = {
     // Subagents are skipped: their edits carry an agent event, and the next assess dates
     // the change to it; skipping keeps helper tool calls from racing the main session.
     let warning = null;
-    const failedBash = ctx.input?.hook_event_name === "PostToolUseFailure" && events.length > 0;
+    const failedBash = ctx.input?.hook_event_name === "PostToolUseFailure" && ctx.input.tool_name === "Bash" && events.length > 0;
     if ((failedBash || (ctx.input?.hook_event_name === "PostToolUse" && WRITING_TOOLS.has(ctx.input.tool_name))) && ctx.session && !ctx.input.agent_id) {
       try {
         const { stampNow } = await import("./assess.mjs");

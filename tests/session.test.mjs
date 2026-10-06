@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { makeRepo, write, gate } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
@@ -66,7 +66,10 @@ test("report still renders the ledger that just closed", () => {
   run(repo, "note", "S1", {}, ["plan", "p"]);
   write(path.join(repo, ".claude", "gate", "runs", loadSession(path.join(repo, ".claude", "gate"), "S1").current), "skeptic-1.md", "# Skeptic 1\n\n## Act on\n- none\n");
   run(repo, "huddle", "S1", {}, ["add", "skeptic", "--file", "skeptic-1.md"]);
-  for (const k of ["context", "skeptic", "implement"]) run(repo, "step", "S1", {}, [k, "done", "x", "--evidence", "ledger.md"]);
+  // only gate note context closes {context} on a stamped ledger, after the lead's lookups
+  lookedUp(repo);
+  run(repo, "note", "S1", {}, ["context", "Traced: src/a.ts:1 exports a0\nRelated: tests/a.test.ts pins a\nResearch: none needed: a fixture"]);
+  for (const k of ["skeptic", "implement"]) run(repo, "step", "S1", {}, [k, "done", "x", "--evidence", "ledger.md"]);
   run(repo, "close", "S1");
   run(repo, "stop", "S1", { last_assistant_message: "report" });
   const r = run(repo, "report", "S1");

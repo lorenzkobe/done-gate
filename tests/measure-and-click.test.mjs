@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, here } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, lookedUp } from "./helpers.mjs";
 import { ensureSession, loadSession } from "../scripts/lib/session-state.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { appendEvents, eventsFromHookInput, nextSeq, readEvents } from "../scripts/lib/events.mjs";
@@ -68,6 +68,7 @@ function committed(name, files = {}, config = GATE_JSON) {
 }
 function openRun(repo, slug, { files = "src/a.ts,src/b.ts", playbook = "feature" } = {}) {
   cli(repo, "open", [slug, playbook]);
+  lookedUp(repo);
   cli(repo, "note", ["task", "Do the thing. [inferred]"]);
   cli(repo, "note", ["context", CONTEXT]);
   return cli(repo, "note", ["plan", "The plan.", "--files", files]);

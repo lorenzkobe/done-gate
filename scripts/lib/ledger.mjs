@@ -259,6 +259,8 @@ export function openLedger(ctx, slug, playbook, repoPaths = []) {
     status: "open",
     openedAt: new Date().toISOString(),
     openedSeq: nextSeq(),
+    // the lead and its helpers search code and memory first (gate note context, R17)
+    lookups: true,
     closedAt: null,
     sessions: [ctx.session],
     ...(repos.length ? { repos } : {}),

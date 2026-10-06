@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { evaluate, sourceHash, lateOrder } from "../scripts/lib/rules.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
-import { makeRepo, write, gate, pluginRoot } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, lookedUp } from "./helpers.mjs";
 import { spawnSync, execFileSync } from "node:child_process";
 import path from "node:path";
 import { readFileSync, appendFileSync, existsSync, writeFileSync } from "node:fs";
@@ -283,6 +283,7 @@ test("C11 boundary: an edit logged before `gate open` blocks R2 only while the P
 
   // the Plan alone is not enough — the case table must exist too
   sh(repo, ["note", "task", "Make a() return 2. [inferred]"]);
+  lookedUp(repo, { session: SESSION });
   sh(repo, ["note", "context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   sh(repo, ["note", "plan", "One file, one constant.", "--files", "src/a.ts"]);
   const planOnly = check(repo);

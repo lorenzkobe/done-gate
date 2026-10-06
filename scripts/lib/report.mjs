@@ -146,6 +146,8 @@ export function renderReport(state, unmet) {
   out.push(`\n## Task\n\n${section(md, "Task") || "_not written_"}`);
   out.push(`\n## Plan\n\n${section(md, "Plan") || "_not written_"}`);
   out.push(`\n## Context\n\n${section(md, "Context") || "_not written_"}`);
+  const gaps = lookupGaps(ledger);
+  if (gaps.length) out.push(`\n${cap(gaps.join("; "))}: checked with grep and Read.`);
 
   out.push("\n## Case table\n");
   out.push(...caseTable(ledger, after));
@@ -280,7 +282,11 @@ const PLAIN_RULES = {
   R13: "the gate config changed mid-task",
   R15: "a helper's findings were not all recorded",
   R16: "the lead edited source at a size a worker should handle",
+  R17: "a helper worked without searching code and memory first",
 };
+
+// The kinds of search the lead declared missing, as "<kind> search not available (<why>)".
+const lookupGaps = (ledger) => Object.entries(ledger.lookupGap ?? {}).filter(([, why]) => why).map(([kind, why]) => `${kind} search not available (${plain(why)})`);
 
 // What was understood before the work, on the same line as what changed: the pointers
 // traced and whether anything was researched. Silent when no Context was written (the
@@ -376,6 +382,7 @@ function forYouLine(state, unmet) {
     else if (v !== "withdrawn") items.push(`"${text}": disputed, waiting for the reviewer's answer`);
   }
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) items.push(`skipped: ${plain(s.text)} (${plain(s.note)})`);
+  for (const gap of lookupGaps(ledger)) items.push(`${gap}: checked with grep and Read`);
   if (ledger.overridden) items.push("I could not satisfy the checks and ended anyway; treat everything above as unverified");
   if (ledger.steps.some((s) => s.key === "context" && s.state === null)) items.push("no context was written: what was traced, what depends on it, what was researched");
   const order = lateOrder(state);

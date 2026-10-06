@@ -222,9 +222,83 @@ export function namesFile(text, root, repos = []) {
 }
 
 const RUN_KINDS = new Set(["command", "browser", "skill", "tool"]);
-// MCP servers that hold notes, documentation or a code index, never the system under test.
-const NOTES_SERVER = /(?:^|[_.-])(?:mem|mem0|memory|mempalace|mempalace|socraticode|docs?|context7|search|exa|tavily|deepwiki)(?:$|[_.-])/i;
-const notesTool = (e) => e.kind === "tool" && e.tool.startsWith("mcp__") && NOTES_SERVER.test(e.tool.slice(5, e.tool.lastIndexOf("__")));
+const serverWord = (names) => new RegExp(`(?:^|[_.-])(?:${names})(?:$|[_.-])`, "i");
+// MCP servers that hold a code index, notes or documentation, never the system under test.
+const CODE_NAMES = "socraticode|sourcegraph|serena|codebase|code-search";
+const MEMORY_NAMES = "mempalace|mem0|memory";
+const CODE_SERVER = serverWord(CODE_NAMES);
+const MEMORY_SERVER = serverWord(MEMORY_NAMES);
+const NOTES_SERVER = serverWord(`${CODE_NAMES}|${MEMORY_NAMES}|docs?|context7|search|exa|tavily|deepwiki`);
+const serverOf = (tool) => tool.slice(5, tool.lastIndexOf("__"));
+const notesTool = (e) => e.kind === "tool" && e.tool.startsWith("mcp__") && NOTES_SERVER.test(serverOf(e.tool));
+
+// A lookup reads the index or the memory: listing, status and anything that writes or
+// re-indexes (add_drawer, codebase_update, graph_build) is not one.
+const LOOKUP_WORDS = new Set(["search", "query", "symbol", "symbols", "impact", "flow", "traverse", "find", "follow", "timeline"]);
+const WRITE_WORDS = new Set(["add", "write", "update", "delete", "mine", "index", "remove", "prune", "put", "create", "sync", "checkpoint", "watch", "build", "replace", "insert", "rename", "edit"]);
+
+// "code", "memory" or null for one event. A failed call counts: the attempt is what is asked.
+export function lookupKind(e) {
+  if (e.kind !== "tool" || !e.tool?.startsWith("mcp__")) return null;
+  const words = e.tool.slice(e.tool.lastIndexOf("__") + 2).toLowerCase().split("_");
+  if (!words.some((w) => LOOKUP_WORDS.has(w)) || words.some((w) => WRITE_WORDS.has(w))) return null;
+  const server = serverOf(e.tool);
+  return CODE_SERVER.test(server) ? "code" : MEMORY_SERVER.test(server) ? "memory" : null;
+}
+
+export const LOOKUP_KINDS = ["code", "memory"];
+export const LOOKUP_EXAMPLE = { code: "SocratiCode `codebase_search`", memory: "MemPalace `mempalace_search`" };
+
+// The lead's own lookups for this task, per kind, as the tool names it used: from the user's
+// message that started it (the newest prompt at or before gate open), or from gate open.
+export function leadLookups(ledger, events) {
+  const opened = ledger.openedSeq ?? 0;
+  let from = opened;
+  for (const e of events) {
+    if (e.seq > opened) break;
+    if (e.kind === "prompt" && !e.agent && !e.handback) from = e.seq;
+  }
+  const out = { code: new Set(), memory: new Set() };
+  for (const e of events) {
+    if (e.seq <= from || e.agent) continue;
+    const kind = lookupKind(e);
+    if (kind) out[kind].add(e.tool);
+  }
+  return out;
+}
+
+// What each helper role must look up before it works; QA stays blind to the code.
+const LOOKUP_NEEDS = { skeptic: LOOKUP_KINDS, reviewer: LOOKUP_KINDS, "reviewer-2": LOOKUP_KINDS, worker: LOOKUP_KINDS, arbiter: LOOKUP_KINDS, qa: ["memory"] };
+
+// Helpers that wrote any file (or the writers of one run-dir file) and skipped a lookup their
+// role needs since the run opened; a resumed helper keeps its id and its lookups.
+export function skippedLookups(state, file = null) {
+  const { ledger } = state;
+  if (!ledger?.lookups || waived(ledger, "lookups")) return [];
+  const since = ledger.openedSeq ?? 0;
+  const helpers = new Map();
+  for (const e of state.events ?? []) {
+    if (e.seq <= since || !e.agent) continue;
+    const role = String(e.agentType ?? "").replace(/^done-gate:/, "");
+    if (!Object.hasOwn(LOOKUP_NEEDS, role)) continue;
+    if (!helpers.has(e.agent)) helpers.set(e.agent, { id: e.agent, role, wrote: new Set(), found: new Set() });
+    const h = helpers.get(e.agent);
+    if (e.kind === "edit") h.wrote.add(e.path);
+    const kind = lookupKind(e);
+    if (kind) h.found.add(kind);
+  }
+  const rel = file ? toPosixRel(state.root, path.join(state.dir, file)) : null;
+  const out = [];
+  for (const h of helpers.values()) {
+    if (rel ? !h.wrote.has(rel) : !h.wrote.size) continue;
+    const missing = LOOKUP_NEEDS[h.role].filter((k) => !h.found.has(k) && !ledger.lookupGap?.[k]);
+    if (missing.length) out.push({ id: h.id, role: h.role, missing });
+  }
+  return out;
+}
+
+export const skippedText = (s) => `the ${s.role} ${s.id} (no ${s.missing.join(" or ")} search)`;
+
 const GATE_CALL = /gate\.mjs["']?\s+(\S+)/;
 const GATE_RUNS = new Set(["check", "verify", "report", "size", "doctor", "close"]);
 
@@ -238,7 +312,7 @@ function gateNote(cmd) {
 // it can fail, and a read-only command (cat, grep, echo) reads the code without running it.
 export function ranEvents(state) {
   const since = state.ledger?.openedSeq ?? 0;
-  return (state.events ?? []).filter((e) => RUN_KINDS.has(e.kind) && e.seq > since && !e.background && !e.readOnly && !gateNote(e.cmd) && (e.kind !== "skill" || e.skill === "verify") && !notesTool(e));
+  return (state.events ?? []).filter((e) => RUN_KINDS.has(e.kind) && e.seq > since && !e.background && !e.readOnly && !e.failed && !gateNote(e.cmd) && (e.kind !== "skill" || e.skill === "verify") && !notesTool(e));
 }
 
 export function ranText(e) {
@@ -600,7 +674,7 @@ export function unfinishedFile(full) {
 
 // Every waiver key a rule reads, with the rule it clears. "qa" is the key older ledgers
 // carry for tests.
-export const WAIVERS = { delegate: "R16", driver: "R4", review: "R5", "review-2": "R9", schema: "R6", tests: "R7", qa: "R7", slop: "R10", "gate-config": "R13" };
+export const WAIVERS = { delegate: "R16", driver: "R4", review: "R5", "review-2": "R9", schema: "R6", tests: "R7", qa: "R7", slop: "R10", "gate-config": "R13", lookups: "R17" };
 
 const orWaive = (key) => ` Or get the user's waiver (\`gate waive ${key} "<reason>"\`).`;
 
@@ -831,6 +905,12 @@ export function evaluate(state) {
       const last = shell[shell.length - 1];
       unmet.push({ rule: "R16", text: `source changed with no worker edit behind it (${last.cmd ? `after \`${String(last.cmd).slice(0, 60)}\`` : "a shell edit"}) at size ${delegated}; at this size only helpers edit source. Hand the piece to a worker (\`gate brief worker\`).${orWaive("delegate")}` });
     }
+  }
+
+  // R17: every helper that wrote or edited a file searched the code and the memory first
+  const skipped = skippedLookups(state);
+  if (skipped.length) {
+    unmet.push({ rule: "R17", text: `helpers worked without searching first: ${skipped.map(skippedText).join(", ")}. Send each back (SendMessage) to search, e.g. ${LOOKUP_KINDS.map((k) => LOOKUP_EXAMPLE[k]).join(" and ")}, and recheck its work.${orWaive("lookups")}` });
   }
 
   // R15: every Act-on finding in a helper file is recorded from the file (hand-typed items do

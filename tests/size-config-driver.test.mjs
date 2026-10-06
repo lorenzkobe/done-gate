@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { evaluate, sourceHash } from "../scripts/lib/rules.mjs";
@@ -43,6 +43,7 @@ function opened(name, config = GATE_JSON) {
   execFileSync("git", ["add", "-A"], { cwd: repo });
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
   cli(repo, "open", [name, "feature"]);
+  lookedUp(repo);
   cli(repo, "note", ["task", "Add checkout. [inferred]"]);
   cli(repo, "note", ["context", "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: local"]);
   return repo;

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync, spawn } from "node:child_process";
 import { readFileSync, rmSync, writeFileSync, existsSync, utimesSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
@@ -336,6 +336,7 @@ function fromFolder(repo, rel, args) {
 test("C10 reported-surface: a shell verb run from a subfolder resolves file:line pointers against the project root", () => {
   const repo = makeRepo("root-subfolder", { "supabase/migrations/004_setup.sql": Array.from({ length: 30 }, (_, i) => `-- ${i}`).join("\n") + "\n" });
   cli(repo, "open", ["root-sub", "feature"]);
+  lookedUp(repo);
   const r = fromFolder(repo, "supabase/migrations", ["note", "context", "Traced: supabase/migrations/004_setup.sql:13 tables\nRelated: tests/a.test.ts\nResearch: none needed: local"]);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /context noted/);

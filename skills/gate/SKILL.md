@@ -6,13 +6,14 @@ description: The done-gate workflow. Use before any task that changes source fil
 # done-gate
 
 `gate` is `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"`. Every verb prints a `next:`
-line: follow it. `gate check` lists what is unmet (R1-R10, R13, R15, R16). You are the lead: plan, size, delegate, report; below large, edit.
+line: follow it. `gate check` lists what is unmet (R1-R10, R13, R15, R16, R17). You are the lead: plan, size, delegate, report; below large, edit.
 
 ## The loop
 
 1. `gate open <slug> <feature|bugfix|refactor|plan>`.
 2. Before any edit: `gate note task "<the ask, quoted, then your words>"`; understand
-   first: trace, then `gate note context "Traced: <file:line pointers> Related:
+   first: search code and memory before grep (missing: `--no-code|--no-memory "<why>"`,
+   tell the user), trace, then `gate note context "Traced: <file:line pointers> Related:
    <what depends on it> Research: <what you looked up, or none needed: why>"`;
    `gate note plan "<approach>" --files a.ts,b.ts [--size large]` (the files predict the
    size; one plain file is tiny, no skeptic or reviewer), then
