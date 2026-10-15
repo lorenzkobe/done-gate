@@ -4,7 +4,7 @@ import { loadConfig } from "./config.mjs";
 import { appendEvents, readEvents } from "./events.mjs";
 import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
 import { delegatedTier, leadDelegates, measure, policyFor, reconcileTier, tiered } from "./size.mjs";
-import { implementationHash, writersOf } from "./rules.mjs";
+import { editedLast, implementationHash, writersOf } from "./rules.mjs";
 import { nextSeq } from "./events.mjs";
 import { evaluate } from "./rules.mjs";
 import { ensureSession, loadSession, saveSession } from "./session-state.mjs";
@@ -84,14 +84,16 @@ function editedSince(ledger, events) {
 // A checkout, pull or rebase that only moved the tree to what commits hold (events.mjs).
 const gitMove = (e) => e.git === true && e.commits === false;
 
-// The changed files the task may have written itself since its baseline (a run's starts before
-// open): an edit-tool edit, a recorded shell write, or a file timed into a non-move command.
-export function ownWrites(holder, events, now, paths) {
+// The changed files the task may have written since its baseline (a run's starts before open): its
+// edit, or its shell write or non-move command another session's last edit or command did not rival.
+export function ownWrites(holder, events, now, paths, others = []) {
   const since = holder.baseline?.seq ?? holder.openedSeq ?? 0;
   const edited = new Set(events.filter((e) => e.kind === "edit" && e.seq > since).map((e) => e.path));
   const shell = new Set((holder.unexplainedChanges ?? []).filter((u) => u.writes).flatMap((u) => u.paths ?? []));
+  // another session's background command is open-ended, so it never accounts for a write of this task
+  const theirs = (p) => others.some((ev) => editedLast(ev, since, p, now.files[p]?.m) || writersOf(ev, since, now.files[p]?.m).some((e) => !e.background));
   // each command's run is timed against the events around it, git moves included
-  return new Set(paths.filter((p) => edited.has(p) || shell.has(p) || writersOf(events, since, now.files[p]?.m).some((e) => !gitMove(e))));
+  return new Set(paths.filter((p) => edited.has(p) || ((shell.has(p) || writersOf(events, since, now.files[p]?.m).some((e) => !gitMove(e))) && !theirs(p))));
 }
 
 // Takes files into the baseline as they are now, out of the task's changes; R16 and the freshness
@@ -245,14 +247,14 @@ export function stampNow(ctx, logged = []) {
   return warning;
 }
 
-// The events of every other session in this repo that logged anything since this one started:
-// R1 asks them whether a change this session never made is theirs.
-function otherSessionsEvents(stateDir, self, since) {
+// The events of every session in this repo but `own` that logged anything since `since`: R1 and
+// rebaseline ask them whether a change this task never made is theirs.
+export function otherSessionsEvents(stateDir, own, since) {
   const dir = path.join(stateDir, "sessions");
   if (!existsSync(dir)) return [];
   const from = Date.parse(since ?? 0) || 0;
   return readdirSync(dir)
-    .filter((s) => s !== self && (statSync(path.join(dir, s, "events.jsonl"), { throwIfNoEntry: false })?.mtimeMs ?? 0) >= from)
+    .filter((s) => !own.includes(s) && (statSync(path.join(dir, s, "events.jsonl"), { throwIfNoEntry: false })?.mtimeMs ?? 0) >= from)
     .map((s) => readEvents(stateDir, s));
 }
 
@@ -274,7 +276,7 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
 
   const sessions = current ? current.ledger.sessions : [ctx.session];
   const events = sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
-  const otherEvents = current ? [] : otherSessionsEvents(ctx.stateDir, ctx.session, session.startedAt);
+  const otherEvents = current ? [] : otherSessionsEvents(ctx.stateDir, [ctx.session], session.startedAt);
   // before the diff is taken, so another session's commit never shows as this task's change
   const settled = current ? settleAtHead(ctx.root, current.ledger, now) : false;
   const absorbed = (current ? absorbForeign(ctx.root, current.ledger, now, config, events) : false) || settled;

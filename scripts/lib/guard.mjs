@@ -3,7 +3,7 @@ import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { currentLedger } from "./ledger.mjs";
 import { leadDelegates } from "./size.mjs";
-import { appendEvents, nextSeq, readEvents } from "./events.mjs";
+import { appendEvents, nextSeq, readEvents, toolUse } from "./events.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { ancestorPids, pidsDir } from "./context.mjs";
 
@@ -700,17 +700,17 @@ export const verbs = {
       // unreadable state: fall back to the role rules alone
     }
     const verdict = decide(ctx.input, ctx.root, undefined, currentRun, ledger, { stateDir: ctx.stateDir, session: ctx.session });
+    const stamp = () => ({ seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, agent: ctx.input?.agent_id ?? null, agentType: ctx.input?.agent_type ?? null });
     if (!verdict.deny) {
       recordSessionPids(ctx);
+      // a command's run is timed from here, not from the session's previous event
+      const id = toolUse(ctx.input ?? {});
+      if (ctx.session && ctx.input?.tool_name === "Bash" && id.toolUseId) appendEvents(ctx.stateDir, ctx.session, [{ ...stamp(), kind: "command-start", ...id }]);
       return;
     }
     appendEvents(ctx.stateDir, ctx.session, [
       {
-        seq: nextSeq(),
-        ts: new Date().toISOString(),
-        session: ctx.session,
-        agent: ctx.input?.agent_id ?? null,
-        agentType: ctx.input?.agent_type ?? null,
+        ...stamp(),
         kind: "deny",
         delegate: verdict.delegate === true,
         tool: ctx.input?.tool_name ?? null,

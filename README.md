@@ -276,9 +276,14 @@ checked.
   against HEAD and that this run never edited is folded into the baseline: not sized, not
   reviewed, not scanned. The report says how many files from other commits were left out.
 - **Another session's edits do not need your ledger.** With no ledger open, R1 leaves out a
-  source file that another session's events account for (its edit of the file, or a writing
-  command whose run holds the file's mtime) and this session's do not. A change no session's
-  events explain stays this session's.
+  source file whose last write was another session's edit, unless this session edited it too,
+  whatever this session's commands were doing then; and a file another session's writing
+  command may have written when no command of this session could have. A command's run is timed from the moment the
+  fence let it start, so the time spent thinking before it does not count. A file both
+  sessions' commands may have written stays this session's R1, and `gate rebaseline "<why>"`
+  releases it; rebaseline never releases a file this task edited, nor one only another
+  session's background command could account for. A change no session's events explain stays
+  this session's.
 - **Outgrowing the size is said at the edit.** The first lead edit that takes a run
   predicted below large into it gets a note from the log hook with the measured size and
   `gate brief worker`; the fence refuses the lead's edits from the next gate verb on. Once

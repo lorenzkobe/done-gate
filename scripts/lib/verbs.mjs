@@ -9,7 +9,7 @@ import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
 import { briefOf, caseOpen, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list } from "./rules.mjs";
-import { assess, buildState, foldIntoBaseline, ownWrites, readVerify, reviewFiles, readVerifyStarted } from "./assess.mjs";
+import { assess, buildState, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { gitHead, withoutRepos } from "./tree.mjs";
 import { appendEvents, readEvents } from "./events.mjs";
@@ -651,7 +651,10 @@ export const verbs = {
     const state = buildState(ctx, {});
     const paths = state.changed.filter((p) => state.config.isSource(p));
     const split = (holder) => {
-      const own = ownWrites(holder, state.events, state.now, paths);
+      // seq is wall-clock microseconds, so the baseline's seq dates the other logs worth reading
+      const since = holder.baseline?.seq ?? holder.openedSeq ?? 0;
+      const others = otherSessionsEvents(ctx.stateDir, state.ledger?.sessions ?? [ctx.session], new Date(since / 1000).toISOString());
+      const own = ownWrites(holder, state.events, state.now, paths, others);
       const fold = paths.filter((p) => !own.has(p));
       const kept = paths.filter((p) => own.has(p));
       if (!fold.length) throw new UsageError(`gate rebaseline: no changed source file to take in${kept.length ? `; ${list(kept)} ${kept.length === 1 ? "was" : "were"} written by this ${state.ledger ? "run" : "session"} and stay${kept.length === 1 ? "s" : ""} its own` : ""}`);

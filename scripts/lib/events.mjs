@@ -40,6 +40,9 @@ function exitOf(response) {
   return typeof code === "number" ? code : null;
 }
 
+// The call's id, which pairs a command with the start the fence logged for it.
+export const toolUse = (input) => (typeof input.tool_use_id === "string" && input.tool_use_id ? { toolUseId: input.tool_use_id } : {});
+
 // One hook payload → zero or more event records. Never throws on odd input.
 export function eventsFromHookInput(input, root, repos = []) {
   if (!input || typeof input !== "object" || input.__unparseable) return [];
@@ -68,7 +71,7 @@ export function eventsFromHookInput(input, root, repos = []) {
     const code = /exit code:?\s*(\d+)/i.exec(String(input.tool_error ?? ""));
     if (tool !== "Bash" || !code) return [];
     const cmd = String(input.tool_input?.command ?? "");
-    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: Number(code[1]), ...(gitWrites(cmd) ? { git: true, commits: !gitMoves(cmd) } : {}), ...(readsOnly(cmd) ? { readOnly: true } : {}) }];
+    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: Number(code[1]), ...toolUse(input), ...(gitWrites(cmd) ? { git: true, commits: !gitMoves(cmd) } : {}), ...(readsOnly(cmd) ? { readOnly: true } : {}) }];
   }
   if (event !== "PostToolUse") return [];
 
@@ -84,7 +87,7 @@ export function eventsFromHookInput(input, root, repos = []) {
     const git = gitWrites(cmd);
     const readOnly = readsOnly(cmd);
     const scratch = !readOnly && scratchOnly(cmd);
-    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...(background ? { background: true } : {}), ...(git ? { git: true, commits: !gitMoves(cmd) } : {}), ...(readOnly ? { readOnly: true } : {}), ...(scratch ? { scratch: true } : {}) }];
+    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...toolUse(input), ...(background ? { background: true } : {}), ...(git ? { git: true, commits: !gitMoves(cmd) } : {}), ...(readOnly ? { readOnly: true } : {}), ...(scratch ? { scratch: true } : {}) }];
   }
   if (tool === "Agent" || tool === "Task") {
     return [{ ...b(), kind: "agent", tool, spawned: input.tool_input?.subagent_type ?? null }];

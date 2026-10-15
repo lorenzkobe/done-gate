@@ -729,14 +729,20 @@ export function lateOrder(state) {
 // A file's mtime may land just after the PostToolUse stamp of the command that wrote it.
 const WRITE_SLACK_MS = 1000;
 
-// The writing commands after `since` whose run (the agent's previous event to its stamp, or on
-// past it in the background) holds a file's mtime; with no mtime (deleted), every one.
+// The writing commands after `since` whose run (its logged start, else the agent's previous event,
+// to its stamp; on past it in the background) holds a file's mtime; with no mtime, every one.
 export function writersOf(events, since, mtime) {
   const last = new Map();
+  const started = new Map();
   const out = [];
   for (const e of events) {
     const t = Date.parse(e.ts);
-    const before = last.get(e.agent ?? "") ?? -Infinity;
+    // a start only times its own command: one whose call never ran (denied, interrupted) moves nothing
+    if (e.kind === "command-start") {
+      started.set(e.toolUseId, t);
+      continue;
+    }
+    const before = started.get(e.toolUseId) ?? last.get(e.agent ?? "") ?? -Infinity;
     last.set(e.agent ?? "", t);
     if (e.seq <= since || e.kind !== "command" || e.readOnly || e.scratch) continue;
     if (mtime === undefined || (mtime >= before && mtime <= (e.background ? Infinity : t + WRITE_SLACK_MS))) out.push(e);
@@ -744,19 +750,26 @@ export function writersOf(events, since, mtime) {
   return out;
 }
 
-function explains(events, since, file, mtime) {
-  return events.some((e) => e.kind === "edit" && e.path === file && e.seq > since) || writersOf(events, since, mtime).length > 0;
-}
+export const editedIn = (events, since, file) => events.some((e) => e.kind === "edit" && e.path === file && e.seq > since);
 
-// With no ledger open, a source change is this session's unless another session's events
-// account for it and this session's do not; a change nobody's events explain stays its own.
+// an edit made the file as it is now only when it is the last write there
+export const editedLast = (events, since, file, mtime) =>
+  mtime !== undefined && events.some((e) => e.kind === "edit" && e.path === file && e.seq > since && Math.abs(Date.parse(e.ts) - mtime) <= WRITE_SLACK_MS);
+
+export const explains = (events, since, file, mtime) => editedIn(events, since, file) || writersOf(events, since, mtime).length > 0;
+
+// With no ledger open, a change is this session's when it edited the file, not when another session's
+// edit wrote it last, else when its own command or no session's events may have written it.
 function ownChanges(state, paths) {
   const since = state.session?.baselineSeq ?? 0;
   const others = state.otherEvents ?? [];
   if (!others.length) return paths;
+  const mine = state.events ?? [];
   return paths.filter((p) => {
     const mtime = state.now?.files?.[p]?.m;
-    return explains(state.events ?? [], since, p, mtime) || !others.some((events) => explains(events, since, p, mtime));
+    if (editedIn(mine, since, p)) return true;
+    if (others.some((events) => editedLast(events, since, p, mtime))) return false;
+    return writersOf(mine, since, mtime).length > 0 || !others.some((events) => explains(events, since, p, mtime));
   });
 }
 
