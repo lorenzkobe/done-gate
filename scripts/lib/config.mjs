@@ -133,7 +133,7 @@ function normaliseVerify(entries, fallbackTimeout) {
     const e = typeof entry === "string" ? { cmd: entry } : entry;
     const cmd = String(e.cmd);
     const when = WHEN.has(e.when) ? e.when : BUILD_ONLY.test(cmd) ? "source" : "always";
-    return { cmd, timeout: Number(e.timeout ?? fallbackTimeout), when };
+    return { cmd, timeout: Number(e.timeout ?? fallbackTimeout), when, ...(e.onlyNew === true ? { onlyNew: true } : {}) };
   });
 }
 

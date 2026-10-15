@@ -6,7 +6,7 @@ description: The done-gate workflow. Use before any task that changes source fil
 # done-gate
 
 `gate` is `node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs"`. Every verb prints a `next:`
-line: follow it. `gate check` lists what is unmet (R1-R10, R13, R15, R16, R17). You are the lead: plan, size, delegate, report; below large, edit.
+line: follow it. `gate check` lists what is unmet (R1-R10, R13, R15, R16, R17, R18). You are the lead: plan, size, delegate, report; below large, edit.
 
 ## The loop
 

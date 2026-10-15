@@ -268,6 +268,8 @@ export function openLedger(ctx, slug, playbook, repoPaths = []) {
     sessions: [ctx.session],
     ...(repos.length ? { repos } : {}),
     gateHash: config.hash,
+    // what gate.json had verify run at open, so the report can tell a command this run brought in
+    verifyAtOpen: config.verify.map((v) => v.cmd),
     policyHash: policy.hash,
     // pinned: a plugin upgrade mid-task changes nothing for this ledger
     policy,

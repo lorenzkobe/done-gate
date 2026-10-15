@@ -9,6 +9,7 @@ import { readEvents } from "./events.mjs";
 import { effectiveTier, policyFor, renderTierBlock, requires, tiered, tierOf } from "./size.mjs";
 import { clickStale, contextPart, drivenAfter, driverCommand, isRole, lastEditSeq, hasContextStep, lateOrder, tracedPointers, verifyWhere } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
+import { exclusionsOf } from "./verify.mjs";
 
 function tailLines(file, n) {
   if (!existsSync(file)) return "";
@@ -30,6 +31,23 @@ function endOf(ledger) {
 }
 const inRun = (ledger) => (e) => e.seq > (ledger.openedSeq ?? 0) && e.seq <= endOf(ledger);
 const deniesIn = (ledger, events) => events.filter((e) => e.kind === "deny" && !e.delegate && inRun(ledger)(e));
+
+// A command written over several lines, on one, for the one-line For you summary.
+const oneLine = (text) => String(text).replace(/\s*\n\s*/g, " ");
+
+// What the verify commands leave out, each marked when its command was not in gate.json at
+// open or when it names a file this task changed.
+function verifyExclusions(state) {
+  const { ledger, verify, changed = [], root } = state;
+  if (!verify) return [];
+  const atOpen = ledger.verifyAtOpen ? new Set(ledger.verifyAtOpen) : null;
+  return verify.commands.flatMap((c) => exclusionsOf(c.cmd).map((x) => {
+    const rel = root ? path.relative(root, path.resolve(root, x.value.split("::")[0])).split(path.sep).join("/") : x.value;
+    const names = changed.some((p) => p === rel || p.startsWith(`${rel}/`));
+    const fresh = atOpen && !c.repo && !atOpen.has(c.cmd);
+    return { cmd: c.cmd, text: x.text, flag: [fresh ? "new in this run" : null, names ? "names a changed file" : null].filter(Boolean).join(", ") };
+  }));
+}
 
 // ---- pieces of the full report (text unchanged; the brief reuses the same facts) ----
 
@@ -62,7 +80,7 @@ export function verifyLines(verify, { tails = true, unfinished = null } = {}) {
       out.push(`- – \`${c.cmd}\`${verifyWhere(c)} — skipped: ${c.skipped}`);
       continue;
     }
-    out.push(`- ${c.exit === 0 && !c.timedOut ? "✓" : "✗"} \`${c.cmd}\`${verifyWhere(c)} — ${c.timedOut ? "timed out" : `exit ${c.exit}`}, ${(c.ms / 1000).toFixed(1)}s`);
+    out.push(`- ${c.exit === 0 && !c.timedOut ? "✓" : "✗"} \`${c.cmd}\`${verifyWhere(c)} — ${c.timedOut ? "timed out" : `exit ${c.exit}`}${c.oldFindings ? ` (exit ${c.rawExit}: ${plural(c.oldFindings, "old finding")} off this task's lines ignored: ${c.oldList.join(", ")}${c.oldFindings > c.oldList.length ? ", …" : ""})` : ""}, ${(c.ms / 1000).toFixed(1)}s`);
     if (tails && (c.exit !== 0 || c.timedOut)) out.push(`\n\`\`\`\n${c.tail.split("\n").slice(-12).join("\n")}\n\`\`\``);
   }
   return out;
@@ -162,6 +180,8 @@ export function renderReport(state, unmet) {
   out.push(...verifyLines(verify, { unfinished: unfinishedVerify(state) }));
   if (ledger.verifyAdded?.length) out.push(`\nadded by this run: ${ledger.verifyAdded.map((c) => `\`${c}\``).join(" · ")}`);
   if (ledger.verifyDropped?.length) out.push(`\ndropped by this run: ${ledger.verifyDropped.map((c) => `\`${c}\``).join(" · ")}`);
+  const excluded = verifyExclusions(state);
+  if (excluded.length) out.push("\nexcluded from verify:", ...excluded.map((x) => `- \`${x.text}\` in \`${x.cmd}\`${x.flag ? ` — ${x.flag}` : ""}`));
   if (verify) out.push(`\nsource hash at verify: \`${verify.sourceHash.slice(0, 12)}\` · now: \`${state.now.hash.slice(0, 12)}\``);
 
   out.push("\n## Changed files\n");
@@ -379,6 +399,9 @@ function forYouLine(state, unmet) {
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) items.push(`skipped: ${plain(s.text)} (${plain(s.note)})`);
   for (const gap of lookupGaps(ledger)) items.push(`${gap}: checked with grep and Read`);
   for (const r of ledger.rebaselines ?? []) items.push(`${plural(r.paths.length, "file")} taken out of this task's changes by hand (${plain(r.reason)})`);
+  for (const cmd of ledger.verifyDropped ?? []) if ((state.config?.verify ?? []).some((v) => v.cmd === cmd)) items.push(`\`${oneLine(cmd)}\` from gate.json was dropped from verify for this run`);
+  for (const x of verifyExclusions(state).filter((e) => e.flag)) items.push(`verify excludes \`${oneLine(x.text)}\` (${x.flag})`);
+  for (const c of state.verify?.commands ?? []) if (c.oldFindings) items.push(`${plural(c.oldFindings, "old lint finding")} ignored by \`${oneLine(c.cmd)}\` (${c.oldList.slice(0, 3).join(", ")}${c.oldFindings > 3 ? ", …" : ""})`);
   if (ledger.overridden) items.push("I could not satisfy the checks and ended anyway; treat everything above as unverified");
   if (ledger.steps.some((s) => s.key === "context" && s.state === null)) items.push("no context was written: what was traced, what depends on it, what was researched");
   const order = lateOrder(state);

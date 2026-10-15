@@ -18,7 +18,7 @@ const HELP = `gate <verb>: node <plugin>/scripts/gate.mjs <verb>
   brief <skeptic|qa|worker|reviewer|reviewer-2|arbiter> [--files a,b | a.ts:1-400]   write a helper's packet
   huddle add <role> --file <file> · huddle resolve <H#.#> --evidence <ptr> · huddle dispute · huddle reply --file worker-<n>.md
   verify [--step verify-before]                             run the verify commands, write verify.json
-  verify --add "<cmd>" · verify --drop "<cmd>"              add a verify command for this run, or drop one this run added
+  verify --add "<cmd>" · verify --drop "<cmd>"              change what verify runs for this run only (gate.json is untouched)
   check                                                     what is still unmet (clean when nothing)
   close                                                     close the run when check is clean
   report [--brief]                                          the run's report (paste --brief as the final message)
@@ -50,7 +50,7 @@ export const verbs = {
     ctx.out(`  ui: ${config.ui.join(", ")}`);
     ctx.out(`  schema: ${config.schema.join(", ") || "none"}`);
     ctx.out(`  highRisk: ${config.highRisk.join(", ") || "none"}`);
-    ctx.out(`  verify: ${config.verify.map((v) => `${v.cmd} (${v.timeout}s)${v.when === "source" ? " (when source)" : ""}`).join(" · ") || "NOTHING — add verify commands to gate.json"}`);
+    ctx.out(`  verify: ${config.verify.map((v) => `${v.cmd} (${v.timeout}s)${v.when === "source" ? " (when source)" : ""}${v.onlyNew ? " (onlyNew)" : ""}`).join(" · ") || "NOTHING — add verify commands to gate.json"}`);
     ctx.out(`  checks: ${config.checks.join(", ") || "none"}`);
     const driverSkill = path.join(ctx.root, ".claude", "skills", "verify", "SKILL.md");
     ctx.out(`  driver: ${existsSync(driverSkill) ? driverSkill : "none — run /done-gate:verify-setup once"}`);
@@ -64,10 +64,11 @@ export const verbs = {
     }
     ctx.out(`ledger: ${current ? `${current.dir} (${current.ledger.playbook}, ${current.ledger.status})` : "none"}`);
     for (const repo of current?.ledger.repos?.length ? loadConfig(ctx.root, current.ledger.repos).repos : []) {
-      const cmds = repo.config.verify.map((v) => `${v.cmd} (${v.timeout}s)${v.when === "source" ? " (when source)" : ""}`);
+      const cmds = repo.config.verify.map((v) => `${v.cmd} (${v.timeout}s)${v.when === "source" ? " (when source)" : ""}${v.onlyNew ? " (onlyNew)" : ""}`);
       ctx.out(`  repo: ${repo.prefix} (${repo.root})${repo.missing ? " — GONE" : ""} · verify: ${cmds.length ? `${cmds.join(" · ")} (its ${repo.config.verifySource})` : "none"}`);
     }
     if (current?.ledger.verifyAdded?.length) ctx.out(`  verify added by this run: ${current.ledger.verifyAdded.join(" · ")}`);
+    if (current?.ledger.verifyDropped?.length) ctx.out(`  verify dropped by this run: ${current.ledger.verifyDropped.join(" · ")}`);
     const open = openRuns(ctx.stateDir);
     if (open.length) ctx.out(`open runs: ${open.map((r) => path.basename(r.dir)).join(", ")}`);
     const errLog = path.join(ctx.stateDir, "gate-error.log");

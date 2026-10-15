@@ -698,7 +698,7 @@ test("C21 refused: gate waive verify is refused and says to run gate verify; gat
   assert.match(byKey, /R6/, `waive does not print what the key clears:\n${byKey}`);
 });
 
-test("C22 edge: gate verify --add records without running; gate verify --drop removes a run-added command and refuses a config command; added commands run when the config has none", () => {
+test("C22 edge: gate verify --add records without running; gate verify --drop removes a run-added command and drops a config command for the run only (0.17: tests/run-verify.test.mjs C1); added commands run when the config has none", () => {
   const cfg = counter("sf-c22-config");
   const added = counter("sf-c22-added");
   const repo = opened("sf-c22", { "count.mjs": COUNT_SRC, ...config({ verify: [cfg.cmd] }) });
@@ -708,8 +708,10 @@ test("C22 edge: gate verify --add records without running; gate verify --drop re
   assert.ok(!existsSync(path.join(runDir(repo), "verify.json")), "--add wrote verify.json");
   assert.equal(nextLines(out).length, 1, out);
 
-  refused(repo, "verify", ["--drop", cfg.cmd]);
+  cli(repo, "verify", ["--drop", cfg.cmd]);
   assert.deepEqual(ledgerOf(repo).verifyAdded, [added.cmd]);
+  cli(repo, "verify", ["--add", cfg.cmd]);
+  assert.deepEqual(ledgerOf(repo).verifyDropped ?? [], [], "the restored config command is still dropped");
   refused(repo, "verify", ["--drop", "never added"]);
   cli(repo, "verify", ["--drop", added.cmd]);
   assert.deepEqual(ledgerOf(repo).verifyAdded ?? [], []);

@@ -78,6 +78,10 @@
                   "source"
                 ],
                 "description": "When the command runs: always, or only when a non-test, non-doc source file changed (source). Default: source for a single npm/pnpm/yarn/bun build script call, always otherwise."
+              },
+              "onlyNew": {
+                "type": "boolean",
+                "description": "For a linter that prints findings as path:line or path(line,col): an exit 1 whose findings all lie in files of this repo and off the lines this task changed counts green, and the report lists the old findings it ignored. A crash, any other exit code, a place outside the repo's source files or in a test file, output past 2 MB, or a command that runs tests stays red. It reads lines, not causes: for line-local linters (flake8, ruff, eslint -f unix), not tsc or mypy. Default: false."
               }
             }
           }

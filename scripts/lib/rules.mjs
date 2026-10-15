@@ -5,6 +5,7 @@ import path from "node:path";
 import { effectiveTier, leadDelegates, policyFor, requires } from "./size.mjs";
 import { baseCopy, changedUnits, fileDiff, gitTracked, hasReindent, indentMatters, sliceEnd } from "./tree.mjs";
 import { scanDiff } from "./slop.mjs";
+import { coverageGaps } from "./verify.mjs";
 import { repoPath, toPosixRel } from "./paths.mjs";
 
 const SLOP_SHOWN = 12;
@@ -690,7 +691,7 @@ export function unfinishedFile(full) {
 // Every waiver key a rule reads, with the rule it clears. "qa" is the key older ledgers
 // carry for tests.
 const REVIEW_WAIVER = { reviewer: "review", "reviewer-2": "review-2" };
-export const WAIVERS = { delegate: "R16", driver: "R4", review: "R5", "review-2": "R9", schema: "R6", tests: "R7", qa: "R7", slop: "R10", "gate-config": "R13", lookups: "R17" };
+export const WAIVERS = { delegate: "R16", driver: "R4", review: "R5", "review-2": "R9", schema: "R6", tests: "R7", qa: "R7", slop: "R10", "gate-config": "R13", lookups: "R17", coverage: "R18" };
 
 const orWaive = (key) => ` Or get the user's waiver (\`gate waive ${key} "<reason>"\`).`;
 
@@ -798,11 +799,11 @@ export function evaluate(state) {
       }
     }
   }
-  // a command the run added is owed a result, whether or not source changed
+  // a command the run added, or a gate.json one it restored after a verify, is owed a result
   const ran = new Set((verify?.commands ?? []).map(verifyKey));
-  const pending = (ledger.verifyAdded ?? []).filter((cmd) => !ran.has(cmd));
+  const pending = [...new Set([...(ledger.verifyAdded ?? []), ...(ledger.verifyRestored ?? [])])].filter((cmd) => !ran.has(cmd));
   if (pending.length && !unmet.some((u) => u.rule === "R3")) {
-    unmet.push({ rule: "R3", text: `added verify command ${pending.map((c) => `\`${c}\``).join(", ")} has not run: \`gate verify\`` });
+    unmet.push({ rule: "R3", text: `verify command ${pending.map((c) => `\`${c}\``).join(", ")} has not run: \`gate verify\`` });
   }
   if (src.length) {
     // "qa" is the waiver key older ledgers carry for the same step
@@ -865,7 +866,7 @@ export function evaluate(state) {
 
   // R13: the gate's own config changed mid-task (a ledger from before hashed the file text)
   if (ledger.gateHash && ![config.hash, config.legacyHash].includes(ledger.gateHash) && !waived(ledger, "gate-config")) {
-    unmet.push({ rule: "R13", text: ".claude/gate.json changed since this ledger opened. Restore it, or get the user's waiver (`gate waive gate-config \"<reason>\"`)." });
+    unmet.push({ rule: "R13", text: ".claude/gate.json changed since this ledger opened. Restore it and change what verify runs for this run only with `gate verify --add \"<cmd>\"` and `gate verify --drop \"<cmd>\"`, or get the user's waiver (`gate waive gate-config \"<reason>\"`)." });
   }
   for (const repo of config.repos ?? []) {
     if (repo.missing) {
@@ -921,6 +922,12 @@ export function evaluate(state) {
       const last = shell[shell.length - 1];
       unmet.push({ rule: "R16", text: `source changed with no worker edit behind it (${last.cmd ? `after \`${String(last.cmd).slice(0, 60)}\`` : "a shell edit"}) at size ${delegated}; at this size only helpers edit source. Hand the piece to a worker (\`gate brief worker\`).${orWaive("delegate")}` });
     }
+  }
+
+  // R18: verify ran every closed case's test file through a test command
+  const gaps = waived(ledger, "coverage") ? [] : coverageGaps(state);
+  if (gaps.length) {
+    unmet.push({ rule: "R18", text: `verify ran no test command that covers ${gaps.map((g) => `${g.id} (${g.file})`).join(", ")}: lint and build commands do not count, and a test command that names paths covers only those. Add one that runs the file (\`gate verify --add "<test runner> ${gaps[0].file}"\`), then \`gate verify\`.${orWaive("coverage")}` });
   }
 
   // R17: every helper that wrote or edited a file searched the code and the memory first

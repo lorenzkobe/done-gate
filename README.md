@@ -157,6 +157,7 @@ attempt to finish.
 | R15 | a helper's file lists more findings than the ledger recorded, a briefed skeptic, reviewer or arbiter stopped before finishing its file, or an Act-on item outside the reviewers' rounds is still open (a skeptic item added after its step closed, one typed by hand) |
 | R16 | the lead edited source itself at size large (a worker's job); waivable with `gate waive delegate` |
 | R17 | a skeptic, reviewer, reviewer-2, worker or arbiter that wrote its file or edited source made no code or no memory lookup since the run opened (QA: no memory lookup), less any kind the lead declared missing; waivable with `gate waive lookups` |
+| R18 | verify ran no test command covering a closed case's test file: lint and build never count, a test command that names paths covers only those (a `cd` is followed, `--ignore` and `--deselect file::name` take a file out); waivable with `gate waive coverage` |
 
 Waivers are the only way past a keyed step: the user OKs it, Claude records the reason
 with `gate waive <key> "…"`, and the report lists every waiver. The keys: `driver` (R4),
@@ -344,7 +345,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `huddle reply --file worker-<n>.md` | record a worker's answers: `fixed:` closes an item, `disagree:` disputes it; an unknown id fails and lists the open ones. Worker reply files are their own stream, numbered like their packet (`brief-worker-2.md` asks for `worker-2.md`); a worker with no lookups is refused (R17) |
 | `waive <key\|R<n>> "<reason>"` | record a waiver and print what it clears; it shows in the report |
 | `verify [--step verify-before]` | run the repo's verify commands, then each declared repo's in its own directory, write `verify.json` |
-| `verify --add "<cmd>"` · `verify --drop "<cmd>"` | add a verify command for this run only, or remove one this run added; nothing runs. Added commands run after the config ones at every `gate verify`, with the default timeout, also when the config has none. They live on the ledger, not in gate.json (R13 stays quiet), and `gate doctor` and the report list them as added by this run. An added command that has not run blocks the close (R3); a dropped one stays in the report as dropped by this run |
+| `verify --add "<cmd>"` · `verify --drop "<cmd>"` | change what verify runs for this run only; nothing runs. `--add` adds a command (it runs after the config ones at every `gate verify`, with the default timeout, also when the config has none) or restores a dropped gate.json one; `--drop` removes an added one or drops a gate.json one for this run. They live on the ledger, not in gate.json (R13 stays quiet); `gate doctor` and the report list them, and For you names every dropped gate.json command. An added or restored command that has not run blocks the close (R3) |
 | `decide <phase> <decision> <why> <evidence> <result>` | append a decision-log row |
 | `brief <skeptic\|qa\|worker\|reviewer\|reviewer-2\|arbiter> [--files a,b \| a.ts:1-400] [--item H#.#]` | write the helper's packet and print its spawn prompt; a packet is numbered like the file it names; a worker's `--files` are the files it owns |
 | `abandon <slug> "<reason>"` | give a run up: marks it abandoned with the reason; it stops attaching to sessions and blocking turns |
@@ -407,6 +408,14 @@ main root, whatever the shell's directory. `gate open`, `gate attach` and
   "helperNote": "Never run two test runs at once: they share tests/.tmp."
 }
 ```
+
+A verify entry for a linter may say `"onlyNew": true`: its exit 1 counts green when every
+`path:line` or `path(line,col)` it prints is a source file of this repo and none lies on a line
+this task added or next to one it deleted; the report and For you list the old findings it
+ignored. A crash, any other exit code, output past 2 MB, a place outside the repo's source or
+in a test file, or a command that runs tests stays red. It reads lines, not causes: a type error this task caused
+in an untouched file reads as old, so use it for line-local linters (flake8, ruff, eslint with
+`-f unix`), not tsc or mypy.
 
 `driver` may instead be `"cmd:npx playwright test"`: a foreground run of that command by the lead
 after the last edit, with exit 0, counts as driving the surface (R4). Setting or changing `driver` mid-task is not a

@@ -478,7 +478,7 @@ test("C4 happy: hooks/session-start.md says the lead never edits source at stand
 // C5 — README's tables: exactly the live rules, and the two new verbs
 // ---------------------------------------------------------------------------
 
-test("C5 edge: README's rule table lists exactly R1-R10, R13 and R15-R17 — the ids scripts/lib/rules.mjs can emit — and the verbs table names huddle reply and brief worker", () => {
+test("C5 edge: README's rule table lists exactly R1-R10, R13 and R15-R18 — the ids scripts/lib/rules.mjs can emit — and the verbs table names huddle reply and brief worker", () => {
   const md = read(README);
 
   // every line that opens a rule row, in the order README lists them
@@ -488,7 +488,7 @@ test("C5 edge: README's rule table lists exactly R1-R10, R13 and R15-R17 — the
 
   const expected = [
     "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10",
-    "R13", "R15", "R16", "R17",
+    "R13", "R15", "R16", "R17", "R18",
   ];
   assert.deepEqual(listed, expected, `README.md's rule table rows:\n${listed.join(", ")}`);
 
