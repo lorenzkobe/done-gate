@@ -2,7 +2,7 @@
 
 ## feature
 
-1. Understand first: search the code (e.g. SocratiCode `codebase_search`) and the memory (e.g. MemPalace `mempalace_search`) before grep (the gate counts a search or query call; reading or getting does not count), loading deferred tools with ToolSearch, and confirm each hit with grep/Read before citing it; run `codebase_update` once if the index watcher is not active; when a tool is missing or the project is not indexed, pass `--no-code "<why>"` or `--no-memory "<why>"` to `gate note context` and tell the user. Then trace the code the task touches (entry points, callers, data flow; `grep -a` for callers), list what depends on it, and research better ways when the problem is a known one (docs, context7, web); write it with `gate note context`. {context}
+1. Understand first: search the code and the memory before grep, trace the code the task touches, list what depends on it, and research better ways when the problem is a known one; write it with `gate note context`. {context}
 2. Write Task and Plan in ledger.md (`gate note task|plan`); include the data/cost plan when data is touched, and the performance plan: the hot paths touched, the data sizes they see, the cost shape of the main operation (one pass, one query), or "no hot path" in one line. {plan}
 3. Write the case table (`gate case add`): happy path, each edge, the refused side of every gate, boundaries, idempotency, the surface the user reported, and a performance row per hot path: the size that matters and what must not happen at it; a `click` row per new or changed link, button or tab, closed by clicking it in the real app after the last edit (`gate case close C<n> --click`). {cases}
 4. Design huddle: spawn the skeptic on the plan, answer every finding, amend the plan (N/A below standard). {skeptic}
@@ -17,7 +17,7 @@
 ## bugfix
 
 1. Reproduce on the real surface FIRST with the /verify driver or the failing command; close it on that run (`gate step repro done "<what failed>" --ran "<part of the command or url>"`). {repro}
-2. Understand first: search the code (e.g. SocratiCode `codebase_search`) and the memory (e.g. MemPalace `mempalace_search`) before grep (the gate counts a search or query call; reading or getting does not count), loading deferred tools with ToolSearch, and confirm each hit with grep/Read before citing it; run `codebase_update` once if the index watcher is not active; when a tool is missing or the project is not indexed, pass `--no-code "<why>"` or `--no-memory "<why>"` to `gate note context` and tell the user. Then trace the code the task touches (entry points, callers, data flow; `grep -a` for callers), list what depends on it, and research better ways when the problem is a known one (docs, context7, web); write it with `gate note context`. {context}
+2. Understand first: search the code and the memory before grep, trace the code the task touches, list what depends on it, and research better ways when the problem is a known one; write it with `gate note context`. {context}
 3. Root cause with runtime evidence: form hypotheses, rule each out with a run, no belt-and-suspenders; close it on the run that showed the cause, the note naming the line at fault as file:line (`--ran`). {rootcause}
 4. Write Task and Plan in ledger.md (`gate note task|plan`); name the hot path the fix touches, the data sizes it sees and its cost shape, or "no hot path" in one line. {plan}
 5. Write the case table; row 1 is the repro, kind `reported-surface`; a performance row when the fix sits on a hot path; a `click` row per link, button or tab the fix changes. {cases}
@@ -32,7 +32,7 @@
 
 ## refactor
 
-1. Understand first: search the code (e.g. SocratiCode `codebase_search`) and the memory (e.g. MemPalace `mempalace_search`) before grep (the gate counts a search or query call; reading or getting does not count), loading deferred tools with ToolSearch, and confirm each hit with grep/Read before citing it; run `codebase_update` once if the index watcher is not active; when a tool is missing or the project is not indexed, pass `--no-code "<why>"` or `--no-memory "<why>"` to `gate note context` and tell the user. Then trace the code the task touches (entry points, callers, data flow; `grep -a` for callers), list what depends on it, and research better ways when the problem is a known one (docs, context7, web); write it with `gate note context`. {context}
+1. Understand first: search the code and the memory before grep, trace the code the task touches, list what depends on it, and research better ways when the problem is a known one; write it with `gate note context`. {context}
 2. Write Task and Plan (`gate note task|plan`): what moves, what must not change, and the hot paths whose data sizes and cost shape must not grow, or "no hot path" in one line. {plan}
 3. Case table: the existing tests that pin current behaviour, plus the pins that are missing, and a performance row per hot path that moves; a `click` row per link, button or tab that moves. {cases}
 4. Design huddle: spawn the skeptic on the plan, answer every finding, amend the plan (N/A below standard). {skeptic}
@@ -47,7 +47,7 @@
 
 ## plan
 
-1. Understand first: search the code (e.g. SocratiCode `codebase_search`) and the memory (e.g. MemPalace `mempalace_search`) before grep (the gate counts a search or query call; reading or getting does not count), loading deferred tools with ToolSearch, and confirm each hit with grep/Read before citing it; run `codebase_update` once if the index watcher is not active; when a tool is missing or the project is not indexed, pass `--no-code "<why>"` or `--no-memory "<why>"` to `gate note context` and tell the user. Then trace the code the task touches (entry points, callers, data flow; `grep -a` for callers), list what depends on it, and research better ways when the problem is a known one (docs, context7, web); write it with `gate note context`. {context}
+1. Understand first: search the code and the memory before grep, trace the code the task touches, list what depends on it, and research better ways when the problem is a known one; write it with `gate note context`. {context}
 2. Write Task and Plan (`gate note task|plan`): goal, constraints, open decisions. {plan}
 3. Design huddle: spawn the skeptic; answer every finding; amend. {skeptic}
 4. Write the spec/plan document with every open decision resolved or listed as a question for the user. {implement}

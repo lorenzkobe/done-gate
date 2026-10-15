@@ -6,6 +6,7 @@ import path from "node:path";
 import { makeRepo, write, gate, pluginRoot } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { DEFAULT_POLICY } from "../scripts/lib/size.mjs";
+import { nextHint } from "../scripts/lib/next.mjs";
 
 // ===== from tests/roles.test.mjs =====
 {
@@ -553,16 +554,49 @@ test("C18 reported-surface: the lead playbook and the skeptic, reviewer, reviewe
   assert.match(qa, /no code search/, "agents/qa.md lets QA code-search, which returns the new implementation");
   assert.match(qa, LOOKUPS_ONLY, "agents/qa.md does not keep QA to lookups");
 
-  // the lead: every "Understand first" step of the playbooks
+  // the lead: the context hint carries the how, once; the playbook steps stay one short line,
+  // since `gate open` prints them and the hint would repeat them
+  const steps = [{ n: 1, key: "context", text: "understand", state: null }];
+  const hint = nextHint({ status: "open", playbook: "feature", taskSeq: 1, planSeq: null, cases: [], steps, huddles: [], waivers: [] });
+  assert.match(hint, /SocratiCode/, hint);
+  assert.match(hint, /MemPalace/, hint);
+  assert.match(hint, CONFIRM, hint);
+  assert.match(hint, /ToolSearch/, hint);
+  assert.match(hint, /search or query call/, hint);
+  assert.match(hint, /codebase_update/, hint);
+  assert.match(hint, /--no-code/, hint);
+  assert.match(hint, /--no-memory/, hint);
+  assert.match(hint, /tell the user/, hint);
   const playbooks = readFileSync(path.join(pluginRoot, "skills", "gate", "playbooks.md"), "utf8");
-  const steps = playbooks.split("\n").filter((l) => /Understand first/i.test(l));
-  assert.ok(steps.length >= 4, `expected the four Understand-first steps, found ${steps.length}`);
-  for (const step of steps) {
-    assert.match(step, /SocratiCode/, step);
-    assert.match(step, /MemPalace/, step);
-    assert.match(step, CONFIRM, step);
-    assert.match(step, /--no-code/, step);
-    assert.match(step, /--no-memory/, step);
+  const understand = playbooks.split("\n").filter((l) => /Understand first/i.test(l));
+  assert.equal(understand.length, 4, `expected the four Understand-first steps, found ${understand.length}`);
+  for (const step of understand) {
+    assert.ok(Buffer.byteLength(step) < 300, `the step is ${Buffer.byteLength(step)} bytes, the hint has the details:\n${step}`);
+    assert.match(step, /search the code and the memory before grep/, step);
+    assert.match(step, /gate note context/, step);
   }
   assert.ok(statSync(path.join(pluginRoot, "skills", "gate", "SKILL.md")).size < 4096, "SKILL.md is 4096 bytes or more");
+});
+
+test("C4 reported-surface: across `gate open` and the hint after `gate note task` the context details print once, the open step line is short, and both lookup flags carry their argument", () => {
+  const repo = makeRepo("roles-c4-once");
+  execFileSync("git", ["add", "-A"], { cwd: repo });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: repo });
+  const gateOut = (...args) => {
+    const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
+    delete env.CLAUDE_CODE_SESSION_ID;
+    const r = spawnSync(process.execPath, [gate, ...args], { encoding: "utf8", env });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout;
+  };
+  const opened = gateOut("open", "once", "feature");
+  const hinted = gateOut("note", "task", "Do the thing. [inferred]");
+  const step1 = opened.split("\n").find((l) => /^\s*1\. /.test(l));
+  assert.ok(step1 && Buffer.byteLength(step1) < 320, `the printed step 1 is long:\n${step1}`);
+  const both = `${opened}\n${hinted}`;
+  for (const detail of ["ToolSearch", "codebase_update", "search or query call"]) {
+    assert.equal(both.split(detail).length - 1, 1, `"${detail}" does not print exactly once:\n${both}`);
+  }
+  assert.match(hinted, /`--no-code "<tool>: not installed\|not indexed"`/, hinted);
+  assert.match(hinted, /`--no-memory "<tool>: not installed\|not indexed"`/, hinted);
 });
