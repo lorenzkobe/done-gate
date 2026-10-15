@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, AT_GIT_TOPLEVEL } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { DEFAULTS } from "../scripts/lib/config.mjs";
 import { detectFramework } from "../scripts/lib/brief.mjs";
@@ -551,7 +551,7 @@ test("C12 boundary: untracked or non-git files appear in the reviewer diff as al
 // C13
 // ---------------------------------------------------------------------------
 
-test("C13 happy: the four agent files say their inputs are in the packet and no longer tell the reviewer to diff itself; frontmatter unchanged", () => {
+test("C13 happy: the four agent files say their inputs are in the packet and no longer tell the reviewer to diff itself; frontmatter unchanged", { skip: !AT_GIT_TOPLEVEL && "reads the committed agent files; this copy is not a git checkout's top" }, () => {
   const ROLES = ["skeptic", "qa", "reviewer", "reviewer-2"];
   const PINNED = ["name", "model", "disallowedTools"]; // turn budgets are tuned on their own
 

@@ -75,7 +75,7 @@ export function matchAny(patterns, relPath, opts) {
 export const DEFAULTS = Object.freeze({
   source: ["**"],
   sourceExclude: ["docs/**", "**/*.md"],
-  tests: ["**/{tests,test,__tests__,spec}/**", "**/*.{test,spec}.*"],
+  tests: ["**/{tests,test,__tests__,spec}/**", "**/*.{test,spec}.*", "**/test_*.py", "**/*_test.{py,go}"],
   ui: ["**/*.{tsx,vue,svelte}"],
   schema: [],
   docs: ["docs/**", "**/*.md"],
@@ -155,7 +155,8 @@ export function repoConfig(dir) {
 }
 
 // With declared repos the path predicates dispatch on the prefix: a repo's file is judged by
-// its own gate.json when it has one, else by the main globs on its repo-relative path.
+// its own gate.json when it has one, else by the main globs on its repo-relative path (and, for
+// tests, by the default conventions as well).
 export function loadConfig(root, repos = []) {
   const file = configPath(root);
   let raw = null;
@@ -207,7 +208,10 @@ export function loadConfig(root, repos = []) {
   const own = repos.map((repo) => ({ ...repo, missing: !existsSync(repo.root), config: repoConfig(repo.root) }));
   const dispatch = (name) => (p) => {
     const at = repoPath(root, p, repos);
-    return (own[at.index]?.config.explicit ? own[at.index].config : main)[name](at.rel);
+    const repo = own[at.index]?.config;
+    if (repo?.explicit) return repo[name](at.rel);
+    // a repo with no gate.json of its own: the main globs, and its own test conventions too
+    return main[name](at.rel) || (name === "isTest" && Boolean(repo?.isTest(at.rel)));
   };
   return { ...resolved, hash, legacyHash, repos: own, ...Object.fromEntries(Object.keys(main).map((name) => [name, dispatch(name)])) };
 }

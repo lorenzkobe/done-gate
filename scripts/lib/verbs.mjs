@@ -8,7 +8,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { briefOf, caseOpen, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE } from "./rules.mjs";
+import { briefOf, caseOpen, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits } from "./rules.mjs";
 import { assess, buildState, readVerify, reviewFiles, readVerifyStarted } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { withoutRepos } from "./tree.mjs";
@@ -604,6 +604,8 @@ export const verbs = {
     const valid = `valid keys: ${Object.keys(WAIVERS).filter((k) => k !== "qa").map((k) => `${k} (${WAIVERS[k]})`).join(", ")}`;
     if (byRule && !key) throw new UsageError(`${named} has no waiver: do what \`gate check\` says for it. ${valid}`);
     if (Object.hasOwn(NO_WAIVER, key)) throw new UsageError(`${key} cannot be waived: a rule with no waiver would still block behind the step. ${NO_WAIVER[key]}.`);
+    const flagged = key === "slop" ? slopHits(buildState(ctx, {})).map((h) => h.key) : null;
+    if (flagged && !flagged.length) throw new UsageError("gate waive slop: the slop check flags no line in this task's diff that a waiver does not already cover; there is nothing to waive");
     const clears = withLedger(ctx, (ledger) => {
       const step = ledger.steps.find((s) => s.key === key);
       const rule = Object.hasOwn(WAIVERS, key) ? WAIVERS[key] : null;
@@ -613,8 +615,9 @@ export const verbs = {
       }
       // a step with no script or agent evidence is closed by hand; a waiver there would clear nothing a rule reads
       if (!rule && !EVIDENCED_KEYS.has(key)) throw new UsageError(`step {${key}} has no waiver: close it with \`gate step ${key} done|skipped|na "<note>"\`. ${valid}`);
-      ledger.waivers.push({ key, reason, seq: nextSeq() });
+      ledger.waivers.push({ key, reason, seq: nextSeq(), ...(flagged ? { lines: flagged } : {}) });
       if (step) Object.assign(step, { state: "WAIVED", note: reason, evidence: null, seq: nextSeq() });
+      if (flagged) return `the ${flagged.length} slop line${flagged.length === 1 ? "" : "s"} flagged now; a new one is flagged again`;
       return [rule, step ? `step {${key}}` : null].filter(Boolean).join(" and ");
     });
     ctx.out(`waived ${key} (clears ${clears}) — the report will show the reason`);

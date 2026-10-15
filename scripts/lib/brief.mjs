@@ -7,6 +7,7 @@ import { leadDelegates, renderTierBlock, tierMax, tierOf } from "./size.mjs";
 import { baseCopy, fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs";
 import { ROLES, flag, outsideRepos, positional } from "./verbs.mjs";
 import { repoPath, toPosixRel } from "./paths.mjs";
+import { OWN_FILE } from "./guard.mjs";
 import { LOOKUP_EXAMPLE, REVIEW_CAP, capUnitsOf, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
@@ -130,17 +131,17 @@ function lookupLines(state, role) {
   const kinds = role === "qa" ? ["memory"] : ["code", "memory"];
   const out = kinds.map((k) => ledger.lookupGap?.[k]
     ? `${k}: the lead declared "${ledger.lookupGap[k]}"; use grep and Read for it.`
-    : `${k}: search it first, before grep, with ${used[k].size ? [...used[k]].map((t) => `\`${t}\``).join(", ") : `a ${k}-search tool (e.g. ${LOOKUP_EXAMPLE[k]})`}.`);
+    : `${k}: ${Object.hasOwn(OWN_FILE, role) ? "after your draft" : "first"}, before grep, search it with ${used[k].size ? [...used[k]].map((t) => `\`${t}\``).join(", ") : `a ${k}-search tool (e.g. ${LOOKUP_EXAMPLE[k]})`}.`);
   if (role === "qa") out.push("no code search: your tests come from the requirements, blind to the new code.");
   out.push("Lookups only (search, query, find); never add, update or re-index. Confirm a hit with grep or Read before citing it; the gate checks that you searched.");
   return out;
 }
 
 // The tests globs a helper may write under: the main repo's, then each declared repo's own
-// (the main ones where it has no gate.json) under its prefix.
+// (where it has no gate.json, the main ones plus the default test conventions) under its prefix.
 function testGlobs(state) {
   const globs = [...state.config.tests];
-  for (const repo of state.config.repos ?? []) globs.push(...(repo.config.explicit ? repo.config.tests : state.config.tests).map((g) => `${repo.prefix}/${g}`));
+  for (const repo of state.config.repos ?? []) globs.push(...(repo.config.explicit ? repo.config.tests : [...new Set([...state.config.tests, ...repo.config.tests])]).map((g) => `${repo.prefix}/${g}`));
   return globs.join(", ");
 }
 

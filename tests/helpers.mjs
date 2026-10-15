@@ -1,11 +1,22 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const here = path.dirname(fileURLToPath(import.meta.url));
 export const pluginRoot = path.resolve(here, "..");
 export const gate = path.join(pluginRoot, "scripts", "gate.mjs");
+
+// False for an installed copy: the plugin cache has no .git, and a marketplace clone puts the
+// plugin below its top. Checks that read the plugin's own git history skip there.
+export const AT_GIT_TOPLEVEL = (() => {
+  try {
+    const top = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: pluginRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    return realpathSync(top) === realpathSync(pluginRoot);
+  } catch {
+    return false;
+  }
+})();
 
 // A throwaway git repo with a few files, a .gitignore and package.json scripts.
 export function makeRepo(name, files = {}) {

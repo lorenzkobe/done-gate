@@ -19,7 +19,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, here, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, lookedUp, AT_GIT_TOPLEVEL } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
@@ -284,8 +284,9 @@ test("C22 boundary: --repo before the slug or between slug and playbook parses; 
 
 test("C23 refused: an ancestor of the main root, a path nested inside a declared repo and one containing a declared repo are refused", () => {
   const { repo, other, p } = pair("mr-c23");
-  // done-gate's own checkout is a git work tree root and an ancestor of tests/.tmp/mr-c23
-  assert.equal(realpathSync(git(pluginRoot, ["rev-parse", "--show-toplevel"]).trim()), realpathSync(pluginRoot));
+  // done-gate's own checkout is a git work tree root and an ancestor of tests/.tmp/mr-c23;
+  // an installed copy is not one, and the refusal below holds either way
+  if (AT_GIT_TOPLEVEL) assert.equal(realpathSync(git(pluginRoot, ["rev-parse", "--show-toplevel"]).trim()), realpathSync(pluginRoot));
   refused(repo, "repo", ["add", pluginRoot]);
   refused(repo, "repo", ["add", prefixOf(repo, pluginRoot)]);
   assert.deepEqual(prefixesOf(repo), [p]);

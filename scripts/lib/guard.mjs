@@ -459,7 +459,7 @@ function inCurrentRun(rel, current) {
 // agent id). Until then it may only read its packet and write one of the owed files, so a
 // helper that runs out of turns always leaves a file; two reviewers out at once each owe
 // their own number.
-const OWN_FILE = { skeptic: "skeptic", reviewer: "review", "reviewer-2": "review2", arbiter: "arbiter" };
+export const OWN_FILE = { skeptic: "skeptic", reviewer: "review", "reviewer-2": "review2", arbiter: "arbiter" };
 function draftOwed(roleName, root, currentRun, { stateDir, session, agentId } = {}) {
   const prefix = OWN_FILE[roleName];
   if (!prefix || !currentRun) return null;
@@ -606,6 +606,8 @@ function recordSessionPids(ctx) {
 
 export const verbs = {
   fence(ctx) {
+    // only a helper that owes its draft is held on Grep and Glob; the lead's need no ledger read
+    if (["Grep", "Glob"].includes(ctx.input?.tool_name) && !ctx.input?.agent_type) return;
     let currentRun = null;
     let ledger = null;
     try {

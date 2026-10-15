@@ -207,12 +207,12 @@ export function predictTier(policy, config, paths) {
 export function measure({ config, policy, diff, baseline, now, root, dir = null, quick = false, repos = [] }) {
   const paths = sized(config, diff.changed);
   const dirty = new Set(baseline?.dirty ?? []);
-  // quick is the edit hook's shape: one git process, no ls-files, no base copy read
+  // quick is the edit hook's shape: one git numstat per whitespace mode, no ls-files, no base copy read
   const copies = new Map(quick ? [] : paths.map((p) => [p, baseCopy(dir, baseline, p, repos)]).filter(([, copy]) => copy));
   const tracked = quick ? null : gitTracked(root, repos);
   const exact = paths.filter((p) => !dirty.has(p) && !copies.has(p) && (quick || tracked.has(p) || diff.deleted.includes(p)));
-  const indented = quick ? [] : exact.filter(indentMatters);
-  const plain = quick ? exact : exact.filter((p) => !indentMatters(p));
+  const indented = exact.filter(indentMatters);
+  const plain = exact.filter((p) => !indentMatters(p));
   const ref = baseline?.head ?? "HEAD";
   const heads = baseline?.heads;
   const numstat = new Map([

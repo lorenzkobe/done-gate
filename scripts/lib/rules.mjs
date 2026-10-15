@@ -9,27 +9,40 @@ import { repoPath, toPosixRel } from "./paths.mjs";
 
 const SLOP_SHOWN = 12;
 
+// The slop lines in this task's diff that no waiver covers. A waiver covers the lines flagged
+// when it was given, each once, keyed by file and line text so it survives the line moving.
+export function slopHits(state) {
+  const { config, changed, diff } = state;
+  const left = new Map();
+  for (const w of (state.ledger?.waivers ?? []).filter((x) => x.key === "slop")) for (const k of w.lines ?? []) left.set(k, (left.get(k) ?? 0) + 1);
+  const hits = [];
+  for (const rel of changed) {
+    if (!config.isSource(rel) || config.isDoc(rel) || config.isTest(rel) || diff?.deleted?.includes(rel)) continue;
+    for (const h of scanDiff(diffTextOf(state, rel))) {
+      const key = `${rel}\t${h.text}`;
+      if (left.get(key)) left.set(key, left.get(key) - 1);
+      else hits.push({ ...h, rel, key });
+    }
+  }
+  return hits;
+}
+
 // Named repo checks, opted into via gate.json "checks" (slop runs on every open ledger
 // unless gate.json says "slop": false; test files keep their separator style). Each
 // returns an unmet text or null.
 const CHECKS = {
   slop: (state) => {
-    const { config, changed, diff } = state;
-    const hits = [];
-    for (const rel of changed) {
-      if (!config.isSource(rel) || config.isDoc(rel) || config.isTest(rel) || diff?.deleted?.includes(rel)) continue;
-      for (const h of scanDiff(diffTextOf(state, rel))) hits.push(`${rel}:${h.line} ${h.pattern} ${JSON.stringify(h.text)}`);
-    }
+    const hits = slopHits(state).map((h) => `${h.rel}:${h.line} ${h.pattern} ${JSON.stringify(h.text)}`);
     if (!hits.length) return null;
     const rest = hits.length - SLOP_SHOWN;
-    return `${hits.length} slop line${hits.length === 1 ? "" : "s"} in this task's diff: ${hits.slice(0, SLOP_SHOWN).join(", ")}${rest > 0 ? `, and ${rest} more` : ""}. Fix them (a comment says why, or it goes), or for a true false positive get the user's waiver (\`gate waive slop "<reason>"\`).`;
+    return `${hits.length} slop line${hits.length === 1 ? "" : "s"} in this task's diff: ${hits.slice(0, SLOP_SHOWN).join(", ")}${rest > 0 ? `, and ${rest} more` : ""}. Fix them (a comment says why, or it goes), or for a true false positive get the user's waiver (\`gate waive slop "<reason>"\`); it covers the lines flagged now.`;
   },
   "claude-md-budget": ({ root, changed }) => {
     const file = path.join(root, "CLAUDE.md");
     if (!existsSync(file)) return null;
     if (!changed.includes("CLAUDE.md")) return null;
     const size = statSync(file).size;
-    return size > 150_000 ? `CLAUDE.md is ${size} chars, over the 150000 budget an assistant can load. Move detail into the linked docs before closing.` : null;
+    return size > 150_000 ? `CLAUDE.md is ${size} chars, over the 150000 budget an assistant can load. Move detail into the linked docs before closing; no waiver clears this.` : null;
   },
   "migration-number": ({ root, changed }) => {
     const added = changed.filter((p) => /^supabase\/migrations\/\d{4}_.*\.sql$/.test(p));
@@ -39,9 +52,9 @@ const CHECKS = {
     const claude = path.join(root, "CLAUDE.md");
     if (!existsSync(claude)) return null;
     const m = /Next number:\s*`?(\d{4})`?/.exec(readFileSync(claude, "utf8"));
-    if (!m) return "CLAUDE.md has no `Next number:` line for migrations.";
+    if (!m) return "CLAUDE.md has no `Next number:` line for migrations; no waiver clears this.";
     const expected = String(max + 1).padStart(4, "0");
-    return m[1] === expected ? null : `migration ${String(max).padStart(4, "0")} was added but CLAUDE.md says the next number is ${m[1]}; it should say ${expected}.`;
+    return m[1] === expected ? null : `migration ${String(max).padStart(4, "0")} was added but CLAUDE.md says the next number is ${m[1]}; it should say ${expected}; no waiver clears this.`;
   },
 };
 
@@ -49,7 +62,9 @@ export function runChecks(state) {
   const { config, ledger } = state;
   const out = [];
   const names = new Set(config.checks ?? []);
-  if (config.slop !== false && ledger && !waived(ledger, "slop")) names.add("slop");
+  // a slop waiver from before 0.17 recorded no lines and covers the whole run
+  const wholeRun = ledger?.waivers.some((w) => w.key === "slop" && !Array.isArray(w.lines));
+  if (config.slop !== false && ledger && !wholeRun) names.add("slop");
   for (const name of names) {
     const fn = CHECKS[name];
     if (!fn) {
