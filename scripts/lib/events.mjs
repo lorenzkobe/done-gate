@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { toPosixRel } from "./paths.mjs";
 // guard.mjs imports this module back: both sides only call each other inside functions
-import { gitWrites, readsOnly, scratchOnly } from "./guard.mjs";
+import { gitMoves, gitWrites, readsOnly, scratchOnly } from "./guard.mjs";
 
 // Wall-clock microseconds, strictly increasing within a process. Orders events across
 // parallel hook processes by wall clock without a shared counter file (which would race).
@@ -68,7 +68,7 @@ export function eventsFromHookInput(input, root, repos = []) {
     const code = /exit code:?\s*(\d+)/i.exec(String(input.tool_error ?? ""));
     if (tool !== "Bash" || !code) return [];
     const cmd = String(input.tool_input?.command ?? "");
-    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: Number(code[1]), ...(gitWrites(cmd) ? { git: true } : {}), ...(readsOnly(cmd) ? { readOnly: true } : {}) }];
+    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: Number(code[1]), ...(gitWrites(cmd) ? { git: true, commits: !gitMoves(cmd) } : {}), ...(readsOnly(cmd) ? { readOnly: true } : {}) }];
   }
   if (event !== "PostToolUse") return [];
 
@@ -84,7 +84,7 @@ export function eventsFromHookInput(input, root, repos = []) {
     const git = gitWrites(cmd);
     const readOnly = readsOnly(cmd);
     const scratch = !readOnly && scratchOnly(cmd);
-    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...(background ? { background: true } : {}), ...(git ? { git: true } : {}), ...(readOnly ? { readOnly: true } : {}), ...(scratch ? { scratch: true } : {}) }];
+    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...(background ? { background: true } : {}), ...(git ? { git: true, commits: !gitMoves(cmd) } : {}), ...(readOnly ? { readOnly: true } : {}), ...(scratch ? { scratch: true } : {}) }];
   }
   if (tool === "Agent" || tool === "Task") {
     return [{ ...b(), kind: "agent", tool, spawned: input.tool_input?.subagent_type ?? null }];

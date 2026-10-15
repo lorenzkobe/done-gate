@@ -23,6 +23,7 @@ const HELP = `gate <verb>: node <plugin>/scripts/gate.mjs <verb>
   close                                                     close the run when check is clean
   report [--brief]                                          the run's report (paste --brief as the final message)
   waive <key> "<why>" · decide <phase> <decision> <why> <evidence> <result> · abandon <slug> "<why>"
+  rebaseline "<why>"                                        take changes that are not this task's (another terminal, a stash pop) out of it
   steps · size · doctor · help`;
 
 export const verbs = {

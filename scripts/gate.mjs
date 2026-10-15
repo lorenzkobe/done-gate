@@ -29,6 +29,7 @@ const VERBS = {
   decide: { hook: false, load: () => import("./lib/verbs.mjs") },
   close: { hook: false, load: () => import("./lib/verbs.mjs") },
   abandon: { hook: false, load: () => import("./lib/verbs.mjs") },
+  rebaseline: { hook: false, load: () => import("./lib/verbs.mjs") },
   verify: { hook: false, load: () => import("./lib/verify.mjs") },
   check: { hook: false, load: () => import("./lib/check.mjs") },
   report: { hook: false, load: () => import("./lib/report.mjs") },

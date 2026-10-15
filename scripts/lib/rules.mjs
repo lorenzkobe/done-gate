@@ -417,7 +417,7 @@ export function implementationHash(snap, config) {
   return digest.digest("hex");
 }
 
-function list(paths, max = 3) {
+export function list(paths, max = 3) {
   const shown = paths.slice(0, max).join(", ");
   return paths.length > max ? `${shown}, +${paths.length - max} more` : shown;
 }
@@ -772,7 +772,7 @@ export function evaluate(state) {
     if (own.length) {
       unmet.push({
         rule: "R1",
-        text: `source changed (${list(own)}) but no ledger is open for this session. Run \`gate open <slug> <feature|bugfix|refactor|plan>\` (or \`gate attach <slug>\`), write Task, Plan and the case table, then continue.`,
+        text: `source changed (${list(own)}) but no ledger is open for this session. Run \`gate open <slug> <feature|bugfix|refactor|plan>\` (or \`gate attach <slug>\`), write Task, Plan and the case table, then continue. If these changes are not yours (another terminal, a stash pop), ask the user, then \`gate rebaseline "<why>"\`.`,
       });
     }
     return unmet;

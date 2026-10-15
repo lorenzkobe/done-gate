@@ -277,6 +277,37 @@ export function gitWrites(raw) {
   return [...String(raw).matchAll(GIT_CALL)].some((m) => !GIT_STILL.has(m[1]) && !(m[2] && (m[1] === "stash" || m[1] === "worktree")));
 }
 
+// A command whose every part is a git move to what commits already hold, a read or a cd: it
+// cannot commit what the agent wrote. Anything else may (a write, an alias, a stash that saves).
+const GIT_MOVES = new Set(["checkout", "switch", "restore", "reset", "pull", "fetch", "merge", "rebase"]);
+const STASH_MOVES = new Set(["pop", "apply", "drop", "clear", "list", "show"]);
+const RESUMES = /\s--(?:continue|edit-todo)(?=\s|$)/;
+const RUNS_OR_STOPS = /\s(?:--exec(?:=|\s|$)|--interactive(?=\s|$)|--rebase=i\w*|-[a-zA-Z]*[ix][a-zA-Z]*(?=\s|$))/;
+export function gitMoves(raw) {
+  let moved = false;
+  for (const seg of segments(withoutHeredocs(String(raw)))) {
+    const { words } = shift(seg);
+    if (!words.length) continue;
+    const text = words.map((w) => w.text).join(" ");
+    if (words[0].text !== "git") {
+      if (words[0].text === "cd" || readsOnly(text)) continue;
+      return false;
+    }
+    let i = 1;
+    while (i < words.length && words[i].text.startsWith("-")) {
+      // a -c setting can point git at hooks or aliases that commit
+      if (words[i].text === "-c") return false;
+      i += words[i].text === "-C" ? 2 : 1;
+    }
+    const sub = words[i]?.text;
+    const args = ` ${words.slice(i + 1).map((w) => w.text).join(" ")}`;
+    if (GIT_STILL.has(sub)) continue;
+    if (sub === "stash" ? !STASH_MOVES.has(words[i + 1]?.text) : !GIT_MOVES.has(sub) || RESUMES.test(args) || (["rebase", "pull"].includes(sub) && RUNS_OR_STOPS.test(args))) return false;
+    moved = true;
+  }
+  return moved;
+}
+
 // Inline code that writes, wherever its target: a heredoc body is text to the shell but code
 // to the interpreter it feeds.
 export function inlineWrites(raw) {

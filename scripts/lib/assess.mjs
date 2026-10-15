@@ -1,14 +1,14 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
-import { readEvents } from "./events.mjs";
+import { appendEvents, readEvents } from "./events.mjs";
 import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
 import { delegatedTier, leadDelegates, measure, policyFor, reconcileTier, tiered } from "./size.mjs";
 import { implementationHash, writersOf } from "./rules.mjs";
 import { nextSeq } from "./events.mjs";
 import { evaluate } from "./rules.mjs";
 import { ensureSession, loadSession, saveSession } from "./session-state.mjs";
-import { diffSnapshots, gitChanged, gitDiffers, gitHead, gitNumstat, snapshot } from "./tree.mjs";
+import { diffSnapshots, gitChanged, gitDiffers, gitHead, gitNumstat, gitTracked, snapshot } from "./tree.mjs";
 import { repoPath } from "./paths.mjs";
 
 export function readVerify(dir) {
@@ -62,7 +62,7 @@ export function stampSourceChange(ledger, hash, events, tree = null) {
     if (tree) {
       const edited = editedSince(ledger, events);
       entry.paths = diffSnapshots(ledger.baseline, tree.now).changed.filter((p) => tree.config.isSource(p) && !edited.has(p));
-      entry.writes = events.some((e) => e.kind === "command" && e.seq > prev && !e.readOnly);
+      entry.writes = events.some((e) => e.kind === "command" && e.seq > prev && !e.readOnly && !gitMove(e));
       entry.prev = prev;
       entry.prevHash = prevHash;
       // a subagent's write is first seen at the lead's next call: it is the subagent's when every
@@ -81,8 +81,61 @@ function editedSince(ledger, events) {
   return new Set(events.filter((e) => e.kind === "edit" && e.seq > since).map((e) => e.path));
 }
 
-// Folds other sessions' commits into the baseline: a source file committed since open, clean
-// against HEAD, not edited or shell-written by this run. Skipped when this run wrote through git.
+// A checkout, pull or rebase that only moved the tree to what commits hold (events.mjs).
+const gitMove = (e) => e.git === true && e.commits === false;
+
+// The changed files the task may have written itself since its baseline (a run's starts before
+// open): an edit-tool edit, a recorded shell write, or a file timed into a non-move command.
+export function ownWrites(holder, events, now, paths) {
+  const since = holder.baseline?.seq ?? holder.openedSeq ?? 0;
+  const edited = new Set(events.filter((e) => e.kind === "edit" && e.seq > since).map((e) => e.path));
+  const shell = new Set((holder.unexplainedChanges ?? []).filter((u) => u.writes).flatMap((u) => u.paths ?? []));
+  // each command's run is timed against the events around it, git moves included
+  return new Set(paths.filter((p) => edited.has(p) || shell.has(p) || writersOf(events, since, now.files[p]?.m).some((e) => !gitMove(e))));
+}
+
+// Takes files into the baseline as they are now, out of the task's changes; R16 and the freshness
+// clock stop counting an unexplained change that was only these files.
+export function foldIntoBaseline(holder, paths, now, config) {
+  const base = holder.baseline;
+  const unexplained = holder.unexplainedChanges ?? [];
+  const without = { ...now.files };
+  for (const p of paths) {
+    if (p in base.files) without[p] = base.files[p];
+    else delete without[p];
+  }
+  const rest = implementationHash({ files: without }, config);
+  const gone = new Set(paths);
+  for (const p of paths) {
+    if (p in now.files) base.files[p] = now.files[p];
+    else delete base.files[p];
+  }
+  // a folded file is no longer diffed against the copy taken at open
+  if (base.based) base.based = base.based.filter((p) => !gone.has(p));
+  if (base.dirty) base.dirty = base.dirty.filter((p) => !gone.has(p));
+  const removed = new Map();
+  const kept = unexplained.filter((u) => {
+    if (!u.paths.some((p) => gone.has(p))) return true;
+    u.paths = u.paths.filter((p) => !gone.has(p));
+    if (u.paths.length) return true;
+    removed.set(u.seq, u);
+    return false;
+  });
+  if (holder.unexplainedChanges) holder.unexplainedChanges = kept;
+  // the stamp walks back past every removed entry, and stops at one a real change made
+  let before = holder.lastSourceHash;
+  while (removed.has(holder.lastSourceChangeSeq)) {
+    const u = removed.get(holder.lastSourceChangeSeq);
+    holder.lastSourceChangeSeq = u.prev;
+    before = u.prevHash;
+  }
+  // the rest of the tree is as it was at that stamp, so only the folded files moved: the
+  // hash follows with no stamp, whatever content they now have
+  if (rest === holder.lastSourceHash || rest === before) holder.lastSourceHash = implementationHash(now, config);
+}
+
+// Folds into the baseline a source file git changed since the HEAD last seen, clean against HEAD
+// and not the task's own; skipped once a git command of the task's may have committed.
 function absorbForeign(root, ledger, now, config, events) {
   const base = ledger.baseline;
   const repos = ledger.repos ?? [];
@@ -94,59 +147,33 @@ function absorbForeign(root, ledger, now, config, events) {
     { dir: root, key: "", from: base?.head, seen: ledger.foreignHead },
     ...repos.map((r) => ({ dir: r.root, key: `${r.prefix}/`, prefix: r.prefix, from: base?.heads?.[r.prefix], seen: ledger.foreignHeads?.[r.prefix] })),
   ];
+  // from the HEAD last folded, so a round trip (A, B, A) folds back to A
   const ahead = [];
   for (const r of roots) {
     const head = r.from ? gitHead(r.dir) : null;
-    if (head && head !== r.from && head !== r.seen) ahead.push({ ...r, head });
+    const last = r.seen ?? r.from;
+    if (head && head !== last) ahead.push({ ...r, last, head });
   }
   if (!ahead.length) return false;
-  if (events.some((e) => e.kind === "command" && e.git && e.seq > (ledger.openedSeq ?? 0))) return false;
+  if (events.some((e) => e.kind === "command" && e.git && !gitMove(e) && e.seq > (ledger.openedSeq ?? 0))) return false;
   const committed = new Set();
   for (const r of ahead) {
     if (r.prefix) ledger.foreignHeads = { ...ledger.foreignHeads, [r.prefix]: r.head };
     else ledger.foreignHead = r.head;
-    for (const p of gitChanged(r.dir, r.from, r.head)) committed.add(`${r.key}${p}`);
+    for (const p of gitChanged(r.dir, r.last, r.head)) committed.add(`${r.key}${p}`);
   }
-  const edited = editedSince(ledger, events);
-  const shell = new Set(unexplained.filter((u) => u.writes).flatMap((u) => u.paths));
   // what a late-declared repo held uncommitted at declaration is this run's, whoever commits it
-  const own = new Set(base.untrackedAtHead ?? []);
-  const moved = diffSnapshots(base, now).changed.filter((p) => config.isSource(p) && committed.has(p) && !edited.has(p) && !shell.has(p) && base.files[p]?.h !== "HEAD" && !own.has(p));
+  const held = new Set(base.untrackedAtHead ?? []);
+  const candidates = diffSnapshots(base, now).changed.filter((p) => config.isSource(p) && committed.has(p) && base.files[p]?.h !== "HEAD" && !held.has(p));
+  const own = ownWrites(ledger, events, now, candidates);
+  const moved = candidates.filter((p) => !own.has(p));
   const dirty = moved.length ? gitNumstat(root, moved, "HEAD", { repos }) : new Map();
-  const foreign = moved.filter((p) => !dirty.has(p));
+  // an untracked file is not what HEAD holds, though git diff HEAD does not list it
+  const tracked = moved.some((p) => p in now.files) ? gitTracked(root, repos) : new Set();
+  const foreign = moved.filter((p) => !dirty.has(p) && (!(p in now.files) || tracked.has(p)));
   if (!foreign.length) return true;
-  const without = { ...now.files };
-  for (const p of foreign) {
-    if (p in base.files) without[p] = base.files[p];
-    else delete without[p];
-  }
-  const rest = implementationHash({ files: without }, config);
-  for (const p of foreign) {
-    if (p in now.files) base.files[p] = now.files[p];
-    else delete base.files[p];
-  }
+  foldIntoBaseline(ledger, foreign, now, config);
   ledger.foreign = [...new Set([...(ledger.foreign ?? []), ...foreign])].sort();
-  // an unexplained change that was only these files is explained now: R16 and the freshness
-  // clock stop counting it
-  const gone = new Set(foreign);
-  const removed = new Map();
-  ledger.unexplainedChanges = unexplained.filter((u) => {
-    if (!u.paths.some((p) => gone.has(p))) return true;
-    u.paths = u.paths.filter((p) => !gone.has(p));
-    if (u.paths.length) return true;
-    removed.set(u.seq, u);
-    return false;
-  });
-  // the stamp walks back past every removed entry, and stops at one a real change made
-  let before = ledger.lastSourceHash;
-  while (removed.has(ledger.lastSourceChangeSeq)) {
-    const u = removed.get(ledger.lastSourceChangeSeq);
-    ledger.lastSourceChangeSeq = u.prev;
-    before = u.prevHash;
-  }
-  // the rest of the tree is as it was at that stamp, so only the absorbed files moved: the
-  // hash follows with no stamp, whatever content the commit gave them
-  if (rest === ledger.lastSourceHash || rest === before) ledger.lastSourceHash = implementationHash(now, config);
   return true;
 }
 
@@ -242,8 +269,6 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
   const baseline = current ? current.ledger.baseline : session.baseline;
   const cache = session.lastTree ?? baseline;
   const now = snapshot(ctx.root, cache, repos);
-  // the declared repos' entries ride along as a hash cache for the run; close and abandon drop them
-  saveSession(ctx.stateDir, { ...session, lastTree: { files: now.files, hash: now.hash } });
 
   const sessions = current ? current.ledger.sessions : [ctx.session];
   const events = sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
@@ -251,6 +276,17 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
   // before the diff is taken, so another session's commit never shows as this task's change
   const settled = current ? settleAtHead(ctx.root, current.ledger, now) : false;
   const absorbed = (current ? absorbForeign(ctx.root, current.ledger, now, config, events) : false) || settled;
+  // with no run open the session's own baseline moves with git the same way
+  let moved = {};
+  if (!current) {
+    const holder = { baseline, openedSeq: session.baselineSeq ?? 0, foreignHead: session.foreignHead };
+    if (absorbForeign(ctx.root, holder, now, config, events)) {
+      moved = { baseline, foreignHead: holder.foreignHead };
+      if (holder.foreign?.length) appendEvents(ctx.stateDir, ctx.session, [{ seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, agent: null, agentType: null, kind: "baseline-moved", head: holder.foreignHead, paths: holder.foreign }]);
+    }
+  }
+  // the declared repos' entries ride along as a hash cache for the run; close and abandon drop them
+  saveSession(ctx.stateDir, { ...session, ...moved, lastTree: { files: now.files, hash: now.hash } });
   const diff = diffSnapshots(baseline, now);
 
   // Size and freshness bookkeeping. The ledger is written only on a state flip (a step

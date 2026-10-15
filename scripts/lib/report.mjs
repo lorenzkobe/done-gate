@@ -99,6 +99,7 @@ export function attentionLines(state, unmet) {
   if (blocks) out.push(`- the gate blocked the turn ${blocks} time${blocks === 1 ? "" : "s"} (see the block events for the rules each time)`);
   if (ledger.status === "abandoned") out.push(`- abandoned: ${ledger.abandonReason}`);
   if (ledger.overridden) out.push("- the gate was OVERRIDDEN; treat every claim above as unverified");
+  for (const r of ledger.rebaselines ?? []) out.push(`- rebaselined ${r.paths.join(", ")}: ${r.reason}`);
   const order = lateOrder(state);
   if (order.late.length) out.push(`- ${order.late.join(" and ")} written after the first source edit (${order.path})`);
   for (const u of unmet) out.push(`- unmet ${u.rule}: ${u.text}`);
@@ -176,7 +177,7 @@ export function renderReport(state, unmet) {
   const other = changed.filter((f) => !seen.has(f));
   if (other.length) out.push(`- other (${other.length}): ${other.slice(0, 20).join(", ")}`);
   if (!changed.length) out.push("_none since baseline_");
-  if (ledger.foreign?.length) out.push(`\n${plural(ledger.foreign.length, "file")} changed only by other commits left out: ${ledger.foreign.slice(0, 20).join(", ")}${ledger.foreign.length > 20 ? ", …" : ""}`);
+  if (ledger.foreign?.length) out.push(`\n${plural(ledger.foreign.length, "file")} changed only by other commits or a git move (checkout, pull, rebase) left out: ${ledger.foreign.slice(0, 20).join(", ")}${ledger.foreign.length > 20 ? ", …" : ""}`);
 
   const tier = tierBlock(state);
   if (tier.length) out.push("\n## Tier\n", ...tier);
@@ -377,6 +378,7 @@ function forYouLine(state, unmet) {
   }
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) items.push(`skipped: ${plain(s.text)} (${plain(s.note)})`);
   for (const gap of lookupGaps(ledger)) items.push(`${gap}: checked with grep and Read`);
+  for (const r of ledger.rebaselines ?? []) items.push(`${plural(r.paths.length, "file")} taken out of this task's changes by hand (${plain(r.reason)})`);
   if (ledger.overridden) items.push("I could not satisfy the checks and ended anyway; treat everything above as unverified");
   if (ledger.steps.some((s) => s.key === "context" && s.state === null)) items.push("no context was written: what was traced, what depends on it, what was researched");
   const order = lateOrder(state);

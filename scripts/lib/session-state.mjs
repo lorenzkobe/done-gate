@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import path from "node:path";
 import { sessionDir } from "./events.mjs";
 import { nextSeq } from "./events.mjs";
-import { snapshot } from "./tree.mjs";
+import { gitHead, snapshot } from "./tree.mjs";
 
 function stateFile(stateDir, session) {
   return path.join(sessionDir(stateDir, session), "state.json");
@@ -32,7 +32,7 @@ export function ensureSession(stateDir, root, session) {
   const state = {
     session,
     startedAt: new Date().toISOString(),
-    baseline: snapshot(root),
+    baseline: { ...snapshot(root), head: gitHead(root) },
     baselineSeq: nextSeq(),
     current: null,
     blocks: { key: null, count: 0 },

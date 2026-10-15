@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameS
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, repoConfig } from "./config.mjs";
-import { nextSeq } from "./events.mjs";
+import { nextSeq, readEvents } from "./events.mjs";
 import { repoPath } from "./paths.mjs";
 import { ensureSession, loadSession, saveSession, updateSession } from "./session-state.mjs";
 import { baseCopyPath, diffSnapshots, gitHead, gitNumstat, gitTop, gitTracked, snapshot, taskBaseline, withRepoAtHead, withRepos, withoutRepos } from "./tree.mjs";
@@ -286,6 +286,12 @@ export function openLedger(ctx, slug, playbook, repoPaths = []) {
     waivers: [],
     pauses: [],
   };
+  // what the session took out of its changes before this run opened is reported with the run
+  const carried = readEvents(ctx.stateDir, ctx.session).filter((e) => e.seq > (session.baselineSeq ?? 0));
+  const byHand = carried.filter((e) => e.kind === "rebaseline").map((e) => ({ at: e.ts, seq: e.seq, reason: e.reason, paths: e.paths }));
+  const byGit = carried.filter((e) => e.kind === "baseline-moved").flatMap((e) => e.paths ?? []);
+  if (byHand.length) ledger.rebaselines = byHand;
+  if (byGit.length) ledger.foreign = [...new Set(byGit)].sort();
   saveLedger(dir, ledger);
   writeFileSync(
     path.join(dir, "ledger.md"),

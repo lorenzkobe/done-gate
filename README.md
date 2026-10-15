@@ -191,6 +191,13 @@ checked.
 - **Can't forge evidence, can't invent a waiver.** See above.
 - **Fails open, loudly.** A bug in the gate itself exits 0 and stamps `GATE ERROR`. A hook
   that could wedge every session in every repo would cost more than one unreported task.
+- **Git's own moves are not your edits.** A checkout, pull, fast-forward, rebase or reset
+  moves the starting point, with or without a run open: a file git changed that now matches
+  HEAD leaves the task's changes, and the report lists it. It stays the task's when this
+  session edited it, a shell command of its own could have written it, or the session made a
+  commit through git (anything but a move counts as one). For what the check cannot see (a
+  stash pop, another terminal's edit), `gate rebaseline "<why>"` takes the changes the task
+  did not write out of it, after asking the user; the report names them and the reason.
 - **Zero friction when nothing changed.** Questions, investigations, a second terminal in
   the same repo: the tree hash is unchanged, the gate stays silent.
 - **Helpers write their file first.** A skeptic, reviewer or arbiter may only read its packet

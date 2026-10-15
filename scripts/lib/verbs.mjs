@@ -8,11 +8,11 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { briefOf, caseOpen, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits } from "./rules.mjs";
-import { assess, buildState, readVerify, reviewFiles, readVerifyStarted } from "./assess.mjs";
+import { briefOf, caseOpen, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list } from "./rules.mjs";
+import { assess, buildState, foldIntoBaseline, ownWrites, readVerify, reviewFiles, readVerifyStarted } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
-import { withoutRepos } from "./tree.mjs";
-import { readEvents } from "./events.mjs";
+import { gitHead, withoutRepos } from "./tree.mjs";
+import { appendEvents, readEvents } from "./events.mjs";
 
 // The report of a run that is no longer current: the same renderer `gate report` uses.
 export function writeReport(ctx, dir, ledger) {
@@ -34,7 +34,7 @@ export function finalise(ctx, state) {
   const session = loadSession(ctx.stateDir, ctx.session);
   // a declared repo's files end with the run: session state holds main-root keys only
   const main = withoutRepos(state.now, state.repos);
-  saveSession(ctx.stateDir, { ...session, current: null, lastClosed: path.basename(state.dir), baseline: main, lastTree: main, baselineSeq: nextSeq() });
+  saveSession(ctx.stateDir, { ...session, current: null, lastClosed: path.basename(state.dir), baseline: { ...main, head: gitHead(ctx.root) }, foreignHead: null, lastTree: main, baselineSeq: nextSeq() });
   writeReport(ctx, state.dir, ledger);
   return ledger;
 }
@@ -639,6 +639,40 @@ export const verbs = {
     appendFileSync(file, `${new Date().toISOString()}\t${cells.map(clean).join("\t")}\n`);
     ctx.out("decision logged");
     printNext(ctx);
+  },
+
+  // Takes the changes the task did not write itself (another terminal's edit, a stash pop) out
+  // of it; what it wrote is kept and named, and the reason is reported.
+  rebaseline(ctx) {
+    const reason = ctx.args.join(" ").trim();
+    if (!reason) throw new UsageError('usage: gate rebaseline "<why, with the user\'s OK>"');
+    const state = buildState(ctx, {});
+    const paths = state.changed.filter((p) => state.config.isSource(p));
+    const split = (holder) => {
+      const own = ownWrites(holder, state.events, state.now, paths);
+      const fold = paths.filter((p) => !own.has(p));
+      const kept = paths.filter((p) => own.has(p));
+      if (!fold.length) throw new UsageError(`gate rebaseline: no changed source file to take in${kept.length ? `; ${list(kept)} ${kept.length === 1 ? "was" : "were"} written by this ${state.ledger ? "run" : "session"} and stay${kept.length === 1 ? "s" : ""} its own` : ""}`);
+      foldIntoBaseline(holder, fold, state.now, state.config);
+      return { fold, kept };
+    };
+    let result;
+    if (state.ledger) {
+      result = withLedger(ctx, (ledger) => {
+        const r = split(ledger);
+        ledger.rebaselines = [...(ledger.rebaselines ?? []), { at: new Date().toISOString(), seq: nextSeq(), reason, paths: r.fold }];
+        return r;
+      });
+    } else {
+      const session = loadSession(ctx.stateDir, ctx.session);
+      const holder = { baseline: session.baseline, openedSeq: session.baselineSeq ?? 0 };
+      result = split(holder);
+      saveSession(ctx.stateDir, { ...session, baseline: holder.baseline });
+      appendEvents(ctx.stateDir, ctx.session, [{ seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, agent: null, agentType: null, kind: "rebaseline", reason, paths: result.fold }]);
+    }
+    ctx.out(`starting point moved for ${list(result.fold)}: no longer this ${state.ledger ? "run's" : "session's"} change — the report will show the reason`);
+    if (result.kept.length) ctx.out(`kept (written by this ${state.ledger ? "run" : "session"}): ${list(result.kept)}`);
+    if (state.ledger) printNext(ctx);
   },
 
   // The user gives up on a task: the ledger is marked abandoned with the reason, so it no
