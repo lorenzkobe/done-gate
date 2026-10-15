@@ -107,10 +107,17 @@ function changeAdded(ctx, flag, cmd) {
   saveLedger(current.dir, ledger);
 }
 
+const VERIFY_STEPS = new Set(["verify", "verify-before"]);
+
 export async function runVerify(ctx, { stepKey = "verify" } = {}) {
   const current = currentLedger(ctx.stateDir, ctx.session);
   if (!current || isDone(current.ledger)) {
     throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
+  }
+  // a green run is evidence for a verify step only; any other step has its own evidence
+  if (stepKey !== "verify") {
+    const keys = current.ledger.steps.filter((s) => VERIFY_STEPS.has(s.key)).map((s) => s.key);
+    if (!keys.includes(stepKey)) throw new UsageError(`gate verify --step takes a verify step of this run (${keys.join(", ") || "none"}), not ${stepKey === null ? "nothing" : `{${stepKey}}`}`);
   }
   const repos = current.ledger.repos ?? [];
   const config = loadConfig(ctx.root, repos);
@@ -190,7 +197,7 @@ export const verbs = {
       return;
     }
     const stepIdx = ctx.args.indexOf("--step");
-    const stepKey = stepIdx >= 0 ? ctx.args[stepIdx + 1] : "verify";
+    const stepKey = stepIdx >= 0 ? ctx.args[stepIdx + 1] ?? null : "verify";
     const { record, red } = await runVerify(ctx, { stepKey });
     for (const c of record.commands) {
       if (c.skipped) {

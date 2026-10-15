@@ -10,7 +10,7 @@ line: follow it. `gate check` lists what is unmet (R1-R10, R13, R15, R16, R17). 
 
 ## The loop
 
-1. `gate open <slug> <feature|bugfix|refactor|plan>`.
+1. `gate open <slug> <feature|bugfix|refactor|plan|investigation>`.
 2. Before any edit: `gate note task "<the ask, quoted, then your words>"`; understand
    first: search code and memory before grep (missing: `--no-code|--no-memory "<why>"`,
    tell the user), trace, then `gate note context "Traced: <file:line pointers> Related:

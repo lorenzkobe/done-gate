@@ -154,7 +154,7 @@ attempt to finish.
 | R9 | high-risk paths changed without the second reviewer (same round rules as R5; an open reviewer-2 item is named) |
 | R10 | a repo check failed: the slop scan found a banner comment, step narration, an empty label, an end marker, an emoji, a bare TODO or a `@param` that echoes its name on an added non-test line (`"slop": false` in gate.json turns it off between tasks; mid-task, `gate waive slop` clears a false positive), or an opted-in check (`claude-md-budget`, `migration-number`) |
 | R13 | `.claude/gate.json` or the plugin's `models.json` changed mid-task |
-| R15 | a helper's file lists more findings than the ledger recorded, or a briefed skeptic, reviewer or arbiter stopped before finishing its file |
+| R15 | a helper's file lists more findings than the ledger recorded, a briefed skeptic, reviewer or arbiter stopped before finishing its file, or an Act-on item outside the reviewers' rounds is still open (a skeptic item added after its step closed, one typed by hand) |
 | R16 | the lead edited source itself at size large (a worker's job); waivable with `gate waive delegate` |
 | R17 | a skeptic, reviewer, reviewer-2, worker or arbiter that wrote its file or edited source made no code or no memory lookup since the run opened (QA: no memory lookup), less any kind the lead declared missing; waivable with `gate waive lookups` |
 
@@ -308,7 +308,7 @@ tests itself, from the case table, before the code.
 | small | one source file, ≤ 40 lines, no UI, schema or high-risk path | reviewer |
 | standard | ≤ 10 files, ≤ 400 lines, or any UI, schema or high-risk file | skeptic, reviewer |
 | large | more than that | skeptic, QA (blind tests), a worker per piece, reviewer, a second reviewer |
-| any | 2+ Act-on items in round 1 | a second reviewer round, same reviewer, fresh context |
+| any | a round with Act-on items | another round, same reviewer, fresh context, until one comes back clean (three at most) |
 | any | a review finding the model disputes with evidence and the reviewer upholds | arbiter, rules once in writing |
 
 `gate note plan --files a.ts,b.ts` predicts the tier before the diff exists, so a small
@@ -317,8 +317,8 @@ then outgrows the prediction, the step comes back and the gate says so. Tiny is 
 by evidence: a plan naming exactly one source file, or a measurement with no estimated lines. `gate size` prints the
 numbers. The skeptic step is on the feature, bugfix and refactor playbooks at standard and
 large; it cannot close without a finished, recorded `skeptic-<n>.md` whose Act-on items are
-all closed. The policy is in `models.json`. Hard ceiling: **ten helper invocations per task**,
-typically two or three. Always-on context cost is about 500 tokens; everything the hooks do
+all closed. The policy is in `models.json`. Aim for at most ten helper invocations per task
+(not enforced); typically two or three. Always-on context cost is about 500 tokens; everything the hooks do
 is off-model.
 
 ## Commands

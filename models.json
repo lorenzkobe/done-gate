@@ -37,15 +37,6 @@
       "schema",
       "highRisk"
     ],
-    "escalate": {
-      "reviewerRound2": {
-        "whenActOnAtLeast": 2,
-        "orTier": "large"
-      }
-    },
-    "ceiling": {
-      "helpersPerTask": 10
-    },
     "delegatesAt": "large",
     "reviewMaxLines": 400
   }

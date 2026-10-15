@@ -23,9 +23,6 @@ export const DEFAULT_POLICY = Object.freeze({
     large: { requires: ["skeptic", "qa", "worker", "reviewer", "reviewer-2"] },
   },
   forceStandard: ["ui", "schema", "highRisk"],
-  // a second reviewer round: after this many Act-on items in round 1, or at this tier
-  escalate: { reviewerRound2: { whenActOnAtLeast: 2, orTier: "large" } },
-  ceiling: { helpersPerTask: 10 },
   // the size at which the lead stops editing and briefs a worker per piece; below it the lead
   // implements with its own context
   delegatesAt: "large",
@@ -55,17 +52,12 @@ function merge(raw) {
   const r = raw && typeof raw === "object" ? raw : {};
   const p = r.policy && typeof r.policy === "object" ? r.policy : {};
   const tiers = p.tiers && typeof p.tiers === "object" && Object.keys(p.tiers).length ? normaliseTiers(p.tiers) : DEFAULT_POLICY.tiers;
-  const round2 = p.escalate && typeof p.escalate === "object" && p.escalate.reviewerRound2 && typeof p.escalate.reviewerRound2 === "object" ? p.escalate.reviewerRound2 : {};
   const resolved = {
     tiers,
     forceStandard: Array.isArray(p.forceStandard) ? p.forceStandard.map(String) : DEFAULT_POLICY.forceStandard,
-    // the old `model` key is dropped: helpers inherit the session's model
-    escalate: { reviewerRound2: { ...DEFAULT_POLICY.escalate.reviewerRound2, ...round2, model: undefined } },
-    ceiling: { ...DEFAULT_POLICY.ceiling, ...(p.ceiling && typeof p.ceiling === "object" ? p.ceiling : {}) },
     delegatesAt: typeof p.delegatesAt === "string" && p.delegatesAt ? p.delegatesAt : DEFAULT_POLICY.delegatesAt,
     reviewMaxLines: Math.max(1, Number.isFinite(p.reviewMaxLines) ? p.reviewMaxLines : DEFAULT_POLICY.reviewMaxLines),
   };
-  delete resolved.escalate.reviewerRound2.model;
   // hashed like the repo config, so a mid-task edit to models.json is caught (R13)
   return { ...resolved, hash: createHash("sha1").update(JSON.stringify(resolved)).digest("hex") };
 }
@@ -364,9 +356,7 @@ export function renderTierBlock(ledger, policy, measured, { details = false } = 
     : "measured: not yet";
   out.push(`tier: ${eff} · ${predicted} · ${measuredText}`);
   const helpers = requires(policy, eff);
-  const esc = policy.escalate?.reviewerRound2;
-  const escText = esc ? ` · round 2 (same reviewer, fresh context) when ${esc.whenActOnAtLeast}+ Act-on or tier ${esc.orTier}` : "";
-  out.push(`requires: ${helpers.length ? helpers.join(", ") : "none"}${escText} · ceiling ${policy.ceiling.helpersPerTask} helpers/task`);
+  out.push(`requires: ${helpers.length ? helpers.join(", ") : "none"}`);
   out.push(`piece cap ${policy.reviewMaxLines} lines: a review round covers at most that many source lines (\`gate brief reviewer --files a,b\` for a piece)`);
   out.push(`auto-N/A: ${t.autoNa.length ? t.autoNa.map((k) => `{${k}}`).join(", ") : "none"}`);
   if (details && measured?.details?.length) {

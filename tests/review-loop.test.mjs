@@ -571,14 +571,14 @@ test("C9 happy: the brief's review line reads n problems, k fixed, m overruled b
 // C10 — the policy gains the arbiter and one more helper
 // ---------------------------------------------------------------------------
 
-test("C10 happy: models.json names no model and a ceiling of 10; the tier block prints the ceiling", () => {
+test("C10 happy: models.json names no model and no ceiling; the tier block prints none", () => {
   const m = modelsJson();
   assert.ok(!("roles" in m), `models.json still names models: ${JSON.stringify(m.roles)}`);
-  assert.equal(m.policy.ceiling.helpersPerTask, 10, `models.json ceiling: ${JSON.stringify(m.policy.ceiling)}`);
+  assert.ok(!("ceiling" in m.policy), `models.json ceiling: ${JSON.stringify(m.policy.ceiling)}`);
 
   const repo = opened("rd-c10");
   const out = cli(repo, "size").stdout;
-  assert.ok(out.includes("ceiling 10"), `\`gate size\` does not print the new ceiling:\n${out}`);
+  assert.doesNotMatch(out, /ceiling/, `\`gate size\` still prints a ceiling:\n${out}`);
 });
 
 // ---------------------------------------------------------------------------
@@ -629,7 +629,7 @@ test("C12 edge: a skeptic file's Act-on bullets are imported too, so R15 covers 
   assert.deepEqual(items.map((i) => i.id), ["H1.1", "H1.2"]);
   assert.deepEqual(items.map((i) => i.text), [A, B]);
   assert.equal(ledgerOf(repo).huddles[0].role, "skeptic");
-  assert.ok(!ruleLine(check(repo), "R15"), `R15 fired while the skeptic file matched the ledger:\n${check(repo)}`);
+  assert.doesNotMatch(check(repo), /R15 — skeptic-1\.md lists/, `R15 fired while the skeptic file matched the ledger:\n${check(repo)}`);
 
   helperFile(repo, "skeptic-1.md", `# Skeptic 1 — rd-c12\n\n## Act on\n- ${A}\n- ${B}\n- ${C}\n## Consider\n- rename it\n`);
   const line = ruleLine(check(repo), "R15");

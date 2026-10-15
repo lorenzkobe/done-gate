@@ -105,7 +105,8 @@ export const verbs = {
         ledger.overridden = { at: new Date().toISOString(), session: ctx.session, blocks: count, unmet };
         saveLedger(state.dir, ledger);
       }
-      recordGateError(new Error(`GATE OVERRIDDEN after ${count} identical blocks: ${unmet.map((u) => u.rule).join(", ")}`), "stop");
+      // an override is the gate working as designed, not a gate error: it goes to the event log
+      appendEvents(ctx.stateDir, ctx.session, [{ seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, agent: null, agentType: null, kind: "override", blocks: count, rules: unmet.map((u) => u.rule) }]);
       clearBlocks(ctx);
       return;
     }

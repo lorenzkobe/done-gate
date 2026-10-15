@@ -87,7 +87,6 @@ const AGENTS_DIR = path.join(pluginRoot, "agents");
 // the six roles T5 asks for, spelled out rather than read back from the file under test;
 // every one runs on the session's own model (agents/*.md: model: inherit)
 const EXPECTED_ROLES = { skeptic: "inherit", qa: "inherit", reviewer: "inherit", "reviewer-2": "inherit", arbiter: "inherit", worker: "inherit" };
-const EXPECTED_CEILING = 10;
 const WORKER_MAX_TURNS = 100;
 
 // roles that must never touch code: they read and write their own findings file only.
@@ -132,25 +131,18 @@ function largeTier(name) {
 // C1
 // ---------------------------------------------------------------------------
 
-test("C1 happy: models.json and DEFAULT_POLICY name no model and a ceiling of 10 helpers/task, and `gate size` prints that ceiling", () => {
+test("C1 happy: models.json and DEFAULT_POLICY name no model and no ceiling setting, and `gate size` prints no ceiling", () => {
   assert.ok(!("roles" in MODELS), "models.json still carries a roles map");
-  assert.equal(MODELS.policy.ceiling.helpersPerTask, EXPECTED_CEILING, "models.json ceiling.helpersPerTask");
+  assert.ok(!("ceiling" in MODELS.policy), "models.json still has the unenforced ceiling");
 
   // the fallback used when models.json cannot be read must say the same thing
   assert.ok(!("roles" in DEFAULT_POLICY), "size.mjs DEFAULT_POLICY still carries roles");
-  assert.equal(
-    DEFAULT_POLICY.ceiling.helpersPerTask,
-    EXPECTED_CEILING,
-    "size.mjs DEFAULT_POLICY.ceiling.helpersPerTask drifted from models.json",
-  );
+  assert.ok(!("ceiling" in DEFAULT_POLICY), "size.mjs DEFAULT_POLICY still has the ceiling");
 
   const repo = standardTier("roles-c1");
   const requires = lineStarting(cli(repo, "size").stdout, "requires:");
   assert.ok(requires, `no requires line in \`gate size\`:\n${cli(repo, "size").stdout}`);
-  assert.ok(
-    requires.endsWith(`ceiling ${EXPECTED_CEILING} helpers/task`),
-    `\`gate size\` still prints the old ceiling: ${requires}`,
-  );
+  assert.doesNotMatch(requires, /ceiling/, `\`gate size\` still prints the ceiling: ${requires}`);
 });
 
 // ---------------------------------------------------------------------------

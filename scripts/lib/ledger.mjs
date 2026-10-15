@@ -234,15 +234,18 @@ export function openLedger(ctx, slug, playbook, repoPaths = []) {
     for (const repo of fresh) declareLate(ctx, found.dir, found.ledger, repo);
     return found;
   }
+  if (!playbook) throw new UsageError(`gate open ${slug}: name a playbook (have: ${PLAYBOOKS.join(", ")})`);
   if (!PLAYBOOKS.includes(playbook)) throw new UsageError(`unknown playbook "${playbook}" (have: ${PLAYBOOKS.join(", ")})`);
   const repos = [];
   for (const given of repoPaths) repos.push(declarable(ctx, given, repos));
   const session = ensureSession(ctx.stateDir, ctx.root, ctx.session);
   const config = loadConfig(ctx.root, repos);
   const policy = loadPolicy();
+  // the folder gets today's date; a slug that already starts with one would carry two
+  const undated = slugify(String(slug).replace(/^\d{4}-\d{2}-\d{2}-(?=[a-z0-9])/i, ""));
   // a closed or abandoned run with the same slug on the same day keeps its folder; the new
   // run takes the next free name
-  const base = `${new Date().toISOString().slice(0, 10)}-${slugify(slug)}`;
+  const base = `${new Date().toISOString().slice(0, 10)}-${undated}`;
   let name = base;
   for (let i = 2; existsSync(path.join(runsDir(ctx.stateDir), name)); i++) name = `${base}-${i}`;
   const dir = path.join(runsDir(ctx.stateDir), name);
@@ -253,7 +256,7 @@ export function openLedger(ctx, slug, playbook, repoPaths = []) {
   // a repo declared here starts as it is now: what it held before the run is not the run's
   const start = withRepos(taskBaseline(ctx.root, session.baseline, dirty), repos);
   const ledger = {
-    slug: slugify(slug),
+    slug: undated,
     playbook,
     version: ctx.version ?? null,
     status: "open",
@@ -356,7 +359,7 @@ export const verbs = {
     }
     const [slug, playbook] = rest;
     if (!slug) throw new UsageError("usage: gate open <slug> <feature|bugfix|refactor|plan|investigation> [--repo <path>]");
-    const { dir, ledger } = openLedger(ctx, slug, playbook ?? "feature", repos);
+    const { dir, ledger } = openLedger(ctx, slug, playbook, repos);
     printOpen(ctx, dir, ledger);
   },
   repo(ctx) {

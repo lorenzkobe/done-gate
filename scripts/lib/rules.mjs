@@ -674,6 +674,7 @@ export function unfinishedFile(full) {
 
 // Every waiver key a rule reads, with the rule it clears. "qa" is the key older ledgers
 // carry for tests.
+const REVIEW_WAIVER = { reviewer: "review", "reviewer-2": "review-2" };
 export const WAIVERS = { delegate: "R16", driver: "R4", review: "R5", "review-2": "R9", schema: "R6", tests: "R7", qa: "R7", slop: "R10", "gate-config": "R13", lookups: "R17" };
 
 const orWaive = (key) => ` Or get the user's waiver (\`gate waive ${key} "<reason>"\`).`;
@@ -835,7 +836,7 @@ export function evaluate(state) {
     }
   }
 
-  // R9: high-risk paths → a second reviewer on a stronger model
+  // R9: high-risk paths → a second, adversarial reviewer
   if (changed.some((p) => config.isHighRisk(p)) && !waived(ledger, "review-2")) {
     const r = reviewed(state, "reviewer-2", after);
     if (r.stopped && r.hasFile && r.openItems.length) {
@@ -924,6 +925,17 @@ export function evaluate(state) {
     if (listed > fromFile) {
       unmet.push({ rule: "R15", text: `${h.file} lists ${listed} Act-on finding(s) but ${h.id} records ${fromFile} from the file. Run \`gate huddle add ${h.role} --file ${h.file}\` again; it records every bullet.` });
     }
+  }
+  // every Act-on item is answered before the run closes, unless its step or review was waived;
+  // one R5 or R9 already names is not named twice, and those rules skip a tier or a run with no
+  // high-risk path, so this one still sees what they skip
+  const named = unmet.filter((u) => u.rule === "R5" || u.rule === "R9").map((u) => u.text).join("\n");
+  const waivedRole = (role) => waived(ledger, REVIEW_WAIVER[role] ?? role) || ledger.steps?.some((s) => s.key === role && s.state === "WAIVED");
+  const unanswered = (ledger.huddles ?? [])
+    .filter((h) => !waivedRole(h.role))
+    .flatMap((h) => h.actOn.filter((a) => !a.closed && !named.includes(`${a.id} (`)));
+  if (unanswered.length) {
+    unmet.push({ rule: "R15", text: `Act-on item(s) still open: ${unanswered.map(openItem).join(", ")}. Answer each, then \`gate huddle resolve <id> --evidence <pointer>\`.` });
   }
   const recorded = new Set((ledger.huddles ?? []).map((h) => h.file).filter(Boolean));
   for (const f of state.reviews ?? []) {

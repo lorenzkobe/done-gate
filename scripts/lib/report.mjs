@@ -22,6 +22,15 @@ function ledgerMd(dir) {
   return existsSync(file) ? readFileSync(file, "utf8") : "";
 }
 
+// The run's own stretch of the session log, from its open to its close or abandon: a session
+// log spans every task the session worked on. seq is microseconds since the epoch.
+function endOf(ledger) {
+  const end = ledger.abandonedAt ?? ledger.closedAt;
+  return end ? Date.parse(end) * 1000 + 999 : Infinity;
+}
+const inRun = (ledger) => (e) => e.seq > (ledger.openedSeq ?? 0) && e.seq <= endOf(ledger);
+const deniesIn = (ledger, events) => events.filter((e) => e.kind === "deny" && !e.delegate && inRun(ledger)(e));
+
 // ---- pieces of the full report (text unchanged; the brief reuses the same facts) ----
 
 export function summaryLine(ledger, events, unmet, after = 0) {
@@ -29,7 +38,7 @@ export function summaryLine(ledger, events, unmet, after = 0) {
   const blank = ledger.steps.filter((x) => !x.state).length;
   const closedCases = ledger.cases.filter((c) => c.status === "closed" && !clickStale(c, after)).length;
   const naCases = ledger.cases.filter((c) => c.na).length;
-  const denies = events.filter((e) => e.kind === "deny" && !e.delegate).length;
+  const denies = deniesIn(ledger, events).length;
   return (
     `DONE ${count("DONE")} · SKIPPED ${count("SKIPPED")} · WAIVED ${count("WAIVED")} · N/A ${count("N/A")} · blank ${blank} · ` +
     `cases ${closedCases}/${ledger.cases.length} closed (${naCases} n/a) · ` +
@@ -78,15 +87,15 @@ export function actOnRows(ledger, dir, reviews, { embed = true } = {}) {
 
 export function attentionLines(state, unmet) {
   const { ledger, events } = state;
-  const denies = events.filter((e) => e.kind === "deny" && !e.delegate).length;
-  const handoffs = events.filter((e) => e.kind === "deny" && e.delegate).length;
+  const denies = deniesIn(ledger, events).length;
+  const handoffs = events.filter((e) => e.kind === "deny" && e.delegate && inRun(ledger)(e)).length;
   const out = [];
   for (const w of ledger.waivers) out.push(`- waived ${w.key}: ${w.reason ?? w.quote}`);
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) out.push(`- skipped: ${s.text} — ${s.note}`);
   for (const a of ledger.huddles.flatMap((h) => h.actOn).filter((x) => x.dispute)) out.push(`- disputed ${a.id}: ${a.dispute.why} [${a.dispute.evidence}] — ${a.dispute.verdict ?? "unanswered"}${a.dispute.reviewerReason ? `; reviewer: ${a.dispute.reviewerReason}` : ""}${a.dispute.arbiterReason ? `; arbiter: ${a.dispute.arbiterReason}` : ""}`);
   if (denies) out.push(`- ${denies} denied write(s) to gate evidence files (see events)`);
   if (handoffs) out.push(`- ${handoffs} lead edit(s) fenced off at this size and handed to a worker`);
-  const blocks = events.filter((e) => e.kind === "block" && e.seq > (ledger.openedSeq ?? 0)).length;
+  const blocks = events.filter((e) => e.kind === "block" && inRun(ledger)(e)).length;
   if (blocks) out.push(`- the gate blocked the turn ${blocks} time${blocks === 1 ? "" : "s"} (see the block events for the rules each time)`);
   if (ledger.status === "abandoned") out.push(`- abandoned: ${ledger.abandonReason}`);
   if (ledger.overridden) out.push("- the gate was OVERRIDDEN; treat every claim above as unverified");
@@ -96,33 +105,19 @@ export function attentionLines(state, unmet) {
   return out;
 }
 
-// Whether the policy wants a second review round: the first reviewer round returned enough
-// Act-on items, or the task is large.
-function round2Required(state) {
-  const esc = state.policy?.escalate?.reviewerRound2;
-  if (!esc) return false;
-  const first = state.ledger.huddles.find((h) => h.role === "reviewer");
-  const eff = effectiveTier(state.policy, state.ledger, state.tier?.measured ?? null);
-  return Boolean(first && first.actOn.length >= (esc.whenActOnAtLeast ?? 2)) || eff === esc.orTier;
-}
-
 export function tierBlock(state) {
   const { ledger, policy, events } = state;
   if (!policy || !tiered(ledger)) return [];
   const measured = state.tier?.measured ?? tierOf(ledger).measured;
   const out = renderTierBlock(ledger, policy, measured);
   const eff = effectiveTier(policy, ledger, measured);
-  // the second review round is satisfied by the reviewer stopping a second time (the same
-  // agent resumed with a fresh packet) or by a reviewer-2 stop, so both ways of running it count
   const required = requires(policy, eff);
   // only this task's events: the session log spans every task the session worked on
   const opened = ledger.openedSeq ?? ledger.baseline?.seq ?? 0;
   const stops = events.filter((e) => e.kind === "subagent-stop" && e.seq > opened);
-  const secondRound = () => stops.filter((e) => isRole(e.agentType, "reviewer"))[1] ?? stops.find((e) => isRole(e.agentType, "reviewer-2")) ?? null;
   const ran = (role) => stops.some((e) => isRole(e.agentType, role));
   const done = required.filter(ran);
   out.push(`helpers: spawned ${done.length} of ${required.length} required (${required.map((r) => `${r}${ran(r) ? " ✓" : ""}`).join(", ")})`);
-  out.push(round2Required(state) ? `round 2: required, ${secondRound() ? "recorded" : "not yet"}` : "round 2: not required");
   return out;
 }
 
@@ -135,9 +130,8 @@ export function renderReport(state, unmet) {
   if (ledger.status === "abandoned") out.push(`\n**ABANDONED** at ${ledger.abandonedAt}: ${ledger.abandonReason}`);
   if (ledger.closedLate) out.push(`\n**Closed late** at ${ledger.closedAt}: \`gate close\` ran, and the next task opened before any stop could finalise it (done-gate before 0.10); what changed was not recorded.`);
   if (ledger.overridden) out.push(`\n**GATE OVERRIDDEN** at ${ledger.overridden.at} after ${ledger.overridden.blocks} identical blocks: ${ledger.overridden.unmet.map((u) => u.rule).join(", ")}`);
-  const errLog = path.join(state.stateDir ?? path.resolve(dir, "..", ".."), "gate-error.log");
-  const gateErrors = tailLines(errLog, 3);
-  if (gateErrors) out.push(`\n**GATE ERROR** (last lines of gate-error.log):\n\`\`\`\n${gateErrors}\n\`\`\``);
+  const gateErrors = gateErrorsIn(state).slice(-3).join("\n");
+  if (gateErrors) out.push(`\n**GATE ERROR** (logged during this run, from gate-error.log):\n\`\`\`\n${gateErrors}\n\`\`\``);
 
   const after = lastEditSeq(state, config, ledger);
   out.push(`\n${summaryLine(ledger, events, unmet, after)}`);
@@ -387,7 +381,7 @@ function forYouLine(state, unmet) {
   if (ledger.steps.some((s) => s.key === "context" && s.state === null)) items.push("no context was written: what was traced, what depends on it, what was researched");
   const order = lateOrder(state);
   if (order.late.length) items.push(`the ${order.late.join(" and ").replace("case table", "list of test cases").replace("Plan", "plan").replace("Context", "context")} was written after the first code change`);
-  const errors = gateErrorsSince(state);
+  const errors = gateErrorsIn(state).length;
   if (errors) items.push(`the gate itself logged ${plural(errors, "error")}; see gate-error.log`);
   const missing = [...new Set(unmet.map((u) => PLAIN_RULES[u.rule] ?? u.text.replace(/\bR\d{1,2}\b/g, "a check")))];
   for (const m of missing) items.push(`missing: ${m}`);
@@ -397,12 +391,19 @@ function forYouLine(state, unmet) {
   return `For you: ${shown.join("; ")}${more ? `; and ${more} more in the full report` : ""}.`;
 }
 
-// Only errors logged since this task opened belong to it; the log is shared and append-only.
-function gateErrorsSince(state) {
+// Only errors logged while this task was open belong to it; the log is shared and append-only.
+// Each error is its timestamped line plus the stack lines under it.
+function gateErrorsIn(state) {
   const errLog = path.join(state.stateDir ?? path.resolve(state.dir, "..", ".."), "gate-error.log");
-  if (!existsSync(errLog)) return 0;
+  if (!existsSync(errLog)) return [];
   const since = state.ledger.openedAt ?? "";
-  return readFileSync(errLog, "utf8").split("\n").filter((l) => /^\d{4}-\d{2}-\d{2}T/.test(l) && l.slice(0, 24) >= since).length;
+  const until = state.ledger.abandonedAt ?? state.ledger.closedAt ?? "9999";
+  const errors = [];
+  for (const line of readFileSync(errLog, "utf8").trimEnd().split("\n")) {
+    if (/^\d{4}-\d{2}-\d{2}T/.test(line)) errors.push([line]);
+    else errors.at(-1)?.push(line);
+  }
+  return errors.filter(([first]) => first.slice(0, 24) >= since && first.slice(0, 24) <= until).map((e) => e.join("\n"));
 }
 
 export function renderBrief(state, unmet) {

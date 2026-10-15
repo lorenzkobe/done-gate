@@ -71,12 +71,11 @@ test("C1 happy: models.json and DEFAULT_POLICY name no model, requires are per t
   assert.deepEqual(MODELS.policy.tiers.small.requires, ["reviewer"]);
   assert.deepEqual(MODELS.policy.tiers.standard.requires, ["skeptic", "reviewer"]);
   assert.deepEqual(MODELS.policy.tiers.large.requires, ["skeptic", "qa", "worker", "reviewer", "reviewer-2"]);
-  assert.deepEqual(MODELS.policy.escalate, { reviewerRound2: { whenActOnAtLeast: 2, orTier: "large" } });
+  assert.ok(!("escalate" in MODELS.policy) && !("ceiling" in MODELS.policy), "models.json keeps an unenforced setting");
   assert.doesNotMatch(JSON.stringify(MODELS), MODEL_NAME, "models.json names a model somewhere");
 
   assert.ok(!("roles" in DEFAULT_POLICY), "DEFAULT_POLICY still has roles");
   assert.deepEqual(DEFAULT_POLICY.tiers, MODELS.policy.tiers);
-  assert.deepEqual(DEFAULT_POLICY.escalate, MODELS.policy.escalate);
   const p = loadPolicy();
   assert.ok(!("roles" in p));
 
@@ -86,8 +85,8 @@ test("C1 happy: models.json and DEFAULT_POLICY name no model, requires are per t
   });
   const loaded = loadPolicy(path.join(old, "models.json"));
   assert.ok(!("roles" in loaded), "roles from an old file leaked into the policy");
-  assert.equal(loaded.escalate.reviewerRound2.whenActOnAtLeast, 3, "the old file's own threshold is kept");
-  assert.ok(!("model" in loaded.escalate.reviewerRound2), "the old model key leaked into the policy");
+  assert.ok(!("escalate" in loaded), "the old file's escalate setting leaked into the policy");
+  assert.deepEqual(loaded.tiers, MODELS.policy.tiers);
 });
 
 // ---------------------------------------------------------------------------
@@ -178,31 +177,19 @@ test("C5 edge: R7 names writing the tests and gate waive tests; a tests waiver s
 // C6 happy — the tier block without models, and the round 2 line
 // ---------------------------------------------------------------------------
 
-test("C6 happy: gate size and the report print helpers without model names; the round 2 line is required by Act-on count or tier and recorded by a second reviewer or a reviewer-2 stop", () => {
+test("C6 happy: gate size and the report print helpers without model names, and a reviewer-2 stop ticks the second reviewer", () => {
   const small = opened("tbl-c6-small", ["src/a.ts", "src/b.ts"]);
   const size = cli(small, "size").stdout;
   assert.match(lineStarting(size, "requires:"), /^requires: skeptic, reviewer\b/, size);
   assert.doesNotMatch(size, MODEL_NAME, size);
   const report = cli(small, "report").stdout;
   assert.match(lineStarting(report, "helpers:"), /spawned 0 of 2 required \(skeptic, reviewer\)/, report);
-  assert.equal(lineStarting(report, "round 2:"), "round 2: not required", report);
 
-  // two Act-on items from round 1 require a second round
-  const dir = runDir(small);
-  write(small, path.relative(small, path.join(dir, "review-1.md")), "# Review 1\n\n## Act on\n- a\n- b\n\n## Consider\n- none\n\n## Dismissed\n- none\n");
-  cli(small, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
-  assert.equal(lineStarting(cli(small, "report").stdout, "round 2:"), "round 2: required, not yet");
-  stop(small, "R1", "done-gate:reviewer");
-  stop(small, "R1", "done-gate:reviewer");
-  assert.equal(lineStarting(cli(small, "report").stdout, "round 2:"), "round 2: required, recorded");
-
-  // at large the tier itself requires it, and a reviewer-2 stop records it
+  // at large a reviewer-2 stop ticks the second reviewer
   const large = opened("tbl-c6-large", LARGE_FILES);
   assert.match(lineStarting(cli(large, "size").stdout, "requires:"), /^requires: skeptic, qa, worker, reviewer, reviewer-2\b/);
-  assert.equal(lineStarting(cli(large, "report").stdout, "round 2:"), "round 2: required, not yet");
   stop(large, "R2", "done-gate:reviewer-2");
   const out = cli(large, "report").stdout;
-  assert.equal(lineStarting(out, "round 2:"), "round 2: required, recorded");
   assert.match(lineStarting(out, "helpers:"), /reviewer-2 ✓/);
   assert.doesNotMatch(out, /round 2 model/);
 });
