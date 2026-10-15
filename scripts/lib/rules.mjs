@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { effectiveTier, leadDelegates, policyFor, requires } from "./size.mjs";
+import { delegatedTier, effectiveTier, leadDelegates, policyFor, requires } from "./size.mjs";
 import { baseCopy, changedUnits, fileDiff, gitTracked, hasReindent, indentMatters, sliceEnd } from "./tree.mjs";
 import { scanDiff } from "./slop.mjs";
 import { coverageGaps } from "./verify.mjs";
@@ -697,7 +697,7 @@ export function unfinishedFile(full) {
 // Every waiver key a rule reads, with the rule it clears. "qa" is the key older ledgers
 // carry for tests.
 const REVIEW_WAIVER = { reviewer: "review", "reviewer-2": "review-2" };
-export const WAIVERS = { delegate: "R16", driver: "R4", review: "R5", "review-2": "R9", schema: "R6", tests: "R7", qa: "R7", slop: "R10", "gate-config": "R13", lookups: "R17", coverage: "R18" };
+export const WAIVERS = { delegate: "R16", driver: "R4", review: "R5", "review-2": "R9", schema: "R6", tests: "R7", qa: "R7", slop: "R10", "gate-config": "R13", lookups: "R17", coverage: "R18", "qa-pass": "R7" };
 
 const orWaive = (key) => ` Or get the user's waiver (\`gate waive ${key} "<reason>"\`).`;
 
@@ -811,7 +811,16 @@ export function evaluate(state) {
   if (pending.length && !unmet.some((u) => u.rule === "R3")) {
     unmet.push({ rule: "R3", text: `verify command ${pending.map((c) => `\`${c}\``).join(", ")} has not run: \`gate verify\`` });
   }
+  // a large run, planned or grown there, by its size now: R7 and R9 ask more of it
+  const sizeNow = effectiveTier(state.policy ?? policyFor(ledger), ledger, state.tier?.measured ?? null);
+  const large = src.length > 0 && delegatedTier(state.policy ?? policyFor(ledger), sizeNow);
+  const grew = ledger.tier?.grewAt ? " (it grew there mid-task)" : "";
   if (src.length) {
+    // a blind QA pass: a QA helper that stopped during the run, whenever it ran
+    const qaRan = (state.events ?? []).some((e) => e.kind === "subagent-stop" && isRole(e.agentType, "qa") && e.seq > (ledger.openedSeq ?? 0));
+    if (large && !qaRan && !waived(ledger, "qa-pass")) {
+      unmet.push({ rule: "R7", text: `this run is size ${sizeNow}${grew}: a blind QA pass is due. \`gate brief qa\` and spawn \`done-gate:qa\`; it writes the tests the case table still lacks, blind to the code.${orWaive("qa-pass")}` });
+    }
     // "qa" is the waiver key older ledgers carry for the same step
     if (!changed.some((p) => config.isTest(p)) && !waived(ledger, "tests") && !waived(ledger, "qa")) {
       unmet.push({
@@ -858,15 +867,16 @@ export function evaluate(state) {
     }
   }
 
-  // R9: high-risk paths → a second, adversarial reviewer
-  if (changed.some((p) => config.isHighRisk(p)) && !waived(ledger, "review-2")) {
+  // R9: high-risk paths, or a large run → a second, adversarial reviewer
+  const highRisk = changed.some((p) => config.isHighRisk(p));
+  if ((highRisk || large) && !waived(ledger, "review-2")) {
     const r = reviewed(state, "reviewer-2", after);
     if (r.stopped && r.hasFile && r.openItems.length) {
       unmet.push({ rule: "R9", text: `reviewer-2 Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${orWaive("review-2")}` });
     } else if (!r.stopped || !r.hasFile) {
       unmet.push({ rule: "R9", text: stillOpen(r) + (r.pending.length && r.hasFile
         ? `high-risk paths changed: no clean reviewer-2 round yet for ${list(r.pending)}: \`gate brief reviewer-2 --files ${nextPiece(state, r.pending).join(",")}\`, spawn \`done-gate:reviewer-2\`, then \`gate huddle add reviewer-2 --file review2-<n>.md\`.${orWaive("review-2")}`
-        : `high-risk paths changed (${list(changed.filter((p) => config.isHighRisk(p)))}): a second review by \`done-gate:reviewer-2\` is required after the last edit, with its review2-<n>.md recorded via \`gate huddle add reviewer-2 --file ...\` and every Act-on item closed.${orWaive("review-2")}`) });
+        : `${highRisk ? `high-risk paths changed (${list(changed.filter((p) => config.isHighRisk(p)))})` : `this run is size ${sizeNow}${grew}`}: a second review by \`done-gate:reviewer-2\` is required after the last edit, with its review2-<n>.md recorded via \`gate huddle add reviewer-2 --file ...\` and every Act-on item closed.${orWaive("review-2")}`) });
     }
   }
 

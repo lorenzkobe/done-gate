@@ -149,9 +149,9 @@ attempt to finish.
 | R4 | UI files changed and the real surface wasn't driven afterwards |
 | R5 | no reviewer pass after the last edit, or an Act-on item is still open; tier tiny needs no reviewer. A change past the piece cap (400 changed lines) is reviewed in pieces, `gate brief reviewer --files a,b`, and one big file in slices, `--files a.ts:1-400`; a line is covered once the last round that saw it came back clean (or was the file's third); new or uncovered lines need a round |
 | R6 | schema files changed with no real-schema probe |
-| R7 | source changed and no test file changed |
+| R7 | source changed and no test file changed; or the run is size large (planned, or grown there mid-task, by its size now) and no QA helper ran during it, waivable with `gate waive qa-pass` |
 | R8 | any case or step is blank, or a click case's click is older than the last source edit; the close step is closed by `gate close`, never by `gate step close …` |
-| R9 | high-risk paths changed without the second reviewer (same round rules as R5; an open reviewer-2 item is named) |
+| R9 | high-risk paths changed, or the run is size large, without a clean second-reviewer round (same round rules as R5; an open reviewer-2 item is named) |
 | R10 | a repo check failed: the slop scan found a banner comment, step narration, an empty label, an end marker, an emoji, a bare TODO or a `@param` that echoes its name on an added non-test line (`"slop": false` in gate.json turns it off between tasks; mid-task, `gate waive slop` clears a false positive), or an opted-in check (`claude-md-budget`, `migration-number`) |
 | R13 | `.claude/gate.json` or the plugin's `models.json` changed mid-task |
 | R15 | a helper's file lists more findings than the ledger recorded, a briefed skeptic, reviewer or arbiter stopped before finishing its file, or an Act-on item outside the reviewers' rounds is still open (a skeptic item added after its step closed, one typed by hand) |
@@ -199,6 +199,8 @@ checked.
   commit through git (anything but a move counts as one). For what the check cannot see (a
   stash pop, another terminal's edit), `gate rebaseline "<why>"` takes the changes the task
   did not write out of it, after asking the user; the report names them and the reason.
+- **Its own storage stays bounded.** Once a day, session-start removes session folders untouched
+  for 14 days that no recent run lists; the report embeds helper files up to 40 KB and names the rest.
 - **Zero friction when nothing changed.** Questions, investigations, a second terminal in
   the same repo: the tree hash is unchanged, the gate stays silent.
 - **Helpers write their file first.** A skeptic, reviewer or arbiter may only read its packet
@@ -315,7 +317,7 @@ tests itself, from the case table, before the code.
 | tiny | one source file, ≤ 15 lines, no UI, schema or high-risk path | none |
 | small | one source file, ≤ 40 lines, no UI, schema or high-risk path | reviewer |
 | standard | ≤ 10 files, ≤ 400 lines, or any UI, schema or high-risk file | skeptic, reviewer |
-| large | more than that | skeptic, QA (blind tests), a worker per piece, reviewer, a second reviewer |
+| large | more than that | skeptic, QA (blind tests), a worker per piece, reviewer, a second reviewer; a task that grows here mid-task gets the same from that point (the lead's earlier edits stand, QA writes the missing tests blind) and the report says it grew |
 | any | a round with Act-on items | another round, same reviewer, fresh context, until one comes back clean (three at most) |
 | any | a review finding the model disputes with evidence and the reviewer upholds | arbiter, rules once in writing |
 

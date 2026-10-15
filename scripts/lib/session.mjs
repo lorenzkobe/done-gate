@@ -1,10 +1,41 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { assess } from "./assess.mjs";
 import { ensureSession, loadSession } from "./session-state.mjs";
 import { recordGateError } from "./context.mjs";
-import { attachLedger, currentLedger, openRuns, saveLedger } from "./ledger.mjs";
+import { attachLedger, currentLedger, isDone, loadLedger, openRuns, runsDir, saveLedger } from "./ledger.mjs";
 import { writeReport } from "./verbs.mjs";
+
+const DAY_MS = 24 * 3600 * 1000;
+const STALE_MS = 14 * DAY_MS;
+
+// Session folders grow without end: once a day, those whose events and state are both untouched
+// for 14 days go, except this session, no-session, and any session an open run, or a run changed
+// in that time, lists (its rules and report read their events).
+function pruneSessions(ctx) {
+  const dir = path.join(ctx.stateDir, "sessions");
+  const marker = path.join(ctx.stateDir, "last-prune");
+  const mtime = (f) => statSync(f, { throwIfNoEntry: false })?.mtimeMs ?? 0;
+  if (!existsSync(dir) || Date.now() - mtime(marker) < DAY_MS) return;
+  writeFileSync(marker, new Date().toISOString());
+  const keep = new Set([ctx.session, "no-session"]);
+  const runs = runsDir(ctx.stateDir);
+  for (const run of existsSync(runs) ? readdirSync(runs) : []) {
+    const file = path.join(runs, run, "ledger.json");
+    try {
+      const ledger = loadLedger(path.join(runs, run));
+      if (isDone(ledger) && Date.now() - mtime(file) >= STALE_MS) continue;
+      for (const s of ledger.sessions ?? []) keep.add(s);
+    } catch {
+      // an unreadable ledger keeps nothing
+    }
+  }
+  for (const name of readdirSync(dir)) {
+    const folder = path.join(dir, name);
+    if (keep.has(name) || Date.now() - Math.max(mtime(path.join(folder, "events.jsonl")), mtime(path.join(folder, "state.json")), mtime(folder)) < STALE_MS) continue;
+    rmSync(folder, { recursive: true, force: true });
+  }
+}
 
 function mandate(ctx) {
   return readFileSync(path.join(ctx.pluginRoot, "hooks", "session-start.md"), "utf8");
@@ -25,6 +56,11 @@ export const verbs = {
       } catch {
         // the state dir itself is unwritable; nothing left to record
       }
+    }
+    try {
+      pruneSessions(ctx);
+    } catch (error) {
+      recordGateError(error, "session-start");
     }
     const parts = [mandate(ctx)];
     // A run a plugin before 0.10 left "closing" (its lead ran `gate close`, and no stop came

@@ -6,7 +6,7 @@ import { loadLedger, runsDir, section } from "./ledger.mjs";
 import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
 import { readEvents } from "./events.mjs";
-import { effectiveTier, policyFor, renderTierBlock, requires, tiered, tierOf } from "./size.mjs";
+import { delegatedTier, effectiveTier, policyFor, renderTierBlock, requires, tiered, tierOf } from "./size.mjs";
 import { clickStale, contextPart, drivenAfter, driverCommand, isRole, lastEditSeq, hasContextStep, lateOrder, tracedPointers, verifyWhere } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { exclusionsOf } from "./verify.mjs";
@@ -86,9 +86,13 @@ export function verifyLines(verify, { tails = true, unfinished = null } = {}) {
   return out;
 }
 
+// Past this much embedded helper text the report names a file instead: the report stays a page.
+const EMBED_MAX = 40_000;
+
 export function actOnRows(ledger, dir, reviews, { embed = true } = {}) {
   if (!ledger.huddles.length) return ["_none_"];
   const out = [];
+  let embedded = 0;
   for (const h of ledger.huddles) {
     out.push(`### ${h.id} ${h.role} round ${h.round}${h.file ? ` — ${h.file}` : ""}`);
     if (h.summary) out.push(h.summary);
@@ -98,7 +102,11 @@ export function actOnRows(ledger, dir, reviews, { embed = true } = {}) {
       const state = a.closed ? `closed [${a.closed}]` : a.dispute ? `**OPEN** — disagreed: ${cell(a.dispute.why)} [${a.dispute.evidence}] — ${a.dispute.verdict ?? "unanswered"}` : "**OPEN**";
       out.push(`- ${a.id} ${cell(a.text)} — ${state}`);
     }
-    if (embed && h.file && reviews.includes(h.file)) out.push(`\n<details><summary>${h.file}</summary>\n\n${readFileSync(path.join(dir, h.file), "utf8").trim()}\n\n</details>`);
+    if (embed && h.file && reviews.includes(h.file)) {
+      const text = readFileSync(path.join(dir, h.file), "utf8").trim();
+      embedded += text.length;
+      out.push(embedded <= EMBED_MAX ? `\n<details><summary>${h.file}</summary>\n\n${text}\n\n</details>` : `\n${h.file}: not embedded (a report embeds at most ${EMBED_MAX / 1000} KB of helper text); read it in the run folder`);
+    }
   }
   return out;
 }
@@ -321,7 +329,8 @@ function changedLine(state) {
   if (!src.length) return `Changed no source files.${contextSummary(state)}`;
   const names = src.slice(0, 3).join(", ") + (src.length > 3 ? ` and ${src.length - 3} more` : "");
   const m = policy && tiered(ledger) ? (state.tier?.measured ?? tierOf(ledger).measured) : null;
-  const size = m ? `, size ${effectiveTier(policy, ledger, m)}` : "";
+  const tier = m ? effectiveTier(policy, ledger, m) : null;
+  const size = tier ? `, size ${tier}${ledger.tier?.grewAt && delegatedTier(policy, tier) ? " (grew to large mid-task)" : ""}` : "";
   return `Changed ${plural(src.length, "file")} (${names})${size}.${contextSummary(state)}`;
 }
 

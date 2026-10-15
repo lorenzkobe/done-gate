@@ -120,6 +120,7 @@ function header(state, role, round) {
   out.push("## Cases", "", ...caseTable(ledger, lastEditSeq(state, state.config, ledger)), "");
   if (role === "worker") out.push("## Tier", "", ...renderTierBlock(ledger, state.policy, state.tier?.measured ?? null), "");
   if (role === "qa" || role === "worker") out.push("## Tests", "", `globs: ${testGlobs(state)}`, `framework: ${detectFramework(state.root)}`, "");
+  if (role === "qa" && ledger.tier?.grewAt) out.push("## Grown", "", "This task grew to large mid-task: the code and some tests exist already. Stay blind to the code; write the tests the case table still lacks, from the requirements.", "");
   if (state.config.helperNote) out.push("## Standing note", "", state.config.helperNote, "");
   return out;
 }

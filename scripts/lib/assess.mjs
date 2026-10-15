@@ -203,6 +203,8 @@ function settleAtHead(root, ledger, now) {
 function markDelegated(ledger, policy, crossed = false) {
   if (ledger.tier?.predictedSeq != null || delegatedTier(policy, ledger.tier?.predicted) || (!crossed && !leadDelegates(ledger, policy))) return false;
   ledger.tier.predictedSeq = nextSeq();
+  // the plan did not say large (a declared size raises the prediction): it grew there mid-task
+  ledger.tier.grewAt = ledger.tier.predictedSeq;
   return true;
 }
 

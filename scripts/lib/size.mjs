@@ -161,7 +161,7 @@ export function leadDelegates(ledger, policy = policyFor(ledger)) {
 // predicted stays null until `gate note plan --files` names the files; the measured diff
 // alone then decides, so a task that never predicts is judged by what it actually changed.
 export function emptyTier() {
-  return { predicted: null, predictedFiles: [], declared: null, measured: null, autoNa: [], predictedSeq: null };
+  return { predicted: null, predictedFiles: [], declared: null, measured: null, autoNa: [], predictedSeq: null, grewAt: null };
 }
 
 // A tier record from an older ledger, or a damaged one, is normalised rather than trusted.
@@ -176,6 +176,8 @@ export function tierOf(ledger) {
     measured: t.measured && typeof t.measured === "object" ? t.measured : null,
     autoNa: Array.isArray(t.autoNa) ? t.autoNa : [],
     predictedSeq: typeof t.predictedSeq === "number" ? t.predictedSeq : null,
+    // when a measurement, not the plan, first took the run to the delegated size
+    grewAt: typeof t.grewAt === "number" ? t.grewAt : null,
   };
 }
 
@@ -303,7 +305,7 @@ export function applyPrediction(ledger, policy, config, paths, declared = null) 
   // R16 counts the lead's source edits from the moment the task became a delegated size;
   // a later re-prediction never moves that mark forward and erases a standing finding
   if (delegated && tier.predictedSeq === null) tier.predictedSeq = nextSeq();
-  if (!delegated && !delegatedTier(policy, tier.measured?.tier)) tier.predictedSeq = null;
+  if (!delegated && !delegatedTier(policy, tier.measured?.tier)) Object.assign(tier, { predictedSeq: null, grewAt: null });
   const required = requiredSteps(policy, pred.tier, ledger);
   tier.autoNa = [];
   for (const key of optionalSteps(ledger)) {

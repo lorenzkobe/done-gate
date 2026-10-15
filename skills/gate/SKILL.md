@@ -25,9 +25,9 @@ Start each Bash command with `gate() { node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.
 3. Tests first, from the case table, red before green: spawn the
    skeptic and write the tests in the same turn; fold its findings into the case table.
    `gate brief <role>` prints each helper's prompt:
-   `done-gate:skeptic` (`skeptic-<n>.md`), `done-gate:qa` (blind tests, large only),
+   `done-gate:skeptic` (`skeptic-<n>.md`), `done-gate:qa` (blind tests, large),
    `done-gate:worker` (edits its packet's files, answers reviews in `worker-<n>.md`),
-   `done-gate:reviewer` (`review-<n>.md`), `done-gate:reviewer-2` (high-risk, `review2-<n>.md`),
+   `done-gate:reviewer` (`review-<n>.md`), `done-gate:reviewer-2` (high-risk/large, `review2-<n>.md`),
    `done-gate:arbiter`.
 4. Tiny, small, standard: implement yourself. No slop: no comment that restates code,
    narrates, numbers steps, labels a block, echoes a signature or marks an end; no banner;
@@ -35,8 +35,8 @@ Start each Bash command with `gate() { node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.
    trivial function; no TODO without a task, console.log or commented-out code; no emoji.
    Why, in one line, two at most; keep workaround notes. Large: never edit source;
    `gate brief worker` per piece, spawn `done-gate:worker`.
-5. Review: `gate brief reviewer` (`--files a,b` per piece past the 400-line cap), spawn, `gate huddle add reviewer --file review-<n>.md`; high-risk: brief
-   reviewer-2 too and spawn both at once; `gate verify` may run in the background.
+5. Review: `gate brief reviewer` (`--files a,b` per piece past the 400-line cap), spawn, `gate huddle add reviewer --file review-<n>.md`; high-risk/large: brief
+   reviewer-2 too, spawn both at once; `gate verify` may run in the background.
    Below large: fix and `gate huddle resolve H<k>.<i> --evidence <ptr>`. Large: `gate brief
    worker`, SendMessage the worker its packet, then `gate huddle reply --file
    worker-<n>.md`. Same reviewer until a round is clean, three rounds at most; still disputed: `gate brief arbiter --item H<k>.<i>`, `done-gate:arbiter`. Disagree:
