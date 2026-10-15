@@ -26,16 +26,22 @@ const HELPER_ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter"];
 // pipes, `&&`, `;` and newlines split segments, so a command hidden in a substitution is read
 // like any other.
 const GIT_WRITE = new Set(["add", "commit", "checkout", "switch", "reset", "restore", "stash", "apply", "am", "merge", "rebase", "mv", "rm", "clean", "push"]);
-const GIT_READ = new Set(["show", "diff", "log", "status", "blame", "ls-files", "cat-file", "rev-parse"]);
+const GIT_READ = new Set(["show", "diff", "log", "status", "blame", "ls-files", "cat-file", "rev-parse", "check-ignore", "rev-list", "merge-base", "show-ref", "for-each-ref", "ls-tree", "describe", "shortlog", "name-rev"]);
 // subcommands that leave HEAD and the working tree alone; any other may move them
 const GIT_STILL = new Set([...GIT_READ, "ls-tree", "grep", "describe", "shortlog", "reflog", "fetch", "remote", "config", "branch", "tag"]);
 const INTERPRETERS = new Set(["node", "nodejs", "deno", "bun", "python", "python3", "perl", "ruby", "php", "sh", "bash", "zsh"]);
 const SHELLS = new Set(["sh", "bash", "zsh"]);
 const INLINE_FLAG = /^-[a-zA-Z]*[ecpEr]$|^--eval$|^--print$/;
 const INLINE_WRITE = /\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|rename(?:Sync)?|unlink(?:Sync)?|rm(?:Sync)?|rmdir(?:Sync)?|mkdir(?:Sync)?|copyFile(?:Sync)?|truncate(?:Sync)?|createWriteStream|open\s*\([^)]*["'][wa][+]?["'])|os\.(?:remove|rename|unlink|makedirs|mkdir)|shutil\.|file_put_contents|fopen|fwrite|unlink/;
-const SCRATCH = /(?:^|\/)(?:tests\/\.tmp|tmp|scratchpad)(?:\/|$)|^\/private\/tmp\//;
+// Scratch roots, read after `..` is resolved: the system temp folders (a session scratchpad
+// lives under one) and a tests/.tmp folder. TMPDIR is not trusted: it could name the repo.
+const SCRATCH_ROOT = /^(?:\/tmp|\/private\/tmp|\/private\/var\/folders|\/var\/folders)(?:\/|$)/;
+const isScratch = (p) => {
+  const n = path.posix.normalize(p);
+  return !n.startsWith("..") && (SCRATCH_ROOT.test(n) || /(?:^|\/)tests\/\.tmp(?:\/|$)/.test(n));
+};
 // Programs that only read their arguments; the flags that turn one into a writer.
-const READ_ONLY = new Set(["ps", "awk", "cat", "ls", "head", "tail", "grep", "egrep", "fgrep", "rg", "sed", "wc", "find", "diff", "stat", "file", "jq", "less", "more", "sort", "uniq", "cut", "tr", "column", "paste", "echo", "printf", "cd", "pwd", "test", "[", "true", "continue", "break", "tree", "du", "date", "which", "type"]);
+const READ_ONLY = new Set(["sleep", ":", "false", "ps", "awk", "cat", "ls", "head", "tail", "grep", "egrep", "fgrep", "rg", "sed", "wc", "find", "diff", "stat", "file", "jq", "less", "more", "sort", "uniq", "cut", "tr", "column", "paste", "echo", "printf", "cd", "pwd", "test", "[", "true", "continue", "break", "tree", "du", "date", "which", "type"]);
 const WRITING_FLAG = {
   sed: /^-[a-zA-Z]*[iI]|^--in-place/,
   sort: /^-[a-zA-Z]*o|^--o|^--compress/,
@@ -244,11 +250,51 @@ function gitReads(args) {
   return GIT_READ.has(verb) || (verb === "stash" && (sub === "list" || sub === "show"));
 }
 
+// The command as the shell reads its words: heredoc bodies cut, quoted strings blanked, so a
+// name inside an echo argument, a string or a heredoc is not where a command starts.
+const bare = (raw) => withoutHeredocs(String(raw)).replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, "''");
+// where a command starts: the text's start, a newline or `;` (an `&&`, `||` or pipe branch may not run)
+const TOP = "(?:^|[;\\n])\\s*";
+
+// Functions a command defines, at a top-level command, as a plain wrapper of the gate's CLI
+// (`gate() { node …/gate.mjs "$@"; }`). A definition the shell skipped (a branch, a subshell)
+// leaves the name undefined, so its call must fail: only a name that is no program on PATH and
+// no shell builtin counts.
+const BUILTINS = new Set(["eval", "exec", "source", ".", "command", "builtin", "cd", "echo", "printf", "read", "set", "unset", "export", "declare", "typeset", "local", "alias", "trap", "test", "[", ":", "true", "false", "kill", "wait", "jobs", "fg", "bg", "let", "shift", "times", "type", "hash", "ulimit", "umask", "getopts", "readonly", "return", "exit", "break", "continue", "pushd", "popd", "dirs", "history", "fc", "enable", "mapfile", "readarray", "coproc", "select", "time"]);
+const onPath = (name) => (process.env.PATH ?? "").split(path.delimiter).some((dir) => dir && existsSync(path.join(dir, name)));
+function definedFunctions(raw) {
+  const text = withoutHeredocs(String(raw));
+  return new Set([...text.matchAll(new RegExp(`${TOP}(?:function\\s+([A-Za-z_][\\w-]*)\\s*(?:\\(\\))?|([A-Za-z_][\\w-]*)\\s*\\(\\))\\s*\\{\\s*node\\s+["']?[^\\s"';&|]*gate\\.mjs["']?\\s+"\\$@"`, "g"))]
+    .map((m) => m[1] ?? m[2])
+    .filter((name) => !BUILTINS.has(name) && !onPath(name)));
+}
+
+// The gate's verbs: a `$G` call is the gate only when its first argument is one, so an unset G
+// leaves a verb name as the program, never a writer.
+const GATE_VERBS = new Set(["open", "attach", "repo", "note", "case", "step", "huddle", "waive", "decide", "close", "abandon", "rebaseline", "verify", "check", "report", "steps", "next", "size", "brief", "doctor", "help"]);
+
+// Variables set, once and as a whole top-level command, to the gate's own CLI
+// (`G="node …/gate.mjs"; $G check`): `$G` then runs the gate. Any other use of the name voids it.
+function gateVariables(raw) {
+  const text = withoutHeredocs(String(raw));
+  const out = new Set();
+  for (const m of text.matchAll(new RegExp(`${TOP}([A-Za-z_]\\w*)=(?:"([^"$\`]*)"|'([^']*)'|([^\\s;&|$\`"']+))(?=\\s*(?:;|\\n|$))`, "g"))) {
+    const value = m[2] ?? m[3] ?? m[4];
+    const named = bare(raw).match(new RegExp(`(?<![$\\w{])${m[1]}(?!\\w)`, "g"))?.length ?? 0;
+    if (named === 1 && /^node\s+\S*gate\.mjs$/.test(value.trim())) out.add(m[1]);
+  }
+  return out;
+}
+
 // Every segment starts with a read-only program, nothing is redirected to a file, and inline
 // code names no write. `node …/gate.mjs` is the gate's own CLI; `sh -c` is read as a command.
 export function readsOnly(raw) {
+  const functions = definedFunctions(raw);
+  const gateVars = gateVariables(raw);
   return segments(withoutHeredocs(raw)).every((seg) => {
-    const { words, envChanged } = shift(seg);
+    const { words: shifted, envChanged } = shift(seg);
+    // a `function name {` header defines; its body segments are checked as they stand
+    const words = shifted[0]?.text === "function" ? shifted.slice(shifted[2]?.text === "{" ? 3 : 2) : shifted;
     if (envChanged) return false;
     for (let i = 0; i < words.length; i++) {
       const target = redirect(words[i]);
@@ -260,6 +306,9 @@ export function readsOnly(raw) {
     const program = first.text;
     if (arithmetic(words)) return true;
     if (program === "node" && /gate\.mjs$/.test(args[0]?.text ?? "")) return true;
+    if (!first.quoted && functions.has(program)) return true;
+    const variable = /^\$\{?(\w+)\}?$/.exec(program);
+    if (variable && gateVars.has(variable[1]) && GATE_VERBS.has(args[0]?.text)) return true;
     if (SHELLS.has(program) && args.some((a) => !a.quoted && /^-[a-zA-Z]*c/.test(a.text))) return readsOnly(args.filter((a) => a.quoted).map((a) => a.text).join("\n"));
     const code = inlineCode(program, args, raw);
     if (code !== null) return !INLINE_WRITE.test(code) && !writingFlag(program, args);
@@ -355,7 +404,7 @@ export function shellWrites(raw) {
     if (/^\/dev\/(?:null|stderr|stdout)$/.test(t)) return;
     const r = resolve(t);
     if (r === null) blind.push(`${what} ${t} (unknown location)`);
-    else if (!SCRATCH.test(r)) outside.push(r);
+    else if (!isScratch(r)) outside.push(r);
   };
   const walk = (text) => {
     for (const seg of segments(withoutHeredocs(text))) {

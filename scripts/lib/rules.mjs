@@ -253,8 +253,13 @@ const notesTool = (e) => e.kind === "tool" && e.tool.startsWith("mcp__") && NOTE
 const LOOKUP_WORDS = new Set(["search", "query", "symbol", "symbols", "impact", "flow", "traverse", "find", "follow", "timeline"]);
 const WRITE_WORDS = new Set(["add", "write", "update", "delete", "mine", "index", "remove", "prune", "put", "create", "sync", "checkpoint", "watch", "build", "replace", "insert", "rename", "edit"]);
 
-// "code", "memory" or null for one event. A failed call counts: the attempt is what is asked.
+// "code", "memory" or null for one event; a failed call is no lookup (the user's choice in 0.17:
+// retry it, or declare the tool missing).
 export function lookupKind(e) {
+  return e.failed ? null : toolKind(e);
+}
+
+function toolKind(e) {
   if (e.kind !== "tool" || !e.tool?.startsWith("mcp__")) return null;
   const words = e.tool.slice(e.tool.lastIndexOf("__") + 2).toLowerCase().split("_");
   if (!words.some((w) => LOOKUP_WORDS.has(w)) || words.some((w) => WRITE_WORDS.has(w))) return null;
@@ -265,20 +270,21 @@ export function lookupKind(e) {
 export const LOOKUP_KINDS = ["code", "memory"];
 export const LOOKUP_EXAMPLE = { code: "SocratiCode `codebase_search`", memory: "MemPalace `mempalace_search`" };
 
-// The lead's own lookups for this task, per kind, as the tool names it used: from the user's
-// message that started it (the newest prompt at or before gate open), or from gate open.
+// The lead's own lookups for this task, per kind, as the tool names it used: from the first user
+// message after the previous run ended (closed or abandoned) or the session started, so an answer to a clarifying
+// question keeps them; else from the newest message before open; else from open. `failed`
+// lists calls that failed.
 export function leadLookups(ledger, events) {
   const opened = ledger.openedSeq ?? 0;
-  let from = opened;
-  for (const e of events) {
-    if (e.seq > opened) break;
-    if (e.kind === "prompt" && !e.agent && !e.handback) from = e.seq;
-  }
-  const out = { code: new Set(), memory: new Set() };
+  const base = ledger.lookupsFrom ?? ledger.baseline?.seq ?? 0;
+  const prompts = events.filter((e) => e.seq <= opened && e.kind === "prompt" && !e.agent && !e.handback);
+  const start = prompts.find((e) => e.seq > base) ?? prompts.at(-1);
+  const from = start ? start.seq - 1 : opened;
+  const out = { code: new Set(), memory: new Set(), failed: { code: new Set(), memory: new Set() } };
   for (const e of events) {
     if (e.seq <= from || e.agent) continue;
-    const kind = lookupKind(e);
-    if (kind) out[kind].add(e.tool);
+    const kind = toolKind(e);
+    if (kind) (e.failed ? out.failed[kind] : out[kind]).add(e.tool);
   }
   return out;
 }

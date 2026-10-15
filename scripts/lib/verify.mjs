@@ -327,7 +327,7 @@ export async function runVerify(ctx, { stepKey = "verify" } = {}) {
   const startedAt = new Date().toISOString();
   // A run the shell dies under leaves this behind; R3 and the report then say so.
   const started = path.join(current.dir, "verify.started.json");
-  writeFileSync(started, JSON.stringify({ startedAt, pid: process.pid, commands: entries.map((v) => `${v.cmd}${verifyWhere(v)}`) }));
+  writeFileSync(started, JSON.stringify({ startedAt, pid: process.pid, session: ctx.session, commands: entries.map((v) => `${v.cmd}${verifyWhere(v)}`) }));
   const commands = [];
   for (const entry of entries) {
     const row = { cmd: entry.cmd, ...(entry.repo ? { repo: entry.repo } : {}) };

@@ -3,7 +3,7 @@ import { recordGateError } from "./context.mjs";
 import { appendEvents, nextSeq } from "./events.mjs";
 import { loadLedger, saveLedger } from "./ledger.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
-import { HELPER_MAX_MS } from "./rules.mjs";
+import { HELPER_MAX_MS, unfinishedVerify } from "./rules.mjs";
 
 export const OVERRIDE_AFTER = 6;
 const PAUSE_RE = /(?:^|\n)\s*PAUSED:\s*(.+?)\s*$/;
@@ -77,6 +77,13 @@ export const verbs = {
     // a helper this session spawned is still running: the turn ends so the helper's
     // hand-back can wake the lead; nothing is finalised
     if (ledgerOpen && helperRunning(state.events ?? [], ctx.session)) {
+      clearBlocks(ctx);
+      return;
+    }
+    // so does a gate verify this session started that still runs (in the background, its exit
+    // wakes the lead); another session's verify, or one running past the helper limit, does not
+    const started = state.verifyStarted;
+    if (ledgerOpen && started?.session === ctx.session && unfinishedVerify(state)?.running && Date.now() - Date.parse(started.startedAt) < HELPER_MAX_MS) {
       clearBlocks(ctx);
       return;
     }

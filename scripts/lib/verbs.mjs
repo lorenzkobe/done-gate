@@ -34,7 +34,7 @@ export function finalise(ctx, state) {
   const session = loadSession(ctx.stateDir, ctx.session);
   // a declared repo's files end with the run: session state holds main-root keys only
   const main = withoutRepos(state.now, state.repos);
-  saveSession(ctx.stateDir, { ...session, current: null, lastClosed: path.basename(state.dir), baseline: { ...main, head: gitHead(ctx.root) }, foreignHead: null, lastTree: main, baselineSeq: nextSeq() });
+  saveSession(ctx.stateDir, { ...session, current: null, lastClosed: path.basename(state.dir), baseline: { ...main, head: gitHead(ctx.root) }, foreignHead: null, lastTree: main, baselineSeq: nextSeq(), runEndSeq: nextSeq() });
   writeReport(ctx, state.dir, ledger);
   return ledger;
 }
@@ -160,7 +160,9 @@ function checkLookups(ctx, ledger, rest) {
   if (missing.length) {
     const what = missing.map((k) => `${k} (e.g. ${LOOKUP_EXAMPLE[k]})`).join(" and ");
     const flags = missing.map((k) => `--no-${k} "<tool>: not installed|not indexed"`).join(" and ");
-    throw new UsageError(`search the ${what} yourself before \`gate note context\` (a subagent's or Explore's search does not count), or pass ${flags} when the tool is missing or the project is not indexed.`);
+    const failed = missing.flatMap((k) => [...found.failed[k]]);
+    const failure = failed.length ? ` Your ${failed.map((t) => `\`${t}\``).join(", ")} call failed and does not count: retry it.` : "";
+    throw new UsageError(`search the ${what} yourself before \`gate note context\` (a subagent's or Explore's search does not count), or pass ${flags} when the tool is missing or the project is not indexed.${failure}`);
   }
   return declared;
 }
@@ -693,7 +695,7 @@ export const verbs = {
     const name = path.basename(dir);
     const session = loadSession(ctx.stateDir, ctx.session);
     const lastTree = session?.lastTree && ledger.repos?.length ? { lastTree: withoutRepos(session.lastTree, ledger.repos) } : {};
-    if (session) saveSession(ctx.stateDir, { ...session, ...lastTree, current: session.current === name ? null : session.current, lastClosed: name });
+    if (session) saveSession(ctx.stateDir, { ...session, ...lastTree, current: session.current === name ? null : session.current, lastClosed: name, ...(ledger.sessions?.includes(ctx.session) ? { runEndSeq: nextSeq() } : {}) });
     writeReport(ctx, dir, ledger);
     ctx.out(`${ledger.slug} abandoned — ${reason}`);
     ctx.out(`report: ${path.join(dir, "report.md")}`);

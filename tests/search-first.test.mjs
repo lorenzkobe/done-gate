@@ -313,7 +313,7 @@ test("C25 refused: gate step context done (any evidence) is refused on a stamped
   assert.equal(stepOf(repo, "context").evidence, "ledger.md#context");
 });
 
-test("C23 edge: a failed lookup (PostToolUseFailure on an mcp__ search) is logged and counts as an attempt", () => {
+test("C23 edge: a failed lookup (PostToolUseFailure on an mcp__ search) is logged; since 0.17 it does not count, and the refusal names it", () => {
   // the hook is wired for it
   const hooks = JSON.parse(readFileSync(path.join(pluginRoot, "hooks", "hooks.json"), "utf8"));
   const matchers = hooks.hooks.PostToolUseFailure.map((h) => new RegExp(`^(?:${h.matcher})$`));
@@ -325,11 +325,12 @@ test("C23 edge: a failed lookup (PostToolUseFailure on an mcp__ search) is logge
   assert.ok(e, "a failed mcp__ call produced no event");
   assert.equal(e.kind, "tool");
   assert.equal(e.tool, CODE_LOOKUP);
-  // through the real hook verb, it satisfies the lead's code lookup
+  // through the real hook verb, it no longer satisfies the lead's code lookup (the user's choice in 0.17)
   const repo = opened("srch-c23");
   hook(repo, { hook_event_name: "PostToolUseFailure", tool_name: CODE_LOOKUP, tool_input: { query: "badge" }, tool_error: "MCP error -32000: project not indexed", tool_error_type: "execution_failed" });
   mcp(repo, MEMORY_LOOKUP);
-  cli(repo, "note", ["context", CONTEXT]);
+  assert.match(refused(repo, "note", ["context", CONTEXT]), new RegExp(`${CODE_LOOKUP}\` call failed`));
+  cli(repo, "note", ["context", CONTEXT, "--no-code", "SocratiCode: not indexed"]);
   // a failed Bash call is still a command with its exit code
   const [bash] = eventsFromHookInput({ ...failure, tool_name: "Bash", tool_input: { command: "npm test" }, tool_error: "Exit code 1" }, "/repo");
   assert.equal(bash.kind, "command");

@@ -268,6 +268,8 @@ export function openLedger(ctx, slug, playbook, repoPaths = []) {
     sessions: [ctx.session],
     ...(repos.length ? { repos } : {}),
     gateHash: config.hash,
+    // the lead's searches for this task count from the first prompt after this point (rules.mjs)
+    lookupsFrom: Math.max(session.baselineSeq ?? 0, session.runEndSeq ?? 0),
     // what gate.json had verify run at open, so the report can tell a command this run brought in
     verifyAtOpen: config.verify.map((v) => v.cmd),
     policyHash: policy.hash,
@@ -327,8 +329,30 @@ export function currentLedger(stateDir, session) {
   return { dir, ledger: loadLedger(dir) };
 }
 
-function printStepLines(ctx, steps) {
-  for (const s of steps) ctx.out(`${String(s.n).padStart(2)}. [${s.state ?? "    "}] ${s.text}${s.key ? `  {${s.key}}` : ""}`);
+function printStepLines(ctx, steps, { short = false } = {}) {
+  for (const s of steps) ctx.out(`${String(s.n).padStart(2)}. [${s.state ?? "    "}] ${short ? firstClause(s.text) : s.text}${s.key ? `  {${s.key}}` : ""}`);
+}
+
+// A step's opening words for `gate open`; `gate next` prints the whole step when it is due.
+function firstClause(text) {
+  const head = String(text).split(/[:;(]|\.\s/)[0].trim();
+  return head.length > 60 ? `${head.slice(0, 59).replace(/\s+\S*$/, "")}…` : head;
+}
+
+// A newer done-gate beside this one in the plugin cache: the session still runs the old copy
+// until it restarts. A dev checkout has no version folders beside it and prints nothing.
+function newerInstalled(version) {
+  const semver = (v) => (/^\d+\.\d+\.\d+$/.test(v) ? v.split(".").map(Number) : null);
+  const mine = semver(String(version ?? ""));
+  if (!mine || path.basename(pluginRoot) !== version) return null;
+  let names = [];
+  try {
+    names = readdirSync(path.dirname(pluginRoot));
+  } catch {
+    return null;
+  }
+  const newer = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  return names.map(semver).filter((v) => v && newer(v, mine) > 0).sort(newer).pop()?.join(".") ?? null;
 }
 
 function printRepo(ctx, repo) {
@@ -348,7 +372,9 @@ function printOpen(ctx, dir, ledger) {
     ctx.out(`verify in ${repo.prefix}: ${own.length ? `${own.join(" · ")} (its ${repo.config.verifySource})` : "none"}`);
   }
   if (ledger.verifyAdded?.length) ctx.out(`verify added by this run: ${ledger.verifyAdded.join(" · ")}`);
-  printStepLines(ctx, ledger.steps.filter((s) => s.key));
+  const newer = newerInstalled(ctx.version);
+  if (newer) ctx.out(`done-gate ${newer} is installed, but this session runs ${ctx.version}: restart Claude Code to use it`);
+  printStepLines(ctx, ledger.steps.filter((s) => s.key), { short: true });
   printNext(ctx);
 }
 

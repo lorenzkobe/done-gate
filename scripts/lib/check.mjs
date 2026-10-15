@@ -26,6 +26,19 @@ const HELP = `gate <verb>: node <plugin>/scripts/gate.mjs <verb>
   rebaseline "<why>"                                        take changes that are not this task's (another terminal, a stash pop) out of it
   steps · size · doctor · help`;
 
+const DAY_MS = 24 * 3600 * 1000;
+const age = (iso) => {
+  const days = Math.floor((Date.now() - Date.parse(iso)) / DAY_MS);
+  return days >= 1 ? `${days} day${days === 1 ? "" : "s"}` : "less than a day";
+};
+
+// Runs another session left open for two days or more: nothing else prompts anyone to close them.
+function staleRuns(ctx) {
+  return openRuns(ctx.stateDir)
+    .filter(({ ledger }) => !ledger.sessions?.includes(ctx.session) && Date.now() - Date.parse(ledger.openedAt) >= 2 * DAY_MS)
+    .map(({ ledger }) => `open run ${ledger.slug}, opened ${age(ledger.openedAt)} ago by another session: if that work is over, \`gate abandon ${ledger.slug} "<reason>"\``);
+}
+
 export const verbs = {
   help(ctx) {
     ctx.out(HELP);
@@ -33,11 +46,9 @@ export const verbs = {
 
   check(ctx) {
     const { unmet } = assess(ctx, {});
-    if (unmet.length === 0) {
-      ctx.out("clean");
-      return;
-    }
+    if (unmet.length === 0) ctx.out("clean");
     unmet.forEach((u, i) => ctx.out(`${i + 1}. ${u.rule} — ${u.text}`));
+    for (const line of staleRuns(ctx)) ctx.out(line);
   },
 
   doctor(ctx) {
@@ -70,7 +81,7 @@ export const verbs = {
     if (current?.ledger.verifyAdded?.length) ctx.out(`  verify added by this run: ${current.ledger.verifyAdded.join(" · ")}`);
     if (current?.ledger.verifyDropped?.length) ctx.out(`  verify dropped by this run: ${current.ledger.verifyDropped.join(" · ")}`);
     const open = openRuns(ctx.stateDir);
-    if (open.length) ctx.out(`open runs: ${open.map((r) => path.basename(r.dir)).join(", ")}`);
+    if (open.length) ctx.out(`open runs: ${open.map((r) => `${path.basename(r.dir)} (${age(r.ledger.openedAt)} old)`).join(", ")}`);
     const errLog = path.join(ctx.stateDir, "gate-error.log");
     if (existsSync(errLog)) {
       const lines = readFileSync(errLog, "utf8").trim().split("\n");
