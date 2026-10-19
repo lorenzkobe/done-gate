@@ -231,3 +231,26 @@ test("C13 edge: abandoning another session's stale run keeps this session's look
   const r = s2("note", ["context", CONTEXT]);
   assert.equal(r.status, 0, r.stderr);
 });
+
+// typecheck-nudge
+test("C1 reported-surface and C2 edge: gate open names a missing type check only when tsconfig.json exists and no verify command is one", () => {
+  const openIn = (name, files) => {
+    const repo = makeRepo(name, files);
+    const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
+    delete env.CLAUDE_CODE_SESSION_ID;
+    const r = spawnSync(process.execPath, [gate, "open", "t", "feature"], { encoding: "utf8", env });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout;
+  };
+  const NUDGE = /verify runs no type check/;
+  const pkg = (scripts) => JSON.stringify({ name: "x", scripts });
+  const ts = { "tsconfig.json": "{}\n" };
+  const out = openIn("tc-missing", { ...ts, "package.json": pkg({ lint: "true", test: "true", build: "true" }) });
+  assert.equal(out.split("\n").filter((l) => NUDGE.test(l)).length, 1, out);
+  assert.match(out, /npx tsc --noEmit/, out);
+  assert.doesNotMatch(openIn("tc-script", { ...ts, "package.json": pkg({ typecheck: "tsc --noEmit", test: "true" }) }), NUDGE);
+  assert.doesNotMatch(openIn("tc-none", { "package.json": pkg({ lint: "true", test: "true" }) }), NUDGE);
+  for (const [name, cmd] of [["tc-tsc", "npx tsc --noEmit -p tests"], ["tc-vue", "npx vue-tsc --noEmit"], ["tc-svelte", "npx svelte-check"], ["tc-dash", "npm run type-check"]]) {
+    assert.doesNotMatch(openIn(name, { ...ts, ".claude/gate.json": JSON.stringify({ verify: [cmd, "npm test"] }) }), NUDGE, cmd);
+  }
+});

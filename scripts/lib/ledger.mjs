@@ -367,6 +367,10 @@ function printOpen(ctx, dir, ledger) {
   const config = loadConfig(ctx.root, ledger.repos);
   const cmds = config.verify.map((v) => v.cmd);
   ctx.out(`verify: ${cmds.length ? `${cmds.join(" · ")} (${config.verifySource})` : "none — add verify commands to .claude/gate.json"}`);
+  // vitest does not type-check and a framework build skips tests/, so type errors pile up under green runs
+  if (existsSync(path.join(ctx.root, "tsconfig.json")) && !cmds.some((c) => /\b(?:tsc|typecheck|type-check|vue-tsc|svelte-check)\b/.test(c))) {
+    ctx.out("verify runs no type check, and this repo has tsconfig.json: add a typecheck script to package.json or `npx tsc --noEmit` to verify in .claude/gate.json");
+  }
   for (const repo of config.repos ?? []) {
     const own = repo.config.verify.map((v) => v.cmd);
     ctx.out(`verify in ${repo.prefix}: ${own.length ? `${own.join(" · ")} (its ${repo.config.verifySource})` : "none"}`);
