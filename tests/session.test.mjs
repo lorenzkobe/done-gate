@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, pluginRoot, AT_GIT_TOPLEVEL } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 
 // ===== from tests/session.test.mjs =====
@@ -26,7 +27,9 @@ test("a fresh session with no ledgers gets the mandate only", () => {
   const ctx = out.hookSpecificOutput.additionalContext;
   assert.equal(out.hookSpecificOutput.hookEventName, "SessionStart");
   assert.match(ctx, /You have done-gate/);
-  assert.ok(!/done-gate-status/.test(ctx));
+  // the in-place warning is about where the plugin runs from (this checkout), not about ledgers
+  const ledgerStatus = ctx.replace(/<done-gate-status>\ndone-gate runs in place[\s\S]*?<\/done-gate-status>/, "");
+  assert.ok(!/done-gate-status/.test(ledgerStatus));
 });
 
 test("after /clear, the new session auto-attaches to the open ledger and is told what is unmet", () => {
@@ -266,3 +269,25 @@ test("C8 happy: CLAUDE_CODE_SESSION_ID beats the marker and loses to DONE_GATE_S
   assert.equal(loadSession(stateDirOf(both), "S9").current, null);
 });
 }
+
+// in-place-warning
+test("C1 reported-surface and C2 edge: session start warns when done-gate runs in place from a git checkout, not from an installed copy", { skip: !AT_GIT_TOPLEVEL && "needs this checkout's own .git" }, () => {
+  const startFrom = (bin, name) => {
+    const repo = makeRepo(name);
+    const env = { ...process.env, CLAUDE_PROJECT_DIR: repo };
+    delete env.CLAUDE_CODE_SESSION_ID;
+    const r = spawnSync(process.execPath, [bin, "session-start"], { input: JSON.stringify({ session_id: "S1", cwd: repo, hook_event_name: "SessionStart", session_start_source: "startup" }), encoding: "utf8", env });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+  };
+  const here = startFrom(gate, "inplace-checkout");
+  assert.match(here, new RegExp(`done-gate runs in place from ${pluginRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`), here);
+  const copy = path.join(os.tmpdir(), `dg-copy-${process.pid}`);
+  rmSync(copy, { recursive: true, force: true });
+  execFileSync("rsync", ["-a", "--exclude", ".git", "--exclude", "tests", "--exclude", ".claude", `${pluginRoot}/`, `${copy}/`]);
+  try {
+    assert.doesNotMatch(startFrom(path.join(copy, "scripts", "gate.mjs"), "inplace-copy"), /runs in place/);
+  } finally {
+    rmSync(copy, { recursive: true, force: true });
+  }
+});

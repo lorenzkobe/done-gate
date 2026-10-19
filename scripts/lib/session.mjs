@@ -108,6 +108,12 @@ export const verbs = {
     } catch {
       // status is a courtesy; the mandate still ships
     }
+    // a git checkout outside Claude Code's plugin folders is a working copy loaded in place: every
+    // edit there reaches this session at once, which once fed half-done changes to long runs
+    const root = ctx.pluginRoot.split(path.sep).join("/");
+    if (existsSync(path.join(ctx.pluginRoot, ".git")) && !root.includes("/.claude/plugins/")) {
+      parts.push(`\n<done-gate-status>\ndone-gate runs in place from ${ctx.pluginRoot}, a git working folder: every edit there reaches this session at once, half-done ones included. That is right for testing the plugin (claude --plugin-dir); for real work install it from a release (claude plugin marketplace add <owner>/<repo>, then claude plugin install done-gate@done-gate).\n</done-gate-status>`);
+    }
     ctx.out({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: parts.join("\n") } });
   },
 };
