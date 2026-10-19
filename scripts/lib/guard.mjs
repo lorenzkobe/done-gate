@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { currentLedger, isDone } from "./ledger.mjs";
-import { leadDelegates } from "./size.mjs";
+import { leadDelegates, policyFor } from "./size.mjs";
 import { appendEvents, nextSeq, readEvents, toolUse } from "./events.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { ancestorPids, pidsDir } from "./context.mjs";
@@ -739,6 +739,21 @@ function notReadyToEdit(ledger) {
   return missing.length ? `the run still needs ${missing.join(", ")} before code is edited` : null;
 }
 
+// A run that outgrew its plan takes no new code files: past twice the planned count and ten
+// more, or past the split limit (40), the rest is another request and belongs in a new run.
+// Both counts are code files, the unit the measurement uses; tests stay free. The measurement is
+// as of the last gate verb or stop, so one turn can add a few files before it shows.
+function outgrown(ledger, config, rel) {
+  if (!ledger?.tier || config.isTest(rel)) return null;
+  const named = ledger.tier.predictedFiles ?? [];
+  if (named.includes(rel)) return null;
+  const planned = named.filter((p) => config.isSource(p) && !config.isTest(p));
+  const now = ledger.tier.measured?.files ?? 0;
+  const limit = policyFor(ledger).splitPast.files;
+  if (now <= limit && !(planned.length && now >= Math.max(2 * planned.length, planned.length + 10))) return null;
+  return `${rel} is outside this task's plan, and the task has grown to ${now} changed files (planned ${planned.length}). Finish and \`gate close\` this task and \`gate open\` a new run for the rest; if it is truly the same request, add the file with \`gate note plan "<plan>" --files <every file>\` (at most ${limit} files)`;
+}
+
 // Where inline code writes: a literal (or a name given one) as open(…, "w"/"a"/"x") or as the
 // target of writeFile, appendFile and kin. Any other write leaves the target unknown.
 function inlineWriteTargets(raw) {
@@ -840,6 +855,8 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
       const shown = [...code, ...(inline.lost ? [`${inline.lost} (in a folder the gate cannot follow)`] : [])];
       const why = shown.length ? notReadyToEdit(ledger) : null;
       if (why) return { deny: true, reason: `done-gate: that command writes ${shown.slice(0, 3).join(", ")} and ${why}.`, paths: [...code] };
+      const tooBig = [...code].map((p) => outgrown(ledger, config, p)).find(Boolean);
+      if (tooBig) return { deny: true, reason: `done-gate: ${tooBig}.`, paths: [...code] };
     }
     // Helpers write only through the edit tools, where the role rules apply; a shell write
     // would bypass them, so their shell writes stay under scratch paths.
@@ -864,6 +881,9 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
   // an unreadable run is the gate's own failure: it fails open, as the hooks do, rather than ask for a second run
   const notReady = code.length && !where.unreadable ? notReadyToEdit(ledger) : null;
   if (notReady) return { deny: true, reason: `done-gate: ${code.join(", ")} is code, and ${notReady}.`, paths };
+  // the lead decides a task is done; a helper edits the files its packet names
+  const tooBig = where.unreadable || input.agent_id ? null : code.map((p) => outgrown(ledger, config, p)).find(Boolean);
+  if (tooBig) return { deny: true, reason: `done-gate: ${tooBig}.`, paths };
   const role = (r) => agentType === `done-gate:${r}` || agentType === r;
   // at a delegated size (policy.delegatesAt, large by default) the lead hands source to a helper:
   // a worker, or any implementer it spawns; the reading roles stay fenced below. A "delegate"

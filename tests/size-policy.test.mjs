@@ -4,7 +4,7 @@ import { execFileSync, spawnSync, execSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, here, doneArgs, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, doneArgs, lookedUp, readyToEdit } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
@@ -1953,4 +1953,38 @@ test("C5 edge: gate verify prints the advice, so the lead sees it mid-run", () =
   for (let i = 0; i < 41; i++) write(repo, `src/m${i}.ts`, `export const m${i} = 1;\n`);
   run("check");
   assert.match(run("verify").stdout, /^advice: this run has grown to 41 files/m);
+});
+
+test("C1 boundary: gate note plan with more than 40 files is refused and says to split; 40 is accepted", () => {
+  const repo = makeRepo("split-plan");
+  execFileSync("git", ["add", "."], { cwd: repo });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: repo });
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  const run = (verb, args = []) => spawnSync(process.execPath, [gate, verb, ...args], { encoding: "utf8", env });
+  assert.equal(run("open", ["big", "feature"]).status, 0);
+  const files = (n) => Array.from({ length: n }, (_, i) => `src/f${i}.ts`).join(",");
+  const refused = run("note", ["plan", "everything", "--files", files(41)]);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /41 code files/);
+  assert.match(refused.stderr, /split/);
+  assert.equal(run("note", ["plan", "a lot", "--files", files(40)]).status, 0);
+  const withTests = `${files(40)},${Array.from({ length: 30 }, (_, i) => `tests/t${i}.test.ts`).join(",")},docs/a.md`;
+  assert.equal(run("note", ["plan", "40 code files and their tests", "--files", withTests]).status, 0, "tests and docs are not counted");
+});
+
+test("C2 refused end to end: after gate check measures 13 changed files on a 3-file plan, the lead's next unplanned code file is refused", () => {
+  const files = Object.fromEntries(Array.from({ length: 14 }, (_, i) => [`src/m${i}.ts`, `export const m${i} = 0;\n`]));
+  const repo = makeRepo("split-grown", files);
+  execFileSync("git", ["add", "."], { cwd: repo });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: repo });
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  const run = (verb, args = [], input) => spawnSync(process.execPath, [gate, verb, ...args], { encoding: "utf8", env, input });
+  assert.equal(run("open", ["grown", "feature"]).status, 0);
+  readyToEdit(repo, { plan: ["--files", "src/m0.ts,src/m1.ts,src/m2.ts"] });
+  for (let i = 0; i < 13; i++) write(repo, `src/m${i}.ts`, `export const m${i} = 1;\n`);
+  run("check");
+  const out = run("fence", [], JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: path.join(repo, "src/m13.ts") }, cwd: repo, session_id: "S1" })).stdout;
+  assert.match(out, /outside this task's plan/, out);
 });

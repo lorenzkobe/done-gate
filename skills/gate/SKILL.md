@@ -48,11 +48,11 @@ Start each Bash command with `gate() { node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.
 
 ## Rules throughout
 
-- Two readings of the ask: `AskUserQuestion` before step 2.
-- A helper that stops with its file unfinished: `gate brief <role>` again; a fresh
-  helper continues from the file.
-- Waiting for a helper ends the turn; its hand-back wakes you. A run a dead session left open: `gate abandon <slug> "<reason>"`.
-- Ceiling: ten helpers per task.
+- Two readings of the ask: `AskUserQuestion` before step 2. New ask mid-run: new run.
+- A helper that stops mid-file: `gate brief <role>` again; a fresh one continues
+  from the file.
+- Waiting for a helper ends the turn; its hand-back wakes you. A dead session's open run: `gate abandon <slug> "<reason>"`.
+- Ceiling: ten helpers a task.
 - A step you cannot do: ask the user, then `gate waive <key> "<why>"`.
 - Never hand-edit `.claude/gate/runs/**` except `ledger.md`. No commits unless asked; the
   repo's CLAUDE.md wins.

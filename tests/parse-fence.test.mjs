@@ -666,3 +666,45 @@ test("C11 refused and edge: inline code is judged by what it writes: a code targ
   assert.match(decide(bash(`cd $D && python3 -c "open('a.ts','w').write('x')"`), repo, cfg, null, null).reason, /cannot follow/, "a folder it cannot read");
   assert.equal(decide(bash(`cd docs && python3 -c "open('notes.md','w').write('x')"`), repo, cfg, null, null).deny, false, "a docs write after cd");
 });
+
+// ---------------------------------------------------------------------------
+// keep-runs-small: a run that outgrew its plan takes no new code files
+// ---------------------------------------------------------------------------
+
+const grown = (files, measured) => planned({ tier: { predictedFiles: files, measured: { files: measured } } });
+
+test("C2 refused: a run planned at 3 files that grew to 13 refuses a new unplanned code file, naming close-and-new-run and re-plan", () => {
+  const v = decide(editOf("src/new.ts", "Write"), repo, cfg, RUN_REL, grown(["src/a.ts", "src/b.ts", "src/c.ts"], 13));
+  assert.equal(v.deny, true);
+  assert.match(v.reason, /new run|gate open/, v.reason);
+  assert.match(v.reason, /gate note plan/, v.reason);
+  assert.match(v.reason, /planned 3/, v.reason);
+  const shell = decide(bash("echo x > src/new.ts"), repo, cfg, RUN_REL, grown(["src/a.ts", "src/b.ts", "src/c.ts"], 13));
+  assert.equal(shell.deny, true, "a shell write is held the same way");
+});
+
+test("C3 edge: planned files and test files stay editable however big the run; under the growth limit unplanned files are free", () => {
+  const big = grown(["src/a.ts", "src/b.ts", "src/c.ts"], 13);
+  assert.equal(decide(editOf("src/a.ts"), repo, cfg, RUN_REL, big).deny, false, "a planned file");
+  assert.equal(decide(editOf("tests/new.test.ts", "Write"), repo, cfg, RUN_REL, big).deny, false, "a test file");
+  assert.equal(decide(editOf("src/new.ts", "Write"), repo, cfg, RUN_REL, grown(["src/a.ts", "src/b.ts", "src/c.ts"], 12)).deny, false, "12 < 3 + 10");
+  assert.equal(decide(editOf("src/new.ts", "Write"), repo, cfg, RUN_REL, grown(Array.from({ length: 12 }, (_, i) => `src/p${i}.ts`), 23)).deny, false, "23 < 2 x 12");
+  assert.equal(decide(editOf("src/new.ts", "Write"), repo, cfg, RUN_REL, grown(Array.from({ length: 12 }, (_, i) => `src/p${i}.ts`), 24)).deny, true, "24 = 2 x 12");
+});
+
+test("C4 edge: a run with no planned files is held only past 40 changed files", () => {
+  assert.equal(decide(editOf("src/new.ts", "Write"), repo, cfg, RUN_REL, grown([], 40)).deny, false);
+  assert.equal(decide(editOf("src/new.ts", "Write"), repo, cfg, RUN_REL, grown([], 41)).deny, true);
+});
+
+test("C6 edge: only the lead is held; a helper edits the files its packet names, and planned tests and docs do not count as planned code", () => {
+  const big = grown(["src/a.ts", "src/b.ts", "src/c.ts"], 13);
+  assert.equal(decide(editOf("src/new.ts", "Write"), repo, cfg, RUN_REL, big).deny, true, "the lead");
+  assert.equal(decide({ ...editOf("src/new.ts", "Write"), agent_id: "A1", agent_type: "done-gate:worker" }, repo, cfg, RUN_REL, big).deny, false, "a worker");
+  const padded = grown(["src/a.ts", "tests/a.test.ts", "tests/b.test.ts", "docs/notes.md"], 11);
+  assert.equal(decide(editOf("src/new.ts", "Write"), repo, cfg, RUN_REL, padded).deny, true, "1 code file planned, 11 changed: 11 >= 1 + 10");
+});
+
+test("C5 happy: once the plan names the new file, the edit passes", () => {
+  assert.equal(decide(editOf("src/new.ts", "Write"), repo, cfg, RUN_REL, grown(["src/a.ts", "src/b.ts", "src/c.ts", "src/new.ts"], 13)).deny, false);
+});

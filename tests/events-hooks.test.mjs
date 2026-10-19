@@ -484,7 +484,8 @@ test("C8 boundary: a plan that predicted small but has already grown to a measur
   cli(repo, "check");
   assert.equal(ledgerOf(repo).tier.measured.tier, "large");
 
-  const reason = fence(repo, pre(repo, "Edit", path.join(repo, "src/d.ts")));
+  // a planned file, so the growth rule (a new unplanned file) stays out of this
+  const reason = fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts")));
   assert.ok(reason, "the measured size fences the lead too");
   assert.match(reason, /large/, reason);
   assert.match(reason, /gate brief worker/, reason);

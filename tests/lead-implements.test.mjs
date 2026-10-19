@@ -118,7 +118,8 @@ test("C3 boundary: a small task that grows to a measured large fences the lead's
   for (const f of LARGE_FILES) write(toLarge, f, "export const y = 2;\n");
   cli(toLarge, "check");
   assert.equal(ledgerOf(toLarge).tier.measured.tier, "large");
-  const reason = fence(toLarge, "Edit", "src/z.ts");
+  // a planned file, so the growth rule (a new unplanned file) stays out of this
+  const reason = fence(toLarge, "Edit", "src/a.ts");
   assert.ok(reason, "measured large fences the lead");
   assert.match(reason, /\blarge\b/);
 });

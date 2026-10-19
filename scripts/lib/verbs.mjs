@@ -196,6 +196,14 @@ export const verbs = {
     const named = section === "plan" ? (files ?? "").split(",").map((f) => f.trim()).filter(Boolean) : [];
     const outside = named.filter((f) => toPosixRel(ctx.root, f, ctx.repos) === null);
     if (outside.length && outside.length === named.length) throw new UsageError(`--files: ${outsideRepos(outside.join(", "))}`);
+    // a plan past the split limit is several tasks: one review cannot cover it well
+    if (named.length) {
+      const { ledger } = open(ctx);
+      const limit = policyFor(ledger).splitPast.files;
+      const config = loadConfig(ctx.root, ledger.repos);
+      const code = named.map((f) => toPosixRel(ctx.root, f, ledger.repos)).filter((f) => f && config.isSource(f) && !config.isTest(f));
+      if (code.length > limit) throw new UsageError(`the plan names ${code.length} code files, past the ${limit} one task can be reviewed well at: split the work into separate tasks, each its own run, and plan only this one's part`);
+    }
     if (size !== undefined) {
       const sizes = tierOrder(policyFor(open(ctx).ledger));
       if (!sizes.includes(size)) throw new UsageError(`unknown size "${size}" (have: ${sizes.join(", ")})`);
