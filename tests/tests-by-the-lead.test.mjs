@@ -265,3 +265,9 @@ test("C3 reported-surface: the README and the models.json principle state the sp
   }
   assert.match(MODELS.principle, /worker and the reviewer/i, "models.json principle names the two lighter roles");
 });
+
+test("release 0.18.0: the verify driver template says a background tab runs no animation frames and asks which check was used", () => {
+  const skill = readFileSync(path.join(pluginRoot, "skills", "verify-setup", "SKILL.md"), "utf8").replace(/\s+/g, " ");
+  assert.match(skill, /background runs no animation frames/);
+  assert.match(skill, /bring the tab to the front, or check motion in a headless browser, and say which you did/);
+});

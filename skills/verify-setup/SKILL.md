@@ -40,7 +40,9 @@ app and surface) and these sections, no placeholders:
   unseeded instance and says to run Seed.
 - **Drive**: the recipe with this repo's real routes and selectors. For a web app: **open at
   a 360 px-wide viewport first**, then desktop; watch the console and network tabs, not
-  only the screen, because a query that fails soft renders like an empty state.
+  only the screen, because a query that fails soft renders like an empty state. A tab in
+  the background runs no animation frames, so scroll and motion read as frozen there: bring
+  the tab to the front, or check motion in a headless browser, and say which you did.
 - **Evidence**: what to capture (the hooks already log every browser call as events; add a
   `gate decide driver ...` row per feature naming what was driven and the observable
   result; screenshots stay in the transcript). Exercise the real user path, never a
