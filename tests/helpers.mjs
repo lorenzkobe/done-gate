@@ -7,6 +7,10 @@ export const here = path.dirname(fileURLToPath(import.meta.url));
 export const pluginRoot = path.resolve(here, "..");
 export const gate = path.join(pluginRoot, "scripts", "gate.mjs");
 
+// The gate reads which MCP servers are set up from the home folder; tests see an empty one
+// unless they point DONE_GATE_HOME elsewhere, so this machine's own setup never leaks in.
+process.env.DONE_GATE_HOME ??= path.join(here, ".tmp", "home-empty");
+
 // False for an installed copy: the plugin cache has no .git, and a marketplace clone puts the
 // plugin below its top. Checks that read the plugin's own git history skip there.
 export const AT_GIT_TOPLEVEL = (() => {
@@ -80,9 +84,10 @@ export function doneArgs(repo, ref, key, note, evidence, session = "S1") {
 export function readyToEdit(repo, { session = "S1", plan = [] } = {}) {
   const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: session };
   delete env.CLAUDE_CODE_SESSION_ID;
+  lookedUp(repo, { session });
   for (const args of [
     ["note", "task", "the task"],
-    ["note", "context", "Traced: src/a.ts:1 · Related: none: `grep -rn a src` · Research: none needed: a test fixture", "--no-code", "SocratiCode: not installed", "--no-memory", "MemPalace: not installed"],
+    ["note", "context", "Traced: src/a.ts:1 · Related: none: `grep -rn a src` · Research: none needed: a test fixture"],
     ["note", "plan", "the plan", ...plan],
     ["case", "add", "the case", "--kind", "happy"],
   ]) {

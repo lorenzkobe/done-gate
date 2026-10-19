@@ -12,11 +12,11 @@ Start each Bash command with `gate() { node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.
 
 1. `gate open <slug> <feature|bugfix|refactor|plan|investigation>`.
 2. Before any edit: `gate note task "<the ask, quoted, then your words>"`; understand
-   first: search code and memory before grep (missing: `--no-code|--no-memory "<why>"`,
-   tell the user), trace, then `gate note context "Traced: <file:line pointers> Related:
+   first: search code and memory before grep (missing: ask the user;
+   `--no-code|--no-memory "<why>" --user-ok "<words>"`), trace, then `gate note context "Traced: <file:line pointers> Related:
    <what depends on it> Research: <what you looked up, or none needed: why>"`;
    `gate note plan "<approach>" --files a.ts,b.ts [--size large]` (the files predict the
-   size; one plain file is tiny, no skeptic or reviewer), then
+   size; tiny: no reviewer), then
    `gate case add "<case>" --kind <happy|edge|refused|boundary|idempotent|reported-surface|performance|click>`
    per row, in that order (R2). The plan names the hot paths, their data sizes and cost
    shape (one pass, one query) or says "no hot path"; a `performance` row names the size

@@ -8,7 +8,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { briefOf, caseOpen, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list } from "./rules.mjs";
+import { briefOf, caseOpen, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
 import { assess, buildState, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { gitHead, withoutRepos } from "./tree.mjs";
@@ -156,6 +156,17 @@ function checkLookups(ctx, ledger, rest) {
   if (!ledger.lookups) return declared;
   const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
   const found = leadLookups(ledger, events);
+  // a skipped search is the user's call, told what is set up: a tool that is set up and was not
+  // even tried is named, so the user knows they are waiving a working tool
+  if (Object.keys(declared).length) {
+    const servers = setUpServers(ctx.root);
+    const untried = Object.keys(declared).flatMap((k) => (found.failed[k].size ? [] : servers[k].map((s) => `${s.name} (set up in ${s.where}, not tried)`)));
+    const ok = flag(rest, "--user-ok");
+    const tell = `tell the user which search is missing or failing${untried.length ? `, and that ${untried.join(", ")} looks set up: try it first, or say why it cannot run` : ""}, and ask whether to continue without it; then pass --user-ok "<their words, at least three>"`;
+    if (!ok?.trim() || ok.startsWith("--")) throw new UsageError(`skipping ${Object.keys(declared).join(" and ")} search is the user's call: ${tell}`);
+    if (!userSaid(ledger, events, ok)) throw new UsageError(`the user did not say "${ok}" in this task (at least three of their words, from a message or a question answer): ${tell}`);
+    for (const kind of Object.keys(declared)) declared[kind] = `${declared[kind]} (the user: "${ok.trim()}")`;
+  }
   const missing = LOOKUP_KINDS.filter((k) => !found[k].size && !declared[k] && !ledger.lookupGap?.[k]);
   if (missing.length) {
     const what = missing.map((k) => `${k} (e.g. ${LOOKUP_EXAMPLE[k]})`).join(" and ");

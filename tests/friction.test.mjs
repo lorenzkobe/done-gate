@@ -34,7 +34,7 @@ const hook = (repo, verb, payload) => {
   return r.stdout.trim();
 };
 const logged = (repo, payload) => hook(repo, "log", payload);
-const prompt = (repo) => logged(repo, { hook_event_name: "UserPromptSubmit", prompt: "add a badge" });
+const prompt = (repo, text = "add a badge") => logged(repo, { hook_event_name: "UserPromptSubmit", prompt: text });
 const lookup = (repo, tool_name) => logged(repo, { hook_event_name: "PostToolUse", tool_name, tool_input: { query: "badge" }, tool_response: {} });
 const failedLookup = (repo, tool_name) => logged(repo, { hook_event_name: "PostToolUseFailure", tool_name, tool_input: { query: "badge" }, tool_error: "MCP error -32000: project not indexed" });
 const CONTEXT = "Traced: src/a.ts:1 exports a0 · Related: tests/a.test.ts:1 pins it · Research: none needed: one constant";
@@ -203,7 +203,8 @@ test("C11 refused: a failed lookup no longer counts; the refusal names it and sa
   assert.match(r.stderr, REFUSAL);
   assert.match(r.stderr, /codebase_search[^\n]*failed|failed[^\n]*codebase_search/, r.stderr);
   assert.match(r.stderr, /--no-code/, r.stderr);
-  cli(repo, "note", ["context", CONTEXT, "--no-code", "SocratiCode: not indexed"]);
+  prompt(repo, "fine, skip the code index for this one");
+  cli(repo, "note", ["context", CONTEXT, "--no-code", "SocratiCode: not indexed", "--user-ok", "skip the code index"]);
 });
 
 test("C12 happy: SKILL.md defines gate as a shell function and stays under 4096 bytes", () => {

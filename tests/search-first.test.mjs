@@ -18,9 +18,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, lookedUp, CODE_LOOKUP, MEMORY_LOOKUP } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, lookedUp, CODE_LOOKUP, MEMORY_LOOKUP } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { eventsFromHookInput, appendEvents, readEvents } from "../scripts/lib/events.mjs";
 
@@ -125,7 +125,10 @@ function planned(name, { plan = ["src/a.ts", "src/app/page.tsx"], lead = [CODE_L
   const files = plan.length > 10 ? Object.fromEntries(plan.map((f) => [f, "export const x = 1;\n"])) : {};
   const repo = opened(name, { files });
   for (const t of lead) mcp(repo, t);
-  cli(repo, "note", ["context", CONTEXT, ...contextArgs]);
+  // a skipped search kind needs the user's OK in their words (search-tools-ask-user)
+  if (contextArgs.some((a) => a.startsWith("--no-"))) prompt(repo, "go on without it");
+  const ok = contextArgs.some((a) => a.startsWith("--no-")) ? ["--user-ok", "go on without it"] : [];
+  cli(repo, "note", ["context", CONTEXT, ...contextArgs, ...ok]);
   cli(repo, "note", ["plan", "The plan.", "--files", plan.join(",")]);
   cli(repo, "case", ["add", "renders the badge", "--kind", "happy"]);
   return repo;
@@ -190,7 +193,8 @@ test("C3 refused: a lead with only a code lookup is refused, naming memory as th
 test("C4 happy: a code lookup plus --no-memory \"MemPalace not installed\" is accepted, the gap is stored, and the brief's For-you line says memory search was not available and why", () => {
   const repo = opened("srch-c4");
   mcp(repo, CODE_LOOKUP);
-  cli(repo, "note", ["context", CONTEXT, "--no-memory", "MemPalace not installed"]);
+  prompt(repo, "go on without mempalace");
+  cli(repo, "note", ["context", CONTEXT, "--no-memory", "MemPalace not installed", "--user-ok", "go on without mempalace"]);
   assert.equal(stepOf(repo, "context").state, "DONE");
   const gap = ledgerOf(repo).lookupGap;
   assert.ok(gap, "no lookupGap stored");
@@ -221,7 +225,8 @@ test("C5 refused: an empty --no-code or --no-memory reason is refused; declaring
 
   const both = opened("srch-c5-both");
   lookedUp(both);
-  cli(both, "note", ["context", CONTEXT, "--no-code", "SocratiCode: not indexed"]);
+  prompt(both, "skip the code index");
+  cli(both, "note", ["context", CONTEXT, "--no-code", "SocratiCode: not indexed", "--user-ok", "skip the code index"]);
   assert.match(String(ledgerOf(both).lookupGap?.code), /SocratiCode: not indexed/);
 });
 
@@ -330,7 +335,8 @@ test("C23 edge: a failed lookup (PostToolUseFailure on an mcp__ search) is logge
   hook(repo, { hook_event_name: "PostToolUseFailure", tool_name: CODE_LOOKUP, tool_input: { query: "badge" }, tool_error: "MCP error -32000: project not indexed", tool_error_type: "execution_failed" });
   mcp(repo, MEMORY_LOOKUP);
   assert.match(refused(repo, "note", ["context", CONTEXT]), new RegExp(`${CODE_LOOKUP}\` call failed`));
-  cli(repo, "note", ["context", CONTEXT, "--no-code", "SocratiCode: not indexed"]);
+  prompt(repo, "skip the code index");
+  cli(repo, "note", ["context", CONTEXT, "--no-code", "SocratiCode: not indexed", "--user-ok", "skip the code index"]);
   // a failed Bash call is still a command with its exit code
   const [bash] = eventsFromHookInput({ ...failure, tool_name: "Bash", tool_input: { command: "npm test" }, tool_error: "Exit code 1" }, "/repo");
   assert.equal(bash.kind, "command");
@@ -565,4 +571,99 @@ test("C24 reported-surface: R17 shows in gate check, and the brief report reads 
   const line = forYou(repo);
   assert.doesNotMatch(line, /\bR17\b/, line);
   assert.match(line, /missing: [^;]*(search|look)/i, line);
+});
+
+// ---------------------------------------------------------------------------
+// search-tools-ask-user: skipping a search tool takes the user's OK, and a tool that is set up must be tried first
+// ---------------------------------------------------------------------------
+
+const homeWith = (name, servers) => {
+  const home = path.join(here, ".tmp", `home-${name}`);
+  rmSync(home, { recursive: true, force: true });
+  mkdirSync(home, { recursive: true });
+  writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ mcpServers: Object.fromEntries(servers.map((s) => [s, { command: "x" }])) }));
+  return home;
+};
+const runHome = (repo, home, verb, args = []) => spawnSync(process.execPath, [gate, verb, ...args], { input: "", encoding: "utf8", env: { ...envFor(repo), DONE_GATE_HOME: home } });
+
+test("C1 refused: --no-code with a code tool set up and never tried names the tool and where it is set up, and still needs the user's OK", () => {
+  const repo = opened("ask-c1");
+  mcp(repo, MEMORY_LOOKUP);
+  const home = homeWith("c1", ["socraticode", "mempalace"]);
+  const r = runHome(repo, home, "note", ["context", CONTEXT, "--no-code", "SocratiCode: not connected"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /socraticode \(set up in ~\/\.claude\.json, not tried\)/i, r.stderr);
+  prompt(repo, "yes go on without socraticode, it will not start");
+  assert.equal(runHome(repo, home, "note", ["context", CONTEXT, "--no-code", "SocratiCode: not connected", "--user-ok", "go on without socraticode"]).status, 0, "the user knowingly says go on");
+});
+
+test("C2 refused: --no-code with no code tool set up and no --user-ok is refused, telling the lead to tell the user and ask", () => {
+  const repo = opened("ask-c2");
+  mcp(repo, MEMORY_LOOKUP);
+  const r = runHome(repo, homeWith("c2", ["mempalace"]), "note", ["context", CONTEXT, "--no-code", "SocratiCode: not installed"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /tell the user/i, r.stderr);
+  assert.match(r.stderr, /--user-ok/, r.stderr);
+});
+
+test("C3 happy: --user-ok whose words the user said, typed or as a question answer, is accepted and recorded", () => {
+  const typed = opened("ask-c3-typed");
+  mcp(typed, MEMORY_LOOKUP);
+  prompt(typed, "ok, continue without socraticode for now");
+  const r = runHome(typed, homeWith("c3", ["mempalace"]), "note", ["context", CONTEXT, "--no-code", "SocratiCode: not installed", "--user-ok", "continue without socraticode"]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(ledgerOf(typed).lookupGap?.code ?? "", /not installed/);
+  assert.match(JSON.stringify(ledgerOf(typed).lookupGap), /continue without socraticode/i, "the user's words are kept");
+
+  const answered = opened("ask-c3-answer");
+  mcp(answered, MEMORY_LOOKUP);
+  hook(answered, { hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", tool_input: { questions: [{ question: "Continue without SocratiCode?" }] }, tool_response: { answers: { "Continue without SocratiCode?": "Yes, continue without it" } } });
+  const a = runHome(answered, homeWith("c3a", ["mempalace"]), "note", ["context", CONTEXT, "--no-code", "SocratiCode: not installed", "--user-ok", "Yes, continue without it"]);
+  assert.equal(a.status, 0, a.stderr);
+});
+
+test("C4 refused: --user-ok words the user never said are refused, and a helper's words do not count", () => {
+  const repo = opened("ask-c4");
+  mcp(repo, MEMORY_LOOKUP);
+  hook(repo, { hook_event_name: "UserPromptSubmit", prompt: "a helper says continue", agent_id: "A1", agent_type: "done-gate:reviewer" });
+  const home = homeWith("c4", ["mempalace"]);
+  prompt(repo, "no");
+  prompt(repo, "<task-notification> the agent says go on without it </task-notification>");
+  for (const words of ["the user said yes", "a helper says continue", "no", "ok", "go on without it"]) {
+    const r = runHome(repo, home, "note", ["context", CONTEXT, "--no-code", "SocratiCode: not installed", "--user-ok", words]);
+    assert.equal(r.status, 1, words);
+    assert.match(r.stderr, /user/i, r.stderr);
+  }
+});
+
+test("C5 edge: a set-up tool that was tried and failed may be skipped with the user's OK", () => {
+  const repo = opened("ask-c5");
+  mcp(repo, MEMORY_LOOKUP);
+  hook(repo, { hook_event_name: "PostToolUseFailure", tool_name: CODE_LOOKUP, tool_input: { query: "x" }, error: "project not indexed" });
+  prompt(repo, "fine, skip the code index");
+  const r = runHome(repo, homeWith("c5", ["socraticode", "mempalace"]), "note", ["context", CONTEXT, "--no-code", "SocratiCode: not indexed", "--user-ok", "skip the code index"]);
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test("C6 happy: an AskUserQuestion answer is logged as an answer event with its text", () => {
+  const repo = opened("ask-c6");
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", tool_input: { questions: [{ question: "Go?" }] }, tool_response: { answers: { "Go?": "Yes, go ahead" } } });
+  const answer = readEvents(stateDir(repo), "S1").find((e) => e.kind === "answer");
+  assert.ok(answer, "no answer event");
+  assert.match(answer.text, /Yes, go ahead/);
+});
+
+test("C9 edge: an OK late in a long message is kept and found; an answer keeps the user's answer, not the question; a 'not' just before the words is no OK", () => {
+  const repo = opened("ask-c9");
+  mcp(repo, MEMORY_LOOKUP);
+  prompt(repo, `${"some context about the task. ".repeat(20)}and yes, carry on without socraticode please`);
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", tool_input: { questions: [{ question: "Skip the memory index entirely?" }] }, tool_response: { questions: [{ question: "Skip the memory index entirely?" }], answers: { "Skip the memory index entirely?": "No" } } });
+  const answer = readEvents(stateDir(repo), "S1").find((e) => e.kind === "answer");
+  assert.doesNotMatch(answer.text, /Skip the memory index/, "the question text is not the user's words");
+  const home = homeWith("c9", []);
+  assert.equal(runHome(repo, home, "note", ["context", CONTEXT, "--no-memory", "MemPalace: not installed", "--user-ok", "skip the memory index"]).status, 1, "words only in the question");
+  prompt(repo, "please do not go on without mempalace");
+  assert.equal(runHome(repo, home, "note", ["context", CONTEXT, "--no-memory", "MemPalace: not installed", "--user-ok", "go on without mempalace"]).status, 1, "a 'not' before the words");
+  const late = runHome(repo, home, "note", ["context", CONTEXT, "--no-code", "SocratiCode: not installed", "--user-ok", "carry on without socraticode"]);
+  assert.equal(late.status, 0, `an OK past the first 200 characters counts:\n${late.stderr}`);
 });

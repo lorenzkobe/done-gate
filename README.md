@@ -178,7 +178,10 @@ count (search, query, symbol, impact, flow, traverse, find, follow, timeline); a
 adds, updates, indexes, lists or reports status does not. `gate note context` is refused
 until the lead itself made both since the user's message that started the task; a lookup by
 a helper or an Explore subagent does not count for the lead. A missing tool or an unindexed
-project is declared with `--no-code "<why>"` or `--no-memory "<why>"`: the report tells you,
+project is declared with `--no-code "<why>"` or `--no-memory "<why>"` plus `--user-ok "<your
+words>"`: the lead must tell you which search is missing (and name a tool that looks set up but
+was not tried) and ask; the gate accepts the skip only when at least three of your words, not
+just after a "not" or "no", are in one of your messages or question answers. The report tells you,
 and every helper packet carries it in its Lookups section, so helpers use grep and Read for
 that kind. Helpers are checked at `gate huddle add|reply` and by R17; QA searches memory only,
 since a code search would show it the new implementation. Runs opened before 0.16.0 are not
@@ -352,7 +355,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | --- | --- |
 | `open <slug> <feature\|bugfix\|refactor\|plan\|investigation> [--repo <path>]` | start a ledger with the playbook's steps; `--repo` (repeatable, anywhere among the arguments) adds a further git repo to the run; on a slug whose run is open it joins that run and declares the repo late |
 | `repo add <path>` | add a further git repo to the open run, measured from its HEAD |
-| `note task\|context\|plan "…"` · `note context "…" [--no-code "<why>"] [--no-memory "<why>"]` · `note plan "…" --files a,b` · `note caveat "…"` | write the prose sections (stamps the order for R2); Context is Traced (file:line pointers), Related, Research, and is refused until the lead made a code and a memory lookup, unless `--no-code`/`--no-memory` declares that kind missing with a reason (see Search first); `--files` predicts the size; a caveat is something the run could not show, printed in both reports |
+| `note task\|context\|plan "…"` · `note context "…" [--no-code "<why>"] [--no-memory "<why>"] [--user-ok "<your words>"]` · `note plan "…" --files a,b` · `note caveat "…"` | write the prose sections (stamps the order for R2); Context is Traced (file:line pointers), Related, Research, and is refused until the lead made a code and a memory lookup, unless `--no-code`/`--no-memory` declares that kind missing with a reason and `--user-ok` quotes your OK (see Search first); `--files` predicts the size; a caveat is something the run could not show, printed in both reports |
 | `case add "…" --kind <kind>` · `case add --batch <file>` · `case amend C1 "…"` · `case close C1 --test file:name \| --click [events#<seq>] \| --na "…"` | the case table; kinds: happy, edge, refused, boundary, idempotent, reported-surface, performance, click; `--batch` reads one case per line as `<kind><TAB><text>`, adds all or none and prints one `next:` line; `amend` replaces a case's text and reopens it; `--click` closes a click case with the named click, or with the only unclaimed click, or with the newest one while only one click case is open, and prints it |
 | `step <key\|n> done\|skipped\|na "…" [--evidence ptr \| --ran "<text>"]` | close a playbook step (not the close step: `gate close` does that); the pointer must resolve; `repro`, `rootcause` and `schema` close only on a recorded run (`--ran` picks the newest command, browser call or skill after the run opened whose text contains it), and `rootcause` names the line at fault as `file:line` in its note; on a run opened since 0.16.0, `context` closes only through `gate note context` |
 | `next` | the full `next:` hint; after a verb it is printed in full the first time a step is hinted and in a short form afterwards, and in full again once a session joins the run (clear, resume, compact, `gate attach`) |

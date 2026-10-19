@@ -15,6 +15,8 @@ export function nextSeq() {
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const TEXT_LIMIT = 200;
+// the user's own words are kept longer: an OK can come late in a long message
+const WORDS_LIMIT = 2000;
 const CHROME_PREFIX = "mcp__claude-in-chrome__";
 
 function base(input) {
@@ -59,7 +61,7 @@ export function eventsFromHookInput(input, root, repos = []) {
     // arrive as prompts too; they are tagged so the Stop hook does not mistake them for a new
     // turn from the user
     const handback = /^\s*<(?:agent-message|task-notification|cross-session-message)\b/.test(text);
-    return [{ ...b(), kind: "prompt", text: text.slice(0, TEXT_LIMIT), ...(handback ? { handback: true } : {}) }];
+    return [{ ...b(), kind: "prompt", text: text.slice(0, WORDS_LIMIT), ...(handback ? { handback: true } : {}) }];
   }
   if (event === "SessionStart") return [{ ...b(), kind: "session-start", source: input.session_start_source ?? null }];
   const tool = input.tool_name ?? "";
@@ -97,6 +99,12 @@ export function eventsFromHookInput(input, root, repos = []) {
   }
   if (tool.startsWith(CHROME_PREFIX)) {
     return [{ ...b(), kind: "browser", tool, ...browserFields(tool.slice(CHROME_PREFIX.length), input.tool_input ?? {}) }];
+  }
+  // the user's answer to a question counts as their words, like a message
+  if (tool === "AskUserQuestion") {
+    const r = input.tool_response ?? {};
+    const notes = Object.values(r.annotations ?? {}).map((a) => a?.notes).filter(Boolean);
+    return [{ ...b(), kind: "answer", text: [...Object.values(r.answers ?? {}), ...notes].map(String).join(" | ").slice(0, WORDS_LIMIT) }];
   }
   // a probe through another MCP server (a database, the built-in browser) or WebFetch
   if (tool.startsWith("mcp__") || tool === "WebFetch") {

@@ -1370,7 +1370,8 @@ function opened(name, { planFiles = "src/a.ts,src/app/page.tsx", files = {} } = 
   const repo = committed(name, files);
   cli(repo, "open", [name, "feature"]);
   cli(repo, "note", ["task", "Give the skeptic a file. [inferred]"]);
-  cli(repo, "note", ["context", "Traced: src/a.ts:1 · Related: none: `grep -rn a src` · Research: none needed: a test fixture", "--no-code", "SocratiCode: not installed", "--no-memory", "MemPalace: not installed"]);
+  lookedUp(repo);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1 · Related: none: `grep -rn a src` · Research: none needed: a test fixture"]);
   cli(repo, "note", ["plan", "Two modules.", "--files", planFiles]);
   cli(repo, "case", ["add", "the skeptic writes its file", "--kind", "happy"]);
   cli(repo, "case", ["add", "everyone else is denied", "--kind", "refused"]);

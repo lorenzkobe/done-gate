@@ -274,12 +274,62 @@ export const LOOKUP_EXAMPLE = { code: "SocratiCode `codebase_search`", memory: "
 // message after the previous run ended (closed or abandoned) or the session started, so an answer to a clarifying
 // question keeps them; else from the newest message before open; else from open. `failed`
 // lists calls that failed.
-export function leadLookups(ledger, events) {
+export function lookupWindowFrom(ledger, events) {
   const opened = ledger.openedSeq ?? 0;
   const base = ledger.lookupsFrom ?? ledger.baseline?.seq ?? 0;
   const prompts = events.filter((e) => e.seq <= opened && e.kind === "prompt" && !e.agent && !e.handback);
   const start = prompts.find((e) => e.seq > base) ?? prompts.at(-1);
-  const from = start ? start.seq - 1 : opened;
+  return start ? start.seq - 1 : opened;
+}
+
+// Whether the user said these words in this task's window: a message, or an answer to a question.
+// At least three words, so "ok" or "no" never stands for consent; system notices and hand-backs
+// that arrive as prompts are not the user.
+const NOT_THE_USER = /^\s*(?:<task-notification|<cross-session-message|\[SYSTEM NOTIFICATION|<system-reminder)/;
+export function userSaid(ledger, events, words) {
+  const norm = (s) => String(s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  const want = norm(words);
+  if (want.split(" ").length < 3) return false;
+  const from = lookupWindowFrom(ledger, events);
+  // "do not go on without it" holds the words but says the opposite
+  const meant = (text) => {
+    const t = norm(text);
+    for (let at = t.indexOf(want); at >= 0; at = t.indexOf(want, at + 1)) {
+      if (!/\b(?:not|don't|dont|never|no)\s+(?:\S+\s+){0,2}$/.test(t.slice(0, at))) return true;
+    }
+    return false;
+  };
+  return events.some((e) => e.seq > from && !e.agent && !e.handback && (e.kind === "answer" || (e.kind === "prompt" && !NOT_THE_USER.test(e.text ?? ""))) && meant(e.text));
+}
+
+// The MCP servers set up for this repo, by kind: the user's ~/.claude.json (its own list and
+// this project's entry) and the repo's .mcp.json, with where each was found.
+export function setUpServers(root, home = process.env.DONE_GATE_HOME || homedir()) {
+  const out = { code: [], memory: [] };
+  const read = (file) => {
+    try {
+      return JSON.parse(readFileSync(file, "utf8"));
+    } catch {
+      return null;
+    }
+  };
+  const user = read(path.join(home, ".claude.json"));
+  const sources = [
+    [user?.mcpServers, "~/.claude.json"],
+    [user?.projects?.[root]?.mcpServers, "~/.claude.json (this project)"],
+    [read(path.join(root, ".mcp.json"))?.mcpServers, ".mcp.json"],
+  ];
+  for (const [servers, where] of sources) {
+    for (const name of Object.keys(servers ?? {})) {
+      if (CODE_SERVER.test(name)) out.code.push({ name, where });
+      else if (MEMORY_SERVER.test(name)) out.memory.push({ name, where });
+    }
+  }
+  return out;
+}
+
+export function leadLookups(ledger, events) {
+  const from = lookupWindowFrom(ledger, events);
   const out = { code: new Set(), memory: new Set(), failed: { code: new Set(), memory: new Set() } };
   for (const e of events) {
     if (e.seq <= from || e.agent) continue;
