@@ -11,7 +11,8 @@ import { emptyTier } from "./size.mjs";
 // size.mjs imports assess.mjs, which imports this module: loadPolicy is only ever called at
 // verb time, never at module top level, or the cycle would hit a TDZ error.
 import { loadPolicy } from "./size.mjs";
-import { implementationHash } from "./rules.mjs";
+import { implementationHash, saidSince } from "./rules.mjs";
+import { knownNewer, UPDATE_COMMANDS } from "./release.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 
@@ -386,17 +387,29 @@ export const verbs = {
   open(ctx) {
     const rest = [];
     const repos = [];
+    let oldOk = "";
     for (let i = 0; i < ctx.args.length; i++) {
       const arg = ctx.args[i];
       const named = arg.startsWith("--repo=") ? arg.slice(7) : arg === "--repo" ? ctx.args[++i] : null;
       if (named) repos.push(named);
       else if (arg === "--repo" || arg.startsWith("--repo=")) throw new UsageError("--repo needs a path: gate open <slug> <playbook> --repo ../other");
+      else if (arg === "--old-version-ok") {
+        oldOk = ctx.args[++i] ?? "";
+        if (!oldOk.trim() || oldOk.startsWith("--")) throw new UsageError('--old-version-ok needs the user\'s words: gate open <slug> <playbook> --old-version-ok "<their words>"');
+      }
       // an ignored flag would open the run without what it asked for
-      else if (arg.startsWith("--")) throw new UsageError(`gate open: unknown option ${arg} (have: --repo <path>)`);
+      else if (arg.startsWith("--")) throw new UsageError(`gate open: unknown option ${arg} (have: --repo <path>, --old-version-ok "<the user's words>")`);
       else rest.push(arg);
     }
     const [slug, playbook] = rest;
     if (!slug) throw new UsageError("usage: gate open <slug> <feature|bugfix|refactor|plan|investigation> [--repo <path>]");
+    // a newer release is the user's call: update, or say (once a session) to carry on with this
+    // one; joining a run that is already open is not a new task
+    const latest = knownNewer(ctx.version);
+    const joining = openRuns(ctx.stateDir).some(({ ledger }) => ledger.slug === slug);
+    if (latest && !joining && !saidSince(readEvents(ctx.stateDir, ctx.session), 0, oldOk)) {
+      throw new UsageError(`done-gate ${latest} is out and this session runs ${ctx.version}: tell the user and ask. To update: ${UPDATE_COMMANDS}. To carry on with ${ctx.version}: \`gate open ${slug} ${playbook ?? "<playbook>"} --old-version-ok "<their words, at least three>"\``);
+    }
     const { dir, ledger } = openLedger(ctx, slug, playbook, repos);
     printOpen(ctx, dir, ledger);
   },

@@ -5,6 +5,7 @@ import { ensureSession, loadSession } from "./session-state.mjs";
 import { recordGateError } from "./context.mjs";
 import { attachLedger, currentLedger, isDone, loadLedger, openRuns, runsDir, saveLedger } from "./ledger.mjs";
 import { writeReport } from "./verbs.mjs";
+import { checkRelease, UPDATE_COMMANDS } from "./release.mjs";
 
 const DAY_MS = 24 * 3600 * 1000;
 const STALE_MS = 14 * DAY_MS;
@@ -42,7 +43,7 @@ function mandate(ctx) {
 }
 
 export const verbs = {
-  "session-start"(ctx) {
+  async "session-start"(ctx) {
     if (ctx.input?.agent_id) return; // subagents get no mandate and no snapshot
     if (!ctx.session) return;
     ensureSession(ctx.stateDir, ctx.root, ctx.session);
@@ -113,6 +114,10 @@ export const verbs = {
     const root = ctx.pluginRoot.split(path.sep).join("/");
     if (existsSync(path.join(ctx.pluginRoot, ".git")) && !root.includes("/.claude/plugins/")) {
       parts.push(`\n<done-gate-status>\ndone-gate runs in place from ${ctx.pluginRoot}, a git working folder: every edit there reaches this session at once, half-done ones included. That is right for testing the plugin (claude --plugin-dir); for real work install it from a release (claude plugin marketplace add <owner>/<repo>, then claude plugin install done-gate@done-gate).\n</done-gate-status>`);
+    }
+    const latest = await checkRelease(ctx.version);
+    if (latest) {
+      parts.push(`\n<done-gate-status>\ndone-gate ${latest} is out; this session runs ${ctx.version}. Before any task, tell the user and ask: update now (${UPDATE_COMMANDS}), or carry on with ${ctx.version}. \`gate open\` waits for one or the other: an update, or \`--old-version-ok "<their words>"\`.\n</done-gate-status>`);
     }
     ctx.out({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: parts.join("\n") } });
   },

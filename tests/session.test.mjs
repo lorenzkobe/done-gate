@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { makeRepo, write, gate, lookedUp, pluginRoot, AT_GIT_TOPLEVEL } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 
 // ===== from tests/session.test.mjs =====
@@ -290,4 +290,124 @@ test("C1 reported-surface and C2 edge: session start warns when done-gate runs i
   } finally {
     rmSync(copy, { recursive: true, force: true });
   }
+});
+
+// release-check: a newer done-gate release is told to the user before any work starts
+test("C1 happy, C2 refused, C3 happy: a newer release is told at session start, gate open waits for an update or the user's OK", () => {
+  const home = path.join(os.tmpdir(), `dg-home-release-${process.pid}`);
+  rmSync(home, { recursive: true, force: true });
+  mkdirSync(path.join(home, ".claude"), { recursive: true });
+  writeFileSync(path.join(home, ".claude", "done-gate-release.json"), JSON.stringify({ latest: "99.0.0", checkedAt: new Date().toISOString(), repo: "o/r" }));
+  const repo = makeRepo("release-newer");
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1", DONE_GATE_HOME: home };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  const hook = (verb, payload) => spawnSync(process.execPath, [gate, verb], { input: JSON.stringify({ session_id: "S1", cwd: repo, ...payload }), encoding: "utf8", env });
+  const verb = (args) => spawnSync(process.execPath, [gate, ...args], { encoding: "utf8", env });
+  try {
+    const ctx = JSON.parse(hook("session-start", { hook_event_name: "SessionStart", session_start_source: "startup" }).stdout).hookSpecificOutput.additionalContext;
+    assert.match(ctx, /99\.0\.0/, ctx);
+    assert.match(ctx, /claude plugin update done-gate@done-gate/, ctx);
+    assert.match(ctx, /tell the user/i, ctx);
+
+    const refused = verb(["open", "t", "feature"]);
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /99\.0\.0/, refused.stderr);
+    assert.match(refused.stderr, /--old-version-ok/, refused.stderr);
+
+    assert.equal(verb(["open", "t", "feature", "--old-version-ok", "keep the old one"]).status, 1, "words the user did not say");
+    hook("log", { hook_event_name: "UserPromptSubmit", prompt: "fine, keep the old one for today" });
+    const opened = verb(["open", "t", "feature", "--old-version-ok", "keep the old one"]);
+    assert.equal(opened.status, 0, opened.stderr);
+    assert.equal(verb(["open", "t", "feature"]).status, 0, "re-joining the open run is not a new task");
+    assert.match(ctx, /\/reload-plugins/, "the notice names the reload");
+    writeFileSync(path.join(home, ".claude", "done-gate-release.json"), JSON.stringify({ latest: JSON.parse(readFileSync(path.join(pluginRoot, ".claude-plugin", "plugin.json"), "utf8")).version, checkedAt: new Date().toISOString() }));
+    assert.equal(verb(["open", "u", "feature"]).status, 0, "running the latest: a new run opens");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("C4 edge: no newer release, or nothing saved and no github marketplace to ask: no notice, open works", () => {
+  const home = path.join(os.tmpdir(), `dg-home-norelease-${process.pid}`);
+  for (const saved of [{ latest: "0.0.1", checkedAt: new Date().toISOString() }, null]) {
+    rmSync(home, { recursive: true, force: true });
+    mkdirSync(path.join(home, ".claude"), { recursive: true });
+    if (saved) writeFileSync(path.join(home, ".claude", "done-gate-release.json"), JSON.stringify(saved));
+    const repo = makeRepo("release-none");
+    const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1", DONE_GATE_HOME: home };
+    delete env.CLAUDE_CODE_SESSION_ID;
+    const out = spawnSync(process.execPath, [gate, "session-start"], { input: JSON.stringify({ session_id: "S1", cwd: repo, hook_event_name: "SessionStart", session_start_source: "startup" }), encoding: "utf8", env });
+    assert.doesNotMatch(out.stdout, /claude plugin update/, JSON.stringify(saved));
+    assert.equal(spawnSync(process.execPath, [gate, "open", "t", "feature"], { encoding: "utf8", env }).status, 0, JSON.stringify(saved));
+  }
+  rmSync(home, { recursive: true, force: true });
+});
+
+test("C5 boundary: an answer older than 6 hours that cannot be refreshed (offline, no github marketplace) still stands; once the running version catches up the notice is gone", async () => {
+  const { checkRelease, knownNewer } = await import("../scripts/lib/release.mjs");
+  const home = path.join(os.tmpdir(), `dg-home-stale-${process.pid}`);
+  rmSync(home, { recursive: true, force: true });
+  mkdirSync(path.join(home, ".claude"), { recursive: true });
+  writeFileSync(path.join(home, ".claude", "done-gate-release.json"), JSON.stringify({ latest: "0.30.0", checkedAt: new Date(Date.now() - 7 * 3600e3).toISOString() }));
+  const before = process.env.DONE_GATE_HOME;
+  process.env.DONE_GATE_HOME = home;
+  try {
+    assert.equal(await checkRelease("0.19.0"), "0.30.0");
+    assert.equal(await checkRelease("0.30.0"), null, "updated: nothing to tell");
+    assert.equal(knownNewer("0.19.0"), "0.30.0");
+    assert.equal(knownNewer("1.0.0"), null);
+  } finally {
+    process.env.DONE_GATE_HOME = before;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("C5 boundary: a fresh answer is used without going online; an old one is refreshed and rewritten; a failed refresh waits its six hours too", async () => {
+  const { checkRelease } = await import("../scripts/lib/release.mjs");
+  const home = path.join(os.tmpdir(), `dg-home-fetch-${process.pid}`);
+  rmSync(home, { recursive: true, force: true });
+  mkdirSync(path.join(home, ".claude", "plugins"), { recursive: true });
+  writeFileSync(path.join(home, ".claude", "plugins", "known_marketplaces.json"), JSON.stringify({ "done-gate": { source: { source: "github", repo: "o/r" } } }));
+  const saved = path.join(home, ".claude", "done-gate-release.json");
+  const before = { home: process.env.DONE_GATE_HOME, fetch: globalThis.fetch };
+  const calls = [];
+  let answer = { ok: true, json: async () => ({ version: "0.40.0" }) };
+  globalThis.fetch = async (url) => {
+    calls.push(url);
+    if (answer instanceof Error) throw answer;
+    return answer;
+  };
+  process.env.DONE_GATE_HOME = home;
+  try {
+    const now = Date.now();
+    writeFileSync(saved, JSON.stringify({ latest: "0.30.0", checkedAt: new Date(now - 3600e3).toISOString() }));
+    assert.equal(await checkRelease("0.19.0", now), "0.30.0", "a fresh answer");
+    assert.equal(calls.length, 0, "no network for a fresh answer");
+
+    writeFileSync(saved, JSON.stringify({ latest: "0.30.0", checkedAt: new Date(now - 7 * 3600e3).toISOString() }));
+    assert.equal(await checkRelease("0.19.0", now), "0.40.0", "an old answer is refreshed");
+    assert.equal(calls.length, 1);
+    assert.match(calls[0], /raw\.githubusercontent\.com\/o\/r\/HEAD\/\.claude-plugin\/plugin\.json/);
+    assert.equal(JSON.parse(readFileSync(saved, "utf8")).latest, "0.40.0", "and rewritten");
+
+    answer = new Error("offline");
+    const later = now + 7 * 3600e3;
+    assert.equal(await checkRelease("0.19.0", later), "0.40.0", "offline: the saved answer stands");
+    assert.equal(calls.length, 2);
+    assert.equal(await checkRelease("0.19.0", later + 60e3), "0.40.0");
+    assert.equal(calls.length, 2, "a failed try waits its six hours too");
+  } finally {
+    globalThis.fetch = before.fetch;
+    process.env.DONE_GATE_HOME = before.home;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("C3 refused: --old-version-ok with no words is a usage error", () => {
+  const repo = makeRepo("release-noargs");
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  const r = spawnSync(process.execPath, [gate, "open", "t", "feature", "--old-version-ok"], { encoding: "utf8", env });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /needs the user's words/);
 });

@@ -287,10 +287,13 @@ export function lookupWindowFrom(ledger, events) {
 // that arrive as prompts are not the user.
 const NOT_THE_USER = /^\s*(?:<task-notification|<cross-session-message|\[SYSTEM NOTIFICATION|<system-reminder)/;
 export function userSaid(ledger, events, words) {
+  return saidSince(events, lookupWindowFrom(ledger, events), words);
+}
+
+export function saidSince(events, from, words) {
   const norm = (s) => String(s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
   const want = norm(words);
   if (want.split(" ").length < 3) return false;
-  const from = lookupWindowFrom(ledger, events);
   // "do not go on without it" holds the words but says the opposite
   const meant = (text) => {
     const t = norm(text);
