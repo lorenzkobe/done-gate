@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { assess } from "./assess.mjs";
+import { assess, unmetCount } from "./assess.mjs";
 import { ensureSession, loadSession } from "./session-state.mjs";
 import { recordGateError } from "./context.mjs";
 import { attachLedger, currentLedger, isDone, loadLedger, openRuns, runsDir, saveLedger } from "./ledger.mjs";
@@ -100,7 +100,7 @@ export const verbs = {
         const inherited = state.ledger.sessions?.[0] !== ctx.session;
         parts.push(
           `\n<done-gate-status>\nOpen ledger: ${state.dir} (${state.ledger.playbook}, ${state.ledger.status}). ` +
-            `${unmet.length} unmet gate item(s). Run \`gate check\` before continuing.` +
+            `${unmetCount(unmet)} unmet gate item(s). Run \`gate check\` before continuing.` +
             (inherited ? ` This ledger was opened by another session on ${String(state.ledger.openedAt).slice(0, 10)}; if that work is over, \`gate abandon ${state.ledger.slug} "<reason>"\` lets it go.` : "") +
             `\n</done-gate-status>`,
         );

@@ -135,8 +135,10 @@ function section(md, heading) {
 
 // The line of `gate check` that reports an unfinished helper file: it names the file and
 // the re-brief.
-const unfinishedLine = (out, file, role) => lines(out).find((l) => l.includes(file) && l.includes(`gate brief ${role}`));
-const neverRecordedLine = (out, file) => lines(out).find((l) => l.includes(file) && /never recorded/.test(l));
+// one rule's items share a line, joined by " · "
+const items = (out) => lines(out).flatMap((l) => l.split(" · "));
+const unfinishedLine = (out, file, role) => items(out).find((l) => l.includes(file) && l.includes(`gate brief ${role}`));
+const neverRecordedLine = (out, file) => items(out).find((l) => l.includes(file) && /never recorded/.test(l));
 
 const FIND_1 = "the plan assumes one caller of a — src/a.ts:1";
 const FIND_2 = "the empty list has no case — src/app/page.tsx:1";

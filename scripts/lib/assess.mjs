@@ -346,6 +346,16 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
   };
 }
 
+// One numbered line per rule, in the order rules first appear; a rule with several items
+// (R8 for open cases and for blank steps) lists them on its line. `cut` shortens each item.
+export const unmetCount = (unmet) => new Set(unmet.map((u) => u.rule)).size;
+
+export function unmetLines(unmet, { cut = 0 } = {}) {
+  const byRule = new Map();
+  for (const u of unmet) byRule.set(u.rule, [...(byRule.get(u.rule) ?? []), cut && u.text.length > cut ? `${u.text.slice(0, cut)}…` : u.text]);
+  return [...byRule].map(([rule, texts], i) => `${i + 1}. ${rule} — ${texts.join(" · ")}`);
+}
+
 export function assess(ctx, opts) {
   const state = buildState(ctx, opts);
   return { state, unmet: evaluate(state) };

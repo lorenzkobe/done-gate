@@ -5,6 +5,8 @@ import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync }
 import path from "node:path";
 import { makeRepo, write, gate, here, pluginRoot, doneArgs, lookedUp } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
+import { actOnRows, pauseLines } from "../scripts/lib/report.mjs";
+import { unmetLines } from "../scripts/lib/assess.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { evaluate } from "../scripts/lib/rules.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
@@ -1029,3 +1031,70 @@ test("C8 idempotent: --brief still writes the same full report.md that `gate rep
   assert.ok(afterBrief.length > short.length, "the full report should be longer than the brief");
 });
 }
+
+// ---------------------------------------------------------------------------
+// output-noise
+// ---------------------------------------------------------------------------
+
+test("C1 reported-surface: gate check prints R8 once when cases are open and steps blank, both reasons on that line", () => {
+  const env = (repo) => {
+    const e = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
+    delete e.CLAUDE_CODE_SESSION_ID;
+    return e;
+  };
+  const cli = (repo, verb, args = []) => {
+    const r = spawnSync(process.execPath, [gate, verb, ...args], { encoding: "utf8", env: env(repo) });
+    assert.equal(r.status, 0, r.stderr);
+    return r;
+  };
+  const repo = makeRepo("noise-c1");
+  cli(repo, "open", ["t", "bugfix"]);
+  cli(repo, "case", ["add", "a case", "--kind", "happy"]);
+  const out = cli(repo, "check").stdout;
+  assert.equal(out.match(/^\d+\. R8 /gm)?.length, 1, out);
+  assert.match(out, /^\d+\. R8 — .*case\(s\) not closed: C1.* · step\(s\) blank:/m, out);
+  const close = spawnSync(process.execPath, [gate, "close"], { encoding: "utf8", env: env(repo) });
+  assert.equal(close.status, 1);
+  assert.equal(close.stdout.match(/^\d+\. R8 /gm)?.length, 1, close.stdout);
+  const lines = out.match(/^\d+\. /gm).length;
+  assert.match(close.stderr, new RegExp(`not closed: ${lines} unmet`), "close counts rules, as its list does");
+  assert.match(spawnSync(process.execPath, [gate, "report", "--brief"], { encoding: "utf8", env: env(repo) }).stdout, new RegExp(`not finished \\(${lines} things? missing\\)`));
+});
+
+test("C2 happy: unmetLines groups by rule in first-seen order and cuts each reason on a repeat; C3 edge: one item prints as before", () => {
+  const unmet = [{ rule: "R3", text: "a" }, { rule: "R8", text: "cases open" }, { rule: "R5", text: "b" }, { rule: "R8", text: "x".repeat(200) }];
+  assert.deepEqual(unmetLines(unmet), ["1. R3 — a", "2. R8 — cases open · " + "x".repeat(200), "3. R5 — b"]);
+  const cut = unmetLines(unmet, { cut: 120 });
+  assert.equal(cut[1], `2. R8 — cases open · ${"x".repeat(120)}…`);
+  assert.deepEqual(unmetLines([{ rule: "R1", text: "only" }]), ["1. R1 — only"]);
+  assert.deepEqual(unmetLines([]), []);
+});
+
+test("C4 reported-surface: a report section is headed by its file and links that file's own packet", () => {
+  const dir = path.join(here, ".tmp", "noise-c4");
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  for (const f of ["brief-reviewer-1.md", "brief-reviewer-17.md", "brief-reviewer-2-3.md"]) writeFileSync(path.join(dir, f), "packet\n");
+  const ledger = { huddles: [
+    { id: "H2", role: "reviewer", round: 1, file: "review-17.md", actOn: [] },
+    { id: "H3", role: "reviewer-2", round: 1, file: "review2-3.md", actOn: [] },
+    { id: "H4", role: "skeptic", round: 1, actOn: [] },
+    { id: "H5", role: "qa", round: 2, actOn: [] },
+  ] };
+  writeFileSync(path.join(dir, "brief-qa-2.md"), "packet\n");
+  const rows = actOnRows(ledger, dir, [], { embed: false }).join("\n");
+  assert.match(rows, /^### H2 reviewer — review-17\.md\npacket: brief-reviewer-17\.md$/m, rows);
+  assert.match(rows, /^### H3 reviewer-2 — review2-3\.md\npacket: brief-reviewer-2-3\.md$/m, rows);
+  assert.match(rows, /^### H4 skeptic$/m, rows);
+  assert.match(rows, /^### H5 qa\npacket: brief-qa-2\.md$/m, rows);
+  assert.doesNotMatch(rows, /round \d|brief-reviewer-1\.md/, rows);
+});
+
+test("C5 boundary: identical consecutive pauses collapse to one line with a count and the first and last time", () => {
+  const p = (ts, text) => ({ ts, text });
+  const same = Array.from({ length: 6 }, (_, i) => p(`T${i}`, "waiting on the helpers"));
+  assert.deepEqual(pauseLines(same), ["- T0 to T5 (x6): waiting on the helpers"]);
+  assert.deepEqual(pauseLines([p("A", "x"), p("B", "y"), p("C", "x")]), ["- A: x", "- B: y", "- C: x"]);
+  assert.deepEqual(pauseLines([p("A", "x"), p("B", "x"), p("C", "y")]), ["- A to B (x2): x", "- C: y"]);
+  assert.deepEqual(pauseLines([p("A", "x")]), ["- A: x"]);
+});

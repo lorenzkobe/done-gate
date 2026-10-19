@@ -9,7 +9,7 @@ import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
 import { briefOf, caseOpen, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list } from "./rules.mjs";
-import { assess, buildState, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted } from "./assess.mjs";
+import { assess, buildState, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { gitHead, withoutRepos } from "./tree.mjs";
 import { appendEvents, readEvents } from "./events.mjs";
@@ -714,8 +714,8 @@ export const verbs = {
         const step = ledger.steps.find((s) => s.key === "close");
         if (step?.note === "closed") Object.assign(step, { state: null, note: null, evidence: null, seq: null });
       });
-      unmet.forEach((u, i) => ctx.out(`${i + 1}. ${u.rule} — ${u.text}`));
-      throw new UsageError(`not closed: ${unmet.length} unmet`);
+      for (const line of unmetLines(unmet)) ctx.out(line);
+      throw new UsageError(`not closed: ${unmetCount(unmet)} unmet`);
     }
     const ledger = finalise(ctx, state);
     ctx.out(`${ledger.slug} closed`);

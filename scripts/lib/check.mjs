@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { assess } from "./assess.mjs";
+import { assess, unmetLines } from "./assess.mjs";
 import { loadConfig, configPath } from "./config.mjs";
 import { currentLedger, openRuns } from "./ledger.mjs";
 import { loadSession } from "./session-state.mjs";
@@ -47,7 +47,7 @@ export const verbs = {
   check(ctx) {
     const { unmet } = assess(ctx, {});
     if (unmet.length === 0) ctx.out("clean");
-    unmet.forEach((u, i) => ctx.out(`${i + 1}. ${u.rule} — ${u.text}`));
+    for (const line of unmetLines(unmet)) ctx.out(line);
     for (const line of staleRuns(ctx)) ctx.out(line);
   },
 

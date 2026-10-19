@@ -1,4 +1,4 @@
-import { assess, LedgerParseError } from "./assess.mjs";
+import { assess, LedgerParseError, unmetLines } from "./assess.mjs";
 import { recordGateError } from "./context.mjs";
 import { appendEvents, nextSeq } from "./events.mjs";
 import { loadLedger, saveLedger } from "./ledger.mjs";
@@ -40,8 +40,8 @@ function helperRunning(events, session, now = Date.now()) {
 
 function renderReason(unmet, { ledgerOpen, repeat = false }) {
   // the full text went out with the last block; a repeat names each item and points at it
-  const lines = [repeat ? `done-gate: the turn cannot end yet — the same ${unmet.length} unmet as the last stop (\`gate check\` prints them in full):` : `done-gate: the turn cannot end yet — ${unmet.length} unmet:`];
-  unmet.forEach((u, i) => lines.push(`${i + 1}. ${u.rule} — ${repeat && u.text.length > 120 ? `${u.text.slice(0, 120)}…` : u.text}`));
+  const items = unmetLines(unmet, { cut: repeat ? 120 : 0 });
+  const lines = [repeat ? `done-gate: the turn cannot end yet — the same ${items.length} unmet as the last stop (\`gate check\` prints them in full):` : `done-gate: the turn cannot end yet — ${items.length} unmet:`, ...items];
   if (ledgerOpen) {
     lines.push("");
     lines.push("Need the user? Ask with AskUserQuestion, or end your message with a final line `PAUSED: <what you need>` and the turn will end.");

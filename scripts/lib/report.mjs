@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { buildState, readVerifyStarted } from "./assess.mjs";
+import { buildState, readVerifyStarted, unmetCount } from "./assess.mjs";
 import { evaluate, unfinishedVerify } from "./rules.mjs";
 import { loadLedger, runsDir, section } from "./ledger.mjs";
 import { loadSession } from "./session-state.mjs";
@@ -60,7 +60,7 @@ export function summaryLine(ledger, events, unmet, after = 0) {
   return (
     `DONE ${count("DONE")} · SKIPPED ${count("SKIPPED")} · WAIVED ${count("WAIVED")} · N/A ${count("N/A")} · blank ${blank} · ` +
     `cases ${closedCases}/${ledger.cases.length} closed (${naCases} n/a) · ` +
-    `blocked writes to gate files ${denies} · gate: ${unmet.length ? `${unmet.length} unmet` : "clean"}`
+    `blocked writes to gate files ${denies} · gate: ${unmet.length ? `${unmetCount(unmet)} unmet` : "clean"}`
   );
 }
 
@@ -89,15 +89,31 @@ export function verifyLines(verify, { tails = true, unfinished = null } = {}) {
 // Past this much embedded helper text the report names a file instead: the report stays a page.
 const EMBED_MAX = 40_000;
 
+// Pauses in order, a run of the same text collapsed to one line with its count.
+export function pauseLines(pauses) {
+  const runs = [];
+  for (const p of pauses) {
+    const last = runs.at(-1);
+    if (last && last.text === p.text) {
+      last.to = p.ts;
+      last.n++;
+    } else runs.push({ from: p.ts, to: p.ts, text: p.text, n: 1 });
+  }
+  return runs.map((r) => (r.n > 1 ? `- ${r.from} to ${r.to} (x${r.n}): ${cell(r.text)}` : `- ${r.from}: ${cell(r.text)}`));
+}
+
 export function actOnRows(ledger, dir, reviews, { embed = true } = {}) {
   if (!ledger.huddles.length) return ["_none_"];
   const out = [];
   let embedded = 0;
   for (const h of ledger.huddles) {
-    out.push(`### ${h.id} ${h.role} round ${h.round}${h.file ? ` — ${h.file}` : ""}`);
+    // the file's own number names its packet; the add order (round) does not, once pieces run in parallel
+    out.push(`### ${h.id} ${h.role}${h.file ? ` — ${h.file}` : ""}`);
     if (h.summary) out.push(h.summary);
-    const packet = `brief-${h.role}-${h.round}.md`;
-    if (existsSync(path.join(dir, packet))) out.push(`packet: ${packet}`);
+    // a huddle with no file (QA) is still named by its round
+    const n = h.file ? /-(\d+)\.md$/.exec(h.file)?.[1] : h.round;
+    const packet = n && `brief-${h.role}-${n}.md`;
+    if (packet && existsSync(path.join(dir, packet))) out.push(`packet: ${packet}`);
     for (const a of h.actOn) {
       const state = a.closed ? `closed [${a.closed}]` : a.dispute ? `**OPEN** — disagreed: ${cell(a.dispute.why)} [${a.dispute.evidence}] — ${a.dispute.verdict ?? "unanswered"}` : "**OPEN**";
       out.push(`- ${a.id} ${cell(a.text)} — ${state}`);
@@ -219,8 +235,7 @@ export function renderReport(state, unmet) {
   } else out.push("_none_");
 
   if (ledger.pauses.length) {
-    out.push("\n## Pauses\n");
-    for (const p of ledger.pauses) out.push(`- ${p.ts}: ${cell(p.text)}`);
+    out.push("\n## Pauses\n", ...pauseLines(ledger.pauses));
   }
 
   if (ledger.caveats?.length) {
@@ -443,7 +458,7 @@ function gateErrorsIn(state) {
 export function renderBrief(state, unmet) {
   const { ledger, dir } = state;
   const out = [];
-  out.push(unmet.length ? `${ledger.slug}: not finished (${plural(unmet.length, "thing")} missing)` : `${ledger.slug}: done`);
+  out.push(unmet.length ? `${ledger.slug}: not finished (${plural(unmetCount(unmet), "thing")} missing)` : `${ledger.slug}: done`);
   out.push("");
   out.push(changedLine(state));
   out.push(checksLine2(state));
