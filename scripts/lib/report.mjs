@@ -60,7 +60,7 @@ export function summaryLine(ledger, events, unmet, after = 0) {
   return (
     `DONE ${count("DONE")} · SKIPPED ${count("SKIPPED")} · WAIVED ${count("WAIVED")} · N/A ${count("N/A")} · blank ${blank} · ` +
     `cases ${closedCases}/${ledger.cases.length} closed (${naCases} n/a) · ` +
-    `tampering attempts ${denies} · gate: ${unmet.length ? `${unmet.length} unmet` : "clean"}`
+    `blocked writes to gate files ${denies} · gate: ${unmet.length ? `${unmet.length} unmet` : "clean"}`
   );
 }
 

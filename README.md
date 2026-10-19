@@ -190,8 +190,9 @@ checked.
   stamps `GATE OVERRIDDEN` on the report, so a stuck loop is loud rather than infinite.
   Progress resets the counter.
 - **Can't forge evidence, can't invent a waiver.** See above.
-- **Fails open, loudly.** A bug in the gate itself exits 0 and stamps `GATE ERROR`. A hook
-  that could wedge every session in every repo would cost more than one unreported task.
+- **Fails open, loudly.** A bug in the gate itself stamps `GATE ERROR`; in a hook it exits 0,
+  because a hook that could wedge every session in every repo would cost more than one
+  unreported task. A `gate` command that crashes exits 1, so a `gate … && next` chain stops.
 - **Git's own moves are not your edits.** A checkout, pull, fast-forward, rebase or reset
   moves the starting point, with or without a run open: a file git changed that now matches
   HEAD leaves the task's changes, and the report lists it. It stays the task's when this

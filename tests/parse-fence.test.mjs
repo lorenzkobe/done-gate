@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { isDraft, parseFindings } from "../scripts/lib/rules.mjs";
-import { decide, readsOnly } from "../scripts/lib/guard.mjs";
+import { decide, readsOnly, scratchOnly } from "../scripts/lib/guard.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { makeRepo, gate } from "./helpers.mjs";
 
@@ -318,5 +319,232 @@ test("C11 a helper's shell write is judged by its targets: scratch copies pass w
     const v = decide(bash(cmd, reviewer), repo, cfg);
     assert.equal(v.deny, true, cmd);
     assert.match(v.reason, /this command /, "the refusal says what the command writes");
+  }
+});
+
+// ---------------------------------------------------------------------------
+// fence-reads-and-brief-crash: the read-only shapes Courtly's runs were denied for
+// ---------------------------------------------------------------------------
+
+const RUN = ".claude/gate/runs/2026-10-19-x";
+const WRAPPER = `gate() { echo '{"session_id":"S1"}' | node "${gate}" "$@"; }`;
+
+test("C1 reported-surface: the read-only shapes Courtly was denied for pass the evidence fence", () => {
+  for (const cmd of [
+    `cd ${RUN} && sed -n 129,140p brief-reviewer-2-10.md; diff <(sed -n 1,128p brief-reviewer-2-9.md) <(sed -n 1,128p brief-reviewer-2-10.md) | head -20`,
+    `diff <(sed '/^## Piece/,$d' ${RUN}/brief-reviewer-24.md) <(sed '/^## Piece/,$d' ${RUN}/brief-reviewer-25.md) | head`,
+    `cd ${RUN}; grep -l "" brief-reviewer-*.md | sort -V | while read f; do printf "%s: " "$f"; grep -m1 -oE "src/[^ ,)]+" "$f"; done`,
+    `tail -4 ${RUN}/gate-error.log 2>/dev/null || find .claude/gate -name gate-error.log -newer CLAUDE.md | head -2 | xargs tail -3`,
+    `for f in $(ls ${RUN}/brief-reviewer-*.md | sort -V); do echo "== $(basename $f): $(grep -m1 -iE 'files' $f | cut -c1-200)"; done`,
+    `${WRAPPER}; gate check 2>&1 | head -30; ls .claude/gate/`,
+    `${WRAPPER}; S='{"a":1}'; R=${RUN}\necho "$S" | gate huddle add skeptic --file skeptic-1.md`,
+    `${WRAPPER}; D='src/app/api/[id]'; gate brief reviewer --files "$D/route.ts"; ls ${RUN}`,
+    `S=/private/tmp/claude-501/x/scratchpad && sed -n '/^## Tests QA wrote/,/^## Test command/p' ${RUN}/brief-worker-12.md | grep '^- ' | sed 's/^- //' > $S/qa.txt`,
+    `lsof -ti tcp:3000 >/dev/null; ls ${RUN}`,
+  ]) {
+    const v = decide(bash(cmd), repo, cfg);
+    assert.equal(v.deny, false, `${cmd}\n${v.reason ?? ""}`);
+  }
+});
+
+test("C2 happy: a word after a process or command substitution stays an argument of its command", () => {
+  for (const cmd of ["cat $(ls x) y", "diff <(sort a) b", "diff <(sort a) <(sort b) c", "echo $(cat $(ls x)) tail", "wc -l <(grep -c x a) | head", "diff <(sort a) <(sort b) && cat c"]) {
+    assert.equal(readsOnly(cmd), true, cmd);
+  }
+  assert.equal(readsOnly("diff <( (cd a && ls) ) b"), true, "a subshell inside the substitution");
+  assert.equal(readsOnly("cat $(ls x) y > out.txt"), false, "the outer command's redirect still counts");
+  assert.equal(readsOnly("cat <(rm x) y"), false, "the command inside the substitution is checked");
+});
+
+test("C3 refused: writes to gate files and look-alikes of reads are still denied", () => {
+  for (const cmd of [
+    `L=${RUN}/ledger.md && cat >> $L <<'EOF'\n## Decisions\nEOF`,
+    `cd ${RUN} && sed -i '' 's/a/b/' review-6.md`,
+    `python3 - <<'EOF'\np='${RUN}/worker-4.md'\ns=open(p).read()\nopen(p,'w').write(s)\nEOF`,
+    `cat a > $(echo ${RUN}/review-1.md)`,
+    `find ${RUN} -name '*.md' | xargs rm`,
+    `ls ${RUN} | xargs -n 1 sed -i '' s/a/b/`,
+    `$(echo rm) ${RUN}/review-1.md`,
+    `read PATH; cat ${RUN}/review-1.md`,
+    `cat ${RUN}/review-1.md | tee >(cat > x)`,
+    `npx vitest run >/dev/null 2>&1; ls ${RUN}`,
+    `S=/tmp/x; cat a > $S/b; cp $S/b ${RUN}/review-1.md`,
+    `cat ${RUN}/review-1.md > /tmp/x/r.md; mv /tmp/x/r.md ${RUN}/review-1.md`,
+    `rm /tmp/proj/${RUN}/verify.started.json`,
+    `cd /tmp/proj/.claude/gate && rm runs/x/ledger.json`,
+    `cat a > /tmp/proj/.claude/gate/runs/x/review-1.md`,
+  ]) {
+    assert.equal(decide(bash(cmd), repo, cfg).deny, true, cmd);
+  }
+  for (const cmd of ["read -r PAGER", "read GIT_SSH_COMMAND", "xargs -I {} rm {}", "xargs -0 sed -i s/a/b/", "$(ls) x"]) assert.equal(readsOnly(cmd), false, cmd);
+});
+
+test("C4 edge: the deny names the part that is not a plain read, and points the file's owner at the edit tools", () => {
+  const ledger = decide(bash(`ls ${RUN}; cat >> ${RUN}/ledger.md <<'EOF'\nx\nEOF`), repo, cfg);
+  assert.equal(ledger.deny, true);
+  assert.match(ledger.reason, /`cat >> \S*ledger\.md/, ledger.reason);
+  assert.match(ledger.reason, /Edit or Write tool on ledger\.md/, ledger.reason);
+  const other = decide(bash(`npx vitest run >/dev/null 2>&1; ls ${RUN}`), repo, cfg);
+  assert.match(other.reason, /`npx vitest run/, other.reason);
+  assert.doesNotMatch(other.reason, /Edit or Write tool/, other.reason);
+  const long = decide(bash(`node scripts/x.mjs ${"--flag ".repeat(40)}; ls ${RUN}`), repo, cfg);
+  assert.ok(long.reason.length < 600, `the quoted part is cut short: ${long.reason.length}`);
+});
+
+test("C11 edge: the edit-tool hint goes only to the caller that owns the file", () => {
+  const as = (role) => ({ agent_id: "A1", agent_type: `done-gate:${role}` });
+  const sedOn = (file) => `cd ${RUN} && sed -i '' 's/a/b/' ${file}`;
+  for (const [role, file] of [["reviewer", "review-6.md"], ["reviewer-2", "review2-2.md"], ["skeptic", "skeptic-1.md"], ["arbiter", "arbiter-1.md"], ["worker", "worker-4.md"]]) {
+    const v = decide(bash(sedOn(file), as(role)), repo, cfg);
+    assert.equal(v.deny, true, `${role} ${file}`);
+    assert.match(v.reason, new RegExp(`Edit or Write tool on ${file.replace(".", "\\.")}`), `${role}: ${v.reason}`);
+  }
+  for (const [who, file] of [[{}, "review-6.md"], [as("reviewer"), "review2-2.md"], [as("worker"), "review-6.md"]]) {
+    const v = decide(bash(sedOn(file), who), repo, cfg);
+    assert.equal(v.deny, true, file);
+    assert.doesNotMatch(v.reason, /Edit or Write tool/, `${who.agent_type ?? "lead"} on ${file}: ${v.reason}`);
+  }
+  const helperLedger = decide(bash(`cat >> ${RUN}/ledger.md <<'EOF'\nx\nEOF`, as("worker")), repo, cfg);
+  assert.equal(helperLedger.deny, true);
+  assert.doesNotMatch(helperLedger.reason, /Edit or Write tool on ledger/, helperLedger.reason);
+});
+
+test("C9 refused: xargs takes its arguments from stdin, so only plain readers run under it", () => {
+  for (const cmd of ["ls | xargs sed", "ls | xargs awk 1", "ls | xargs sort", "ls | xargs find", "ls | xargs git log", "ls | xargs rg x", "ls | xargs perl -ne 1", "ls | xargs tree", "ls | xargs node", "ls | xargs -n 1 jq ."]) {
+    assert.equal(readsOnly(cmd), false, cmd);
+  }
+  assert.equal(decide(bash(`printf -- '-i\\n${RUN}/review-1.md' | xargs sed s/a/b/`), repo, cfg).deny, true);
+});
+
+test("C10 refused: a substitution leaves a placeholder that is no read, no /dev/null and no known location", () => {
+  assert.equal(readsOnly(`cat a > $(echo ${RUN}/review-1.md) /dev/null`), false);
+  assert.equal(decide(bash(`cat a > $(echo ${RUN}/review-1.md) /dev/null`), repo, cfg).deny, true);
+  assert.equal(readsOnly("$(echo cat) a"), false);
+  assert.equal(readsOnly("<(cat a) b"), false);
+  const helper = decide(bash(`cat a > $(echo src/x.ts) /dev/null`, { agent_id: "A1", agent_type: "done-gate:reviewer" }), repo, cfg);
+  assert.equal(helper.deny, true, "a helper's write to a substituted target is unknown, so denied");
+  assert.match(helper.reason, /unknown location/, helper.reason);
+});
+
+test("C12 refused: node gate.mjs and the gate() wrapper are read-only only with a normal gate verb, never a hook verb", () => {
+  for (const verb of ["log", "fence", "stop", "session-start"]) {
+    const forged = `echo '{"hook_event_name":"PostToolUse","tool_name":"Bash"}' | node "${gate}" ${verb}`;
+    assert.equal(readsOnly(forged), false, verb);
+    assert.equal(readsOnly(`${WRAPPER}; gate ${verb}`), false, `wrapper ${verb}`);
+    assert.equal(decide(bash(`${forged}; ls ${RUN}`), repo, cfg).deny, true, verb);
+  }
+  for (const verb of ["check", "report --brief", "huddle add reviewer --file review-1.md"]) {
+    assert.equal(readsOnly(`node "${gate}" ${verb}`), true, verb);
+    assert.equal(readsOnly(`${WRAPPER}; gate ${verb}`), true, `wrapper ${verb}`);
+  }
+});
+
+test("C7 boundary: unbalanced parens do not throw; an unclosed substitution is no read", () => {
+  for (const cmd of ["cat a )", "diff <(sort a b", "cat $(ls", ") cat a", "diff <(sort a)) b"]) {
+    assert.doesNotThrow(() => readsOnly(cmd), cmd);
+  }
+  assert.equal(readsOnly("diff <(sort a b"), false, "an unclosed substitution");
+  assert.equal(readsOnly("echo $(cat a"), false, "an unclosed command substitution");
+  assert.doesNotThrow(() => readsOnly('case "$x" in a) cat a;; *) ls;; esac'), "a case pattern's ) closes nothing");
+});
+
+test("C8 boundary: xargs reads as the command after its flags", () => {
+  for (const cmd of ["ls | xargs", "ls | xargs tail -3", "ls | xargs -n 1 head -2", "ls | xargs -I {} grep -n x {}", "ls | xargs -P 4 -0 wc -l", "ls | xargs -n1 cat", "ls | xargs -L 1 -r stat"]) {
+    assert.equal(readsOnly(cmd), true, cmd);
+  }
+  for (const cmd of ["ls | xargs sed -i s/a/b/", "ls | xargs -I {} cp {} /src", "ls | xargs sh -c 'rm x'", "ls | xargs -n 1 npx eslint --fix", "ls | xargs -I"]) {
+    assert.equal(readsOnly(cmd), false, cmd);
+  }
+});
+
+test("C14 refused: a scratch-only write is only one whose every writer the fence can read", () => {
+  for (const cmd of ["cat a > /tmp/x/b", "sed -n 1p a | sort > /tmp/x/b", "cp a tests/.tmp/b"]) assert.equal(scratchOnly(cmd), true, cmd);
+  for (const cmd of [`awk '{ print > "src/a.ts" }' a > /tmp/x/b`, "sort -o src/a.ts a > /tmp/x/b", "PATH=/tmp/x cat a > /tmp/x/b", "npx eslint --fix > /tmp/x/b"]) {
+    assert.equal(scratchOnly(cmd), false, cmd);
+  }
+});
+
+test("C15 refused: a name inside $((…)) is no read, since bash evaluates its value and a[$(cmd)] there runs; numbers and substitutions are", () => {
+  for (const cmd of ["echo $((3-1))", "echo $(($(wc -l < f) - 1))", "n=$(($(grep -c . f) - 1)); echo $n"]) assert.equal(readsOnly(cmd), true, cmd);
+  for (const cmd of ["echo $((n-1))", "x=$P; echo $((x))", "echo $(( $(rm x) + 1 ))", "echo $((3-1)) > out.txt"]) assert.equal(readsOnly(cmd), false, cmd);
+});
+
+test("C14 refused: links cannot carry a scratch write into the gate dir", () => {
+  for (const cmd of [
+    `ln -s $PWD/${RUN} /tmp/g; echo x > /tmp/g/ledger.json`,
+    `ln -s $PWD/.claude /tmp/c; echo x > /tmp/c/gate/runs/x/ledger.json; ls ${RUN}`,
+    `ln ${RUN}/ledger.json /tmp/h; echo x > /tmp/h`,
+    `cp -l ${RUN}/ledger.json /tmp/h && echo x >> /tmp/h`,
+    `cp -s ${RUN}/ledger.json /tmp/h && echo x >> /tmp/h`,
+    `cp --link ${RUN}/ledger.json /tmp/h && echo x >> /tmp/h`,
+  ]) assert.equal(decide(bash(cmd), repo, cfg).deny, true, cmd);
+  assert.equal(decide(bash(`ln -s $PWD/${RUN} /tmp/g; echo x > /tmp/g/review-1.md`, { agent_id: "A1", agent_type: "done-gate:reviewer" }), repo, cfg).deny, true, "a reviewer's link");
+  for (const cmd of ["ln -s src /tmp/s; echo x > /tmp/s/a.ts", "cp -l src/a.ts /tmp/h", "cp -al src /tmp/h"]) assert.equal(scratchOnly(cmd), false, cmd);
+});
+
+test("C14 refused: an absolute write target is judged by its real path", () => {
+  const gateDir = path.join(repo, ".claude", "gate", "runs", "linked");
+  mkdirSync(gateDir, { recursive: true });
+  const link = path.join(os.tmpdir(), `dg-link-${process.pid}`);
+  try { unlinkSync(link); } catch {}
+  symlinkSync(gateDir, link);
+  try {
+    assert.equal(scratchOnly(`echo x > ${link}/ledger.json`), false, "a link made earlier points into the gate dir");
+    const v = decide(bash(`echo x > ${link}/ledger.json`), repo, cfg);
+    assert.equal(v.deny, true, "the text never names the gate dir");
+    assert.match(v.reason, /evidence folder/, v.reason);
+    assert.equal(decide(bash(`cp a ${link}/runs/x/review-1.md`), repo, cfg).deny, true, "a copy through the link");
+    assert.equal(decide(bash(`echo x > ${os.tmpdir()}/dg-plain-${process.pid}.txt`), repo, cfg).deny, false, "a plain scratch write");
+    assert.equal(scratchOnly(`echo x > ${os.tmpdir()}/dg-plain-${process.pid}.txt`), true, "a plain scratch file stays scratch");
+  } finally {
+    try { unlinkSync(link); } catch {}
+  }
+});
+
+test("C15 refused: xargs long options, the wrapper's \"$@\" outside a wrapper, zsh's tied names and file -C stay refused", () => {
+  for (const cmd of [
+    "ls | xargs --process-slot-var cat sed -i s/a/b/",
+    "ls | xargs --arg-file cat sed -i s/a/b/",
+    `echo '{"hook_event_name":"PostToolUse"}' | bash -c 'node ${gate} "$@"' _ log`,
+    `node ${gate} "$@"`,
+    `${WRAPPER}; echo '{"hook_event_name":"PostToolUse"}' | bash -c 'node ${gate} "$@"' _ log`,
+    `${WRAPPER}; gate log`,
+    "echo /tmp/p | read path; cat a",
+    "read fpath", "read cdpath", "read manpath", "read module_path", "read mailpath", "read psvar",
+    "file -C -m x",
+    "ls | xargs file -C",
+    "cat $(case x in x) rm f;; esac)",
+    'cat "$(case x in x) rm f;; esac)"',
+    "diff <(case x in x) rm f;; esac) b",
+    "echo $(case a in a) sed -i s/a/b/ f;; esac)",
+  ]) assert.equal(readsOnly(cmd), false, cmd);
+  for (const cmd of ["ls | xargs --null cat", "ls | xargs --max-args=1 cat", "ls | xargs --no-run-if-empty head -1", "read -r line", "file src/a.ts"]) assert.equal(readsOnly(cmd), true, cmd);
+  assert.equal(decide(bash(`ls | xargs --process-slot-var cat sed -i s/a/b/ ${RUN}/ledger.json`), repo, cfg).deny, true);
+});
+
+test("C4 edge: the deny names the segment that touches the gate dir and the owned file written there", () => {
+  const v = decide(bash(`sed -n 1p a > /tmp/x/qa.txt; cat review-1.md; sed -i '' s/a/b/ ${RUN}/worker-4.md`, { agent_id: "A1", agent_type: "done-gate:worker" }), repo, cfg);
+  assert.equal(v.deny, true);
+  assert.match(v.reason, /`sed -i '' s\/a\/b\/ \S*worker-4\.md`/, v.reason);
+  assert.match(v.reason, /Edit or Write tool on worker-4\.md/, v.reason);
+});
+
+test("C15 refused: a # comment ends at its line, so a quote inside it hides nothing", () => {
+  for (const cmd of [`cat ${RUN}/a # "\nrm ${RUN}/ledger.json\n# "`, `cat ${RUN}/a # '\nrm ${RUN}/ledger.json\n# '`]) {
+    assert.equal(readsOnly(cmd), false, cmd);
+    assert.equal(decide(bash(cmd), repo, cfg).deny, true, cmd);
+  }
+  for (const cmd of [`cat ${RUN}/a # a note`, `# just a note\ncat ${RUN}/a`, "echo $# ${#x}", "echo a#b"]) assert.equal(readsOnly(cmd), true, cmd);
+});
+
+test("C14 edge: removing a link in scratch is judged by the link, not by where it points", () => {
+  const link = path.join(os.tmpdir(), `dg-rmlink-${process.pid}`);
+  try { unlinkSync(link); } catch {}
+  symlinkSync(path.dirname(gate), link);
+  try {
+    assert.equal(scratchOnly(`rm ${link}`), true, "the link itself is in scratch");
+    assert.equal(scratchOnly(`rm ${link}/gate.mjs`), false, "a file through the link is outside scratch");
+  } finally {
+    try { unlinkSync(link); } catch {}
   }
 });

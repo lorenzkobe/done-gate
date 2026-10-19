@@ -523,7 +523,7 @@ test("C15 boundary: only gate errors logged after the run opened are flagged", (
   const crash = { extraEnv: { DONE_GATE_TEST: "1" }, input: "{}" };
   const log = path.join(stateDir(repo), "gate-error.log");
 
-  cli(repo, "__throw", [], crash); // predates the run
+  assert.equal(run(repo, "__throw", [], crash).status, 1); // predates the run
   assert.ok(existsSync(log), "the pre-open crash did not reach gate-error.log");
 
   cli(repo, "open", ["crashy", "feature"]);
@@ -533,7 +533,7 @@ test("C15 boundary: only gate errors logged after the run opened are flagged", (
     `an error logged before the run opened was blamed on it:\n${before}`,
   );
 
-  cli(repo, "__throw", [], crash); // during the run
+  assert.equal(run(repo, "__throw", [], crash).status, 1); // during the run
   assert.equal(readFileSync(log, "utf8").match(/^\d{4}-\d{2}-\d{2}T/gm).length, 2, "two errors on file");
 
   const after = brief(repo);

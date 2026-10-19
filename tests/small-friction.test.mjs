@@ -304,7 +304,7 @@ test("C8 reported-surface: the brief For-you line drops pauses and blocked write
 
   const full = cli(repo, "report").stdout;
   assert.match(full, /## Pauses\n\n- .*need the API key from you/);
-  assert.match(full, /tampering attempts 1 /);
+  assert.match(full, /blocked writes to gate files 1 /);
 });
 
 test("C11 happy: gate verify --add stores the command on the ledger, runs it after the config commands, and doctor and the report show it as added by this run; twice keeps one; R13 stays quiet", () => {

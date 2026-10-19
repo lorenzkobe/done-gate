@@ -46,7 +46,7 @@ const stop = (repo) => {
   const out = hook(repo, "stop", { hook_event_name: "Stop", stop_hook_active: false, last_assistant_message: "done." }).stdout.trim();
   return out.startsWith("{") ? JSON.parse(out) : null;
 };
-// the fence denies a shell write into the gate's own evidence files: a "tampering attempt"
+// the fence denies a shell write into the gate's own evidence files: a "blocked write"
 const denied = (repo) => {
   const out = hook(repo, "fence", { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "echo x >> .claude/gate/runs/x/events.jsonl" } }).stdout;
   assert.match(out, /deny/, `premise: the fence denies the write:\n${out}`);
@@ -150,14 +150,14 @@ test("C8 reported-surface: denied writes from before the run opened or after it 
   denied(repo);
   denied(repo);
   cli(repo, "open", ["t", "feature"]);
-  assert.match(cli(repo, "report").stdout, /tampering attempts 0/);
+  assert.match(cli(repo, "report").stdout, /blocked writes to gate files 0/);
   cli(repo, "abandon", ["t", "user moved on"]);
   denied(repo);
   const ledger = loadLedger(path.join(stateDir(repo), "runs", readdirSync(path.join(stateDir(repo), "runs"))[0]));
   assert.equal(ledger.status, "abandoned");
   cli(repo, "open", ["u", "feature"]);
   // the next run in the same session sees none of the three either
-  assert.match(cli(repo, "report").stdout, /tampering attempts 0/);
+  assert.match(cli(repo, "report").stdout, /blocked writes to gate files 0/);
 });
 
 test("C9 boundary: a deny inside the run is counted; a block from before the run is not", () => {
@@ -168,7 +168,7 @@ test("C9 boundary: a deny inside the run is counted; a block from before the run
   cli(repo, "open", ["t", "feature"]);
   denied(repo);
   const report = cli(repo, "report").stdout;
-  assert.match(report, /tampering attempts 1/, report);
+  assert.match(report, /blocked writes to gate files 1/, report);
   assert.match(report, /1 denied write/, report);
   assert.doesNotMatch(report, /the gate blocked the turn/, report);
 });
@@ -304,7 +304,7 @@ test("C20 edge: a run that ended counts no denies and shows no gate errors logge
   appendFileSync(errLog(repo), `${new Date(Date.now() + 1000).toISOString()} verb=check Error: after the end\n`);
   const report = cli(repo, "report").stdout;
   assert.match(report, /ABANDONED/, "premise: the report is the abandoned run's");
-  assert.match(report, /tampering attempts 0/, report);
+  assert.match(report, /blocked writes to gate files 0/, report);
   assert.match(report, /Error: inside\n\s+at frame/, report);
   assert.doesNotMatch(report, /after the end/, report);
 });

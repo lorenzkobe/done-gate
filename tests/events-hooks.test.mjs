@@ -463,8 +463,8 @@ test("C6 edge: a fenced lead edit is logged as a deny event and the report count
   assert.equal(denies.length, 1);
   assert.equal(denies[0].session, "S1");
   assert.equal(denies[0].agentType ?? null, null, "the lead has no agent type");
-  // a delegation deny is a hand-off, not tampering: the report says so and keeps the tampering count at 0
-  assert.match(cli(repo, "report").stdout, /tampering attempts 0/);
+  // a delegation deny is a hand-off, not a blocked write: the report says so and keeps the count at 0
+  assert.match(cli(repo, "report").stdout, /blocked writes to gate files 0/);
   assert.match(cli(repo, "report").stdout, /1 lead edit\(s\) fenced off/);
 });
 

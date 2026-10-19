@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { currentLedger } from "./ledger.mjs";
@@ -41,7 +41,13 @@ const isScratch = (p) => {
   return !n.startsWith("..") && (SCRATCH_ROOT.test(n) || /(?:^|\/)tests\/\.tmp(?:\/|$)/.test(n));
 };
 // Programs that only read their arguments; the flags that turn one into a writer.
-const READ_ONLY = new Set(["sleep", ":", "false", "ps", "awk", "cat", "ls", "head", "tail", "grep", "egrep", "fgrep", "rg", "sed", "wc", "find", "diff", "stat", "file", "jq", "less", "more", "sort", "uniq", "cut", "tr", "column", "paste", "echo", "printf", "cd", "pwd", "test", "[", "true", "continue", "break", "tree", "du", "date", "which", "type"]);
+const READ_ONLY = new Set(["sleep", ":", "false", "ps", "awk", "cat", "ls", "head", "tail", "grep", "egrep", "fgrep", "rg", "sed", "wc", "find", "diff", "stat", "file", "jq", "less", "more", "sort", "uniq", "cut", "tr", "column", "paste", "echo", "printf", "cd", "pwd", "test", "[", "true", "continue", "break", "tree", "du", "date", "which", "type", "basename", "dirname", "realpath", "readlink", "md5", "md5sum", "shasum", "sha1sum", "sha256sum", "cmp", "comm", "nl", "seq", "lsof"]);
+// xargs takes its arguments from stdin, which can hand a program -i, -o, -delete or --pre: only
+// readers with no writing flag at all run under it
+const XARGS_READERS = new Set(["cat", "head", "tail", "grep", "egrep", "fgrep", "wc", "ls", "stat", "basename", "dirname", "md5", "md5sum", "shasum", "sha1sum", "sha256sum", "cmp", "diff", "echo", "printf"]);
+const XARGS_VALUE = new Set(["-n", "-I", "-L", "-P", "-d", "-s", "-E", "-a", "-R", "-S", "-J"]);
+// GNU long options that take no value; any other one without `=` may swallow the program name
+const XARGS_BARE_LONG = new Set(["--null", "--no-run-if-empty", "--verbose", "--exit", "--open-tty", "--interactive"]);
 const WRITING_FLAG = {
   sed: /^-[a-zA-Z]*[iI]|^--in-place/,
   sort: /^-[a-zA-Z]*o|^--o|^--compress/,
@@ -49,6 +55,7 @@ const WRITING_FLAG = {
   find: /^-(?:delete|exec|execdir|ok|okdir|fprint|fls)/,
   git: /^--output/,
   rg: /^--pre/,
+  file: /^-[a-zA-Z]*C/,
   perl: /^-[a-zA-Z]*i/,
   // print or printf into a file or a command, system(), a command piped to getline or a
   // coprocess, or an in-place, script-file or --exec run (flags glued or not)
@@ -68,6 +75,12 @@ function heredocBodies(raw) {
 
 // Segments of tokens {text, quoted, assign, redir}; assign marks `name="value"`, whose name is bare,
 // and redir a token opened by a bare `>`, whose target may be quoted. `2>&1` and `&>` stay one token; `&` alone splits.
+// A `$(…)`, backtick, `<(…)` or `$((…))`, quoted or not, is its own segments, and its command keeps a SUBSTITUTED
+// word where it stood, so `diff <(a) b` keeps `b` as an argument and `> $(echo f)` keeps its target.
+// Segments inside `$((…))` carry `arith`. An unclosed one leaves an UNCLOSED segment, which no rule reads,
+// and so does a `case` inside one, whose pattern's `)` the frames would take for the close.
+export const SUBSTITUTED = "$(…)";
+const UNCLOSED = "(unclosed";
 export function segments(text) {
   const out = [];
   let seg = [];
@@ -77,8 +90,28 @@ export function segments(text) {
   let assign = false;
   let redir = false;
   let quote = null;
-  let resume = null; // the double quote a `$(` or backtick interrupted
+  const frames = []; // { kind: "sub" | "tick" | "arith" | "paren", outer: the command and quote the substitution sits in }
+  const inArith = () => frames.findLast((f) => f.kind !== "paren")?.kind === "arith";
+  const open = (kind) => {
+    frames.push({ kind, outer: { seg, tok, has, quoted, assign, redir, quote } });
+    quote = null;
+    seg = [];
+    tok = "";
+    has = false;
+    quoted = false;
+    assign = false;
+    redir = false;
+  };
+  const close = () => {
+    cut();
+    const { outer } = frames.pop();
+    ({ seg, tok, quoted, assign, redir, quote } = outer);
+    tok += SUBSTITUTED;
+    has = true;
+  };
+  let caseInside = false;
   const push = () => {
+    if (has && !quoted && tok === "case" && frames.some((f) => f.kind !== "paren")) caseInside = true;
     if (has) seg.push({ text: tok, quoted, redir, assign: assign || (!quoted && /^[A-Za-z_]\w*=/.test(tok)) });
     tok = "";
     has = false;
@@ -88,7 +121,10 @@ export function segments(text) {
   };
   const cut = () => {
     push();
-    if (seg.length) out.push(seg);
+    if (seg.length) {
+      if (inArith()) seg.arith = true;
+      out.push(seg);
+    }
     seg = [];
   };
   for (let i = 0; i < text.length; i++) {
@@ -96,27 +132,28 @@ export function segments(text) {
     if (quote) {
       if (c === quote) quote = null;
       else if (c === "\\" && quote === '"' && i + 1 < text.length) tok += text[++i];
-      else if (quote === '"' && ((c === "$" && text[i + 1] === "(") || c === "`")) {
-        // a substitution runs inside double quotes too: its command is its own segment
-        cut();
-        resume = quote;
-        quote = null;
-        if (c === "$") i++;
-      } else tok += c;
+      else if (quote === '"' && c === "$" && text[i + 1] === "(") {
+        open("sub");
+        i++;
+      } else if (quote === '"' && c === "`") open("tick");
+      else tok += c;
       continue;
     }
-    if (resume && (c === ")" || c === "`")) {
-      cut();
-      quote = resume;
-      resume = null;
-      has = true;
-      quoted = true;
+    if (c === "`") {
+      if (frames.at(-1)?.kind === "tick") close();
+      else open("tick");
       continue;
     }
     // a redirect glued to the word before it (`echo x>file`) is its own token
     if (c === ">") {
       if (has && (quoted || !/^(?:\d*|&)>*$/.test(tok))) push();
       redir = true;
+    }
+    // a `#` that starts a word comments out the rest of its line, quotes and all
+    if (c === "#" && !has) {
+      const end = text.indexOf("\n", i);
+      i = end < 0 ? text.length : end - 1;
+      continue;
     }
     if (c === '"' || c === "'") {
       if (!quoted && /^[A-Za-z_]\w*=/.test(tok)) assign = true;
@@ -143,11 +180,37 @@ export function segments(text) {
       continue;
     }
     if (c === "$" && text[i + 1] === "(") {
-      cut();
+      const arith = text[i + 2] === "(";
+      open(arith ? "arith" : "sub");
+      i += arith ? 2 : 1;
+      continue;
+    }
+    if (c === "(" && tok === "<" && !quoted) {
+      tok = "";
+      has = false;
+      open("sub");
+      continue;
+    }
+    if (c === ")" && frames.at(-1)?.kind === "arith" && text[i + 1] === ")") {
+      close();
       i++;
       continue;
     }
-    if ("|;\n()`".includes(c)) {
+    if (c === ")" && frames.at(-1)?.kind === "sub") {
+      close();
+      continue;
+    }
+    if (c === "(") {
+      cut();
+      frames.push({ kind: "paren" });
+      continue;
+    }
+    if (c === ")") {
+      cut();
+      if (frames.at(-1)?.kind === "paren") frames.pop();
+      continue;
+    }
+    if ("|;\n".includes(c)) {
       cut();
       continue;
     }
@@ -159,6 +222,10 @@ export function segments(text) {
     has = true;
   }
   cut();
+  while (frames.length) {
+    if (frames.pop().kind !== "paren") caseInside = true;
+  }
+  if (caseInside) out.push([{ text: UNCLOSED, quoted: false, redir: false, assign: false }]);
   return out;
 }
 
@@ -245,6 +312,35 @@ function arithmetic(words) {
   return words.every((w) => !w.quoted && /^(?:\d+|[-+%])$/.test(w.text));
 }
 
+// Inside `$((…))` a substitution is a number. A name is not: bash evaluates its value there, and
+// a value like a[$(cmd)] runs the command.
+function arithmeticInside(words) {
+  return words.every((w) => !w.quoted && (/^[\d+\-*/%<>=!&|^~?:,]+$/.test(w.text) || w.text === SUBSTITUTED));
+}
+
+function xargsReads(args) {
+  let i = 0;
+  while (i < args.length && !args[i].quoted && args[i].text.startsWith("-")) {
+    if (args[i].text.startsWith("--") && !args[i].text.includes("=") && !XARGS_BARE_LONG.has(args[i].text)) return false;
+    i += XARGS_VALUE.has(args[i].text) ? 2 : 1;
+  }
+  if (i > args.length) return false;
+  return i === args.length || (!args[i].quoted && XARGS_READERS.has(args[i].text));
+}
+
+// `read` sets only the names it is given; an upper-case one could be PATH, a pager or an editor
+// a later reader runs, and zsh ties these lower-case ones to PATH-like variables.
+const READ_VALUE = new Set(["-p", "-d", "-n", "-N", "-t", "-u"]);
+const ZSH_TIED = new Set(["path", "fpath", "cdpath", "manpath", "module_path", "mailpath", "psvar"]);
+function readSetsPlainNames(args) {
+  for (let i = 0; i < args.length; i++) {
+    if (!args[i].quoted && READ_VALUE.has(args[i].text)) i++;
+    else if (!args[i].quoted && args[i].text.startsWith("-")) continue;
+    else if (!/^[a-z_][a-z0-9_]*$/.test(args[i].text) || ZSH_TIED.has(args[i].text)) return false;
+  }
+  return true;
+}
+
 function gitReads(args) {
   const [verb, sub] = (args[0]?.text === "-C" ? args.slice(2) : args).map((a) => a.text);
   return GIT_READ.has(verb) || (verb === "stash" && (sub === "list" || sub === "show"));
@@ -262,12 +358,14 @@ const TOP = "(?:^|[;\\n])\\s*";
 // no shell builtin counts.
 const BUILTINS = new Set(["eval", "exec", "source", ".", "command", "builtin", "cd", "echo", "printf", "read", "set", "unset", "export", "declare", "typeset", "local", "alias", "trap", "test", "[", ":", "true", "false", "kill", "wait", "jobs", "fg", "bg", "let", "shift", "times", "type", "hash", "ulimit", "umask", "getopts", "readonly", "return", "exit", "break", "continue", "pushd", "popd", "dirs", "history", "fc", "enable", "mapfile", "readarray", "coproc", "select", "time"]);
 const onPath = (name) => (process.env.PATH ?? "").split(path.delimiter).some((dir) => dir && existsSync(path.join(dir, name)));
+const WRAPPER = `${TOP}(?:function\\s+([A-Za-z_][\\w-]*)\\s*(?:\\(\\))?|([A-Za-z_][\\w-]*)\\s*\\(\\))\\s*\\{\\s*(?:echo\\s+'[^']*'\\s*\\|\\s*)?node\\s+["']?[^\\s"';&|]*gate\\.mjs["']?\\s+"\\$@"`;
 function definedFunctions(raw) {
   const text = withoutHeredocs(String(raw));
-  return new Set([...text.matchAll(new RegExp(`${TOP}(?:function\\s+([A-Za-z_][\\w-]*)\\s*(?:\\(\\))?|([A-Za-z_][\\w-]*)\\s*\\(\\))\\s*\\{\\s*node\\s+["']?[^\\s"';&|]*gate\\.mjs["']?\\s+"\\$@"`, "g"))]
+  return new Set([...text.matchAll(new RegExp(WRAPPER, "g"))]
     .map((m) => m[1] ?? m[2])
     .filter((name) => !BUILTINS.has(name) && !onPath(name)));
 }
+
 
 // The gate's verbs: a `$G` call is the gate only when its first argument is one, so an unset G
 // leaves a verb name as the program, never a writer.
@@ -289,33 +387,50 @@ function gateVariables(raw) {
 // Every segment starts with a read-only program, nothing is redirected to a file, and inline
 // code names no write. `node …/gate.mjs` is the gate's own CLI; `sh -c` is read as a command.
 export function readsOnly(raw) {
+  return firstNotRead(raw) === null;
+}
+
+// The first segment of a command that is not a plain read, or null when every one is.
+export function firstNotRead(raw) {
+  return notReads(raw)[0] ?? null;
+}
+
+function notReads(raw) {
   const functions = definedFunctions(raw);
   const gateVars = gateVariables(raw);
-  return segments(withoutHeredocs(raw)).every((seg) => {
-    const { words: shifted, envChanged } = shift(seg);
-    // a `function name {` header defines; its body segments are checked as they stand
-    const words = shifted[0]?.text === "function" ? shifted.slice(shifted[2]?.text === "{" ? 3 : 2) : shifted;
-    if (envChanged) return false;
-    for (let i = 0; i < words.length; i++) {
-      const target = redirect(words[i]);
-      if (target === null) continue;
-      if ((target || words[i + 1]?.text || "") !== "/dev/null") return false;
-    }
-    if (!words.length) return true;
-    const [first, ...args] = words;
-    const program = first.text;
-    if (arithmetic(words)) return true;
-    if (program === "node" && /gate\.mjs$/.test(args[0]?.text ?? "")) return true;
-    if (!first.quoted && functions.has(program)) return true;
-    const variable = /^\$\{?(\w+)\}?$/.exec(program);
-    if (variable && gateVars.has(variable[1]) && GATE_VERBS.has(args[0]?.text)) return true;
-    if (SHELLS.has(program) && args.some((a) => !a.quoted && /^-[a-zA-Z]*c/.test(a.text))) return readsOnly(args.filter((a) => a.quoted).map((a) => a.text).join("\n"));
-    const code = inlineCode(program, args, raw);
-    if (code !== null) return !INLINE_WRITE.test(code) && !writingFlag(program, args);
-    if (writingFlag(program, args)) return false;
-    if (program === "git") return gitReads(args);
-    return READ_ONLY.has(program);
-  });
+  return segments(withoutHeredocs(raw)).filter((seg) => !segmentReads(seg, raw, functions, gateVars));
+}
+
+function segmentReads(seg, raw, functions, gateVars) {
+  const { words: shifted, envChanged } = shift(seg);
+  // a `function name {` header defines; its body segments are checked as they stand
+  const words = shifted[0]?.text === "function" ? shifted.slice(shifted[2]?.text === "{" ? 3 : 2) : shifted;
+  if (envChanged) return false;
+  for (let i = 0; i < words.length; i++) {
+    const target = redirect(words[i]);
+    if (target === null) continue;
+    if ((target || words[i + 1]?.text || "") !== "/dev/null") return false;
+  }
+  if (!words.length) return true;
+  const [first, ...args] = words;
+  const program = first.text;
+  if (seg.arith) return arithmeticInside(words);
+  if (arithmetic(words)) return true;
+  // `"$@"` is the body of a wrapper this same command defines (`bash -c` text is read on its
+  // own, with no definition); the calls name the verb
+  if (program === "node" && /gate\.mjs$/.test(args[0]?.text ?? "")) return GATE_VERBS.has(args[1]?.text) || (functions.size > 0 && args[1]?.quoted && args[1].text === "$@");
+  // a bare name is the `G()` header of its own definition
+  if (!first.quoted && functions.has(program)) return !args.length || GATE_VERBS.has(args[0].text);
+  const variable = /^\$\{?(\w+)\}?$/.exec(program);
+  if (variable && gateVars.has(variable[1]) && GATE_VERBS.has(args[0]?.text)) return true;
+  if (SHELLS.has(program) && args.some((a) => !a.quoted && /^-[a-zA-Z]*c/.test(a.text))) return readsOnly(args.filter((a) => a.quoted).map((a) => a.text).join("\n"));
+  const code = inlineCode(program, args, raw);
+  if (code !== null) return !INLINE_WRITE.test(code) && !writingFlag(program, args);
+  if (writingFlag(program, args)) return false;
+  if (program === "git") return gitReads(args);
+  if (program === "xargs") return xargsReads(args);
+  if (program === "read") return readSetsPlainNames(args);
+  return READ_ONLY.has(program);
 }
 
 // Whether a command may have moved HEAD or the tree through git: it is not read-only and its text
@@ -376,15 +491,41 @@ export function inlineWrites(raw) {
 // A command that writes, but only under scratch paths: every program in it is one the fence
 // knows (a reader, or a writer whose targets it can read) and every target is scratch. It
 // cannot have written source.
+const IN_GATE_DIR = /(?:^|\/)\.claude\/gate(?:\/|$)/;
 export function scratchOnly(raw) {
   const known = segments(withoutHeredocs(raw)).every((seg) => {
-    const { words } = shift(seg);
-    // mv and rsync can delete what they read from, which no target list shows
-    return !words.length || READ_ONLY.has(words[0].text) || (Boolean(WRITERS[words[0].text]) && !["mv", "rsync"].includes(words[0].text));
+    const { words, envChanged } = shift(seg);
+    if (envChanged) return false;
+    // mv and rsync can delete what they read from, which no target list shows; a reader's
+    // writing flag (awk print >, sort -o) writes where no target list looks
+    if (!words.length) return true;
+    const [first, ...args] = words;
+    // a link made under scratch can point anywhere, and every later write through it lands there
+    const links = first.text === "ln" || (first.text === "cp" && args.some((a) => !a.quoted && /^-[a-zA-Z]*[ls]|^--(?:link|symbolic-link)$/.test(a.text)));
+    return (READ_ONLY.has(first.text) && !writingFlag(first.text, args)) || (Boolean(WRITERS[first.text]) && !["mv", "rsync"].includes(first.text) && !links);
   });
   if (!known || inlineWrites(raw)) return false;
-  const { outside, blind } = shellWrites(raw);
-  return !outside.length && !blind.length;
+  const { outside, blind, all } = shellWrites(raw);
+  // a repo can sit under /tmp or tests/.tmp: its gate dir is never scratch
+  return !outside.length && !blind.length && !all.some((t) => IN_GATE_DIR.test(t));
+}
+
+// An absolute path through any link already on disk: a scratch-looking path can lead elsewhere.
+// rm and rmdir act on the last name itself, so only the folders above it are followed.
+function realPath(p, { keepLast = false } = {}) {
+  if (p === null || !p.startsWith("/")) return p;
+  if (keepLast && path.dirname(p) !== p) return path.join(realPath(path.dirname(p)), path.basename(p));
+  let head = p;
+  const rest = [];
+  while (head !== "/" && !existsSync(head)) {
+    rest.unshift(path.basename(head));
+    head = path.dirname(head);
+  }
+  try {
+    return path.join(realpathSync(head), ...rest);
+  } catch {
+    return p;
+  }
 }
 
 export function shellWrites(raw) {
@@ -393,6 +534,7 @@ export function shellWrites(raw) {
   let cwdKnown = true;
   const outside = [];
   const blind = [];
+  const all = [];
   const expand = (t) => t.replace(/\$\{(\w+)\}|\$(\w+)/g, (m, a, b) => vars[a ?? b] ?? m);
   const resolve = (t) => {
     const x = expand(t);
@@ -402,9 +544,12 @@ export function shellWrites(raw) {
   };
   const target = (t, what) => {
     if (/^\/dev\/(?:null|stderr|stdout)$/.test(t)) return;
-    const r = resolve(t);
+    const r = realPath(resolve(t), { keepLast: what === "rm" || what === "rmdir" });
     if (r === null) blind.push(`${what} ${t} (unknown location)`);
-    else if (!isScratch(r)) outside.push(r);
+    else {
+      all.push(r);
+      if (!isScratch(r)) outside.push(r);
+    }
   };
   const walk = (text) => {
     for (const seg of segments(withoutHeredocs(text))) {
@@ -487,7 +632,7 @@ export function shellWrites(raw) {
     }
   };
   walk(raw);
-  return { outside, blind };
+  return { outside, blind, all };
 }
 
 function targetPaths(input, root, repos) {
@@ -556,6 +701,31 @@ function draftOwed(roleName, root, currentRun, { stateDir, session, agentId } = 
   return owed.sort((a, b) => a - b).map((n) => `${currentRun}/${prefix}-${n}.md`);
 }
 
+// The file each caller may write with the edit tools: a helper its own findings file, the lead ledger.md.
+const OWNED_FILE = /(?:^|[/\s'"=])((review2|review|skeptic|arbiter|worker)-\d+\.md|ledger\.md)(?=$|[\s'";|&)<>])/;
+const FILE_OWNER = { review2: "reviewer-2", review: "reviewer", skeptic: "skeptic", arbiter: "arbiter", worker: "worker" };
+const shown = (seg) => {
+  const text = seg.map((w) => (w.quoted && (w.text === "" || /\s/.test(w.text)) ? `'${w.text}'` : w.text)).join(" ");
+  return text.length > 120 ? `${text.slice(0, 120)}…` : text;
+};
+function evidenceDeny(cmd, agentType) {
+  const parts = notReads(cmd);
+  const touchesGate = (seg) => {
+    const t = seg.map((w) => w.text).join(" ");
+    return EVIDENCE_IN_COMMAND.test(t) || namesGateDir(t) || OWNED_FILE.test(t);
+  };
+  const part = parts.find(touchesGate) ?? parts[0] ?? null;
+  const named = (part && OWNED_FILE.exec(part.map((w) => w.text).join(" "))) ?? OWNED_FILE.exec(withoutHeredocs(cmd));
+  const owner = named && (named[2] ? FILE_OWNER[named[2]] : null);
+  const caller = agentType?.replace(/^done-gate:/, "") ?? null;
+  const owns = named && (named[2] ? owner === caller : agentType === null);
+  return [
+    `done-gate: that command writes gate evidence files (.claude/gate/...)${part ? `: \`${shown(part)}\` is not a plain read` : ""}.`,
+    "Evidence is written only by `gate` verbs; read it with cat, grep or `gate report`.",
+    owns ? `Use the Edit or Write tool on ${named[1]} instead.` : "",
+  ].filter(Boolean).join(" ");
+}
+
 export function decide(input, root, config = null, currentRun = null, ledger = null, where = {}) {
   const repos = ledger?.repos ?? [];
   config ??= loadConfig(root, repos);
@@ -578,9 +748,13 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
     const cmd = String(input.tool_input?.command ?? "");
     // a heredoc that quotes an evidence path is text; the command around it is what runs,
     // unless the heredoc feeds an interpreter whose code writes
-    if (((EVIDENCE_IN_COMMAND.test(withoutHeredocs(cmd)) || namesGateDir(withoutHeredocs(cmd))) && !readsOnly(cmd)) || (EVIDENCE_IN_COMMAND.test(cmd) && inlineWrites(cmd))) {
-      return { deny: true, reason: "done-gate: that command writes gate evidence files (.claude/gate/...). Evidence is written only by `gate` verbs; read it with cat, grep or `gate report`.", paths: [] };
+    // a write only under scratch paths cannot reach evidence, whatever it read
+    if (((EVIDENCE_IN_COMMAND.test(withoutHeredocs(cmd)) || namesGateDir(withoutHeredocs(cmd))) && !readsOnly(cmd) && !scratchOnly(cmd)) || (EVIDENCE_IN_COMMAND.test(cmd) && inlineWrites(cmd))) {
+      return { deny: true, reason: evidenceDeny(cmd, agentType), paths: [] };
     }
+    // a link made earlier hides the gate dir from the text; the real path of each target does not
+    const linked = shellWrites(cmd).all.find((t) => IN_GATE_DIR.test(t));
+    if (linked) return { deny: true, reason: `done-gate: that command writes ${linked}, which is in the gate's evidence folder. Evidence is written only by \`gate\` verbs.`, paths: [] };
     // Helpers write only through the edit tools, where the role rules apply; a shell write
     // would bypass them, so their shell writes stay under scratch paths.
     if (HELPER_ROLES.some((r) => agentType === `done-gate:${r}` || agentType === r)) {

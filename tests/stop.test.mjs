@@ -641,11 +641,19 @@ test("`gate help` lists the verbs and exits 0; an unknown verb points at it", ()
   assert.match(run(["status"], "{}").stderr, /gate help/);
 });
 
-test("a verb that throws fails OPEN: exit 0 and the stack lands in gate-error.log", () => {
+test("C13 edge: a verb that throws exits 1 so a `gate … && next` chain stops, and the stack lands in gate-error.log; a hook that throws fails open with exit 0", () => {
   const r = run(["__throw"], "{}", { DONE_GATE_STATE_DIR: path.join(root, "tests", ".tmp", "smoke-state"), DONE_GATE_TEST: "1" });
-  assert.equal(r.status, 0);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /done-gate: __throw: deliberate test crash/);
   assert.equal(r.stdout, "");
   const log = readFileSync(path.join(root, "tests", ".tmp", "smoke-state", "gate-error.log"), "utf8");
   assert.match(log, /__throw/);
+  const notDir = path.join(root, "tests", ".tmp", "smoke-state-file");
+  writeFileSync(notDir, "a file where the state dir should be\n");
+  for (const hook of ["log", "stop"]) {
+    const h = run([hook], JSON.stringify({ hook_event_name: hook === "stop" ? "Stop" : "PostToolUse", tool_name: "Bash", tool_input: { command: "ls" }, tool_response: {}, session_id: "S1", cwd: root }), { DONE_GATE_STATE_DIR: notDir });
+    assert.match(h.stderr, /ENOTDIR/, `${hook}: the hook did crash`);
+    assert.equal(h.status, 0, `${hook}: a crashing hook fails open`);
+  }
 });
 }

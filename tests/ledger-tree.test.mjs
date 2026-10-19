@@ -1087,7 +1087,7 @@ test("C7 refused: `gate note task \"\"` prints to stderr and leaves no gate-erro
 
   // A real plugin failure still lands in the log, exactly as tests/smoke.test.mjs pins it.
   const boom = run(repo, "__throw", [], { extraEnv: { DONE_GATE_TEST: "1" } });
-  assert.equal(boom.status, 0);
+  assert.equal(boom.status, 1, "a crashed verb fails its command too");
   assert.ok(existsSync(errorLog(repo)), "a genuine crash no longer reaches gate-error.log");
   assert.match(readFileSync(errorLog(repo), "utf8"), /__throw/);
 });

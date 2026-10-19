@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { buildState } from "./assess.mjs";
 import { caseTable, verifyLines } from "./report.mjs";
@@ -179,6 +179,7 @@ function fileList(state, files, { blind = false } = {}) {
   if (!files.length) return ["no files named in the plan (the implementer ran `gate note plan` without --files)"];
   return files.map((rel) => {
     const abs = absolute(state, rel);
+    if (existsSync(abs) && statSync(abs).isDirectory()) return `- ${rel.replace(/\/+$/, "")}/ (directory)`;
     if (blind) {
       const before = state.baseline?.files?.[rel]?.l;
       return typeof before === "number" ? `- ${rel} (${plural(before, "line")} when the task opened)` : `- ${rel} (new file for this task)`;

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// done-gate dispatcher. Every verb runs inside a fail-open wrapper: a crash exits 0 with
-// the stack in gate-error.log, because a hook that exits non-zero on its own bug would
-// wedge every session in every repo where the plugin is installed.
+// done-gate dispatcher. A crash lands its stack in gate-error.log. A hook still exits 0, because
+// a hook that exits non-zero on its own bug would wedge every session in every repo where the
+// plugin is installed; any other verb exits 1, so the command that called it stops.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -115,7 +115,7 @@ try {
     }
   }
   process.stderr.write(`done-gate: ${error?.message ?? error}\n`);
-  // a verb the model called wrongly fails its shell command, so a `gate … && next` chain
+  // a verb that fails, misused or crashed, fails its shell command, so a `gate … && next` chain
   // stops there; hooks always exit 0, or a bug of ours would wedge the session
-  if (error instanceof UsageError && !VERBS[process.argv[2]]?.hook) process.exitCode = 1;
+  if (!VERBS[process.argv[2]]?.hook) process.exitCode = 1;
 }
