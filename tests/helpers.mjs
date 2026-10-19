@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,4 +73,20 @@ export function doneArgs(repo, ref, key, note, evidence, session = "S1") {
   const payload = { session_id: session, cwd: repo, hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: `node probe.mjs ${key}` }, tool_response: { exit_code: 0 } };
   execFileSync(process.execPath, [gate, "log"], { input: JSON.stringify(payload), env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: session } });
   return [ref, "done", `${note} (src/a.ts:1)`, "--ran", `node probe.mjs ${key}`];
+}
+
+// Writes the minimal Task, Context, Plan and one case into the open run, so the fence lets
+// code be edited (an edit before them is refused). `plan` adds args to `gate note plan`.
+export function readyToEdit(repo, { session = "S1", plan = [] } = {}) {
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: session };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  for (const args of [
+    ["note", "task", "the task"],
+    ["note", "context", "Traced: src/a.ts:1 · Related: none: `grep -rn a src` · Research: none needed: a test fixture", "--no-code", "SocratiCode: not installed", "--no-memory", "MemPalace: not installed"],
+    ["note", "plan", "the plan", ...plan],
+    ["case", "add", "the case", "--kind", "happy"],
+  ]) {
+    const r = spawnSync(process.execPath, [gate, ...args], { encoding: "utf8", env });
+    if (r.status !== 0) throw new Error(`readyToEdit: gate ${args.slice(0, 2).join(" ")}: ${r.stderr}`);
+  }
 }

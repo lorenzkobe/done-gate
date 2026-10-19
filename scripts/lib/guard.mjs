@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
-import { currentLedger } from "./ledger.mjs";
+import { currentLedger, isDone } from "./ledger.mjs";
 import { leadDelegates } from "./size.mjs";
 import { appendEvents, nextSeq, readEvents, toolUse } from "./events.mjs";
 import { toPosixRel } from "./paths.mjs";
@@ -637,7 +637,8 @@ export function shellWrites(raw) {
 
 function targetPaths(input, root, repos) {
   const ti = input.tool_input ?? {};
-  const raw = input.tool_name === "MultiEdit" ? (ti.edits ?? []).map((e) => e?.file_path) : [ti.file_path ?? ti.notebook_path];
+  // MultiEdit names its file once, at the top; an older shape put it on each edit
+  const raw = input.tool_name === "MultiEdit" ? [ti.file_path, ...(ti.edits ?? []).map((e) => e?.file_path)] : [ti.file_path ?? ti.notebook_path];
   return raw.map((p) => toPosixRel(root, p, repos)).filter((p) => typeof p === "string" && p.length);
 }
 
@@ -726,6 +727,78 @@ function evidenceDeny(cmd, agentType) {
   ].filter(Boolean).join(" ");
 }
 
+// What a run still lacks before code may be edited; each playbook asks only for its own steps.
+function notReadyToEdit(ledger) {
+  if (!ledger || isDone(ledger)) return "no run is open: `gate open <slug> <feature|bugfix|refactor|plan|investigation>` (or `gate attach <slug>` to join one another session left open), then write the Task, Context, Plan and cases";
+  const has = (key) => (ledger.steps ?? []).some((s) => s.key === key);
+  const missing = [];
+  if (has("plan") && !ledger.taskSeq) missing.push("Task (`gate note task`)");
+  if (has("context") && !ledger.contextSeq) missing.push("Context (`gate note context`)");
+  if (has("plan") && !ledger.planSeq) missing.push("Plan (`gate note plan`)");
+  if (has("cases") && !ledger.cases?.length) missing.push("a case (`gate case add`)");
+  return missing.length ? `the run still needs ${missing.join(", ")} before code is edited` : null;
+}
+
+// Where inline code writes: a literal (or a name given one) as open(…, "w"/"a"/"x") or as the
+// target of writeFile, appendFile and kin. Any other write leaves the target unknown.
+function inlineWriteTargets(raw) {
+  const targets = [];
+  let unknown = false;
+  let lost = null;
+  const dirs = [];
+  for (const seg of segments(withoutHeredocs(raw))) {
+    const { words } = shift(seg);
+    if (["cd", "pushd"].includes(words[0]?.text)) dirs.push(words[1]?.text ?? "~");
+    const code = words.length ? inlineCode(words[0].text, words.slice(1), raw) : null;
+    if (code === null || !INLINE_WRITE.test(code) && !/\.write_(?:text|bytes)\s*\(/.test(code)) continue;
+    // a name given a literal exactly once; one assigned again could hold anything at the write
+    const assigned = [...code.matchAll(/\b([A-Za-z_]\w*)\s*=(?!=)/g)].map((m) => m[1]);
+    const names = Object.fromEntries([...code.matchAll(/\b([A-Za-z_]\w*)\s*=\s*["'`]([^"'`]+)["'`]/g)].filter((m) => assigned.filter((n) => n === m[1]).length === 1).map((m) => [m[1], m[2]]));
+    const arg = (a) => {
+      const lit = /^\s*["'`]([^"'`]+)["'`]\s*$/.exec(a);
+      if (lit) return lit[1];
+      const name = /^\s*([A-Za-z_]\w*)\s*$/.exec(a)?.[1];
+      return name && names[name] ? names[name] : null;
+    };
+    // a relative target is read from the folder the command moved to
+    // from the last absolute cd on; ~, $VAR and - are folders the gate cannot follow
+    const place = (t) => {
+      if (t.startsWith("/") || !dirs.length) return t;
+      let base = "";
+      for (const d of dirs) {
+        if (/^[~$-]|\$/.test(d)) {
+          lost ||= t;
+          return null;
+        }
+        base = d.startsWith("/") ? d : path.posix.join(base, d);
+      }
+      return path.posix.normalize(path.posix.join(base, t));
+    };
+    const argAt = (a) => {
+      const t = arg(a);
+      return t === null ? null : place(t);
+    };
+    let seen = 0;
+    for (const m of code.matchAll(/\bopen\s*\(\s*([^,()]+?)\s*,\s*(?:mode\s*=\s*)?["']([^"']*)["']/g)) {
+      if (!/[wax+]/.test(m[2])) continue;
+      seen++;
+      const t = argAt(m[1]);
+      if (t) targets.push(t);
+      else unknown = true;
+    }
+    for (const m of code.matchAll(/\b(?:writeFile|appendFile|createWriteStream|truncate)(?:Sync)?\s*\(\s*([^,()]+)/g)) {
+      seen++;
+      const t = argAt(m[1]);
+      if (t) targets.push(t);
+      else unknown = true;
+    }
+    // a write the patterns above do not read (os.remove, shutil, rename, write_text, an open with no literal mode)
+    const writes = (code.match(new RegExp(INLINE_WRITE.source, "g")) ?? []).length + (code.match(/\.write_(?:text|bytes)\s*\(/g) ?? []).length;
+    if (writes > seen) unknown = true;
+  }
+  return { targets, unknown, lost };
+}
+
 export function decide(input, root, config = null, currentRun = null, ledger = null, where = {}) {
   const repos = ledger?.repos ?? [];
   config ??= loadConfig(root, repos);
@@ -755,6 +828,19 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
     // a link made earlier hides the gate dir from the text; the real path of each target does not
     const linked = shellWrites(cmd).all.find((t) => IN_GATE_DIR.test(t));
     if (linked) return { deny: true, reason: `done-gate: that command writes ${linked}, which is in the gate's evidence folder. Evidence is written only by \`gate\` verbs.`, paths: [] };
+    // the lead's shell write to code waits for the plan like an Edit does
+    if (!where.unreadable && !HELPER_ROLES.some((r) => agentType === `done-gate:${r}` || agentType === r) && agentType !== "done-gate:worker") {
+      const isCode = (p) => p && !isScratch(p) && (config.isSource(p) || config.isTest(p));
+      const code = new Set(shellWrites(cmd).outside.filter((p) => !isScratch(p)).map((p) => toPosixRel(root, p, repos)).filter(isCode));
+      const inline = inlineWriteTargets(cmd);
+      for (const t of inline.targets) if (isCode(toPosixRel(root, t, repos))) code.add(toPosixRel(root, t, repos));
+      // a write whose target cannot be read, in code that names a code file, may be writing it
+      if (inline.unknown) for (const m of cmd.matchAll(/["'`]([^"'`\s]+\.\w+)["'`]/g)) if (isCode(toPosixRel(root, m[1], repos))) code.add(toPosixRel(root, m[1], repos));
+      // moved to a folder the gate cannot follow: any relative write there may be code
+      const shown = [...code, ...(inline.lost ? [`${inline.lost} (in a folder the gate cannot follow)`] : [])];
+      const why = shown.length ? notReadyToEdit(ledger) : null;
+      if (why) return { deny: true, reason: `done-gate: that command writes ${shown.slice(0, 3).join(", ")} and ${why}.`, paths: [...code] };
+    }
     // Helpers write only through the edit tools, where the role rules apply; a shell write
     // would bypass them, so their shell writes stay under scratch paths.
     if (HELPER_ROLES.some((r) => agentType === `done-gate:${r}` || agentType === r)) {
@@ -774,6 +860,10 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
       return { deny: true, reason: `done-gate: ${rel} is gate evidence and is written only by \`gate\` verbs.`, paths };
     }
   }
+  const code = paths.filter((p) => !isScratch(p) && (config.isSource(p) || config.isTest(p)));
+  // an unreadable run is the gate's own failure: it fails open, as the hooks do, rather than ask for a second run
+  const notReady = code.length && !where.unreadable ? notReadyToEdit(ledger) : null;
+  if (notReady) return { deny: true, reason: `done-gate: ${code.join(", ")} is code, and ${notReady}.`, paths };
   const role = (r) => agentType === `done-gate:${r}` || agentType === r;
   // at a delegated size (policy.delegatesAt, large by default) the lead hands source to a helper:
   // a worker, or any implementer it spawns; the reading roles stay fenced below. A "delegate"
@@ -864,6 +954,7 @@ export const verbs = {
     if (["Grep", "Glob"].includes(ctx.input?.tool_name) && !ctx.input?.agent_type) return;
     let currentRun = null;
     let ledger = null;
+    let unreadable = false;
     try {
       const current = currentLedger(ctx.stateDir, ctx.session);
       if (current) {
@@ -872,8 +963,9 @@ export const verbs = {
       }
     } catch {
       // unreadable state: fall back to the role rules alone
+      unreadable = true;
     }
-    const verdict = decide(ctx.input, ctx.root, undefined, currentRun, ledger, { stateDir: ctx.stateDir, session: ctx.session });
+    const verdict = decide(ctx.input, ctx.root, undefined, currentRun, ledger, { stateDir: ctx.stateDir, session: ctx.session, unreadable });
     const stamp = () => ({ seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, agent: ctx.input?.agent_id ?? null, agentType: ctx.input?.agent_type ?? null });
     if (!verdict.deny) {
       recordSessionPids(ctx);

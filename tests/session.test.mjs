@@ -228,8 +228,8 @@ test("C5 refused: the fence denies Edit and Write to .claude/gate/current-sessio
     assert.equal(out.hookSpecificOutput.permissionDecision, "deny", `${tool} to the marker`);
     assert.match(out.hookSpecificOutput.permissionDecisionReason, /evidence/);
   }
-  // The permitted side: an ordinary source file is still silent (no decision emitted).
-  assert.equal(fence(repo, "Write", path.join(repo, "src", "a.ts")).stdout.trim(), "");
+  // The permitted side: an ordinary docs file is still silent (no decision emitted); code waits for a planned run.
+  assert.equal(fence(repo, "Write", path.join(repo, "docs", "notes.md")).stdout.trim(), "");
 });
 
 test("C7 refused: the fence denies a Bash command that writes to .claude/gate/current-session", () => {

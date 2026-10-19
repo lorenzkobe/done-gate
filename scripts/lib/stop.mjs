@@ -5,7 +5,9 @@ import { loadLedger, saveLedger } from "./ledger.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { HELPER_MAX_MS, unfinishedVerify } from "./rules.mjs";
 
-export const OVERRIDE_AFTER = 6;
+// Stuck: from ASK_AFTER identical blocks the lead must ask the user; BRAKE_AFTER stops a gate-bug loop.
+export const ASK_AFTER = 3;
+export const BRAKE_AFTER = 20;
 const PAUSE_RE = /(?:^|\n)\s*PAUSED:\s*(.+?)\s*$/;
 
 // Every block is logged, so a turn that could not end can be diagnosed from the session's events.
@@ -38,11 +40,16 @@ function helperRunning(events, session, now = Date.now()) {
   return starts.some((st) => now - Date.parse(st.ts ?? 0) < HELPER_MAX_MS && !mine.some((e) => e.kind === "subagent-stop" && e.agent === st.agent && e.seq > st.seq));
 }
 
-function renderReason(unmet, { ledgerOpen, repeat = false }) {
+function renderReason(unmet, { ledgerOpen, repeat = false, stuck = 0 }) {
   // the full text went out with the last block; a repeat names each item and points at it
   const items = unmetLines(unmet, { cut: repeat ? 120 : 0 });
-  const lines = [repeat ? `done-gate: the turn cannot end yet — the same ${items.length} unmet as the last stop (\`gate check\` prints them in full):` : `done-gate: the turn cannot end yet — ${items.length} unmet:`, ...items];
-  if (ledgerOpen) {
+  const head = stuck
+    ? `done-gate: stuck — the same ${items.length} unmet ${stuck} times in a row. Stop working on them and ask the user: end your message with a final line \`PAUSED: <what you need from them>\`, or ask with AskUserQuestion. The gate does not let the turn end otherwise.`
+    : repeat
+      ? `done-gate: the turn cannot end yet — the same ${items.length} unmet as the last stop (\`gate check\` prints them in full):`
+      : `done-gate: the turn cannot end yet — ${items.length} unmet:`;
+  const lines = [head, ...items];
+  if (ledgerOpen && !stuck) {
     lines.push("");
     lines.push("Need the user? Ask with AskUserQuestion, or end your message with a final line `PAUSED: <what you need>` and the turn will end.");
     lines.push("Run `gate check` at any time to see this list.");
@@ -88,15 +95,17 @@ export const verbs = {
       return;
     }
 
-    if (ledgerOpen) {
-      const pause = PAUSE_RE.exec(lastMessage);
-      if (pause) {
+    // a pause hands the turn to the user, run or no run: the stuck reason asks for exactly this
+    const pause = PAUSE_RE.exec(lastMessage);
+    if (pause) {
+      const entry = { seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, text: pause[1] };
+      if (ledgerOpen) {
         const ledger = loadLedger(state.dir);
-        ledger.pauses.push({ seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, text: pause[1] });
+        ledger.pauses.push(entry);
         saveLedger(state.dir, ledger);
-        clearBlocks(ctx);
-        return;
-      }
+      } else appendEvents(ctx.stateDir, ctx.session, [{ ...entry, agent: null, agentType: null, kind: "pause" }]);
+      clearBlocks(ctx);
+      return;
     }
 
     if (unmet.length === 0) {
@@ -106,17 +115,17 @@ export const verbs = {
 
     const key = unmet.map((u) => `${u.rule}:${u.text}`).join("\n");
     const count = bumpBlocks(ctx, key);
-    if (count >= OVERRIDE_AFTER) {
+    if (count >= BRAKE_AFTER) {
       if (state.dir) {
         const ledger = loadLedger(state.dir);
         ledger.overridden = { at: new Date().toISOString(), session: ctx.session, blocks: count, unmet };
         saveLedger(state.dir, ledger);
       }
-      // an override is the gate working as designed, not a gate error: it goes to the event log
+      // the emergency brake is the gate working as designed, not a gate error: it goes to the event log
       appendEvents(ctx.stateDir, ctx.session, [{ seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, agent: null, agentType: null, kind: "override", blocks: count, rules: unmet.map((u) => u.rule) }]);
       clearBlocks(ctx);
       return;
     }
-    block(ctx, renderReason(unmet, { ledgerOpen, repeat: count > 1 }), unmet.map((u) => u.rule));
+    block(ctx, renderReason(unmet, { ledgerOpen, repeat: count > 1, stuck: count >= ASK_AFTER ? count : 0 }), unmet.map((u) => u.rule));
   },
 };

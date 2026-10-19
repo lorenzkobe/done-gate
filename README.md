@@ -144,7 +144,7 @@ attempt to finish.
 | # | Blocks the turn when |
 | --- | --- |
 | R1 | source changed and no ledger is open |
-| R2 | Context, Plan or case table was written after the first source edit |
+| R2 | Context, Plan or case table was written after the first source edit (the fence now refuses such an edit; R2 still catches one from before) |
 | R3 | `gate verify` is missing, red, older than the last source edit, still running, or started and never finished (the shell died under it); or a command added with `gate verify --add` has not run yet |
 | R4 | UI files changed and the real surface wasn't driven afterwards |
 | R5 | no reviewer pass after the last edit, or an Act-on item is still open; tier tiny needs no reviewer. A change past the piece cap (400 changed lines) is reviewed in pieces, `gate brief reviewer --files a,b`, and one big file in slices, `--files a.ts:1-400`; a line is covered once the last round that saw it came back clean (or was the file's third); new or uncovered lines need a round |
@@ -186,9 +186,13 @@ checked.
 
 ## Guarantees, and their edges
 
-- **Can't end a turn with a gap.** After six *identical* blocks in a row it lets go and
-  stamps `GATE OVERRIDDEN` on the report, so a stuck loop is loud rather than infinite.
-  Progress resets the counter.
+- **Can't end a turn with a gap, and can't give up.** From the third *identical* block in a
+  row the reason says stop and ask the user (`PAUSED: <what you need>`), and the block holds.
+  Only a gate bug could outlast that, so an emergency brake lets go at the twentieth and
+  stamps `EMERGENCY BRAKE` on the report. Progress resets the counter.
+- **Can't code before the plan.** An edit to a source or test file, by the edit tools or a
+  shell write, is refused until a run is open with the Task, Context, Plan and a case its
+  playbook asks for.
 - **Can't forge evidence, can't invent a waiver.** See above.
 - **Fails open, loudly.** A bug in the gate itself stamps `GATE ERROR`; in a hook it exits 0,
   because a hook that could wedge every session in every repo would cost more than one

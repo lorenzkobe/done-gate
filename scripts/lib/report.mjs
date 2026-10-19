@@ -142,7 +142,7 @@ export function attentionLines(state, unmet) {
   const blocks = events.filter((e) => e.kind === "block" && inRun(ledger)(e)).length;
   if (blocks) out.push(`- the gate blocked the turn ${blocks} time${blocks === 1 ? "" : "s"} (see the block events for the rules each time)`);
   if (ledger.status === "abandoned") out.push(`- abandoned: ${ledger.abandonReason}`);
-  if (ledger.overridden) out.push("- the gate was OVERRIDDEN; treat every claim above as unverified");
+  if (ledger.overridden) out.push("- the gate's emergency brake fired: the same unmet list came back again and again, which only a gate bug should cause; treat every claim above as unverified");
   for (const r of ledger.rebaselines ?? []) out.push(`- rebaselined ${r.paths.join(", ")}: ${r.reason}`);
   const order = lateOrder(state);
   if (order.late.length) out.push(`- ${order.late.join(" and ")} written after the first source edit (${order.path})`);
@@ -174,7 +174,7 @@ export function renderReport(state, unmet) {
   out.push(`# ${ledger.slug} — ${ledger.playbook} — ${ledger.status} · done-gate ${ledger.version ?? "unknown"}`);
   if (ledger.status === "abandoned") out.push(`\n**ABANDONED** at ${ledger.abandonedAt}: ${ledger.abandonReason}`);
   if (ledger.closedLate) out.push(`\n**Closed late** at ${ledger.closedAt}: \`gate close\` ran, and the next task opened before any stop could finalise it (done-gate before 0.10); what changed was not recorded.`);
-  if (ledger.overridden) out.push(`\n**GATE OVERRIDDEN** at ${ledger.overridden.at} after ${ledger.overridden.blocks} identical blocks: ${ledger.overridden.unmet.map((u) => u.rule).join(", ")}`);
+  if (ledger.overridden) out.push(`\n**EMERGENCY BRAKE** at ${ledger.overridden.at} after ${ledger.overridden.blocks} identical blocks (the lead was told to stop and ask you from the third): ${ledger.overridden.unmet.map((u) => u.rule).join(", ")}`);
   const gateErrors = gateErrorsIn(state).slice(-3).join("\n");
   if (gateErrors) out.push(`\n**GATE ERROR** (logged during this run, from gate-error.log):\n\`\`\`\n${gateErrors}\n\`\`\``);
 
@@ -428,7 +428,7 @@ function forYouLine(state, unmet) {
   for (const cmd of ledger.verifyDropped ?? []) if ((state.config?.verify ?? []).some((v) => v.cmd === cmd)) items.push(`\`${oneLine(cmd)}\` from gate.json was dropped from verify for this run`);
   for (const x of verifyExclusions(state).filter((e) => e.flag)) items.push(`verify excludes \`${oneLine(x.text)}\` (${x.flag})`);
   for (const c of state.verify?.commands ?? []) if (c.oldFindings) items.push(`${plural(c.oldFindings, "old lint finding")} ignored by \`${oneLine(c.cmd)}\` (${c.oldList.slice(0, 3).join(", ")}${c.oldFindings > 3 ? ", …" : ""})`);
-  if (ledger.overridden) items.push("I could not satisfy the checks and ended anyway; treat everything above as unverified");
+  if (ledger.overridden) items.push("the gate's emergency brake stopped a stuck loop, so the checks were not met; treat everything above as unverified");
   if (ledger.steps.some((s) => s.key === "context" && s.state === null)) items.push("no context was written: what was traced, what depends on it, what was researched");
   const order = lateOrder(state);
   if (order.late.length) items.push(`the ${order.late.join(" and ").replace("case table", "list of test cases").replace("Plan", "plan").replace("Context", "context")} was written after the first code change`);

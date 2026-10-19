@@ -548,3 +548,121 @@ test("C14 edge: removing a link in scratch is judged by the link, not by where i
     try { unlinkSync(link); } catch {}
   }
 });
+
+// ---------------------------------------------------------------------------
+// enforce-order-no-giving-up: no code edit before the run, Task, Context, Plan and a case
+// ---------------------------------------------------------------------------
+
+const editOf = (rel, tool = "Edit") => ({ hook_event_name: "PreToolUse", tool_name: tool, tool_input: { file_path: path.join(repo, rel) }, cwd: repo, session_id: "S1" });
+const FEATURE_STEPS = [{ key: "context" }, { key: "plan" }, { key: "cases" }];
+const planned = (over = {}) => ({ slug: "t", taskSeq: 1, contextSeq: 2, planSeq: 3, cases: [{ id: "C1" }], steps: FEATURE_STEPS, waivers: [], ...over });
+const RUN_REL = ".claude/gate/runs/2026-10-19-t";
+
+test("C1 refused: an edit to a source file with no run open is denied and says to open one", () => {
+  for (const tool of ["Edit", "Write"]) {
+    const v = decide(editOf("src/a.ts", tool), repo, cfg, null, null);
+    assert.equal(v.deny, true, tool);
+    assert.match(v.reason, /gate open/, v.reason);
+  }
+});
+
+test("C2 refused: with a run open, a source or test edit waits for Task, Context, Plan and a case, and the reason names what is missing", () => {
+  for (const [missing, ledger] of [
+    ["Task", planned({ taskSeq: undefined })],
+    ["Context", planned({ contextSeq: undefined })],
+    ["Plan", planned({ planSeq: undefined })],
+    ["case", planned({ cases: [] })],
+  ]) {
+    for (const file of ["src/a.ts", "tests/a.test.ts"]) {
+      const v = decide(editOf(file), repo, cfg, RUN_REL, ledger);
+      assert.equal(v.deny, true, `${missing} ${file}`);
+      assert.match(v.reason, new RegExp(missing), v.reason);
+    }
+  }
+  const nothing = decide(editOf("src/a.ts"), repo, cfg, RUN_REL, planned({ taskSeq: undefined, contextSeq: undefined, planSeq: undefined, cases: [] }));
+  assert.match(nothing.reason, /Task.*Context.*Plan.*case/, nothing.reason);
+});
+
+test("C3 happy: once Task, Context, Plan and a case exist the edit passes; a playbook with no context step does not wait for Context", () => {
+  assert.equal(decide(editOf("src/a.ts"), repo, cfg, RUN_REL, planned()).deny, false);
+  assert.equal(decide(editOf("tests/a.test.ts", "Write"), repo, cfg, RUN_REL, planned()).deny, false);
+  assert.equal(decide(editOf("src/a.ts"), repo, cfg, RUN_REL, planned({ contextSeq: undefined, steps: [{ key: "plan" }, { key: "cases" }] })).deny, false);
+});
+
+test("C9 edge: each run asks only for its playbook's own steps: an investigation edits once open, a plan run needs Task, Context and Plan but no case", () => {
+  const bare = { slug: "i", cases: [], waivers: [] };
+  assert.equal(decide(editOf("tests/repro.test.ts", "Write"), repo, cfg, RUN_REL, { ...bare, steps: [] }).deny, false, "investigation");
+  const planRun = { ...bare, steps: [{ key: "context" }, { key: "plan" }, { key: "skeptic" }] };
+  assert.match(decide(editOf("src/a.ts"), repo, cfg, RUN_REL, planRun).reason, /Task.*Context.*Plan/);
+  assert.equal(decide(editOf("src/a.ts"), repo, cfg, RUN_REL, { ...planRun, taskSeq: 1, contextSeq: 2, planSeq: 3 }).deny, false, "plan run needs no case");
+});
+
+test("C10 edge: an unreadable run is the gate's failure, so the edit is let through instead of asking for a second run", () => {
+  assert.equal(decide(editOf("src/a.ts"), repo, cfg, null, null, { unreadable: true }).deny, false);
+  assert.equal(decide(bash("echo x > src/a.ts"), repo, cfg, null, null, { unreadable: true }).deny, false);
+});
+
+test("C1 refused: a MultiEdit names its file at the top, and the fence sees it (evidence and code alike)", () => {
+  const multi = (rel) => ({ hook_event_name: "PreToolUse", tool_name: "MultiEdit", tool_input: { file_path: path.join(repo, rel), edits: [{ old_string: "a", new_string: "b" }] }, cwd: repo, session_id: "S1" });
+  assert.equal(decide(multi(`${RUN}/ledger.json`), repo, cfg, RUN_REL, planned()).deny, true, "evidence through MultiEdit");
+  assert.equal(decide(multi("src/a.ts"), repo, cfg, null, null).deny, true, "code before a run");
+  assert.equal(decide(multi("src/a.ts"), repo, cfg, RUN_REL, planned()).deny, false, "code once planned");
+});
+
+test("C4 edge: docs, files the gate does not count as source, and scratch files stay editable with no run", () => {
+  for (const rel of ["docs/notes.md", "README.md", "tests/.tmp/x.ts"]) assert.equal(decide(editOf(rel), repo, cfg, null, null).deny, false, rel);
+  assert.equal(decide({ ...editOf("x"), tool_input: { file_path: "/tmp/scratch/a.ts" } }, repo, cfg, null, null).deny, false);
+});
+
+test("C5 refused: a lead shell write to a source file waits for the plan; a read or a scratch write does not", () => {
+  for (const cmd of ["sed -i '' s/a/b/ src/a.ts", "echo x > src/a.ts", "cp /tmp/a.ts src/a.ts", "printf x >> tests/a.test.ts"]) {
+    assert.equal(decide(bash(cmd), repo, cfg, null, null).deny, true, `no run: ${cmd}`);
+    assert.equal(decide(bash(cmd), repo, cfg, RUN_REL, planned({ planSeq: undefined })).deny, true, `no plan: ${cmd}`);
+    assert.equal(decide(bash(cmd), repo, cfg, RUN_REL, planned()).deny, false, `planned: ${cmd}`);
+  }
+  for (const cmd of [`python3 - <<'EOF'\np='src/a.ts'\ns=open(p).read()\nopen(p,'w').write(s)\nEOF`, `node -e 'require("fs").writeFileSync("src/a.ts","x")'`]) {
+    assert.equal(decide(bash(cmd), repo, cfg, null, null).deny, true, `inline code before a run: ${cmd}`);
+    assert.equal(decide(bash(cmd), repo, cfg, RUN_REL, planned()).deny, false, `inline code once planned: ${cmd}`);
+  }
+  for (const cmd of ["cat src/a.ts", "grep -n a src/a.ts", "echo x > /tmp/x.ts", "npm test", "git commit -qm x", `python3 -c "open('/tmp/x.txt','w')"`]) assert.equal(decide(bash(cmd), repo, cfg, null, null).deny, false, cmd);
+});
+
+test("C1 refused: a closed or abandoned run is no run: code waits for a new one", () => {
+  for (const status of ["closed", "abandoned"]) {
+    const v = decide(editOf("src/a.ts"), repo, cfg, RUN_REL, planned({ status }));
+    assert.equal(v.deny, true, status);
+    assert.match(v.reason, /no run is open/, v.reason);
+  }
+  assert.equal(decide(editOf("src/a.ts"), repo, cfg, RUN_REL, planned({ status: "open" })).deny, false);
+});
+
+test("C11 refused and edge: inline code is judged by what it writes: a code target waits for the plan, a scratch target with code only read does not", () => {
+  for (const cmd of [
+    `python3 - <<'EOF'\nopen('/tmp/o','w').write(open('scripts/lib/stop.mjs').read())\nEOF`,
+    `node -e 'require("fs").writeFileSync("/tmp/o", require("fs").readFileSync("src/a.ts","utf8"))'`,
+    `python3 - <<'EOF'\nout='/tmp/o.txt'\nopen(out,'w').write(open('src/a.ts').read())\nEOF`,
+    `cd /tmp && python3 -c "open('out.txt','w').write('x')"`,
+    `cd /tmp/x/scratchpad && node -e "require('fs').writeFileSync('out.json','{}')"`,
+    `cd ${repo} && python3 - <<'EOF'\nout='docs/report.md'\nopen(out,'w').write(open('src/a.ts').read())\nEOF`,
+  ]) assert.equal(decide(bash(cmd), repo, cfg, null, null).deny, false, cmd);
+  assert.match(decide(bash(`cd ${repo} && python3 -c "open('src/a.ts','w').write('x')"`), repo, cfg, null, null).reason ?? "", /writes src\/a\.ts/, "an absolute cd into the repo is followed");
+  const lostWrite = decide(bash(`cd ~/x && python3 -c "open('a.ts','w').write('x')"`), repo, cfg, null, null);
+  assert.equal(lostWrite.deny, true);
+  assert.ok(lostWrite.paths.every((p) => !/cannot follow/.test(p)), "the note stays in the reason, not the path");
+  for (const cmd of [
+    `python3 - <<'EOF'\np='src/a.ts'\ns=open(p).read()\nopen(p,'w').write(s)\nEOF`,
+    `node -e 'require("fs").writeFileSync("src/a.ts","x")'`,
+    `python3 -c "open('src/a.ts','a').write('x')"`,
+    `python3 - <<'EOF'\nimport os\nopen(os.environ['T'],'w').write(open('src/a.ts').read())\nEOF`,
+    `cd src && python3 -c "open('a.ts','w').write('x')"`,
+    `cd src && node -e "require('fs').writeFileSync('a.ts','x')"`,
+    `cd $D && python3 -c "open('a.ts','w').write('x')"`,
+    `python3 - <<'EOF'\np='src/a.ts'\ns=open(p).read()\nopen(p,'w').write(s)\np='/tmp/log.txt'\nEOF`,
+  ]) {
+    const v = decide(bash(cmd), repo, cfg, null, null);
+    assert.equal(v.deny, true, cmd);
+  }
+  assert.match(decide(bash(`cd src && python3 -c "open('a.ts','w').write('x')"`), repo, cfg, null, null).reason, /writes src\/a\.ts/, "the cd is followed");
+  assert.match(decide(bash(`cd $D && python3 -c "open('a.ts','w').write('x')"`), repo, cfg, null, null).reason, /cannot follow/, "a folder it cannot read");
+  assert.equal(decide(bash(`cd docs && python3 -c "open('notes.md','w').write('x')"`), repo, cfg, null, null).deny, false, "a docs write after cd");
+});

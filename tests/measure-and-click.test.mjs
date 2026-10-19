@@ -226,6 +226,7 @@ test("C4 edge: a slop line added before open in a dirty file is not reported; on
 
 test("C5 refused: a shell command or an edit-tool write naming <run>/base/ is refused by the fence; reading it and editing source are not", () => {
   const repo = opened("mc-c5", { files: "src/a.ts" });
+  cli(repo, "case", ["add", "the change works", "--kind", "happy"]);
   const fence = (payload) => {
     const out = hook(repo, { hook_event_name: "PreToolUse", ...payload }, { verb: "fence" });
     if (out === null) return null;

@@ -128,6 +128,7 @@ function opened(name, { playbook = "feature", files = {}, planFiles = PLAN_FILE,
   });
   cli(repo, "open", [name, playbook]);
   cli(repo, "note", ["task", TASK_TEXT]);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1 · Related: none: `grep -rn a src` · Research: none needed: a test fixture", "--no-code", "SocratiCode: not installed", "--no-memory", "MemPalace: not installed"]);
   cli(repo, "note", ["plan", PLAN_TEXT, ...(planFiles ? ["--files", planFiles] : [])]);
   for (const [text, kind] of cases ?? [["renders the packet", "happy"], ["refuses an unknown role", "refused"]]) {
     cli(repo, "case", ["add", text, "--kind", kind]);
@@ -513,6 +514,7 @@ test("C12 boundary: untracked or non-git files appear in the reviewer diff as al
 
   cli(repo, "open", ["packets-c12", "feature"]);
   cli(repo, "note", ["task", TASK_TEXT]);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1 · Related: none: `grep -rn a src` · Research: none needed: a test fixture", "--no-code", "SocratiCode: not installed", "--no-memory", "MemPalace: not installed"]);
   cli(repo, "note", ["plan", PLAN_TEXT, "--files", PLAN_FILE]);
   cli(repo, "case", ["add", "renders", "--kind", "happy"]);
 
@@ -855,6 +857,7 @@ function opened(name, { planFiles = "src/a.ts", files = {} } = {}) {
   const repo = committed(name, files);
   cli(repo, "open", [name, "feature"]);
   cli(repo, "note", ["task", "Give helpers a budget. [inferred]"]);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1 · Related: none: `grep -rn a src` · Research: none needed: a test fixture", "--no-code", "SocratiCode: not installed", "--no-memory", "MemPalace: not installed"]);
   cli(repo, "note", ["plan", "One module.", "--files", planFiles]);
   cli(repo, "case", ["add", "the helper works inside its budget", "--kind", "happy"]);
   cli(repo, "case", ["add", "everything else is denied", "--kind", "refused"]);

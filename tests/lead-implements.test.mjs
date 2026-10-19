@@ -61,6 +61,7 @@ function opened(name, files) {
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
   cli(repo, "open", [name, "feature"]);
   cli(repo, "note", ["task", "Do the thing. [inferred]"]);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1 · Related: none: `grep -rn a src` · Research: none needed: a test fixture", "--no-code", "SocratiCode: not installed", "--no-memory", "MemPalace: not installed"]);
   cli(repo, "note", ["plan", "The plan.", "--files", files.join(",")]);
   cli(repo, "case", ["add", "it works", "--kind", "happy"]);
   return repo;

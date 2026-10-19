@@ -79,24 +79,6 @@ test("with an open ledger and unmet rules, a plain 'done' message is blocked and
   assert.match(out.reason, /R7/);
 });
 
-test("six consecutive identical blocks fall open with a GATE OVERRIDDEN stamp; progress resets the counter", () => {
-  const repo = makeRepo("stop-override");
-  start(repo);
-  write(repo, "src/a.ts", "changed\n");
-  run(repo, "open", {}, ["task", "feature"]);
-  for (let i = 0; i < 5; i++) assert.equal(stop(repo).json?.decision, "block");
-  assert.equal(loadSession(path.join(repo, ".claude", "gate"), "S1").blocks.count, 5);
-  write(repo, "tests/a.test.ts", "progress\n"); // R7 now met → unmet list differs → counter resets
-  assert.equal(stop(repo).json?.decision, "block");
-  assert.equal(loadSession(path.join(repo, ".claude", "gate"), "S1").blocks.count, 1);
-  for (let i = 0; i < 4; i++) assert.equal(stop(repo).json?.decision, "block");
-  const sixth = stop(repo).json;
-  assert.equal(sixth, null);
-  const current = loadSession(path.join(repo, ".claude", "gate"), "S1").current;
-  const ledger = loadLedger(path.join(repo, ".claude", "gate", "runs", current));
-  assert.ok(ledger.overridden, "override stamped on the ledger");
-});
-
 test("a corrupt ledger.json blocks once with the parse error, then falls open with a GATE ERROR stamp", () => {
   const repo = makeRepo("stop-corrupt");
   start(repo);
@@ -657,3 +639,58 @@ test("C13 edge: a verb that throws exits 1 so a `gate … && next` chain stops, 
   }
 });
 }
+
+// enforce-order-no-giving-up: the gate asks instead of giving up; an emergency brake at 20
+const gateBin = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", "gate.mjs");
+const hookRun = (repo, verb, input = {}, args = []) => {
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  const r = spawnSync(process.execPath, [gateBin, verb, ...args], { input: JSON.stringify({ session_id: "S1", cwd: repo, ...input }), encoding: "utf8", env });
+  // hooks answer in JSON, verbs in text
+  return { ...r, json: r.stdout.trim().startsWith("{") ? JSON.parse(r.stdout) : null };
+};
+const startS1 = (repo) => hookRun(repo, "session-start", { hook_event_name: "SessionStart", session_start_source: "startup" });
+const stopS1 = (repo, msg = "done.") => hookRun(repo, "stop", { hook_event_name: "Stop", last_assistant_message: msg });
+
+test("C6 happy and C7 boundary: identical blocks 3 to 19 tell the lead to stop and ask the user; the 20th is an emergency brake; progress resets the count", () => {
+  const start = startS1;
+  const stop = stopS1;
+  const run = (repo, verb, _input, args = []) => hookRun(repo, verb, {}, args);
+  const repo = makeRepo("stop-no-give-up");
+  start(repo);
+  run(repo, "open", {}, ["task", "feature"]);
+  write(repo, "src/a.ts", "changed\n");
+  const reasons = [];
+  for (let i = 1; i <= 19; i++) {
+    const out = stop(repo).json;
+    assert.equal(out?.decision, "block", `block ${i}`);
+    reasons.push(out.reason);
+  }
+  assert.doesNotMatch(reasons[1], /stuck/, "the 2nd block is an ordinary one");
+  assert.match(reasons[2], /^done-gate: stuck/, "the 3rd says stuck first");
+  assert.match(reasons[2], /PAUSED:/, "and points at the pause");
+  assert.match(reasons[18], /^done-gate: stuck/);
+  assert.equal(stop(repo).json, null, "the 20th lets go");
+  const current = loadSession(path.join(repo, ".claude", "gate"), "S1").current;
+  const ledger = loadLedger(path.join(repo, ".claude", "gate", "runs", current));
+  assert.equal(ledger.overridden?.blocks, 20);
+  assert.match(run(repo, "report", {}).stdout, /EMERGENCY BRAKE/);
+  write(repo, "src/a.ts", "changed again\n");
+  write(repo, "tests/a.test.ts", "progress\n");
+  assert.doesNotMatch(stop(repo).json?.reason ?? "", /stuck/, "progress starts the count over");
+});
+
+test("C8 edge: a PAUSED line ends the turn at any count, with a run open or none", () => {
+  const repo = makeRepo("stop-paused-any");
+  startS1(repo);
+  hookRun(repo, "open", {}, ["task", "feature"]);
+  write(repo, "src/a.ts", "changed\n");
+  for (let i = 0; i < 5; i++) stopS1(repo);
+  assert.equal(stopS1(repo, "I need the API key.\nPAUSED: the API key").json, null);
+  const bare = makeRepo("stop-paused-bare");
+  startS1(bare);
+  write(bare, "src/a.ts", "changed\n");
+  for (let i = 0; i < 3; i++) assert.equal(stopS1(bare).json?.decision, "block");
+  assert.match(stopS1(bare).json.reason, /stuck/, "no run open: still told to ask");
+  assert.equal(stopS1(bare, "Which run should this go in?\nPAUSED: which run").json, null, "and the pause ends the turn");
+});

@@ -127,17 +127,17 @@ test("C7 edge: a stop override is recorded on the ledger and in the report, not 
   cli(repo, "open", ["t", "feature"]);
   write(repo, "src/a.ts", "changed\n");
   let last;
-  for (let i = 0; i < 6; i++) last = stop(repo);
-  assert.equal(last, null, "premise: the sixth identical block falls open");
+  for (let i = 0; i < 20; i++) last = stop(repo);
+  assert.equal(last, null, "premise: the twentieth identical block is the emergency brake");
   assert.ok(ledgerOf(repo).overridden, "override stamped on the ledger");
-  assert.match(cli(repo, "report").stdout, /GATE OVERRIDDEN/);
+  assert.match(cli(repo, "report").stdout, /EMERGENCY BRAKE/);
   assert.ok(!existsSync(errLog(repo)) || !/OVERRIDDEN/.test(readFileSync(errLog(repo), "utf8")), "the override went to gate-error.log");
 
   const bare = committed("rb-c7-bare");
   hook(bare, "session-start", { hook_event_name: "SessionStart", session_start_source: "startup" });
   write(bare, "src/a.ts", "changed\n");
-  for (let i = 0; i < 6; i++) last = stop(bare);
-  assert.equal(last, null, "premise: R1 falls open after six identical blocks");
+  for (let i = 0; i < 20; i++) last = stop(bare);
+  assert.equal(last, null, "premise: R1 lets go only at the emergency brake");
   assert.ok(!existsSync(errLog(bare)) || !/OVERRIDDEN/.test(readFileSync(errLog(bare), "utf8")), "the override went to gate-error.log");
   const override = readEvents(stateDir(bare), "S1").find((e) => e.kind === "override");
   assert.ok(override, "no override event was logged");

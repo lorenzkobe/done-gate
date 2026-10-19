@@ -374,6 +374,7 @@ test("C7 refused: at the delegated size the lead's Edit of ../other/src/a.py is 
   const LARGE = Array.from({ length: policy.tiers.standard.maxFiles }, (_, i) => `src/f${i}.ts`);
   const big = pair("mr-c7", { main: Object.fromEntries(LARGE.map((f) => [f, "export const x = 1;\n"])), files: [...LARGE, "../mr-c7-other/src/a.py"].join(",") });
   assert.equal(ledgerOf(big.repo).tier.predicted, "large");
+  cli(big.repo, "case", ["add", "the change works", "--kind", "happy"]);
   const target = { file_path: path.join(big.other, "src/a.py") };
   const reason = fence(big.repo, "Edit", target);
   assert.ok(reason, "the lead's Edit of a declared repo's source file at large must be denied");
@@ -385,6 +386,7 @@ test("C7 refused: at the delegated size the lead's Edit of ../other/src/a.py is 
 
   const small = pair("mr-c7-small");
   assert.equal(ledgerOf(small.repo).tier.predicted, "tiny", "one planned file");
+  cli(small.repo, "case", ["add", "the change works", "--kind", "happy"]);
   const smallTarget = { file_path: path.join(small.other, "src/a.py") };
   assert.equal(fence(small.repo, "Edit", smallTarget), null, "below the delegated size the lead edits it");
   const denied = fence(small.repo, "Edit", smallTarget, "done-gate:reviewer");

@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { eventsFromHookInput, readEvents, appendEvents } from "../scripts/lib/events.mjs";
-import { makeRepo, gate, write, here } from "./helpers.mjs";
+import { makeRepo, gate, write, here, readyToEdit } from "./helpers.mjs";
 import { decide } from "../scripts/lib/guard.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
@@ -169,7 +169,8 @@ test("a Bash command that writes an evidence file is denied; reads and ordinary 
 
 test("the QA agent may write only under the tests globs", () => {
   const qa = { agent_id: "A1", agent_type: "done-gate:qa" };
-  assert.equal(decide(input("Write", `${repo}/tests/new.test.ts`, qa), repo, cfg).deny, false);
+  const planned = { slug: "x", taskSeq: 1, contextSeq: 2, planSeq: 3, cases: [{ id: "C1" }], steps: [{ key: "context" }, { key: "plan" }, { key: "cases" }], waivers: [] };
+  assert.equal(decide(input("Write", `${repo}/tests/new.test.ts`, qa), repo, cfg, ".claude/gate/runs/x", planned).deny, false);
   assert.equal(decide(input("Edit", `${repo}/src/a.ts`, qa), repo, cfg).deny, true);
   assert.equal(decide(input("Write", `${repo}/.claude/gate/runs/x/ledger.md`, qa), repo, cfg).deny, true);
 });
@@ -206,12 +207,14 @@ test("the reviewer may write only its own review-<n>.md inside the open task's r
   assert.equal(decide(input("Write", `${repo}/.claude/gate/runs/x/review-1.md`, rv), repo, cfg).deny, true);
 });
 
-test("the skeptic may write only its own skeptic-<n>.md in the open task's run dir; unknown agents and the main session follow the evidence rule only", () => {
+test("the skeptic may write only its own skeptic-<n>.md in the open task's run dir; unknown agents and the main session follow the evidence and plan-first rules only", () => {
   assert.equal(decide(input("Write", `${repo}/notes.md`, { agent_id: "A3", agent_type: "done-gate:skeptic" }), repo, cfg).deny, true);
   // no ledger is open in this repo, so even a well-named skeptic file is refused
   assert.equal(decide(input("Write", `${repo}/.claude/gate/runs/x/skeptic-1.md`, { agent_id: "A3", agent_type: "done-gate:skeptic" }), repo, cfg).deny, true);
-  assert.equal(decide(input("Write", `${repo}/src/a.ts`, { agent_id: "A4", agent_type: "general-purpose" }), repo, cfg).deny, false);
-  assert.equal(decide(input("Write", `${repo}/src/a.ts`), repo, cfg).deny, false);
+  assert.equal(decide(input("Write", `${repo}/docs/notes.md`, { agent_id: "A4", agent_type: "general-purpose" }), repo, cfg).deny, false);
+  assert.equal(decide(input("Write", `${repo}/docs/notes.md`), repo, cfg).deny, false);
+  // code waits for a planned run, for any caller
+  assert.equal(decide(input("Write", `${repo}/src/a.ts`, { agent_id: "A4", agent_type: "general-purpose" }), repo, cfg).deny, true);
 });
 
 test("`gate fence` emits the PreToolUse deny envelope and logs the attempt; allows are silent", () => {
@@ -225,7 +228,7 @@ test("`gate fence` emits the PreToolUse deny envelope and logs the attempt; allo
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /evidence/);
   const events = readFileSync(path.join(repo, ".claude", "gate", "sessions", "S1", "events.jsonl"), "utf8");
   assert.match(events, /"kind":"deny"/);
-  const allowed = run(input("Write", `${repo}/src/a.ts`));
+  const allowed = run(input("Write", `${repo}/docs/notes.md`));
   assert.equal(allowed.stdout.trim(), "");
 });
 }
@@ -309,8 +312,7 @@ function fence(repo, payload) {
 function openedWith(name, { playbook = "feature", files = null, extra = {} } = {}) {
   const repo = committed(name, extra);
   cli(repo, "open", [name, playbook]);
-  cli(repo, "note", ["task", "Do the thing. [inferred]"]);
-  cli(repo, "note", ["plan", "The plan.", ...(files ? ["--files", files.join(",")] : [])]);
+  readyToEdit(repo, { plan: files ? ["--files", files.join(",")] : [] });
   return repo;
 }
 
@@ -370,7 +372,7 @@ test("a delegate waiver lets the lead edit source at predicted large", () => {
 // C2 — everything the fence must leave alone
 // ---------------------------------------------------------------------------
 
-test("C2 happy: the lead still edits source when the prediction is small, when the plan named no files, when no ledger is open, and on the un-tiered plan playbook", () => {
+test("C2 happy: the lead still edits source when the prediction is small, when the plan named no files, and on the un-tiered plan playbook; with no run open it is refused", () => {
   const small = openedWith("fence-c2-small", { files: ["src/a.ts"] });
   assert.equal(ledgerOf(small).tier.predicted, "tiny");
   assert.equal(fence(small, pre(small, "Edit", path.join(small, "src/a.ts"))), null, "tier tiny");
@@ -379,9 +381,9 @@ test("C2 happy: the lead still edits source when the prediction is small, when t
   assert.equal(ledgerOf(noFiles).tier.predicted, null, "no --files means no prediction");
   assert.equal(fence(noFiles, pre(noFiles, "Edit", path.join(noFiles, "src/a.ts"))), null, "no prediction");
 
-  // no ledger at all: `gate open` was never run here
+  // no ledger at all: `gate open` was never run here, so code waits for one
   const none = committed("fence-c2-none");
-  assert.equal(fence(none, pre(none, "Edit", path.join(none, "src/a.ts"))), null, "no open ledger");
+  assert.match(fence(none, pre(none, "Edit", path.join(none, "src/a.ts"))) ?? "", /no run is open/, "no open ledger");
 
   // scripts/lib/ledger.mjs gives a tier only to feature/bugfix/refactor; plan gets null
   const planned = openedWith("fence-c2-plan", { playbook: "plan", files: ["src/a.ts", "src/b.ts"] });
@@ -501,8 +503,10 @@ test("C8 boundary: with no prediction and nothing measured yet the lead may stil
 // C7 — the ordinary pass-through is unchanged
 // ---------------------------------------------------------------------------
 
-test("C7 idempotent: the tests/fixtures/stdin edit payloads still pass the fence silently when no ledger is open", () => {
+test("C7 idempotent: the tests/fixtures/stdin edit payloads pass the fence silently once a run is planned", () => {
   const repo = committed("fence-c7");
+  cli(repo, "open", ["fence-c7", "feature"]);
+  readyToEdit(repo);
   // the fixtures address /repo; point them at this one, and ask the fence rather than the log
   const asPreToolUse = (name) =>
     JSON.parse(JSON.stringify(stdinFixture(name)).split("/repo").join(repo).split('"PostToolUse"').join('"PreToolUse"'));
