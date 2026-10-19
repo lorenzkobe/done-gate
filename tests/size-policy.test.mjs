@@ -11,7 +11,7 @@ import { loadConfig } from "../scripts/lib/config.mjs";
 import { evaluate } from "../scripts/lib/rules.mjs";
 import { snapshot, diffSnapshots } from "../scripts/lib/tree.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
-import { loadPolicy, tierFor, measure, OPTIONAL_STEPS, optionalSteps } from "../scripts/lib/size.mjs";
+import { loadPolicy, tierFor, measure, OPTIONAL_STEPS, optionalSteps, splitAdvice } from "../scripts/lib/size.mjs";
 
 // ===== from tests/tier-policy.test.mjs =====
 {
@@ -562,7 +562,7 @@ test("C16 happy: models.json carries the policy object and no escalate/never/cei
   assert.ok(!("roles" in m), "models.json still names models per role");
 
   assert.equal(typeof m.policy, "object");
-  assert.deepEqual(Object.keys(m.policy).sort(), ["delegatesAt", "forceStandard", "reviewMaxLines", "tiers"]);
+  assert.deepEqual(Object.keys(m.policy).sort(), ["delegatesAt", "forceStandard", "reviewMaxLines", "splitPast", "tiers"]);
   assert.equal(m.policy.reviewMaxLines, 400);
   assert.equal(m.policy.delegatesAt, "large");
   assert.deepEqual(Object.keys(m.policy.tiers), ["tiny", "small", "standard", "large"]);
@@ -1879,3 +1879,78 @@ test("C6 edge: R8 fires for a blank step and an open case, and for nothing else"
   }
 });
 }
+
+// ---------------------------------------------------------------------------
+// split-advice
+// ---------------------------------------------------------------------------
+
+test("C2 boundary: splitAdvice speaks past 40 files or past 3000 lines, not at them", () => {
+  const policy = loadPolicy();
+  assert.deepEqual(policy.splitPast, { files: 40, lines: 3000 });
+  assert.equal(splitAdvice(policy, { files: 40, lines: 3000 }), null);
+  assert.equal(splitAdvice(policy, null), null);
+  for (const m of [{ files: 41, lines: 10 }, { files: 2, lines: 3001 }]) {
+    const line = splitAdvice(policy, m);
+    assert.match(line, new RegExp(`${m.files} files and ${m.lines} lines`), line);
+    assert.match(line, /gate close/, line);
+    assert.match(line, /new run/, line);
+  }
+});
+
+test("C4 edge: a policy without splitPast or with a bad value uses the default", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "split-"));
+  for (const [name, body, want] of [
+    ["none.json", { policy: {} }, { files: 40, lines: 3000 }],
+    ["zero.json", { policy: { splitPast: { files: 0, lines: -5 } } }, { files: 40, lines: 3000 }],
+    ["text.json", { policy: { splitPast: { files: "many", lines: 2000 } } }, { files: 40, lines: 2000 }],
+    ["set.json", { policy: { splitPast: { files: 25, lines: 1500 } } }, { files: 25, lines: 1500 }],
+  ]) {
+    writeFileSync(path.join(dir, name), JSON.stringify(body));
+    assert.deepEqual(loadPolicy(path.join(dir, name)).splitPast, want, name);
+  }
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("C1 happy and C3 edge: a run past 40 files gets the advice in gate check and the report, and it never blocks", () => {
+  const files = Object.fromEntries(Array.from({ length: 41 }, (_, i) => [`src/m${i}.ts`, `export const m${i} = 0;\n`]));
+  const repo = makeRepo("split-c1", files);
+  execFileSync("git", ["add", "."], { cwd: repo });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: repo });
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  const run = (verb, args = []) => spawnSync(process.execPath, [gate, verb, ...args], { encoding: "utf8", env });
+  assert.equal(run("open", ["big", "feature"]).status, 0);
+  assert.doesNotMatch(run("check").stdout, /new run/, "no advice before the change");
+  for (let i = 0; i < 41; i++) write(repo, `src/m${i}.ts`, `export const m${i} = 1;\n`);
+  const check = run("check");
+  const advice = check.stdout.split("\n").filter((l) => /41 files and \d+ lines/.test(l));
+  assert.equal(advice.length, 1, check.stdout);
+  assert.doesNotMatch(advice[0], /^\d+\. R\d/, "advice is no numbered rule");
+  assert.match(run("report").stdout, /## Attention\n[\s\S]*41 files and \d+ lines/, "the report carries it");
+  const evaluated = loadLedger(path.join(repo, ".claude", "gate", "runs", loadSession(path.join(repo, ".claude", "gate"), "S1").current));
+  assert.ok(!JSON.stringify(evaluated).includes("splitAdvice"), "nothing is stored for it");
+});
+
+test("C6 edge: estimated line counts are left out of the advice's size", () => {
+  const policy = loadPolicy();
+  const details = [{ path: "a.sql", lines: 32509, estimate: true }, { path: "b.ts", lines: 120, estimate: false }, { path: "c.ts", lines: 69, estimate: false }];
+  assert.equal(splitAdvice(policy, { files: 3, lines: 32698, details }), null, "a guess alone does not trip it");
+  assert.match(splitAdvice(policy, { files: 3, lines: 9000, details: [{ path: "x", lines: 3001, estimate: false }] }), /3 files and 3001 lines/);
+  assert.match(splitAdvice(policy, { files: 3, lines: 3001 }), /3001 lines/, "an old measurement without details uses its total");
+  const filesOnly = splitAdvice(policy, { files: 41, lines: 500, details: [{ path: "a.sql", lines: 500, estimate: true }] });
+  assert.match(filesOnly, /grown to 41 files, past/, "no '0 lines' when every count is a guess");
+});
+
+test("C5 edge: gate verify prints the advice, so the lead sees it mid-run", () => {
+  const files = Object.fromEntries(Array.from({ length: 41 }, (_, i) => [`src/m${i}.ts`, `export const m${i} = 0;\n`]));
+  const repo = makeRepo("split-c5", files);
+  execFileSync("git", ["add", "."], { cwd: repo });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: repo });
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  const run = (verb, args = []) => spawnSync(process.execPath, [gate, verb, ...args], { encoding: "utf8", env });
+  assert.equal(run("open", ["big", "feature"]).status, 0);
+  for (let i = 0; i < 41; i++) write(repo, `src/m${i}.ts`, `export const m${i} = 1;\n`);
+  run("check");
+  assert.match(run("verify").stdout, /^advice: this run has grown to 41 files/m);
+});

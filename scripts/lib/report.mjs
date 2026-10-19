@@ -6,7 +6,7 @@ import { loadLedger, runsDir, section } from "./ledger.mjs";
 import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
 import { readEvents } from "./events.mjs";
-import { delegatedTier, effectiveTier, policyFor, renderTierBlock, requires, tiered, tierOf } from "./size.mjs";
+import { delegatedTier, effectiveTier, policyFor, renderTierBlock, requires, splitAdvice, tiered, tierOf } from "./size.mjs";
 import { clickStale, contextPart, drivenAfter, driverCommand, isRole, lastEditSeq, hasContextStep, lateOrder, tracedPointers, verifyWhere } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { exclusionsOf } from "./verify.mjs";
@@ -132,6 +132,8 @@ export function attentionLines(state, unmet) {
   const denies = deniesIn(ledger, events).length;
   const handoffs = events.filter((e) => e.kind === "deny" && e.delegate && inRun(ledger)(e)).length;
   const out = [];
+  const advice = splitAdvice(policyFor(ledger), ledger.tier?.measured);
+  if (advice) out.push(`- ${advice}`);
   for (const w of ledger.waivers) out.push(`- waived ${w.key}: ${w.reason ?? w.quote}`);
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) out.push(`- skipped: ${s.text} — ${s.note}`);
   for (const a of ledger.huddles.flatMap((h) => h.actOn).filter((x) => x.dispute)) out.push(`- disputed ${a.id}: ${a.dispute.why} [${a.dispute.evidence}] — ${a.dispute.verdict ?? "unanswered"}${a.dispute.reviewerReason ? `; reviewer: ${a.dispute.reviewerReason}` : ""}${a.dispute.arbiterReason ? `; arbiter: ${a.dispute.arbiterReason}` : ""}`);

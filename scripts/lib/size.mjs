@@ -28,6 +28,10 @@ export const DEFAULT_POLICY = Object.freeze({
   delegatesAt: "large",
   // the most source lines one review round may cover; a larger change is reviewed in pieces
   reviewMaxLines: 400,
+  // past this a run is advised to close and go on in new runs: 6 of 82 Courtly runs reached it
+  // (Oct 2026), among them the two longest (10.9 h, 8.6 h) and the 111-file one that could not
+  // afford its final review
+  splitPast: { files: 40, lines: 3000 },
 });
 
 // A requires entry names a role. An older policy wrote "reviewer:opus" for the second review
@@ -57,6 +61,7 @@ function merge(raw) {
     forceStandard: Array.isArray(p.forceStandard) ? p.forceStandard.map(String) : DEFAULT_POLICY.forceStandard,
     delegatesAt: typeof p.delegatesAt === "string" && p.delegatesAt ? p.delegatesAt : DEFAULT_POLICY.delegatesAt,
     reviewMaxLines: Math.max(1, Number.isFinite(p.reviewMaxLines) ? p.reviewMaxLines : DEFAULT_POLICY.reviewMaxLines),
+    splitPast: Object.fromEntries(["files", "lines"].map((k) => [k, Number.isFinite(p.splitPast?.[k]) && p.splitPast[k] > 0 ? p.splitPast[k] : DEFAULT_POLICY.splitPast[k]])),
   };
   // hashed like the repo config, so a mid-task edit to models.json is caught (R13)
   return { ...resolved, hash: createHash("sha1").update(JSON.stringify(resolved)).digest("hex") };
@@ -97,6 +102,17 @@ export function tierMax(policy, a, b) {
 function aboveLowest(policy, tier) {
   const order = tierOrder(policy);
   return tier === order[0] && order.length > 1 && !requires(policy, tier).length ? order[1] : tier;
+}
+
+// Advice, never a block: a run this big is best closed once green and continued in new runs.
+// Estimated line counts (a file git could not measure) are left out: one such guess once read
+// 32,509 lines on a three-file run.
+export function splitAdvice(policy, measured) {
+  const limit = policy.splitPast ?? DEFAULT_POLICY.splitPast;
+  if (!measured) return null;
+  const lines = Array.isArray(measured.details) && measured.details.length ? measured.details.filter((d) => !d.estimate).reduce((n, d) => n + (d.lines ?? 0), 0) : measured.lines;
+  if (measured.files <= limit.files && lines <= limit.lines) return null;
+  return `this run has grown to ${measured.files} files${lines ? ` and ${lines} lines` : ""}, past the ${limit.files} files or ${limit.lines} lines one run reviews well: once what is done is green, \`gate close\` it and open a new run for each remaining piece, so each gets its own design check and a diff a reviewer can read`;
 }
 
 export function requires(policy, tier) {

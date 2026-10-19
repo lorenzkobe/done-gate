@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { assess, unmetLines } from "./assess.mjs";
+import { policyFor, splitAdvice } from "./size.mjs";
 import { loadConfig, configPath } from "./config.mjs";
 import { currentLedger, openRuns } from "./ledger.mjs";
 import { loadSession } from "./session-state.mjs";
@@ -45,9 +46,11 @@ export const verbs = {
   },
 
   check(ctx) {
-    const { unmet } = assess(ctx, {});
+    const { state, unmet } = assess(ctx, {});
     if (unmet.length === 0) ctx.out("clean");
     for (const line of unmetLines(unmet)) ctx.out(line);
+    const advice = state.ledger ? splitAdvice(policyFor(state.ledger), state.ledger.tier?.measured) : null;
+    if (advice) ctx.out(`advice: ${advice}`);
     for (const line of staleRuns(ctx)) ctx.out(line);
   },
 

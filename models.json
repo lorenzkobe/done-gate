@@ -38,6 +38,10 @@
       "highRisk"
     ],
     "delegatesAt": "large",
-    "reviewMaxLines": 400
+    "reviewMaxLines": 400,
+    "splitPast": {
+      "files": 40,
+      "lines": 3000
+    }
   }
 }

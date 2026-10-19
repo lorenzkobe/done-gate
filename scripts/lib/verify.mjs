@@ -12,6 +12,7 @@ import { loadSession } from "./session-state.mjs";
 import { diffSnapshots, parseHunks, snapshot } from "./tree.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
+import { policyFor, splitAdvice } from "./size.mjs";
 
 const TAIL_LINES = 40;
 const TAIL_BYTES = 8000;
@@ -382,7 +383,7 @@ export const verbs = {
     }
     const stepIdx = ctx.args.indexOf("--step");
     const stepKey = stepIdx >= 0 ? ctx.args[stepIdx + 1] ?? null : "verify";
-    const { record, red } = await runVerify(ctx, { stepKey });
+    const { record, red, dir } = await runVerify(ctx, { stepKey });
     for (const c of record.commands) {
       if (c.skipped) {
         ctx.out(`– ${c.cmd}${verifyWhere(c)} — skipped: ${c.skipped}`);
@@ -394,6 +395,10 @@ export const verbs = {
     }
     const ran = record.commands.filter((c) => !c.skipped).length;
     ctx.out(red.length ? `${red.length} of ${ran} red — fix and run \`gate verify\` again` : `all ${ran} green — step {${stepKey}} closed with verify.json`);
+    // the lead runs verify after its edits, so the advice reaches it mid-run, not only in the report
+    const ledger = loadLedger(dir);
+    const advice = splitAdvice(policyFor(ledger), ledger.tier?.measured);
+    if (advice) ctx.out(`advice: ${advice}`);
     printNext(ctx);
   },
 };
