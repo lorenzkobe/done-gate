@@ -12,7 +12,7 @@ import { evaluate } from "../scripts/lib/rules.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 
 // tests-by-the-lead: blind QA only at tier large, the lead writes the tests first below it;
-// every helper runs on the session's model and no policy file names one. Cases C1–C9.
+// worker and reviewer run on Sonnet, the rest on the session's model, and no policy file names one. Cases C1–C9.
 
 const MODELS = JSON.parse(readFileSync(path.join(pluginRoot, "models.json"), "utf8"));
 const LARGE_FILES = Array.from({ length: (MODELS.policy.tiers.standard.maxFiles ?? 10) + 1 }, (_, i) => `src/f${i}.ts`);
@@ -90,18 +90,20 @@ test("C1 happy: models.json and DEFAULT_POLICY name no model, requires are per t
 });
 
 // ---------------------------------------------------------------------------
-// C2 happy — every agent inherits the session's model
+// C2 happy — worker and reviewer run on Sonnet, the rest on the session's model
 // ---------------------------------------------------------------------------
 
-test("C2 happy: every agents/*.md says model: inherit, and no model name appears in agents/, models.json or scripts/lib outside a comment", () => {
+const ON_SONNET = new Set(["worker.md", "reviewer.md"]);
+
+test("C2 happy: worker and reviewer say model: sonnet, the other agents model: inherit; no agent body and no scripts/lib code names a model", () => {
   const agents = readdirSync(path.join(pluginRoot, "agents")).filter((f) => f.endsWith(".md"));
   assert.equal(agents.length, 6, `six agents expected: ${agents}`);
   for (const f of agents) {
     const text = readFileSync(path.join(pluginRoot, "agents", f), "utf8");
     const fm = /^---\n([\s\S]*?)\n---/.exec(text);
     assert.ok(fm, `${f}: no frontmatter`);
-    assert.match(fm[1], /^model: inherit$/m, `${f}: model is not inherit`);
-    assert.doesNotMatch(text, MODEL_NAME, `${f} names a model`);
+    assert.match(fm[1], ON_SONNET.has(f) ? /^model: sonnet$/m : /^model: inherit$/m, `${f}: wrong model line`);
+    assert.doesNotMatch(text.replace(/^model: sonnet$/m, ""), MODEL_NAME, `${f} names a model outside its model line`);
   }
   const stripComments = (s) => s.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
   for (const f of readdirSync(path.join(pluginRoot, "scripts", "lib")).filter((f) => f.endsWith(".mjs"))) {
@@ -251,4 +253,15 @@ test("C9 idempotent: at tier large gate brief qa writes the packet, huddle add q
   assert.match(helpers, /qa ✓/);
   assert.match(helpers, /worker ✓/);
   assert.match(helpers, /spawned 2 of 5 required/);
+});
+
+test("C3 reported-surface: the README and the models.json principle state the split; neither still says every helper runs on the session's model", () => {
+  const readme = readFileSync(path.join(pluginRoot, "README.md"), "utf8");
+  const cost = readme.slice(readme.indexOf("## Cost")).replace(/\s+/g, " ");
+  assert.match(cost, /worker and the reviewer run on Sonnet/i, "README Cost names the split");
+  assert.match(cost, /skeptic, QA, reviewer-2 and arbiter run on the session's own model/i);
+  for (const [name, text] of [["README", readme], ["models.json", MODELS.principle]]) {
+    assert.doesNotMatch(text, /every helper runs on the session'?s own model/i, `${name} keeps the old rule`);
+  }
+  assert.match(MODELS.principle, /worker and the reviewer/i, "models.json principle names the two lighter roles");
 });

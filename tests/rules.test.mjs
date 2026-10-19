@@ -202,7 +202,7 @@ test("R13: gate.json changed since the ledger opened blocks unless waived", () =
   assert.ok(!ids(clean({ ledger: { gateHash: "stale", waivers: [{ key: "gate-config", found: true }] } })).includes("R13"));
 });
 
-test("agent briefs exist, every helper inherits the session's model, and the write fences are described", async () => {
+test("agent briefs exist with their names, and models.json names no models (tests-by-the-lead C2 pins each agent's model)", async () => {
   const { readFileSync, existsSync } = await import("node:fs");
   const path = (await import("node:path")).default;
   const { pluginRoot } = await import("./helpers.mjs");
@@ -213,7 +213,6 @@ test("agent briefs exist, every helper inherits the session's model, and the wri
     assert.ok(existsSync(file), file);
     const fm = readFileSync(file, "utf8").split("---")[1];
     assert.match(fm, new RegExp(`^name: ${name}$`, "m"));
-    assert.match(fm, /^model: inherit$/m);
   }
 });
 }

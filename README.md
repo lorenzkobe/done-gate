@@ -313,10 +313,13 @@ checked.
 
 ## Cost
 
-The gate sizes each task from the real diff and spends helpers accordingly. Every helper
-runs on the session's own model (`model: inherit`), so the plugin behaves the same whatever
-model the lead runs on; no policy file names one. Below size large the lead writes the
-tests itself, from the case table, before the code.
+The gate sizes each task from the real diff and spends helpers accordingly. The worker and
+the reviewer run on Sonnet (`model: sonnet` in their agent files): they work from a packet,
+and a stronger check follows each (the tests, `gate verify`, and reviewer-2 on large and
+high-risk runs). The skeptic, QA, reviewer-2 and arbiter run on the session's own model
+(`model: inherit`), because nothing after them would catch what they miss. No policy file
+names a model. Below size large the lead writes the tests itself, from the case table,
+before the code.
 
 | Tier | When | Helpers |
 | --- | --- | --- |

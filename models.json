@@ -1,5 +1,5 @@
 {
-  "principle": "Spend helpers where they buy correctness, never where they don't. Every helper runs on the session's own model; the size of the change, not a model name, decides who is spawned; escalation is by evidence, not by habit.",
+  "principle": "Spend helpers where they buy correctness, never where they don't. The worker and the reviewer run on a lighter model, set in their agent files, because a stronger check follows each (tests, gate verify, and reviewer-2 on large and high-risk runs); the skeptic, QA, reviewer-2 and arbiter run on the session's own model, because nothing after them catches their miss. The size of the change decides who is spawned; escalation is by evidence, not by habit.",
   "policy": {
     "tiers": {
       "tiny": {

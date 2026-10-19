@@ -11,8 +11,8 @@ import { printNext } from "./next.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-// Plugin-level policy: which helpers a task of a given size needs. Helpers run on the
-// session's own model (agents/*.md say `model: inherit`), so no model is named here. It
+// Plugin-level policy: which helpers a task of a given size needs. Each helper's model is set
+// in its agents/<role>.md, so no model is named here. It
 // lives in models.json, not in the repo's gate.json, so a plugin upgrade mid-task never
 // trips R13 (which hashes the repo config).
 export const DEFAULT_POLICY = Object.freeze({

@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Independent reviewer for done-gate. Fresh context, no share in the implementation. Runs the tests, reads the diff, hunts bugs and edge cases, weak tests, security and performance problems, writes its findings to review-<n>.md in the run dir. Never fixes code.
-model: inherit
+model: sonnet
 disallowedTools: [Edit, MultiEdit, NotebookEdit]
 maxTurns: 60
 effort: medium

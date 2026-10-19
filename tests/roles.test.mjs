@@ -85,8 +85,8 @@ const MODELS = JSON.parse(readFileSync(path.join(pluginRoot, "models.json"), "ut
 const AGENTS_DIR = path.join(pluginRoot, "agents");
 
 // the six roles T5 asks for, spelled out rather than read back from the file under test;
-// every one runs on the session's own model (agents/*.md: model: inherit)
-const EXPECTED_ROLES = { skeptic: "inherit", qa: "inherit", reviewer: "inherit", "reviewer-2": "inherit", arbiter: "inherit", worker: "inherit" };
+// worker and reviewer run on Sonnet, the rest on the session's own model
+const EXPECTED_ROLES = { skeptic: "inherit", qa: "inherit", reviewer: "sonnet", "reviewer-2": "inherit", arbiter: "inherit", worker: "sonnet" };
 const WORKER_MAX_TURNS = 100;
 
 // roles that must never touch code: they read and write their own findings file only.
