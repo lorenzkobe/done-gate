@@ -8,10 +8,11 @@ import { baseCopy, fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs"
 import { ROLES, flag, outsideRepos, positional } from "./verbs.mjs";
 import { repoPath, toPosixRel } from "./paths.mjs";
 import { OWN_FILE } from "./guard.mjs";
-import { LOOKUP_EXAMPLE, REVIEW_CAP, capUnitsOf, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify } from "./rules.mjs";
+import { LOOKUP_EXAMPLE, REVIEW_CAP, capUnitsOf, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify, verifyProblem } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { nextSeq } from "./events.mjs";
+import { caseTestFile, runsTests, verifyEntries } from "./verify.mjs";
 
 // A packet is everything a helper needs, generated from gate state and the working tree.
 // The model authors none of it; the helper reads it instead of the ledger and the diff.
@@ -122,8 +123,14 @@ function header(state, role, round) {
   if (role === "qa" || role === "worker") out.push("## Tests", "", `globs: ${testGlobs(state)}`, `framework: ${detectFramework(state.root)}`, "");
   if (role === "qa" && ledger.tier?.grewAt) out.push("## Grown", "", "This task grew to large mid-task: the code and some tests exist already. Stay blind to the code; write the tests the case table still lacks, from the requirements.", "");
   if (state.config.helperNote) out.push("## Standing note", "", state.config.helperNote, "");
+  if (state.config.serialTests && TEST_RUNNERS.has(role)) {
+    const how = state.config.testFiles ? `only through \`gate test <test files>\`, from ${state.root},` : "only as the packet's test command, one at a time,";
+    out.push("## Running tests", "", `This repo allows one test run at a time. Run tests ${how} with a Bash timeout of 600000 ms: it waits its turn. If it exits 75 (busy), run it again. Never poll with pgrep or sleep, and never start a second test run beside one.`, "");
+  }
   return out;
 }
+
+const TEST_RUNNERS = new Set(["qa", "worker", "reviewer", "reviewer-2"]);
 
 // No bullets: a QA packet holds no line that reads like a diff.
 function lookupLines(state, role) {
@@ -214,9 +221,31 @@ function arbiterBody(state, item) {
 
 // The verify commands a helper may run itself; "when: source" entries are listed too.
 function testCommands(state) {
-  const cmds = (state.config.verify ?? []).map((v) => `- \`${v.cmd}\``);
-  for (const repo of state.config.repos ?? []) cmds.push(...repo.config.verify.map((v) => `- \`${v.cmd}\` (run in ${repo.root})`));
-  return cmds.length ? cmds : ["_no verify command in gate.json_"];
+  const cmds = verifyEntries(state.config, state.ledger).map((v) => `- \`${v.cmd}\`${v.cwd ? ` (run in ${v.cwd})` : ""}${v.related ? ": gate.json's testFiles on this task's related test files" : v.when === "final" ? " (the final check, run once with `gate verify --final`)" : ""}`);
+  if (cmds.length) return cmds;
+  return [state.config.verify.length ? "_no verify command for this run: gate.json's are all dropped_" : "_no verify command in gate.json_"];
+}
+
+// Whether verify.json is the gate's own green run on exactly this code. When it is, a reviewer
+// runs the case tests instead of the whole command again: on a shared test database a second
+// full run only queues behind the first.
+function freshness(state) {
+  const problem = verifyProblem(state, { final: false }) ?? ((state.verify.commands ?? []).some((c) => c.skipped && !c.final && runsTests(c.cmd)) ? { reason: "a test command was skipped, so tests added since never ran under it" } : null);
+  if (problem) return [`verify.json is not fresh (${problem.reason}): run the test command yourself.`];
+  const files = [...new Set([
+    ...state.ledger.cases.map((c) => caseTestFile(c, state.root, state.config)).filter(Boolean),
+    ...(state.changed ?? []).filter((p) => state.config.isTest(p) && existsSync(absolute(state, p))),
+  ])];
+  const head = "verify.json is fresh: the gate's own green run on exactly this code. Do not run the whole test command again;";
+  if (!files.length) return [`${head} there are no case tests to run.`];
+  // `gate test` takes this repo's files; a declared repo's run through verify
+  const own = state.config.testFiles ? files.filter((f) => !f.startsWith("../")) : [];
+  if (!own.length) return [`${head} run the case tests with the test command's runner, naming these files instead of the whole suite:`, "", ...files.map((f) => `- ${f}`)];
+  const rest = files.filter((f) => !own.includes(f));
+  return [
+    `${head} run the case tests, from ${state.root}:`, "", `\`gate test ${own.map((f) => (/[^\w./-]/.test(f) ? `'${f.replace(/'/g, `'\\''`)}'` : f)).join(" ")}\``,
+    ...(rest.length ? ["", "Case tests in a declared repo (`gate verify` ran them; run them with that repo's runner if you need to see one fail):", "", ...rest.map((f) => `- ${f}`)] : []),
+  ];
 }
 
 // The diff is inlined while it is short; past the cap the helper gets the file list with line
@@ -272,7 +301,7 @@ export function renderPacket(state, role, { round, n, item = null, piece = null,
     out.push("## Files you own", "", ...fileList(state, files), "");
     const qaTests = (state.changed ?? []).filter((p) => state.config.isTest(p));
     out.push("## Tests QA wrote", "", ...(qaTests.length ? qaTests.map((t) => `- ${t}`) : ["_none yet_"]), "");
-    out.push("## Test command", "", ...testCommands(state), "");
+    out.push("## Test command", "", "The lead's `gate verify` runs these. Before you finish, run the tests QA wrote and the tests of the files you own, not the whole command.", "", ...testCommands(state), "");
     // a piece's worker answers the findings that cite its files; the rest go to the packet
     // briefed without --files
     const cites = (text) => owned.some((f) => new RegExp(`(?<![\\w/.-])${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`).test(text));
@@ -294,6 +323,13 @@ export function renderPacket(state, role, { round, n, item = null, piece = null,
     const scopeSet = new Set(reviewScope(state));
     const paths = piece ? new Set(piece.files.map(pathOf)) : null;
     const shown = piece ? (state.changed ?? []).filter((p) => paths.has(p) || !scopeSet.has(p)) : state.changed ?? [];
+    // a fix-check round: the role's earlier findings on these files, each closed, to confirm
+    const cites = (text) => (paths ? [...paths] : reviewScope(state)).some((f) => text.includes(f));
+    const recheck = state.ledger.huddles.filter((h) => h.role === role).flatMap((h) => h.actOn.filter((a) => a.closed && (cites(a.text) || cites(String(a.closed)))));
+    if (recheck.length) {
+      out.push("## Findings to re-check", "", "Earlier rounds found these and each was closed as shown. For each, say ADDRESSED or NOT ADDRESSED, and flag anything the fix broke in the lines below.", "");
+      out.push(...recheck.map((a) => `- ${a.id} — ${a.text} — closed: ${a.closed}`), "");
+    }
     out.push(...diffOrFiles(state, "Diff", shown, ranges, paths ?? new Set()));
     const closers = new Map();
     for (const c of state.ledger.cases) if (c.status === "closed" && c.test) closers.set(c.test, [...(closers.get(c.test) ?? []), c.id]);
@@ -302,7 +338,7 @@ export function renderPacket(state, role, { round, n, item = null, piece = null,
       out.push("## Shared tests", "", "Each of these tests closes more than one case. Check that it can fail for each case on its own; a case it cannot fail for is not covered.", "");
       out.push(...sharedTests.map(([ptr, ids]) => `- ${ptr} closes ${ids.join(", ")}`), "");
     }
-    out.push("## Verify", "", ...verifyLines(state.verify, { tails: false, unfinished: unfinishedVerify(state) }), "");
+    out.push("## Verify", "", ...verifyLines(state.verify, { tails: false, unfinished: unfinishedVerify(state) }), "", ...freshness(state), "");
     out.push("## Test command", "", ...testCommands(state), "");
     out.push("", "## Write your findings to", "", path.join(state.dir, `${reviewPrefix(role)}-${n}.md`), "");
     if (role === "reviewer-2") {
@@ -359,11 +395,24 @@ export const verbs = {
         const listed = rows.map((r) => `${r.entry} (${r.lines} lines)`).join(", ");
         throw new UsageError(`${lines} changed lines is more than one review round can read well (cap ${cap}). Review it in pieces: \`gate brief ${role} --files <some of: ${listed}>\`, each piece under ${cap} lines (a file over the cap is sliced as path:from-to); a line counts as reviewed once a clean round saw it.`);
       }
-      // a slice is remembered by the content keys of the lines it holds, so an edit above it
-      // moves them without losing them
+      // a piece is remembered by the content keys of the lines it holds, so an edit above it
+      // moves them without losing them, and a fix re-opens only the lines it changed
       const units = {};
-      for (const r of rows) if (r.e.from) units[r.e.path] = [...(units[r.e.path] ?? []), ...r.units.map((u) => u.key)];
-      piece = { files: entries, lines, units };
+      const at = {};
+      for (const r of rows) {
+        units[r.e.path] = [...(units[r.e.path] ?? []), ...r.units.map((u) => u.key)];
+        at[r.e.path] = [...(at[r.e.path] ?? []), ...r.units.map((u) => u.pos)];
+      }
+      // a slice also keeps the changed line just outside each end, so a later fix at its edge
+      // can be told from a deletion
+      const edges = {};
+      for (const r of rows.filter((x) => x.e.from)) {
+        const all = changedUnitsOf(state, r.e.path);
+        const before = all.filter((u) => u.pos < r.e.from).at(-1) ?? null;
+        const after = all.find((u) => u.pos > r.e.to) ?? null;
+        edges[r.e.path] = [edges[r.e.path]?.[0] ?? (before && [before.key, before.pos]), after && [after.key, after.pos]];
+      }
+      piece = { files: entries, lines, units, at, ...(Object.keys(edges).length ? { edges } : {}) };
     }
     // below the delegated size the lead implements with its own context; a worker packet
     // would hand that context away for nothing
@@ -465,7 +514,7 @@ export const verbs = {
     // seen is what this round's reviewer is shown (its huddle inherits it); the other roles'
     // briefs are dated under briefed, so a ledger with no seen map stays a legacy one
     if (piece) {
-      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...(Object.keys(piece.units).length ? { units: piece.units } : {}) } };
+      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...(Object.keys(piece.units).length ? { units: piece.units } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}) } };
       saveLedger(state.dir, state.ledger);
     } else if (own) {
       state.ledger.briefed = { ...(state.ledger.briefed ?? {}), [own]: { seq: nextSeq(), ...(owned ? { files: owned } : {}), ...(item ? { item: item.id } : {}) } };

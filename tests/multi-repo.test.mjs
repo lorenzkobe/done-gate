@@ -903,3 +903,24 @@ test("H11 boundary: a refused --repo on an open run does not attach the session"
   assert.deepEqual(ledgerOf(repo).sessions, ["S1"]);
   assert.equal(loadSession(stateDir(repo), "S2"), null);
 });
+
+test("packet test command C5 edge: with a declared repo and a run-added command, the reviewer packet lists what gate verify runs, in its order, the repo's own commands marked with where they run", () => {
+  const { repo, other, p } = pair("mr-ptc", {
+    config: { ...GATE_JSON, verify: [tagged("MAIN-RAN"), tagged("MAIN-DROPPED")] },
+    otherFiles: { ".claude/gate.json": JSON.stringify({ verify: [tagged("OTHER-RAN")] }) },
+  });
+  cli(repo, "case", ["add", "renders", "--kind", "happy"]);
+  cli(repo, "verify", ["--drop", tagged("MAIN-DROPPED")]);
+  cli(repo, "verify", ["--add", tagged("RUN-ADDED")]);
+  edit(repo, other, "src/a.py", py(21));
+  const body = /## Test command\n([\s\S]*?)(?=\n## |$)/.exec(packetOf(cli(repo, "brief", ["reviewer"])))[1];
+  const listed = body.split("\n").filter((l) => l.startsWith("- "));
+  cli(repo, "verify");
+  const ran = verifyJson(repo).commands;
+  assert.equal(listed.length, ran.length, `${body}\nvs ${JSON.stringify(ran.map((c) => c.cmd))}`);
+  ran.forEach((c, i) => {
+    assert.ok(listed[i].startsWith(`- \`${c.cmd}\``), `line ${i}: ${listed[i]} is not ${c.cmd}`);
+    assert.equal(listed[i].includes(`(run in ${realpathSync(other)})`), Boolean(c.repo), listed[i]);
+  });
+  assert.ok(!body.includes("MAIN-DROPPED"), body);
+});

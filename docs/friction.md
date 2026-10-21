@@ -45,3 +45,29 @@ Left out: an interview until every choice is settled (more questions), glossary 
 files (project docs, not the gate's job), issue-tracker and teaching skills (outside the gate).
 
 ## Done (moved here when a release fixes it, with the version)
+
+Fixed in 0.20.0, from a look at 134 RollCall runs (2026-10-21; ~38 active hours since 10-06,
+the 12 large runs ~20 of them, median 107 active minutes and 8.5 review rounds each):
+
+- 2026-10-06 to 10-21, rollcall, most large runs: helpers queued on the one shared test
+  database in `until ! pgrep pytest; do sleep 5` loops: 347 of 474 test-command minutes, 12 hit
+  the 10-minute Bash timeout, and overlapping runs deadlocked on a TRUNCATE and turned flaky
+  ("the packet's test command does not reproduce"). Fixed: `gate test <files>` with
+  `testFiles` and `serialTests` (one run at a time, no polling); reviewers reuse a verify.json
+  the gate ran on exactly their code and run only the case tests; workers and QA run their own.
+- rollcall, many runs: helper packets listed only gate.json's verify commands, not the run's
+  `--add`/`--drop`, so leads kept editing the shared gate.json per ticket and it went stale
+  (TICKET-3568's tests in later tickets' runs). Fixed: packets list what verify runs.
+- rollcall, the user: "it kept on running like a whole repo test". Fixed: `{"related": true}`
+  runs the task's related tests while working, and a `"when": "final"` area suite runs once
+  with `gate verify --final`; the full suite stays with CI.
+- rollcall, large runs: a fixed finding sent a fresh reviewer over the whole piece again (one run
+  re-read ~2,000 lines). Fixed: after a fix only the changed lines need a fix-check round, whose
+  packet lists the findings to re-check.
+- 2026-10-21, the owner: the faster loop needs gate.json keys each repo lacks ("if those keys
+  doesn't exist ... add it before starting"). Fixed: session start asks once, before any run,
+  and `gate setup` proposes the keys from the repo (its runner, or the wrapper its verify already
+  uses) and writes them only on the user's words (`--apply` / `--decline`).
+- 2026-10-21, release trial on rollcall's tree: `{"related": true}` picked ~175 of 774 test files
+  when a module most tests import changed, plus helper files. Fixed: hub modules leave their
+  tests to the final check (except the ones named after them); helpers and fixtures are skipped.

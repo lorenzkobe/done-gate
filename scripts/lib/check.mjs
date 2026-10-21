@@ -18,8 +18,10 @@ const HELP = `gate <verb>: node <plugin>/scripts/gate.mjs <verb>
   next                                                      the next step in full (verbs print it short after the first time)
   brief <skeptic|qa|worker|reviewer|reviewer-2|arbiter> [--files a,b | a.ts:1-400]   write a helper's packet
   huddle add <role> --file <file> · huddle resolve <H#.#> --evidence <ptr> · huddle dispute · huddle reply --file worker-<n>.md
-  verify [--step verify-before]                             run the verify commands, write verify.json
+  verify [--final] [--step verify-before]                   run the verify commands, write verify.json; --final also runs the "when": "final" area suite
   verify --add "<cmd>" · verify --drop "<cmd>"              change what verify runs for this run only (gate.json is untouched)
+  test <test file>...                                       run gate.json's testFiles on these files; with serialTests, one test run at a time
+  setup [--apply [file] | --decline] --user-ok "<words>"   propose the faster test loop's gate.json keys; write them on the user's yes
   check                                                     what is still unmet (clean when nothing)
   close                                                     close the run when check is clean
   report [--brief]                                          the run's report (paste --brief as the final message)

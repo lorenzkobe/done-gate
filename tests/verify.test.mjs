@@ -182,7 +182,7 @@ function findWhenEnum(node) {
   return null;
 }
 
-const WHEN = ["always", "source"]; // the case table's own words
+const WHEN = ["always", "source", "final"]; // the case table's own words
 
 // Two commands that both exit 0 but are told apart by the tag they echo, so a
 // record can be matched to the entry that produced it without relying on order.
@@ -431,7 +431,7 @@ test("C8 happy: gate.schema.json documents when on a verify entry, and gate doct
   assert.deepEqual(
     findWhenEnum(schema()),
     WHEN,
-    "the verify item schema must allow when with exactly the two documented values",
+    "the verify item schema must allow when with exactly the documented values",
   );
 
   // no gate.json: the derived commands, where build is the source-only one

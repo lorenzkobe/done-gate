@@ -72,6 +72,9 @@ Three things make this hard to game:
   results) into the run dir, and the model spawns it with one sentence. QA's packet withholds
   the diff; its blindness is a convention the prompt asks for, since the fence denies writes,
   not reads.
+  When verify.json is the gate's own green run on exactly the code a reviewer gets, the
+  packet says so and lists the case test files: the reviewer runs those, not the whole test
+  command again. Workers and QA run their own tests; the lead's `gate verify` runs the rest.
 - **Findings are recorded, not paraphrased, and can be disputed once.** `gate huddle add`
   records every Act-on bullet of the reviewer's file (R15 blocks if one is missing). A
   finding the model believes wrong is disputed with evidence; the reviewer withdraws or
@@ -147,7 +150,7 @@ attempt to finish.
 | R2 | Context, Plan or case table was written after the first source edit (the fence now refuses such an edit; R2 still catches one from before) |
 | R3 | `gate verify` is missing, red, older than the last source edit, still running, or started and never finished (the shell died under it); or a command added with `gate verify --add` has not run yet |
 | R4 | UI files changed and the real surface wasn't driven afterwards |
-| R5 | no reviewer pass after the last edit, or an Act-on item is still open; tier tiny needs no reviewer. A change past the piece cap (400 changed lines) is reviewed in pieces, `gate brief reviewer --files a,b`, and one big file in slices, `--files a.ts:1-400`; a line is covered once the last round that saw it came back clean (or was the file's third); new or uncovered lines need a round |
+| R5 | no reviewer pass after the last edit, or an Act-on item is still open; tier tiny needs no reviewer. A change past the piece cap (400 changed lines) is reviewed in pieces, `gate brief reviewer --files a,b`, and one big file in slices, `--files a.ts:1-400`; a line is covered once the last round that saw it came back clean (or was the file's third); new or uncovered lines need a round. Once a round's findings are fixed and closed, only the lines the fix changed need a fix-check round (R5 names them as `path:from-to`), and its packet lists the findings to re-check, ADDRESSED or NOT ADDRESSED. A fix that deleted a reviewed line keeps the rule from before (the whole file or slice waits for a round, the cap included), and an inserted copy of a reviewed line is asked for like any new line. A round recorded before 0.20 has no line positions: there a fix is judged by counting new lines between the neighbours of what vanished, which a deletion plus a nearby insertion can satisfy |
 | R6 | schema files changed with no real-schema probe |
 | R7 | source changed and no test file changed; or the run is size large (planned, or grown there mid-task, by its size now) and no QA helper ran during it, waivable with `gate waive qa-pass` |
 | R8 | any case or step is blank, or a click case's click is older than the last source edit; the close step is closed by `gate close`, never by `gate step close …` |
@@ -362,8 +365,10 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `huddle add <role> --file review-1.md` · `acton` · `resolve` · `dispute` | reviewer rounds and Act-on items; `add` prints each recorded id with its finding and refuses a file whose writer made no lookups (R17) |
 | `huddle reply --file worker-<n>.md` | record a worker's answers: `fixed:` closes an item, `disagree:` disputes it; an unknown id fails and lists the open ones. Worker reply files are their own stream, numbered like their packet (`brief-worker-2.md` asks for `worker-2.md`); a worker with no lookups is refused (R17) |
 | `waive <key\|R<n>> "<reason>"` | record a waiver and print what it clears; it shows in the report |
-| `verify [--step verify-before]` | run the repo's verify commands, then each declared repo's in its own directory, write `verify.json` |
-| `verify --add "<cmd>"` · `verify --drop "<cmd>"` | change what verify runs for this run only; nothing runs. `--add` adds a command (it runs after the config ones at every `gate verify`, with the default timeout, also when the config has none) or restores a dropped gate.json one; `--drop` removes an added one or drops a gate.json one for this run. They live on the ledger, not in gate.json (R13 stays quiet); `gate doctor` and the report list them, and For you names every dropped gate.json command. An added or restored command that has not run blocks the close (R3) |
+| `verify [--final] [--step verify-before]` | run the repo's verify commands, then each declared repo's in its own directory, write `verify.json`; a `"when": "final"` command runs only with `--final` and is owed until then |
+| `verify --add "<cmd>"` · `verify --drop "<cmd>"` | change what verify runs for this run only; nothing runs. `--add` adds a command (it runs after the config ones at every `gate verify`, with the default timeout, also when the config has none) or restores a dropped gate.json one; `--drop` removes an added one or drops a gate.json one for this run. They live on the ledger, not in gate.json (R13 stays quiet), and the worker and reviewer packets' Test command lists what verify will run with them, so there is no need to edit gate.json to steer helpers; `gate doctor` and the report list them, and For you names every dropped gate.json command. An added or restored command that has not run blocks the close (R3) |
+| `setup [--apply [file] \| --decline] --user-ok "<words>"` | propose the faster test loop's gate.json keys; `--apply` writes the proposal (or the edited file) and `--decline` records `"testFiles": null`, each only with the user's words and no run open |
+| `test <test file>...` | run gate.json's `testFiles` on these test files of this repo, output streamed, exit code passed through; with `serialTests` it waits for the repo-wide test lock (exit 75 when busy past five minutes) |
 | `decide <phase> <decision> <why> <evidence> <result>` | append a decision-log row |
 | `brief <skeptic\|qa\|worker\|reviewer\|reviewer-2\|arbiter> [--files a,b \| a.ts:1-400] [--item H#.#]` | write the helper's packet and print its spawn prompt; a packet is numbered like the file it names; a worker's `--files` are the files it owns |
 | `abandon <slug> "<reason>"` | give a run up: marks it abandoned with the reason; it stops attaching to sessions and blocking turns |
@@ -423,9 +428,63 @@ main root, whatever the shell's directory. `gate open`, `gate attach` and
   "checks":   ["claude-md-budget", "migration-number"],
   "slop":     true,
   "driver":   "skill:verify",
-  "helperNote": "Never run two test runs at once: they share tests/.tmp."
+  "helperNote": "Never run two test runs at once: they share tests/.tmp.",
+  "testFiles": "scripts/test_db.sh run {files} -q",
+  "serialTests": true
 }
 ```
+
+`testFiles` is the command that runs given test files, with `{files}` where they go. `gate test
+<test files>` runs it on files of this repo the tests globs match (each passed as one quoted
+argument; anything else is refused), streams its output and exits with its code; a reviewer's
+packet names the exact `gate test` line for the case tests when verify.json is fresh.
+`serialTests: true` is for tests that share one database or folder: `gate test` and `gate verify`
+then take one repo-wide lock (`.claude/gate/test.lock`), so a second run waits its turn instead
+of colliding, with no polling by the model. The lock names the tests' process group, so a gate
+killed mid-run still holds it until its tests end; a lock whose holder is gone is taken over. A
+wait past five minutes exits 75 ("busy … run it again"), so it fits a 10-minute Bash call. The
+worker, QA and reviewer packets then say to run tests only through `gate test`. Changing either
+key mid-task is a config change (R13).
+
+A repo with tests and no `testFiles` key is asked once, at session start and before any run
+opens: `gate setup` prints a proposal built from the repo (the runner it can prove, the verify
+commands kept, `{"related": true}` added, the test command marked `final`, `serialTests` left as a
+question) and writes nothing. On the user's yes, `gate setup --apply [edited.json] --user-ok
+"<their words>"` writes it; on a no, `gate setup --decline --user-ok "<their words>"` records
+`"testFiles": null`. Either write is the gate's own, not task work, and is refused while a run is
+open (R13). To change your mind later, edit gate.json in a task run like any config change.
+
+Test what changed while working, and the wider area once at the end:
+
+```json
+{
+  "testFiles": "scripts/test_db.sh run {files} -q",
+  "verify": [
+    "./venv/bin/python -m flake8 app",
+    { "related": true },
+    { "cmd": "scripts/test_db.sh run tests/test_app -q", "when": "final" }
+  ]
+}
+```
+
+`{ "related": true }` (it goes by `related tests`, also for `--drop`) runs `testFiles` on this
+task's related test files: closed cases' test files, changed test files, and test files that
+reference a changed module by its folder or package (`src/booking`, `app.booking`, `from app
+import booking`). A bare word is not enough, and a generic name (models, views, utils, index…)
+relates nothing: a change there is left to the final check. It reads text, not imports, so it
+misses relative imports (`./Button`, `from .x import`) and modules at the repo root, and may
+pick up a look-alike (`self.core.user`); the final check is the backstop. Helpers, conftest,
+fixtures and mocks under the tests folder are not picked, and a changed module that more than a
+tenth of the test files reference (at least 20) is a hub: only the tests named after it are picked,
+the rest are left to the final check, so give a repo with hubs a `final` command. No related file: the
+row is skipped. It covers the main repo only.
+
+A `"when": "final"` command is the area suite. Plain `gate verify` does not run it; it records it
+as owed while the implementation changed and is not green on it, and R3 holds the close until
+`gate verify --final` (every command, the final one included) has run it green on this code. Run
+it once your edits are done; it may run in the background while review runs. A test-only edit
+keeps it green. It must pass at HEAD: deselect failures that are already there, or every close
+blocks on them. The full suite stays with CI.
 
 A verify entry for a linter may say `"onlyNew": true`: its exit 1 counts green when every
 `path:line` or `path(line,col)` it prints is a source file of this repo and none lies on a line

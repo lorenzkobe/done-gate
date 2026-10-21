@@ -12,6 +12,7 @@ import { loadSession } from "./session-state.mjs";
 import { diffSnapshots, parseHunks, snapshot } from "./tree.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
+import { BusyError, HELD_ENV, acquireTestLock, describeHolder, quote } from "./testlock.mjs";
 import { policyFor, splitAdvice } from "./size.mjs";
 
 const TAIL_LINES = 40;
@@ -42,14 +43,15 @@ function tail(text) {
 
 // Runs one command in its own process group. Resolves on the command's own exit, not
 // on stream close, so a background child that inherited stdout cannot hold us hostage.
-export function runCommand({ cmd, timeout, onlyNew = false }, cwd) {
+export function runCommand({ cmd, timeout, onlyNew = false }, cwd, { onSpawn = () => {}, env = {} } = {}) {
   return new Promise((resolve) => {
     const started = Date.now();
     let output = "";
     let full = onlyNew ? "" : null;
     let timedOut = false;
     let settled = false;
-    const child = spawn(cmd, { cwd, shell: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CI: "1", FORCE_COLOR: "0" } });
+    const child = spawn(cmd, { cwd, shell: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CI: "1", FORCE_COLOR: "0", ...env } });
+    onSpawn(child.pid);
     const collect = (chunk) => {
       const text = chunk.toString("utf8");
       if (full !== null && full !== false) full = full.length + text.length > ONLY_NEW_MAX ? false : full + text;
@@ -93,9 +95,9 @@ export function runCommand({ cmd, timeout, onlyNew = false }, cwd) {
 
 // Per command (verifyKey), the implementation hash at its last green run in this ledger; carried
 // through every verify.json so a skipped run does not forget it.
-function lastGreen(file) {
+function lastGreen(file, field = "greenAt") {
   try {
-    return JSON.parse(readFileSync(file, "utf8")).greenAt ?? {};
+    return JSON.parse(readFileSync(file, "utf8"))[field] ?? {};
   } catch {
     return {};
   }
@@ -245,24 +247,88 @@ function holds(base, entry, abs) {
   return abs === at || abs.startsWith(at.endsWith(path.sep) ? at : `${at}${path.sep}`);
 }
 
+// Module names too common to say which tests a change touches: a change to one of them is left
+// to the final check.
+const GENERIC = new Set(["index", "__init__", "main", "app", "apps", "utils", "util", "helpers", "types", "config", "constants", "settings", "models", "views", "urls", "serializers", "services", "admin", "tasks", "forms", "schemas", "api", "routes", "common", "base", "conftest", "mod", "lib"]);
+const RELATED_MAX_BYTES = 1024 * 1024;
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// What sits under the tests folder without being a test: conftest, package markers, helpers,
+// support code, fixtures and mocks. Anything else the tests globs match counts as a test.
+const NOT_TEST = /(?:^|\/)(?:conftest\.py|__init__\.py|[^/]*_(?:helpers?|support|fixtures?|utils?)\.[^/.]+|(?:helpers?|support|fixtures?|utils?)\.[^/.]+)$|(?:^|\/)(?:fixtures|__fixtures__|__mocks__|helpers|support)\//;
+// a name that says test wins over a helper-sounding name or folder
+const NAMED_TEST = /(?:^|\/)(?:test_[^/]*|[^/]*_test\.[^/.]+|[^/]*\.(?:test|spec)\.[^/.]+|[^/]*_spec\.[^/.]+|[^/]*Test\.[^/.]+)$/;
+const isTestFile = (config, p) => config.isTest(p) && (NAMED_TEST.test(p) || !NOT_TEST.test(p));
+// A changed module that more of the repo's tests reference than this is a hub: its tests are
+// most of the suite, which the final check runs.
+const HUB_SHARE = 0.1;
+const HUB_MIN = 20;
+
+// This task's related test files in the main repo: closed cases' test files, changed test files
+// that still exist, and test files that reference a changed module by its folder or package
+// (src/booking, app.booking, from app import booking); a bare word is not enough. Helpers and
+// fixtures are not picked, and a hub module picks only the tests named after it.
+export function relatedTests(root, config, ledger, snap, touched) {
+  const mine = (p) => !p.startsWith("../");
+  const out = new Set();
+  for (const c of ledger.cases ?? []) {
+    const f = caseTestFile(c, root, config);
+    if (f && mine(f)) out.add(f);
+  }
+  for (const p of touched) if (mine(p) && isTestFile(config, p) && existsSync(path.join(root, p))) out.add(p);
+  const patterns = touched
+    .filter((p) => mine(p) && config.isSource(p) && !config.isTest(p) && !config.isDoc(p))
+    .map((p) => ({ stem: path.posix.basename(p).replace(/\.[^.]+$/, ""), parent: path.posix.basename(path.posix.dirname(p)) }))
+    .filter(({ stem, parent }) => stem.length >= 3 && !GENERIC.has(stem.toLowerCase()) && parent !== ".")
+    .map(({ stem, parent }) => ({ stem, re: new RegExp(`\\b${escapeRe(parent)}[./]${escapeRe(stem)}\\b|\\bfrom\\s+[\\w.]*\\b${escapeRe(parent)}\\s+import\\s+[^\\n]*\\b${escapeRe(stem)}\\b`) }));
+  if (patterns.length) {
+    const tests = Object.keys(snap.files).filter((p) => mine(p) && isTestFile(config, p));
+    const hits = patterns.map(() => []);
+    for (const p of tests) {
+      if (snap.files[p].s > RELATED_MAX_BYTES) continue;
+      let text;
+      try {
+        text = readFileSync(path.join(root, p), "utf8");
+      } catch {
+        continue;
+      }
+      patterns.forEach(({ re }, i) => re.test(text) && hits[i].push(p));
+    }
+    // a hub's tests are left to the final check, except the ones named after it
+    const hub = Math.max(HUB_MIN, tests.length * HUB_SHARE);
+    hits.forEach((found, i) => {
+      const own = (p) => path.posix.basename(p).toLowerCase().includes(patterns[i].stem.toLowerCase());
+      for (const p of found) if (found.length <= hub || own(p)) out.add(p);
+    });
+  }
+  return [...out].sort();
+}
+
+// A closed case's test file from its pointer (file:line, file::name), when it exists and is a
+// test file; a click or n/a case has none.
+export function caseTestFile(c, root, config) {
+  if (c.status !== "closed" || !c.test) return null;
+  const rel = /^(.+?\.\w+)(?::|$)/.exec(c.test)?.[1];
+  return rel && existsSync(path.resolve(root, rel)) && config.isTest(rel) ? rel : null;
+}
+
 // Closed cases whose test file (it exists and is a test file) no green, run test command covers.
 export function coverageGaps(state) {
   const { ledger, verify, config, root } = state;
   if (!ledger || !verify) return [];
   const repoRoot = (prefix) => (prefix ? (config.repos ?? []).find((r) => r.prefix === prefix)?.root : root);
   const scopes = verify.commands
-    .filter((c) => !c.skipped && c.exit === 0 && !c.timedOut)
+    .filter((c) => c.covers || (!c.skipped && c.exit === 0 && !c.timedOut))
     .flatMap((c) => {
       const cwd = repoRoot(c.repo ?? null);
       return cwd ? testScopes(c.cmd, cwd, (abs) => config.isTest(path.relative(root, abs).split(path.sep).join("/"))) : [];
     });
+  const listed = new Set(verify.commands.filter((c) => !c.skipped && c.exit === 0 && !c.timedOut && Array.isArray(c.files)).flatMap((c) => c.files));
   const gaps = [];
   for (const c of ledger.cases ?? []) {
-    if (c.status !== "closed" || !c.test) continue;
-    const rel = /^(.+?\.\w+)(?::|$)/.exec(c.test)?.[1];
-    if (!rel) continue;
+    const rel = caseTestFile(c, root, config);
+    if (!rel || listed.has(rel)) continue;
     const abs = path.resolve(root, rel);
-    if (!existsSync(abs) || !config.isTest(rel)) continue;
     const covered = scopes.some((s) => (s.names.length ? s.names.some((n) => holds(s.base, n, abs)) : holds(s.base, ".", abs)) && !s.drops.some((d) => holds(s.base, d, abs)));
     if (!covered) gaps.push({ id: c.id, file: rel });
   }
@@ -286,9 +352,20 @@ export function exclusionsOf(cmd) {
   return out;
 }
 
+// What `gate verify` runs for this run, in order: gate.json's commands minus the ones the run
+// dropped, the ones it added, then each declared repo's own. Helper packets list the same.
+export function verifyEntries(config, ledger) {
+  const dropped = new Set(ledger.verifyDropped ?? []);
+  return [
+    ...config.verify.filter((v) => !dropped.has(v.cmd)),
+    ...(ledger.verifyAdded ?? []).map((cmd) => ({ cmd, timeout: DEFAULTS.verifyTimeout, when: "always" })),
+    ...(config.repos ?? []).flatMap((r) => r.config.verify.map((v) => ({ ...v, repo: r.prefix, cwd: r.root }))),
+  ];
+}
+
 const VERIFY_STEPS = new Set(["verify", "verify-before"]);
 
-export async function runVerify(ctx, { stepKey = "verify" } = {}) {
+export async function runVerify(ctx, { stepKey = "verify", final = false } = {}) {
   const current = currentLedger(ctx.stateDir, ctx.session);
   if (!current || isDone(current.ledger)) {
     throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
@@ -300,18 +377,15 @@ export async function runVerify(ctx, { stepKey = "verify" } = {}) {
   }
   const repos = current.ledger.repos ?? [];
   const config = loadConfig(ctx.root, repos);
-  const dropped = new Set(current.ledger.verifyDropped ?? []);
-  const entries = [
-    ...config.verify.filter((v) => !dropped.has(v.cmd)),
-    ...(current.ledger.verifyAdded ?? []).map((cmd) => ({ cmd, timeout: DEFAULTS.verifyTimeout, when: "always" })),
-    ...(config.repos ?? []).flatMap((r) => r.config.verify.map((v) => ({ ...v, repo: r.prefix, cwd: r.root }))),
-  ];
+  const entries = verifyEntries(config, current.ledger);
   if (entries.length === 0) throw new UsageError("nothing to verify: no verify commands in .claude/gate.json, no lint/test/build scripts in package.json and none added with `gate verify --add`");
+  if (entries.some((e) => e.related && !e.repo) && !config.testFiles) throw new UsageError(`a {"related": true} verify entry needs testFiles in .claude/gate.json: the command that runs given test files, with {files} where they go`);
 
   const session = loadSession(ctx.stateDir, ctx.session);
   const snap = snapshot(ctx.root, session?.lastTree ?? current.ledger.baseline, repos);
   // a "source" command (the build, by default) only runs when the implementation changed
-  const changed = diffSnapshots(current.ledger.baseline, snap).changed.filter((p) => config.isSource(p) && !config.isTest(p) && !config.isDoc(p));
+  const touched = diffSnapshots(current.ledger.baseline, snap).changed;
+  const changed = touched.filter((p) => config.isSource(p) && !config.isTest(p) && !config.isDoc(p));
   // a "source" command last green on this same implementation has nothing new to judge; with
   // declared repos each command is judged by the implementation of its own repo alone
   const scopes = new Map();
@@ -325,6 +399,17 @@ export async function runVerify(ctx, { stepKey = "verify" } = {}) {
   };
   const file = path.join(current.dir, "verify.json");
   const greenAt = lastGreen(file);
+  // a final command's whole source (tests too) at its last green run: a skip on that same code
+  // still covers its test files, and --final reruns it once tests changed
+  const greenSource = lastGreen(file, "greenSource");
+  const sourceNow = sourceHash(snap, config);
+  // with serialTests verify waits for any `gate test` and holds the lock while it runs
+  let lock = null;
+  try {
+    if (config.serialTests) lock = await acquireTestLock(ctx.stateDir, "gate verify", { onWait: (h) => ctx.err(`waiting: ${describeHolder(h)} holds the test lock; verify starts when it ends`) });
+  } catch (error) {
+    throw error instanceof BusyError ? new UsageError(error.message) : error;
+  }
   const startedAt = new Date().toISOString();
   // A run the shell dies under leaves this behind; R3 and the report then say so.
   const started = path.join(current.dir, "verify.started.json");
@@ -334,34 +419,65 @@ export async function runVerify(ctx, { stepKey = "verify" } = {}) {
     const row = { cmd: entry.cmd, ...(entry.repo ? { repo: entry.repo } : {}) };
     const key = verifyKey(row);
     const name = `${entry.cmd}${verifyWhere(row)}`;
-    const scope = entry.when === "source" ? scopeOf(entry.repo ?? null) : null;
+    const isFinal = entry.when === "final";
+    if (isFinal) row.final = true;
+    const scope = entry.when === "source" || isFinal ? scopeOf(entry.repo ?? null) : null;
     if (scope && !scope.changed) {
       ctx.err(`verify: ${name} skipped (no implementation change)`);
       commands.push({ ...row, skipped: "no implementation change (tests or docs only)", ms: 0 });
       continue;
     }
-    if (scope && greenAt[key] === scope.implementation) {
+    const sameCode = isFinal && greenSource[key] === sourceNow;
+    if (scope && greenAt[key] === scope.implementation && !(isFinal && final && !sameCode)) {
       ctx.err(`verify: ${name} skipped (green on this implementation already)`);
-      commands.push({ ...row, skipped: "already green on this code", ms: 0 });
+      commands.push({ ...row, skipped: "already green on this code", ms: 0, ...(sameCode ? { covers: true } : {}) });
       continue;
     }
+    // the area suite runs once, when the edits are done; until then it is owed
+    if (isFinal && !final) {
+      ctx.err(`verify: ${name} owed (the final check: \`gate verify --final\`)`);
+      commands.push({ ...row, skipped: "the final check: runs with `gate verify --final`", owed: true, ms: 0 });
+      continue;
+    }
+    let run = entry;
+    if (entry.related) {
+      if (entry.repo) {
+        commands.push({ ...row, skipped: "related tests run for the main repo only", ms: 0 });
+        continue;
+      }
+      const files = relatedTests(ctx.root, config, current.ledger, snap, touched);
+      if (!files.length) {
+        ctx.err(`verify: ${name} skipped (no related test files)`);
+        commands.push({ ...row, skipped: "no related test files", ms: 0 });
+        continue;
+      }
+      row.files = files;
+      run = { ...entry, cmd: config.testFiles.split("{files}").join(files.map(quote).join(" ")) };
+    }
     ctx.err(`verify: ${name} (timeout ${entry.timeout}s)`);
-    const { output, ...result } = { ...row, ...(await runCommand(entry, entry.cwd ?? ctx.root)) };
+    const { output, ...result } = { ...row, ...(await runCommand(run, entry.cwd ?? ctx.root, { onSpawn: (pgid) => lock?.setGroup(pgid), env: lock ? { [HELD_ENV]: String(process.pid) } : {} })) };
+    if (entry.related) Object.assign(result, { cmd: entry.cmd, ran: run.cmd });
     // a test run's failures print file:line too: onlyNew never reads one
     if (entry.onlyNew && !runsTests(entry.cmd) && result.exit === 1 && !result.timedOut && output) {
       const old = oldFindingsOnly(output, entry, ctx, config);
       if (old) Object.assign(result, { exit: 0, rawExit: 1, oldFindings: old.length, oldList: old.slice(0, 20) });
     }
     commands.push(result);
-    if (result.exit === 0 && !result.timedOut) greenAt[key] = scopeOf(entry.repo ?? null).implementation;
-    else delete greenAt[key];
+    if (result.exit === 0 && !result.timedOut) {
+      greenAt[key] = scopeOf(entry.repo ?? null).implementation;
+      if (isFinal) greenSource[key] = sourceNow;
+    } else {
+      delete greenAt[key];
+      delete greenSource[key];
+    }
     ctx.err(`  → ${result.timedOut ? "TIMED OUT" : `exit ${result.exit}`} in ${(result.ms / 1000).toFixed(1)}s`);
   }
-  const record = { startedAt, finishedAt: new Date().toISOString(), sourceHash: sourceHash(snap, config), greenAt, commands };
+  const record = { startedAt, finishedAt: new Date().toISOString(), sourceHash: sourceNow, greenAt, greenSource, commands };
   // written whole: a Stop hook may read it while a background verify is still writing
   writeFileSync(`${file}.${process.pid}.tmp`, JSON.stringify(record, null, 2));
   renameSync(`${file}.${process.pid}.tmp`, file);
   rmSync(started, { force: true });
+  lock?.release();
 
   const red = commands.filter((c) => !c.skipped && (c.exit !== 0 || c.timedOut));
   const ledger = loadLedger(current.dir);
@@ -383,7 +499,7 @@ export const verbs = {
     }
     const stepIdx = ctx.args.indexOf("--step");
     const stepKey = stepIdx >= 0 ? ctx.args[stepIdx + 1] ?? null : "verify";
-    const { record, red, dir } = await runVerify(ctx, { stepKey });
+    const { record, red, dir } = await runVerify(ctx, { stepKey, final: ctx.args.includes("--final") });
     for (const c of record.commands) {
       if (c.skipped) {
         ctx.out(`– ${c.cmd}${verifyWhere(c)} — skipped: ${c.skipped}`);
@@ -394,6 +510,7 @@ export const verbs = {
       if (!green) ctx.out("```\n" + c.tail.split("\n").slice(-12).join("\n") + "\n```"); // the failing tail: the same 12 lines the report shows
     }
     const ran = record.commands.filter((c) => !c.skipped).length;
+    if (record.commands.some((c) => c.owed)) ctx.out("final check owed: run `gate verify --final` once your edits are done (it may run in the background while review runs)");
     ctx.out(red.length ? `${red.length} of ${ran} red — fix and run \`gate verify\` again` : `all ${ran} green — step {${stepKey}} closed with verify.json`);
     // the lead runs verify after its edits, so the advice reaches it mid-run, not only in the report
     const ledger = loadLedger(dir);

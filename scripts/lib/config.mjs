@@ -120,7 +120,10 @@ function defaultVerify(root) {
   return SCRIPT_ORDER.filter((name) => typeof scripts[name] === "string").map((name) => ({ cmd: `${pm} ${name}`, when: name === "build" ? "source" : "always" }));
 }
 
-const WHEN = new Set(["always", "source"]);
+const WHEN = new Set(["always", "source", "final"]);
+
+// The name a {"related": true} verify entry goes by: its rows, --drop, the packets.
+export const RELATED = "related tests";
 
 // One package.json build script call and nothing else: `npm run build`, `pnpm build`. A
 // compound command (&&, ;, |), or a tool whose build also tests (gradle, make), runs always.
@@ -131,6 +134,7 @@ const BUILD_ONLY = /^\s*(?:npm|pnpm|yarn|bun)(?:\s+run)?\s+build\s*$/;
 function normaliseVerify(entries, fallbackTimeout) {
   return (entries ?? []).map((entry) => {
     const e = typeof entry === "string" ? { cmd: entry } : entry;
+    if (e.related === true) return { cmd: RELATED, related: true, timeout: Number(e.timeout ?? fallbackTimeout), when: "always" };
     const cmd = String(e.cmd);
     const when = WHEN.has(e.when) ? e.when : BUILD_ONLY.test(cmd) ? "source" : "always";
     return { cmd, timeout: Number(e.timeout ?? fallbackTimeout), when, ...(e.onlyNew === true ? { onlyNew: true } : {}) };
@@ -178,6 +182,8 @@ export function loadConfig(root, repos = []) {
     slop: r.slop !== false,
     driver: typeof r.driver === "string" ? r.driver : DEFAULTS.driver,
     helperNote: typeof r.helperNote === "string" && r.helperNote.trim() ? r.helperNote.trim() : null,
+    testFiles: typeof r.testFiles === "string" && r.testFiles.includes("{files}") ? r.testFiles : null,
+    serialTests: r.serialTests === true,
     verify: normaliseVerify(r.verify ?? defaultVerify(root), DEFAULTS.verifyTimeout),
     verifySource: Array.isArray(r.verify) ? ".claude/gate.json" : "package.json scripts",
   };

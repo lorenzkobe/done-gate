@@ -133,7 +133,7 @@ test("C2 three clean range rounds covering every changed line pass R5; with 801-
   assert.ok(!blocks(check(repo), "R5"), check(repo));
 });
 
-test("C3 a range round with a finding, fixed by an edit inside the range, leaves only that span uncovered", () => {
+test("C3 a range round with a finding, fixed by an edit inside the range, leaves only the edited lines uncovered", () => {
   const repo = opened("rr-c3");
   bigEdit(repo);
   round(repo, "reviewer", `${BIG}:1-400`);
@@ -142,7 +142,9 @@ test("C3 a range round with a finding, fixed by an edit inside the range, leaves
   edit(repo, BIG, body(1200, "big").replace("big500 = 500", "big500 = 501"));
   cli(repo, "huddle", ["resolve", "H2.1", "--evidence", "src/big.ts:500"]);
   const line = ruleLine(check(repo), "R5");
-  assert.match(line, /big\.ts:401-800/);
+  // the edited line and the next one (its key holds the line above): not the whole slice
+  assert.match(line, /big\.ts:501-502/);
+  assert.doesNotMatch(line, /big\.ts:401-800/);
   assert.doesNotMatch(line, /big\.ts:1-400/);
   assert.doesNotMatch(line, /big\.ts:801-1200/);
   round(repo, "reviewer", `${BIG}:401-800`);

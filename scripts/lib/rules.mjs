@@ -605,17 +605,23 @@ function spans(rel, open, all) {
 // helper stopped after its brief) and came back clean, or was the last round the cap allows
 // for that file, or had every item closed with no implementation edit since it stopped. An
 // edit above a slice moves its lines but keeps them covered; an edit to a line uncovers that
-// line. Returns the entries still uncovered ("path" or "path:from-to"), or null for a ledger
-// from before seen sets, which keeps the old rule.
+// line. A round whose items are all closed also covers the lines it recorded that the fix left
+// unchanged, so only the fixed lines need a fix-check round; when a fix deleted a line it
+// recorded (see fixDeleted), the rule from before applies.
+// Returns the entries still uncovered ("path" or "path:from-to"), or null for a ledger from
+// before seen sets, which keeps the old rule.
 export function uncovered(state, role, after = lastEditSeq(state, state.config, state.ledger)) {
   const rounds = (state.ledger.huddles ?? []).filter((h) => h.role === role && h.file && Array.isArray(h.files));
   if (!rounds.length) return null;
   const stops = (state.events ?? []).filter((e) => e.kind === "subagent-stop" && isRole(e.agentType, role));
-  const covered = (round, seenBy) => {
-    const stop = stops.find((e) => e.seq > (round.briefSeq ?? Infinity));
+  const stopOf = (round) => stops.find((e) => e.seq > (round.briefSeq ?? Infinity));
+  let counts = new Map();
+  const covered = (round, seenBy, rel = null, key = null) => {
+    const stop = stopOf(round);
     if (!stop) return false;
     if (!round.actOn.length || seenBy >= REVIEW_CAP) return true;
-    return round.actOn.every((a) => a.closed) && after < stop.seq;
+    if (!round.actOn.every((a) => a.closed)) return false;
+    return after < stop.seq || (key !== null && keptLine(round, rel, key, counts));
   };
   const out = [];
   for (const rel of reviewScope(state)) {
@@ -625,24 +631,102 @@ export function uncovered(state, role, after = lastEditSeq(state, state.config, 
       continue;
     }
     const whole = (h) => h.files.includes(rel);
-    if (seeing.every(whole)) {
+    const keyed = (h) => Array.isArray(h.units?.[rel]);
+    if (seeing.every((h) => whole(h) && !keyed(h))) {
       // whole-file rounds only: the last one judges the file, no diff is read
       if (!covered(seeing[seeing.length - 1], seeing.length)) out.push(rel);
       continue;
     }
     const units = changedUnitsOf(state, rel);
     const all = positionsOf(units);
+    counts = baseCounts(units.map((u) => u.key));
+    // rounds with every item closed and an edit since: the fix narrows them to the lines it
+    // changed, unless it deleted a line, which keeps the rule from before (the whole file, or
+    // slice, waits for a round, the cap included)
+    const fixed = seeing.filter((h) => keyed(h) && h.actOn.length && h.actOn.every((a) => a.closed) && stopOf(h) && after > stopOf(h).seq);
+    const narrow = !fixed.some((h) => fixDeleted(h.units[rel], units, whole(h), h.edges?.[rel], h.at?.[rel]));
     // with slices the cap counts the rounds that saw this line, not the file
     const saw = (h, u) => whole(h) || (h.units?.[rel] ?? []).includes(u.key);
     const open = positionsOf(units.filter((u) => {
       const rounds = seeing.filter((h) => saw(h, u));
       const last = rounds[rounds.length - 1];
-      return !last || !covered(last, rounds.length);
+      return !last || !covered(last, rounds.length, rel, narrow ? u.key : null);
     }));
     if (!units.length && !covered(seeing[seeing.length - 1], seeing.length)) out.push(rel);
     else if (open.length) out.push(...spans(rel, open, all));
   }
   return out;
+}
+
+// Twin lines (the same text after the same line) share a key base and are told apart by order,
+// so a copy inserted before a reviewed twin takes its key: once a file holds more of a base than
+// a round recorded, no line of that base counts as unchanged.
+const baseOf = (key) => key.replace(/#\d+$/, "");
+function baseCounts(keys) {
+  const out = new Map();
+  for (const k of keys) out.set(baseOf(k), (out.get(baseOf(k)) ?? 0) + 1);
+  return out;
+}
+const recordedBy = new WeakMap();
+function keptLine(round, rel, key, now) {
+  let byRel = recordedBy.get(round);
+  if (!byRel) recordedBy.set(round, (byRel = new Map()));
+  if (!byRel.has(rel)) {
+    const keys = round.units?.[rel] ?? [];
+    byRel.set(rel, { keys: new Set(keys), counts: baseCounts(keys) });
+  }
+  const rec = byRel.get(rel);
+  return rec.keys.has(key) && (now.get(baseOf(key)) ?? 0) <= (rec.counts.get(baseOf(key)) ?? 0);
+}
+
+// Whether the lines a round recorded (its keys, in file order) lost one the fix did not replace.
+// A vanished line is replaced when a new line now sits where it sat: at the same offset from a
+// surviving neighbour (the round's line before it, else after it; for a slice, the changed line
+// it recorded outside its end). A neighbour that is gone, or a round with no positions (an older
+// ledger), falls back to counting new lines between the neighbours. A whole file with no line
+// left is a rewrite when it has as many new lines.
+function fixDeleted(order, units, wholeFile, edges = null, at = null) {
+  const now = new Map(units.map((u) => [u.key, u.pos]));
+  const mine = new Set(order);
+  const fresh = units.filter((u) => !mine.has(u.key));
+  const freshAt = new Set(fresh.map((u) => u.pos));
+  // an outer end: undefined when nothing changed beyond it, null when its line is gone
+  const end = (e) => (!e ? undefined : now.has(e[0]) ? { now: now.get(e[0]), was: e[1] } : null);
+  const outer = wholeFile ? [undefined, undefined] : edges ? edges.map(end) : [null, null];
+  // twin lines are numbered in file order, so moving one, or deleting one and inserting a copy
+  // elsewhere, keeps every key: a twin must still sit where it sat, counted from the nearest
+  // surviving line without a twin before it, else after it, else the slice's outer edge, else
+  // from the top of the file
+  if (at) {
+    const twins = baseCounts(order);
+    const single = order.map((k, i) => (now.has(k) && twins.get(baseOf(k)) === 1 ? { now: now.get(k), was: at[i] } : null));
+    for (let k = 0; k < order.length; k++) {
+      if (!now.has(order[k]) || single[k]) continue;
+      const before = single.slice(0, k).reverse().find(Boolean);
+      const after = single.slice(k + 1).find(Boolean);
+      const edge = [outer[0], outer[1]].find((e) => e && e.was !== undefined);
+      const anchor = before ?? after ?? edge ?? { now: 0, was: 0 };
+      if (now.get(order[k]) !== anchor.now + (at[k] - anchor.was)) return true;
+    }
+  }
+  for (let i = 0; i < order.length; i++) {
+    if (now.has(order[i])) continue;
+    let j = i;
+    while (j + 1 < order.length && !now.has(order[j + 1])) j++;
+    const prev = i > 0 ? { now: now.get(order[i - 1]), was: at?.[i - 1] } : outer[0];
+    const next = j + 1 < order.length ? { now: now.get(order[j + 1]), was: at?.[j + 1] } : outer[1];
+    if (prev === null || next === null) return true;
+    const anchor = prev?.was !== undefined ? (k) => prev.now + (at[k] - prev.was) : next?.was !== undefined ? (k) => next.now - (next.was - at[k]) : null;
+    if (at && anchor) {
+      for (let k = i; k <= j; k++) if (!freshAt.has(anchor(k))) return true;
+    } else {
+      const lo = prev?.now ?? -Infinity;
+      const hi = next?.now ?? Infinity;
+      if (lo >= hi || fresh.filter((u) => u.pos > lo && u.pos < hi).length < j - i + 1) return true;
+    }
+    i = j;
+  }
+  return false;
 }
 
 // The first piece of the uncovered entries that fits the cap, so the command R5/R9 print can
@@ -718,7 +802,7 @@ export function caseOpen(c, after) {
   return c.status !== "closed" || (!c.test && !c.na && !c.event) || clickStale(c, after);
 }
 
-function processAlive(pid) {
+export function processAlive(pid) {
   if (!pid) return false;
   try {
     process.kill(pid, 0);
@@ -739,6 +823,35 @@ export function unfinishedVerify(state) {
   if (!started) return null;
   if (state.verify && started.startedAt && String(state.verify.finishedAt ?? "") >= started.startedAt) return null;
   return { startedAt: started.startedAt ?? "an unknown time", pid: started.pid ?? null, running: processAlive(started.pid) };
+}
+
+// What R3 holds against verify.json, as a short reason and R3's text, or null when it is
+// green on this source. With no source change only an added command that never ran counts.
+export function verifyProblem(state, { source = true, final = true } = {}) {
+  const { verify, ledger, now, config } = state;
+  if (source) {
+    const unfinished = unfinishedVerify(state);
+    if (unfinished) {
+      return unfinished.running
+        ? { reason: "still running", text: `a \`gate verify\` started at ${unfinished.startedAt} is still running (pid ${unfinished.pid}); wait for it, do not start another. If that pid is not a verify of yours (a reboot reused it), \`gate verify\` again replaces it.` }
+        : { reason: "never finished", text: `a \`gate verify\` started at ${unfinished.startedAt} never finished (the shell that ran it died). Run \`gate verify\` again.` };
+    }
+    if (!verify) return { reason: "no verify.json yet", text: "no verify.json for this run. Run `gate verify` after your last source edit." };
+    const red = (verify.commands ?? []).filter((c) => !c.skipped && (c.exit !== 0 || c.timedOut));
+    if (red.length) {
+      return { reason: "red", text: `verify is red: ${red.map((c) => `\`${c.cmd}\`${verifyWhere(c)} ${c.timedOut ? "timed out" : `exit ${c.exit}`}`).join("; ")}. Fix, then run \`gate verify\` again.` };
+    }
+    if (verify.sourceHash !== sourceHash(now, config)) return { reason: "stale: source changed after it", text: "verify.json is stale: source changed after the last `gate verify`. Run it again." };
+    const owed = (verify.commands ?? []).filter((c) => c.owed);
+    if (final && owed.length) {
+      return { reason: "the final check has not run on this code", text: `${owed.map((c) => `\`${c.cmd}\`${verifyWhere(c)}`).join(", ")} (the final check) has not run on this code: run \`gate verify --final\` once your edits are done; it may run in the background while review runs.` };
+    }
+  }
+  // a command the run added, or a gate.json one it restored after a verify, is owed a result
+  const ran = new Set((verify?.commands ?? []).map(verifyKey));
+  const pending = [...new Set([...(ledger.verifyAdded ?? []), ...(ledger.verifyRestored ?? [])])].filter((cmd) => !ran.has(cmd));
+  if (pending.length) return { reason: "an added command has not run", text: `verify command ${pending.map((c) => `\`${c}\``).join(", ")} has not run: \`gate verify\`` };
+  return null;
 }
 
 export function unfinishedFile(full) {
@@ -851,32 +964,8 @@ export function evaluate(state) {
     return unmet;
   }
 
-  if (src.length) {
-    const unfinished = unfinishedVerify(state);
-    if (unfinished) {
-      unmet.push({ rule: "R3", text: unfinished.running
-        ? `a \`gate verify\` started at ${unfinished.startedAt} is still running (pid ${unfinished.pid}); wait for it, do not start another. If that pid is not a verify of yours (a reboot reused it), \`gate verify\` again replaces it.`
-        : `a \`gate verify\` started at ${unfinished.startedAt} never finished (the shell that ran it died). Run \`gate verify\` again.` });
-    } else if (!verify) {
-      unmet.push({ rule: "R3", text: "no verify.json for this run. Run `gate verify` after your last source edit." });
-    } else {
-      const red = (verify.commands ?? []).filter((c) => !c.skipped && (c.exit !== 0 || c.timedOut));
-      if (red.length) {
-        unmet.push({
-          rule: "R3",
-          text: `verify is red: ${red.map((c) => `\`${c.cmd}\`${verifyWhere(c)} ${c.timedOut ? "timed out" : `exit ${c.exit}`}`).join("; ")}. Fix, then run \`gate verify\` again.`,
-        });
-      } else if (verify.sourceHash !== sourceHash(now, config)) {
-        unmet.push({ rule: "R3", text: "verify.json is stale: source changed after the last `gate verify`. Run it again." });
-      }
-    }
-  }
-  // a command the run added, or a gate.json one it restored after a verify, is owed a result
-  const ran = new Set((verify?.commands ?? []).map(verifyKey));
-  const pending = [...new Set([...(ledger.verifyAdded ?? []), ...(ledger.verifyRestored ?? [])])].filter((cmd) => !ran.has(cmd));
-  if (pending.length && !unmet.some((u) => u.rule === "R3")) {
-    unmet.push({ rule: "R3", text: `verify command ${pending.map((c) => `\`${c}\``).join(", ")} has not run: \`gate verify\`` });
-  }
+  const verifyGap = verifyProblem(state, { source: src.length > 0 });
+  if (verifyGap) unmet.push({ rule: "R3", text: verifyGap.text });
   // a large run, planned or grown there, by its size now: R7 and R9 ask more of it
   const sizeNow = effectiveTier(state.policy ?? policyFor(ledger), ledger, state.tier?.measured ?? null);
   const large = src.length > 0 && delegatedTier(state.policy ?? policyFor(ledger), sizeNow);
@@ -1009,7 +1098,7 @@ export function evaluate(state) {
   // R18: verify ran every closed case's test file through a test command
   const gaps = waived(ledger, "coverage") ? [] : coverageGaps(state);
   if (gaps.length) {
-    unmet.push({ rule: "R18", text: `verify ran no test command that covers ${gaps.map((g) => `${g.id} (${g.file})`).join(", ")}: lint and build commands do not count, and a test command that names paths covers only those. Add one that runs the file (\`gate verify --add "<test runner> ${gaps[0].file}"\`), then \`gate verify\`.${orWaive("coverage")}` });
+    unmet.push({ rule: "R18", text: `verify ran no test command that covers ${gaps.map((g) => `${g.id} (${g.file})`).join(", ")}: lint and build commands do not count, and a test command that names paths covers only those. Add one that runs the file (\`gate verify --add "<test runner> ${gaps[0].file}"\`), then \`gate verify\`; when a "final" command runs it, \`gate verify --final\`.${orWaive("coverage")}` });
   }
 
   // R17: every helper that wrote or edited a file searched the code and the memory first

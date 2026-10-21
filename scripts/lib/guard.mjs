@@ -369,7 +369,7 @@ function definedFunctions(raw) {
 
 // The gate's verbs: a `$G` call is the gate only when its first argument is one, so an unset G
 // leaves a verb name as the program, never a writer.
-const GATE_VERBS = new Set(["open", "attach", "repo", "note", "case", "step", "huddle", "waive", "decide", "close", "abandon", "rebaseline", "verify", "check", "report", "steps", "next", "size", "brief", "doctor", "help"]);
+const GATE_VERBS = new Set(["open", "attach", "repo", "note", "case", "step", "huddle", "waive", "decide", "close", "abandon", "rebaseline", "verify", "test", "setup", "check", "report", "steps", "next", "size", "brief", "doctor", "help"]);
 
 // Variables set, once and as a whole top-level command, to the gate's own CLI
 // (`G="node …/gate.mjs"; $G check`): `$G` then runs the gate. Any other use of the name voids it.

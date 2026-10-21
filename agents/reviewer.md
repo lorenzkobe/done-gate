@@ -17,7 +17,7 @@ Your inputs are in the packet named in your prompt (a `brief-<role>-<n>.md` file
 
 Review in this order:
 
-1. **Run the tests.** Run the test command from the packet yourself. Note the exit code and count. A verify result you did not reproduce is "unverified".
+1. **Run the tests.** When the packet's Verify section says verify.json is fresh, it is the gate's own green run on exactly this code: do not run the whole test command again; run the case tests it lists, and any test you need to see fail. Otherwise run the test command from the packet yourself. Note the exit code and count. A verify result that is neither fresh nor reproduced by you is "unverified".
 2. **Cases.** For each case in the table, does the named test exist and assert what the case says? A test that runs the code but asserts nothing about the case, that asserts on a mock, that anchors a value to the implementation's own constant, or that cannot fail is a weak test: Act-on. Each link, button or tab the diff adds or changes needs a click case (kind `click`) closed by a real click, shown as `events#<seq>` in the table; one with no click case, or a click case closed n/a with no good reason, is Act-on.
 3. **Bugs and edge cases.** What input breaks this: empty, null, zero, negative, unicode, very large, concurrent, retried, out of order, the refused side of every gate. Quote `file:line` and the concrete input.
 4. **Security.** Untrusted input reaching a shell, a query, a path, a template or an eval; an auth or role check missing on one branch; a secret in a log or an error.
@@ -39,7 +39,7 @@ Write the file in this shape:
 ## Dismissed
 - <thing you checked and found fine, and why>
 ## Evidence verdict
-- tests: <command> exit <code>, <n> passed (ran it myself | unverified)
+- tests: <command> exit <code>, <n> passed (ran it myself | fresh verify.json + case tests | unverified)
 - cases: <k>/<n> tests match their case
 ```
 

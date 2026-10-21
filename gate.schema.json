@@ -75,13 +75,31 @@
                 "type": "string",
                 "enum": [
                   "always",
-                  "source"
+                  "source",
+                  "final"
                 ],
-                "description": "When the command runs: always, or only when a non-test, non-doc source file changed (source). Default: source for a single npm/pnpm/yarn/bun build script call, always otherwise."
+                "description": "When the command runs: always; only when a non-test, non-doc source file changed (source); or as the final check, run once with `gate verify --final` and owed until it is green on the current implementation (final). Default: source for a single npm/pnpm/yarn/bun build script call, always otherwise."
               },
               "onlyNew": {
                 "type": "boolean",
                 "description": "For a linter that prints findings as path:line or path(line,col): an exit 1 whose findings all lie in files of this repo and off the lines this task changed counts green, and the report lists the old findings it ignored. A crash, any other exit code, a place outside the repo's source files or in a test file, output past 2 MB, or a command that runs tests stays red. It reads lines, not causes: for line-local linters (flake8, ruff, eslint -f unix), not tsc or mypy. Default: false."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "related"
+            ],
+            "properties": {
+              "related": {
+                "const": true,
+                "description": "Run testFiles on this task's related test files (closed cases' test files, changed test files, and test files that reference a changed module by its folder or package). Goes by the name `related tests`. Needs testFiles."
+              },
+              "timeout": {
+                "type": "number",
+                "description": "seconds, default 600"
               }
             }
           }
@@ -113,6 +131,18 @@
     "helperNote": {
       "type": "string",
       "description": "A standing note for every helper, printed in each packet under \"## Standing note\" (e.g. \"Never run two test runs at once: they share tests/.tmp\"). Changing it mid-task is a config change (R13)."
+    },
+    "testFiles": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "\\{files\\}",
+      "description": "The command that runs given test files, with {files} where they go (e.g. \"npx vitest run {files}\"). `gate test <test files>` runs it, and a fresh-verify reviewer packet names the exact `gate test` line. Changing it mid-task is a config change (R13). null records that the user declined the faster test loop, so session start does not propose it again."
+    },
+    "serialTests": {
+      "type": "boolean",
+      "description": "true when test runs must not overlap (one shared test database or folder): `gate test` and `gate verify` take one repo-wide lock and wait their turn, and helper packets say to run tests only through `gate test`. Changing it mid-task is a config change (R13)."
     }
   }
 }

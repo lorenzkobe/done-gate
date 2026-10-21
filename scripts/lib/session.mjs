@@ -2,10 +2,11 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import path from "node:path";
 import { assess, unmetCount } from "./assess.mjs";
 import { ensureSession, loadSession } from "./session-state.mjs";
-import { recordGateError } from "./context.mjs";
+import { recordGateError, UsageError } from "./context.mjs";
 import { attachLedger, currentLedger, isDone, loadLedger, openRuns, runsDir, saveLedger } from "./ledger.mjs";
 import { writeReport } from "./verbs.mjs";
 import { checkRelease, UPDATE_COMMANDS } from "./release.mjs";
+import { needsSetup } from "./setup.mjs";
 
 const DAY_MS = 24 * 3600 * 1000;
 const STALE_MS = 14 * DAY_MS;
@@ -114,6 +115,17 @@ export const verbs = {
     const root = ctx.pluginRoot.split(path.sep).join("/");
     if (existsSync(path.join(ctx.pluginRoot, ".git")) && !root.includes("/.claude/plugins/")) {
       parts.push(`\n<done-gate-status>\ndone-gate runs in place from ${ctx.pluginRoot}, a git working folder: every edit there reaches this session at once, half-done ones included. That is right for testing the plugin (claude --plugin-dir); for real work install it from a release (claude plugin marketplace add <owner>/<repo>, then claude plugin install done-gate@done-gate).\n</done-gate-status>`);
+    }
+    // a repo with tests but no testFiles is asked once, before a run opens: gate.json changed
+    // mid-run trips R13
+    try {
+      const running = Boolean(currentLedger(ctx.stateDir, ctx.session)) || foreign !== null || openRuns(ctx.stateDir).some((r) => r.ledger.status !== "closed");
+      if (!running && needsSetup(ctx.root)) {
+        parts.push("\n<done-gate-setup>\nThis repo is not set up for the faster test loop (.claude/gate.json has no testFiles): verify runs whole test commands on every call. Before the first task, run `gate setup`, check its proposal against how this repo runs tests, and show it to the user. On their yes, `gate setup --apply [edited.json] --user-ok \"<their words>\"`; on a no, `gate setup --decline --user-ok \"<their words>\"` so it is not asked again. Do it before `gate open`: changing gate.json mid-run trips R13.\n</done-gate-setup>");
+      }
+    } catch (error) {
+      // a gate.json that is not valid JSON is the repo's to fix, not a gate failure
+      if (!(error instanceof UsageError)) recordGateError(error, "session-start");
     }
     const latest = await checkRelease(ctx.version);
     if (latest) {
