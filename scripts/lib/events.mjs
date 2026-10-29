@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { toPosixRel } from "./paths.mjs";
 // guard.mjs imports this module back: both sides only call each other inside functions
-import { gitMoves, gitWrites, readsOnly, scratchOnly } from "./guard.mjs";
+import { gitMoves, gitWrites, ownFileWrites, readsOnly, runsInline, scratchOnly } from "./guard.mjs";
 
 // Wall-clock microseconds, strictly increasing within a process. Orders events across
 // parallel hook processes by wall clock without a shared counter file (which would race).
@@ -42,6 +42,14 @@ function exitOf(response) {
   return typeof code === "number" ? code : null;
 }
 
+// A helper's shell write to its own findings file is its edit, as a Write would be; the command
+// itself then wrote nothing a source change could come from, so it is tagged like a scratch write.
+// The fence let it through only into the current run, so any run dir here is that one.
+function ownEdits(input, cmd, root, b) {
+  if (!input.agent_id) return [];
+  return ownFileWrites(cmd, input.agent_type, root).map((p) => ({ ...b(), kind: "edit", tool: "Bash", path: p }));
+}
+
 // The call's id, which pairs a command with the start the fence logged for it.
 export const toolUse = (input) => (typeof input.tool_use_id === "string" && input.tool_use_id ? { toolUseId: input.tool_use_id } : {});
 
@@ -73,7 +81,8 @@ export function eventsFromHookInput(input, root, repos = []) {
     const code = /exit code:?\s*(\d+)/i.exec(String(input.tool_error ?? ""));
     if (tool !== "Bash" || !code) return [];
     const cmd = String(input.tool_input?.command ?? "");
-    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: Number(code[1]), ...toolUse(input), ...(gitWrites(cmd) ? { git: true, commits: !gitMoves(cmd) } : {}), ...(readsOnly(cmd) ? { readOnly: true } : {}) }];
+    const own = ownEdits(input, cmd, root, b);
+    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: Number(code[1]), ...toolUse(input), ...(gitWrites(cmd) ? { git: true, commits: !gitMoves(cmd) } : {}), ...(readsOnly(cmd) ? { readOnly: true } : {}), ...(runsInline(cmd) ? { runs: true } : {}), ...(own.length ? { scratch: true } : {}) }, ...own];
   }
   if (event !== "PostToolUse") return [];
 
@@ -88,8 +97,9 @@ export function eventsFromHookInput(input, root, repos = []) {
     // run may have moved HEAD itself, readOnly when the command cannot have written source
     const git = gitWrites(cmd);
     const readOnly = readsOnly(cmd);
-    const scratch = !readOnly && scratchOnly(cmd);
-    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...toolUse(input), ...(background ? { background: true } : {}), ...(git ? { git: true, commits: !gitMoves(cmd) } : {}), ...(readOnly ? { readOnly: true } : {}), ...(scratch ? { scratch: true } : {}) }];
+    const own = ownEdits(input, cmd, root, b);
+    const scratch = !readOnly && (own.length > 0 || scratchOnly(cmd));
+    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...toolUse(input), ...(background ? { background: true } : {}), ...(git ? { git: true, commits: !gitMoves(cmd) } : {}), ...(readOnly ? { readOnly: true } : {}), ...(runsInline(cmd) ? { runs: true } : {}), ...(scratch ? { scratch: true } : {}) }, ...own];
   }
   if (tool === "Agent" || tool === "Task") {
     return [{ ...b(), kind: "agent", tool, spawned: input.tool_input?.subagent_type ?? null }];

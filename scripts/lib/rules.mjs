@@ -384,10 +384,11 @@ function gateNote(cmd) {
 }
 
 // What a step that claims a run can close on, oldest first. A background run reports before
-// it can fail, and a read-only command (cat, grep, echo) reads the code without running it.
+// it can fail, and a read-only command (cat, grep, echo) reads the code without running it;
+// inline interpreter code that writes nothing still ran.
 export function ranEvents(state) {
   const since = state.ledger?.openedSeq ?? 0;
-  return (state.events ?? []).filter((e) => RUN_KINDS.has(e.kind) && e.seq > since && !e.background && !e.readOnly && !e.failed && !gateNote(e.cmd) && (e.kind !== "skill" || e.skill === "verify") && !notesTool(e));
+  return (state.events ?? []).filter((e) => RUN_KINDS.has(e.kind) && e.seq > since && !e.background && (!e.readOnly || e.runs) && !e.failed && !gateNote(e.cmd) && (e.kind !== "skill" || e.skill === "verify") && !notesTool(e));
 }
 
 export function ranText(e) {

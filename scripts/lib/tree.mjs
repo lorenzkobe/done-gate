@@ -230,6 +230,8 @@ function addFiles(files, dir, key, previous) {
     } catch {
       continue; // deleted between listing and stat
     }
+    // git lists a submodule and a symlink to a folder too; neither has content to hash
+    if (!st.isFile()) continue;
     const prev = previous?.files?.[rel];
     if (prev && prev.s === st.size && prev.m === st.mtimeMs && "l" in prev) {
       files[rel] = prev;

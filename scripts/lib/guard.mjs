@@ -483,6 +483,15 @@ export function inlineWrites(raw) {
   });
 }
 
+// Inline code an interpreter runs (`node -e`, `python -c`, a heredoc into one) is a run even
+// when it writes nothing; `sh -c` is read as the command it holds.
+export function runsInline(raw) {
+  return segments(withoutHeredocs(raw)).some((seg) => {
+    const { words } = shift(seg);
+    return words.length > 0 && !SHELLS.has(words[0].text) && inlineCode(words[0].text, words.slice(1), raw) !== null;
+  });
+}
+
 // Where a command writes: `outside` lists the targets not under a scratch path; `blind` names
 // writes whose target cannot be read from the text (an unknown variable, inline code that
 // writes, a git command, an extract into an unknown directory). Variables set in the same
@@ -814,6 +823,28 @@ function inlineWriteTargets(raw) {
   return { targets, unknown, lost };
 }
 
+const OWN_PREFIX = { ...OWN_FILE, worker: "worker" };
+
+// The findings files a helper's shell command writes when every write is one of them: its role's
+// <prefix>-<n>.md in a run dir, each target known, no git write, no other evidence named once
+// those paths are taken out. Anything else is [] and the evidence fence decides as before.
+export function ownFileWrites(raw, agentType, root) {
+  const prefix = OWN_PREFIX[String(agentType ?? "").replace(/^done-gate:/, "")];
+  if (!prefix || gitWrites(raw)) return [];
+  const own = new RegExp(`^\\.claude/gate/runs/[^/]+/${prefix}-\\d+\\.md$`);
+  const { all, blind } = shellWrites(raw);
+  const inline = inlineWriteTargets(raw);
+  // shellWrites cannot see where inline code writes; inlineWriteTargets reads its literal targets
+  if (blind.some((b) => !/inline code writes$/.test(b)) || inline.unknown || inline.lost) return [];
+  const rel = (t) => toPosixRel(root, path.resolve(root, t));
+  const written = [...all, ...inline.targets];
+  if (!written.every((t) => own.test(rel(t) ?? "") || isScratch(t))) return [];
+  const targets = [...new Set(written.map(rel).filter((t) => own.test(t ?? "")))];
+  if (!targets.length) return [];
+  const rest = String(raw).replace(new RegExp(`[^\\s'"=]*\\.claude/gate/runs/[^/\\s'"]+/${prefix}-\\d+\\.md`, "g"), "OWN");
+  return EVIDENCE_IN_COMMAND.test(rest) || namesGateDir(withoutHeredocs(rest)) ? [] : targets;
+}
+
 export function decide(input, root, config = null, currentRun = null, ledger = null, where = {}) {
   const repos = ledger?.repos ?? [];
   config ??= loadConfig(root, repos);
@@ -821,11 +852,13 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
   const agentType = input.agent_type ?? null;
   const roleName = Object.keys(OWN_FILE).find((r) => agentType === `done-gate:${r}` || agentType === r) ?? null;
   const owed = roleName ? draftOwed(roleName, root, currentRun, { ...where, agentId: input.agent_id ?? null }) : null;
+  const ownShell = tool === "Bash" && currentRun ? ownFileWrites(String(input.tool_input?.command ?? ""), agentType, root) : [];
   if (owed) {
     const rel = targetPaths(input, root, repos)[0] ?? null;
     const packet = rel && PACKET.test(rel);
     const ownFile = owed.includes(rel);
-    if (!((tool === "Read" && packet) || (EDIT_TOOLS.has(tool) && ownFile))) {
+    const drafts = ownShell.length > 0 && ownShell.every((p) => owed.includes(p));
+    if (!((tool === "Read" && packet) || (EDIT_TOOLS.has(tool) && ownFile) || drafts)) {
       return { deny: true, reason: `done-gate: write your draft first: ${owed.join(" or ")} (every section may read "- unverified"); until it exists you may only read your packet. Then investigate and rewrite it.`, paths: rel ? [rel] : [] };
     }
     return { deny: false };
@@ -834,6 +867,7 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
 
   if (tool === "Bash") {
     const cmd = String(input.tool_input?.command ?? "");
+    if (ownShell.length && ownShell.every((p) => inCurrentRun(p, currentRun))) return { deny: false };
     // a heredoc that quotes an evidence path is text; the command around it is what runs,
     // unless the heredoc feeds an interpreter whose code writes
     // a write only under scratch paths cannot reach evidence, whatever it read
