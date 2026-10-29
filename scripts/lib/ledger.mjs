@@ -383,6 +383,30 @@ function printOpen(ctx, dir, ledger) {
   printNext(ctx);
 }
 
+// A verb from the model's shell has no CLAUDE_PROJECT_DIR and roots itself at its cwd, while the
+// hooks file the session's events under the repo it started in. A run opened in a sibling (or in a
+// repo inside that one) would never see them: the repo that has them, or null.
+function eventsElsewhere(ctx) {
+  if (process.env.CLAUDE_PROJECT_DIR || !ctx.session) return null;
+  const has = (dir) => existsSync(path.join(dir, ".claude", "gate", "sessions", String(ctx.session), "events.jsonl"));
+  if (has(ctx.root)) return null;
+  const parent = path.dirname(ctx.root);
+  let siblings = [];
+  try {
+    siblings = readdirSync(parent, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => path.join(parent, d.name));
+  } catch {
+    // an unreadable parent leaves the ancestors to check
+  }
+  const ancestors = [];
+  for (let dir = parent; dir !== path.dirname(dir); dir = path.dirname(dir)) ancestors.push(dir);
+  return [...siblings, ...ancestors].find((dir) => dir !== ctx.root && has(dir)) ?? null;
+}
+
+function refuseElsewhere(ctx, verb) {
+  const home = eventsElsewhere(ctx);
+  if (home) throw new UsageError(`this session's hook events are filed under ${home}, the repo it started in, so a run in ${ctx.root} would never see its searches, runs or your messages. Run it from there and declare this repo: \`cd ${home} && gate ${verb} --repo ${ctx.root}\``);
+}
+
 export const verbs = {
   open(ctx) {
     const rest = [];
@@ -410,6 +434,7 @@ export const verbs = {
     if (latest && !joining && !saidSince(readEvents(ctx.stateDir, ctx.session), 0, oldOk)) {
       throw new UsageError(`done-gate ${latest} is out and this session runs ${ctx.version}: tell the user and ask. To update: ${UPDATE_COMMANDS}. To carry on with ${ctx.version}: \`gate open ${slug} ${playbook ?? "<playbook>"} --old-version-ok "<their words, at least three>"\``);
     }
+    refuseElsewhere(ctx, `open ${[slug, playbook].filter(Boolean).join(" ")}`);
     const { dir, ledger } = openLedger(ctx, slug, playbook, repos);
     printOpen(ctx, dir, ledger);
   },
@@ -423,6 +448,7 @@ export const verbs = {
   attach(ctx) {
     const [slug] = ctx.args;
     if (!slug) throw new UsageError("usage: gate attach <slug>");
+    refuseElsewhere(ctx, `open ${slug}`);
     const { dir, ledger } = attachLedger(ctx, slug);
     printOpen(ctx, dir, ledger);
   },
