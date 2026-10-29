@@ -39,7 +39,7 @@ Start each Bash command with `gate() { node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.
    reviewer-2 too, spawn both at once; `gate verify` may run in the background.
    Below large: fix and `gate huddle resolve H<k>.<i> --evidence <ptr>`. Large: `gate brief
    worker`, SendMessage the worker its packet, then `gate huddle reply --file
-   worker-<n>.md`. Same reviewer until a round is clean, three rounds at most; still disputed: `gate brief arbiter --item H<k>.<i>`, `done-gate:arbiter`. Disagree:
+   worker-<n>.md`. Same reviewer until a round is clean, three rounds + a fix-check; still disputed: `gate brief arbiter --item H<k>.<i>`, `done-gate:arbiter`. Disagree:
    `gate huddle dispute H<k>.<i> "<why>" --evidence <ptr>`, one round.
 6. `gate verify` after the last edit, Bash timeout 600000 ms. Drive the real UI if it
    changed (R4); probe the real schema likewise (R6).

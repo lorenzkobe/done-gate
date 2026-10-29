@@ -137,13 +137,18 @@ test("C6 reported-surface: the fix-check packet lists the findings to re-check w
   assert.match(section, /ADDRESSED or NOT ADDRESSED/);
 });
 
-test("C7 boundary: three whole-file rounds, each with a fixed finding, cover the file by the cap", () => {
+test("C7 boundary: three whole-file rounds, each with a fixed finding, leave only the fixed lines for one fix-check round, which ends the review", () => {
   const repo = opened("fc-c7");
   for (let i = 1; i <= 3; i++) {
     round(repo, "reviewer", null, [FINDING]);
     fixLine30(repo, 1000 + i);
     cli(repo, "huddle", ["resolve", `H${i}.1`, "--evidence", "src/mid.ts:30"]);
   }
+  const entries = entriesOf(ruleLine(check(repo), "R5"));
+  assert.ok(entries.length > 0 && entries.every((e) => /^src\/mid\.ts:\d+-\d+$/.test(e)), entries.join(", "));
+  round(repo, "reviewer", null, [FINDING]);
+  fixLine30(repo, 2000);
+  cli(repo, "huddle", ["resolve", "H4.1", "--evidence", "src/mid.ts:30"]);
   assert.ok(!blocks(check(repo), "R5"), check(repo));
 });
 

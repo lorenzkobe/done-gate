@@ -499,7 +499,19 @@ export const verbs = {
     const seenByRole = new Set(state.ledger.huddles.filter((h) => h.role === role && Array.isArray(h.files)).flatMap((h) => h.files.map(pathOf)));
     const neverSeen = unseen === null ? [] : reviewScope(state).filter((f) => !seenByRole.has(f));
     const stillOpen = piece ? piece.files.map(pathOf).some((f) => neverSeen.includes(f)) : neverSeen.length > 0;
-    if (done >= REVIEW_CAP && !(legacy && role === "reviewer-2") && !stillOpen) {
+    // past the cap, the fixes made after the last round get one fix-check round over the lines
+    // they changed, once every finding of the role on those files is closed; never a second one
+    const pieceFiles = piece ? piece.files.map(pathOf) : reviewScope(state);
+    const roleRounds = state.ledger.huddles.filter((h) => h.role === role);
+    const fixCheck = reviewing && done >= REVIEW_CAP && (unseen ?? []).some((u) => pieceFiles.includes(pathOf(u)))
+      && roleRounds.every((h) => h.actOn.every((a) => a.closed))
+      && !roleRounds.some((h) => h.fixCheck && (h.files ?? []).some((e) => pieceFiles.includes(pathOf(e))));
+    // the fix-check is a file's last round, so it takes every unreviewed part of each file at once
+    const split = fixCheck && piece ? (unseen ?? []).filter((u) => pieceFiles.includes(pathOf(u)) && !piece.files.includes(u) && !piece.files.includes(pathOf(u))) : [];
+    if (split.length && !stillOpen) {
+      throw new UsageError(`${role} fix-check: it is the last round for ${[...new Set(split.map(pathOf))].join(", ")}, so it takes all of its unreviewed lines at once: \`gate brief ${role} --files ${(unseen ?? []).filter((u) => pieceFiles.includes(pathOf(u))).join(",")}\``);
+    }
+    if (done >= REVIEW_CAP && !(legacy && role === "reviewer-2") && !stillOpen && !fixCheck) {
       throw new UsageError(`${role} round ${done + 1}: three rounds is the cap. What is still disputed goes to the arbiter (\`gate brief arbiter --item H<k>.<i>\`, spawn done-gate:arbiter); what is still open is fixed and closed with \`gate huddle resolve\`.`);
     }
     let item = null;
@@ -514,7 +526,7 @@ export const verbs = {
     // seen is what this round's reviewer is shown (its huddle inherits it); the other roles'
     // briefs are dated under briefed, so a ledger with no seen map stays a legacy one
     if (piece) {
-      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...(Object.keys(piece.units).length ? { units: piece.units } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}) } };
+      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...(Object.keys(piece.units).length ? { units: piece.units } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true } : {}) } };
       saveLedger(state.dir, state.ledger);
     } else if (own) {
       state.ledger.briefed = { ...(state.ledger.briefed ?? {}), [own]: { seq: nextSeq(), ...(owned ? { files: owned } : {}), ...(item ? { item: item.id } : {}) } };

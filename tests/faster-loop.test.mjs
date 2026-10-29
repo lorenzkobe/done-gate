@@ -106,7 +106,7 @@ test("C3 refused: a round with Act-on items, fixed and closed below the cap: R5 
   assert.ok(blocks(check(repo), "R5"), `a fix below the cap is verified by another round:\n${check(repo)}`);
 });
 
-test("C4 boundary: round three has items; fixed and closed in seen files, R5 passes and no fourth round is asked", () => {
+test("C4 boundary: round three has items, fixed and closed: R5 asks one fix-check round, and after it closed items are enough", () => {
   const repo = opened("fl-c4");
   edit(repo, "src/a.ts", "export const a = 2;\n");
   for (const n of [1, 2, 3]) {
@@ -114,7 +114,11 @@ test("C4 boundary: round three has items; fixed and closed in seen files, R5 pas
     edit(repo, "src/a.ts", `export const a = ${10 + n};\n`);
     closeAll(repo);
   }
-  assert.ok(!blocks(check(repo), "R5"), `after the cap, closed items are enough:\n${check(repo)}`);
+  assert.ok(blocks(check(repo), "R5"), `the third round's fix gets a fix-check round:\n${check(repo)}`);
+  round(repo, "reviewer", 4, ["finding 4 — src/a.ts:1"]);
+  edit(repo, "src/a.ts", "export const a = 20;\n");
+  closeAll(repo);
+  assert.ok(!blocks(check(repo), "R5"), `after the fix-check round, closed items are enough:\n${check(repo)}`);
 });
 
 test("C5 edge: reviewer-2 on a high-risk path: a clean round then an edit in a seen file passes R9; a fourth reviewer-2 round is refused", () => {
@@ -149,10 +153,10 @@ test("C6 idempotent: a huddle recorded before this change (no files) keeps the o
   assert.ok(blocks(check(repo), "R5"), `an old huddle cannot vouch for later edits:\n${check(repo)}`);
 });
 
-test("C16 boundary: past the cap a round is briefed only when a file no round saw exists", () => {
+test("C16 boundary: past the cap and its fix-check round, a round is briefed only when a file no round saw exists", () => {
   const repo = opened("fl-c16");
   edit(repo, "src/a.ts", "export const a = 2;\n");
-  for (const n of [1, 2, 3]) {
+  for (const n of [1, 2, 3, 4]) {
     round(repo, "reviewer", n, [`finding ${n} — src/a.ts:1`]);
     edit(repo, "src/a.ts", `export const a = ${10 + n};\n`);
     closeAll(repo);

@@ -603,8 +603,8 @@ function spans(rel, open, all) {
 // A change is reviewed in pieces when it is large; each round records what it saw: whole
 // files, or slices of them as the content keys of the changed lines inside the range. A
 // changed line is covered when the last round of this role that saw it really ran (the
-// helper stopped after its brief) and came back clean, or was the last round the cap allows
-// for that file, or had every item closed with no implementation edit since it stopped. An
+// helper stopped after its brief) and came back clean, or was the fix-check round after the
+// cap's third, or had every item closed with no implementation edit since it stopped. An
 // edit above a slice moves its lines but keeps them covered; an edit to a line uncovers that
 // line. A round whose items are all closed also covers the lines it recorded that the fix left
 // unchanged, so only the fixed lines need a fix-check round; when a fix deleted a line it
@@ -620,8 +620,10 @@ export function uncovered(state, role, after = lastEditSeq(state, state.config, 
   const covered = (round, seenBy, rel = null, key = null) => {
     const stop = stopOf(round);
     if (!stop) return false;
-    if (!round.actOn.length || seenBy >= REVIEW_CAP) return true;
-    if (!round.actOn.every((a) => a.closed)) return false;
+    // the fix-check round after the cap is the last; at the cap an open finding is fixed and
+    // resolved (R5/R9 name it), not briefed again
+    if (round.fixCheck || !round.actOn.length || seenBy > REVIEW_CAP) return true;
+    if (!round.actOn.every((a) => a.closed)) return seenBy >= REVIEW_CAP;
     return after < stop.seq || (key !== null && keptLine(round, rel, key, counts));
   };
   const out = [];
@@ -631,6 +633,8 @@ export function uncovered(state, role, after = lastEditSeq(state, state.config, 
       out.push(rel);
       continue;
     }
+    // a fix inside the fix-check round gives its lines new keys; the round still ends the file's review
+    if (seeing.some((h) => h.fixCheck && stopOf(h))) continue;
     const whole = (h) => h.files.includes(rel);
     const keyed = (h) => Array.isArray(h.units?.[rel]);
     if (seeing.every((h) => whole(h) && !keyed(h))) {
@@ -643,7 +647,7 @@ export function uncovered(state, role, after = lastEditSeq(state, state.config, 
     counts = baseCounts(units.map((u) => u.key));
     // rounds with every item closed and an edit since: the fix narrows them to the lines it
     // changed, unless it deleted a line, which keeps the rule from before (the whole file, or
-    // slice, waits for a round, the cap included)
+    // slice, waits for a round)
     const fixed = seeing.filter((h) => keyed(h) && h.actOn.length && h.actOn.every((a) => a.closed) && stopOf(h) && after > stopOf(h).seq);
     const narrow = !fixed.some((h) => fixDeleted(h.units[rel], units, whole(h), h.edges?.[rel], h.at?.[rel]));
     // with slices the cap counts the rounds that saw this line, not the file
