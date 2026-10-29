@@ -101,6 +101,29 @@ function written(v) {
   return Object.keys(extra).length ? { cmd: v.cmd, ...extra } : v.cmd;
 }
 
+// The paths a command's words name: test files by the repo's globs, and whether any is wider (a
+// folder or a glob). `bash -c "…"` is read as the command it holds.
+function namedPaths(root, cmd, config) {
+  const out = { files: 0, wide: false };
+  for (const seg of segments(withoutHeredocs(cmd))) {
+    const words = seg.map((w) => w.text).filter((w) => w !== "");
+    if (/^(?:bash|sh|zsh)$/.test(path.basename(words[0] ?? "")) && words[1] === "-c" && words[2]) {
+      const inner = namedPaths(root, words[2], config);
+      out.files += inner.files;
+      out.wide ||= inner.wide;
+      continue;
+    }
+    for (const w of words.slice(1)) {
+      if (w.startsWith("-")) continue;
+      const bare = w.split("::")[0].replace(/\/$/, "");
+      if (GLOB.test(bare)) out.wide = true;
+      else if (existsSync(path.join(root, bare)) && statSync(path.join(root, bare)).isDirectory()) out.wide = true;
+      else if (config.isTest(bare) && existsSync(path.join(root, bare))) out.files += 1;
+    }
+  }
+  return out;
+}
+
 // gate.json with the faster test loop's keys added; every key it had is kept. The test-running
 // verify commands become the final check, and the related entry runs before them.
 export function proposeSetup(root) {
@@ -111,11 +134,17 @@ export function proposeSetup(root) {
   const wrapped = config.verify.map((v) => (v.related ? null : { cmd: v.cmd, template: wrapperOf(root, v.cmd, files, config) })).find((w) => w?.template);
   const testFiles = usable(raw.testFiles) ? raw.testFiles : wrapped?.template ?? runner(root);
   const rawVerify = Array.isArray(raw.verify) ? raw.verify : null;
-  const entries = config.verify.map((v, i) => {
+  const testCmd = (v) => !v.related && runsTests(v.cmd, testFiles);
+  // a test command that names single test files and nothing wider is the last tickets' list:
+  // once testFiles exists, the related entry runs each task's own tests instead
+  const perTicket = (v) => Boolean(testFiles) && testCmd(v) && v.when !== "final" && (({ files, wide }) => files > 0 && !wide)(namedPaths(root, v.cmd, config));
+  const dropped = config.verify.filter(perTicket).map((v) => v.cmd);
+  const entries = config.verify.flatMap((v, i) => {
     const original = rawVerify?.[i];
-    if (v.related || v.when === "final" || v.when === "source" || !runsTests(v.cmd)) return original ?? written(v);
+    if (perTicket(v)) return [];
+    if (v.related || v.when === "final" || v.when === "source" || !testCmd(v)) return [original ?? written(v)];
     const base = typeof original === "object" && original ? original : written(v);
-    return typeof base === "string" ? { cmd: base, when: "final" } : { ...base, when: "final" };
+    return [typeof base === "string" ? { cmd: base, when: "final" } : { ...base, when: "final" }];
   });
   // a related entry needs testFiles, or every verify refuses to start
   if (testFiles && !config.verify.some((v) => v.related)) {
@@ -128,6 +157,7 @@ export function proposeSetup(root) {
   else if (usable(raw.testFiles)) notes.push("testFiles is the one gate.json already has.");
   else if (wrapped) notes.push(`testFiles is taken from how verify already runs named test files: ${wrapped.cmd.length > 120 ? `${wrapped.cmd.slice(0, 117)}...` : wrapped.cmd}`);
   else notes.push(`testFiles is a guess from the repo (${testFiles}): if tests run through a wrapper (a test database script, a container), use that instead.`);
+  for (const cmd of dropped) notes.push(`Left out of verify, since it names only single test files (a past task's list) and the related entry runs each task's own tests (if it is the suite, put it back with "when": "final"): ${cmd.length > 120 ? `${cmd.slice(0, 117)}...` : cmd}`);
   if (wrapped && /(?:^|[^a-z])(?:db|database|postgres|mysql|mongo|docker|compose)(?![a-z])/i.test(wrapped.template)) notes.push("That wrapper looks like a shared test database: test runs through it likely must not overlap, so \"serialTests\": true is probably right.");
   if (!entries.some((e) => typeof e === "object" && e.when === "final")) notes.push('No test command to run as the final check: add one with "when": "final" (the area suite, green at HEAD).');
   else notes.push("The final command must pass at HEAD: deselect failures that are already there, or every close blocks on them. Narrow it to the area you work in if the whole suite is slow; CI runs the full suite.");

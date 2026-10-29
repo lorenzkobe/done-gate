@@ -9,7 +9,7 @@ import { loadSession } from "./session-state.mjs";
 // Read-only verbs. `check` prints only what is still unmet; "clean" when nothing is.
 // `doctor` prints the plugin, config, session and ledger state for debugging.
 const HELP = `gate <verb>: node <plugin>/scripts/gate.mjs <verb>
-  open <slug> <feature|bugfix|refactor|plan|investigation> [--repo <path>]   start a run (or re-attach one with that slug); --repo adds a further git repo to it
+  open <slug> <feature|bugfix|refactor|plan|investigation> [--repo <path>] [--setup-later "<the user's words>"]   start a run (or re-attach one with that slug); --repo adds a further git repo to it; --setup-later opens before gate setup on the user's say-so
   repo add <path>                                           add a further git repo to the open run, measured from its HEAD
   attach <slug>                                             join an open run from another session
   note task|context|plan "<text>" [--files a,b] [--size t]  write the ledger sections

@@ -6,6 +6,7 @@ import { loadConfig, repoConfig } from "./config.mjs";
 import { nextSeq, readEvents } from "./events.mjs";
 import { repoPath } from "./paths.mjs";
 import { ensureSession, loadSession, saveSession, updateSession } from "./session-state.mjs";
+import { needsSetup } from "./setup.mjs";
 import { baseCopyPath, diffSnapshots, gitHead, gitNumstat, gitTop, gitTracked, snapshot, taskBaseline, withRepoAtHead, withRepos, withoutRepos } from "./tree.mjs";
 import { emptyTier } from "./size.mjs";
 // size.mjs imports assess.mjs, which imports this module: loadPolicy is only ever called at
@@ -407,22 +408,40 @@ function refuseElsewhere(ctx, verb) {
   if (home) throw new UsageError(`this session's hook events are filed under ${home}, the repo it started in, so a run in ${ctx.root} would never see its searches, runs or your messages. Run it from there and declare this repo: \`cd ${home} && gate ${verb} --repo ${ctx.root}\``);
 }
 
+// A session shown the setup notice at its start cannot open a run until the repo is set up or
+// set aside: the notice alone went unread in busy sessions, and gate.json cannot change once a
+// run is open. The user's own words for "later" hold for the rest of the session.
+function refuseSetup(ctx, slug, playbook, later) {
+  const session = loadSession(ctx.stateDir, ctx.session);
+  if (!session?.setupNoticed || session.setupLater || !needsSetup(ctx.root)) return;
+  if (later && saidSince(readEvents(ctx.stateDir, ctx.session), session.baselineSeq ?? 0, later)) {
+    updateSession(ctx.stateDir, ctx.session, { setupLater: later.trim() });
+    return;
+  }
+  const again = `gate open ${[slug, playbook].filter(Boolean).join(" ")}`;
+  throw new UsageError(`this repo is not set up for the faster test loop, and gate.json cannot change once a run is open. Run \`gate setup\` now, check its proposal and show it to the user: on their yes \`gate setup --apply [edited.json] --user-ok "<their words>"\`, on a no \`gate setup --decline --user-ok "<their words>"\`. If they want to decide later: \`${again} --setup-later "<their words, at least three>"\`${later ? ` (the user did not say "${later}" in this session)` : ""}.`);
+}
+
 export const verbs = {
   open(ctx) {
     const rest = [];
     const repos = [];
     let oldOk = "";
+    let setupLater = "";
     for (let i = 0; i < ctx.args.length; i++) {
       const arg = ctx.args[i];
       const named = arg.startsWith("--repo=") ? arg.slice(7) : arg === "--repo" ? ctx.args[++i] : null;
       if (named) repos.push(named);
       else if (arg === "--repo" || arg.startsWith("--repo=")) throw new UsageError("--repo needs a path: gate open <slug> <playbook> --repo ../other");
-      else if (arg === "--old-version-ok") {
+      else if (arg === "--setup-later") {
+        setupLater = ctx.args[++i] ?? "";
+        if (!setupLater.trim() || setupLater.startsWith("--")) throw new UsageError('--setup-later needs the user\'s words: gate open <slug> <playbook> --setup-later "<their words>"');
+      } else if (arg === "--old-version-ok") {
         oldOk = ctx.args[++i] ?? "";
         if (!oldOk.trim() || oldOk.startsWith("--")) throw new UsageError('--old-version-ok needs the user\'s words: gate open <slug> <playbook> --old-version-ok "<their words>"');
       }
       // an ignored flag would open the run without what it asked for
-      else if (arg.startsWith("--")) throw new UsageError(`gate open: unknown option ${arg} (have: --repo <path>, --old-version-ok "<the user's words>")`);
+      else if (arg.startsWith("--")) throw new UsageError(`gate open: unknown option ${arg} (have: --repo <path>, --old-version-ok "<the user's words>", --setup-later "<the user's words>")`);
       else rest.push(arg);
     }
     const [slug, playbook] = rest;
@@ -435,6 +454,7 @@ export const verbs = {
       throw new UsageError(`done-gate ${latest} is out and this session runs ${ctx.version}: tell the user and ask. To update: ${UPDATE_COMMANDS}. To carry on with ${ctx.version}: \`gate open ${slug} ${playbook ?? "<playbook>"} --old-version-ok "<their words, at least three>"\``);
     }
     refuseElsewhere(ctx, `open ${[slug, playbook].filter(Boolean).join(" ")}`);
+    if (!joining) refuseSetup(ctx, slug, playbook, setupLater);
     const { dir, ledger } = openLedger(ctx, slug, playbook, repos);
     printOpen(ctx, dir, ledger);
   },

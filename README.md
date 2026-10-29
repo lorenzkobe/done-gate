@@ -448,11 +448,16 @@ key mid-task is a config change (R13).
 
 A repo with tests and no `testFiles` key is asked once, at session start and before any run
 opens: `gate setup` prints a proposal built from the repo (the runner it can prove, the verify
-commands kept, `{"related": true}` added, the test command marked `final`, `serialTests` left as a
+commands kept, `{"related": true}` added, the test command marked `final`, a verify command
+that names only single test files (a past task's list) left out, `serialTests` left as a
 question) and writes nothing. On the user's yes, `gate setup --apply [edited.json] --user-ok
 "<their words>"` writes it; on a no, `gate setup --decline --user-ok "<their words>"` records
 `"testFiles": null`. Either write is the gate's own, not task work, and is refused while a run is
-open (R13). To change your mind later, edit gate.json in a task run like any config change.
+open (R13). Until one of them is done, that session's `gate open` refuses; the user can put it
+off for the session with `gate open <slug> <playbook> --setup-later "<their words>"`. To change
+your mind later, edit gate.json in a task run like any config change. A verify command that
+starts like the `testFiles` template (a wrapper such as `scripts/test_db.sh run …`) counts as a
+test command for coverage.
 
 Test what changed while working, and the wider area once at the end:
 

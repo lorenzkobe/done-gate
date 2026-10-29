@@ -30,7 +30,8 @@ function proposal(repo) {
   const end = r.stdout.lastIndexOf("\n}") + 2;
   return { json: JSON.parse(r.stdout.slice(start, end)), out: r.stdout };
 }
-const JEST = { "package.json": JSON.stringify({ name: "j", scripts: { lint: "eslint .", test: "jest", build: "tsc" }, devDependencies: { jest: "29" } }) };
+// no gate.json: the fixture's declined setup would hide the ask these tests are about
+const JEST = { "package.json": JSON.stringify({ name: "j", scripts: { lint: "eslint .", test: "jest", build: "tsc" }, devDependencies: { jest: "29" } }), ".claude/gate.json": null };
 
 test("C1 happy: a repo with tests and no testFiles key gets a setup block at session start", () => {
   const repo = makeRepo("ts-c1", JEST);
@@ -117,7 +118,8 @@ test("C7 edge: --apply writes the proposal with the user's OK and counts as no c
   const open = makeRepo("ts-c7-open", JEST);
   startContext(open);
   said(open, "yes add the keys please");
-  run(open, "open", ["t", "feature"]);
+  said(open, "set it up later please");
+  assert.equal(run(open, "open", ["t", "feature", "--setup-later", "set it up later"]).status, 0);
   const refused = run(open, "setup", ["--apply", "--user-ok", "yes add the keys"]);
   assert.notEqual(refused.status, 0);
   assert.match(refused.stderr, /run is open|R13/);
@@ -145,7 +147,8 @@ test("C9 edge: a malformed gate.json: the mandate still ships and there is no se
 test("C10 edge: no setup block while a run is open", () => {
   const repo = makeRepo("ts-c10", JEST);
   startContext(repo);
-  run(repo, "open", ["t", "feature"]);
+  said(repo, "set it up later please");
+  assert.equal(run(repo, "open", ["t", "feature", "--setup-later", "set it up later"]).status, 0);
   const again = run(repo, "session-start", [], JSON.stringify({ session_id: "S1", cwd: repo, hook_event_name: "SessionStart", session_start_source: "resume" }));
   assert.doesNotMatch(JSON.parse(again.stdout).hookSpecificOutput.additionalContext, SETUP);
   const other = run(repo, "session-start", [], JSON.stringify({ session_id: "S2", cwd: repo, hook_event_name: "SessionStart", session_start_source: "startup" }));

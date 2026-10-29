@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { assess, unmetCount } from "./assess.mjs";
-import { ensureSession, loadSession } from "./session-state.mjs";
+import { ensureSession, loadSession, updateSession } from "./session-state.mjs";
 import { recordGateError, UsageError } from "./context.mjs";
 import { attachLedger, currentLedger, isDone, loadLedger, openRuns, runsDir, saveLedger } from "./ledger.mjs";
 import { writeReport } from "./verbs.mjs";
@@ -121,6 +121,8 @@ export const verbs = {
     try {
       const running = Boolean(currentLedger(ctx.stateDir, ctx.session)) || foreign !== null || openRuns(ctx.stateDir).some((r) => r.ledger.status !== "closed");
       if (!running && needsSetup(ctx.root)) {
+        // this session's gate open refuses until setup is applied, declined or put off in the user's words
+        if (loadSession(ctx.stateDir, ctx.session)) updateSession(ctx.stateDir, ctx.session, { setupNoticed: true });
         parts.push("\n<done-gate-setup>\nThis repo is not set up for the faster test loop (.claude/gate.json has no testFiles): verify runs whole test commands on every call. Before the first task, run `gate setup`, check its proposal against how this repo runs tests, and show it to the user. On their yes, `gate setup --apply [edited.json] --user-ok \"<their words>\"`; on a no, `gate setup --decline --user-ok \"<their words>\"` so it is not asked again. Do it before `gate open`: changing gate.json mid-run trips R13.\n</done-gate-setup>");
       }
     } catch (error) {

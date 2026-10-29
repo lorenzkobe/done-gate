@@ -203,7 +203,18 @@ function runnerAt(words) {
   }
   return -1;
 }
-export const runsTests = (cmd) => segments(withoutHeredocs(cmd)).some((seg) => runnerAt(seg.map((w) => w.text).filter((w) => w !== "")) >= 0);
+// gate.json's testFiles template (`scripts/test_db.sh run {files} -q`) is the repo's own test
+// runner: a segment that starts with its words before {files} runs tests, its paths after them.
+function templateAt(words, template) {
+  const parts = template ? template.trim().split(/\s+/) : [];
+  const lead = parts.slice(0, Math.max(0, parts.indexOf("{files}")));
+  return lead.length && lead.every((w, i) => words[i] === w) ? lead.length - 1 : -1;
+}
+const testRunnerAt = (words, template) => {
+  const at = runnerAt(words);
+  return at >= 0 ? at : templateAt(words, template);
+};
+export const runsTests = (cmd, template = null) => segments(withoutHeredocs(cmd)).some((seg) => testRunnerAt(seg.map((w) => w.text).filter((w) => w !== ""), template) >= 0);
 
 const GLOB = /[*?[{]/;
 const DROPS = new Set(["--ignore", "--ignore-glob", "--deselect"]);
@@ -213,7 +224,7 @@ const TAKES_VALUE = new Set([...DROPS, "-k", "-m", "-c", "-p", "-t", "-g", "--co
 // the folders, globs and test files it names after the runner (none: the folder it runs in),
 // and what its --ignore, --ignore-glob or --deselect file::name take out. A flag's value never
 // names what runs: --config or --junitxml point at other files.
-function testScopes(cmd, cwd, isTest) {
+function testScopes(cmd, cwd, isTest, template = null) {
   const scopes = [];
   let base = cwd;
   for (const seg of segments(withoutHeredocs(cmd))) {
@@ -222,7 +233,7 @@ function testScopes(cmd, cwd, isTest) {
       base = path.resolve(base, words[1]);
       continue;
     }
-    const at = runnerAt(words);
+    const at = testRunnerAt(words, template);
     if (at < 0) continue;
     const scope = { base, names: [], drops: [] };
     for (let i = at + 1; i < words.length; i++) {
@@ -321,7 +332,7 @@ export function coverageGaps(state) {
     .filter((c) => c.covers || (!c.skipped && c.exit === 0 && !c.timedOut))
     .flatMap((c) => {
       const cwd = repoRoot(c.repo ?? null);
-      return cwd ? testScopes(c.cmd, cwd, (abs) => config.isTest(path.relative(root, abs).split(path.sep).join("/"))) : [];
+      return cwd ? testScopes(c.cmd, cwd, (abs) => config.isTest(path.relative(root, abs).split(path.sep).join("/")), config.testFiles) : [];
     });
   const listed = new Set(verify.commands.filter((c) => !c.skipped && c.exit === 0 && !c.timedOut && Array.isArray(c.files)).flatMap((c) => c.files));
   const gaps = [];

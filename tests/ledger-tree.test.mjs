@@ -280,7 +280,7 @@ test("C1 check.mjs is the home of both verbs", async () => {
 });
 
 test("C1 doctor and check still run and keep their output shape", () => {
-  const repo = makeRepo("t3-verbs");
+  const repo = makeRepo("t3-verbs", { ".claude/gate.json": null });
   const version = JSON.parse(
     readFileSync(path.join(pluginRoot, ".claude-plugin", "plugin.json"), "utf8"),
   ).version;

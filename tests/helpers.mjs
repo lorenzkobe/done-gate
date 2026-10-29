@@ -37,9 +37,12 @@ export function makeRepo(name, files = {}) {
     "tests/a.test.ts": "test('a', () => {});\n",
     "docs/notes.md": "# notes\n",
     "ignored.txt": "not tracked\n",
+    // setup recorded as declined, so a session start does not hold `gate open` for it; a test of
+    // setup itself passes ".claude/gate.json": null to start with none
+    ".claude/gate.json": JSON.stringify({ testFiles: null }),
     ...files,
   };
-  for (const [rel, content] of Object.entries(all)) write(dir, rel, content);
+  for (const [rel, content] of Object.entries(all)) if (content !== null) write(dir, rel, content);
   return dir;
 }
 
