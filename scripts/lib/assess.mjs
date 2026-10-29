@@ -65,16 +65,29 @@ export function stampSourceChange(ledger, hash, events, tree = null) {
       entry.writes = events.some((e) => e.kind === "command" && e.seq > prev && !e.readOnly && !gitMove(e));
       entry.prev = prev;
       entry.prevHash = prevHash;
-      // a subagent's write is first seen at the lead's next call: it is the subagent's when every
-      // file that moved lies in a subagent command's run and in none of the lead's (seq is in µs)
-      const moved = entry.paths.map((p) => tree.now.files[p]?.m).filter((m) => m !== undefined && m >= prev / 1000 - 1000);
-      const writers = moved.map((m) => writersOf(events, prev, m));
-      if (writers.length && writers.every((w) => w.length && w.every((e) => e.agent))) entry.agentType = writers.at(-1).at(-1).agentType;
+      // a subagent's write is first seen at the lead's next call: a moved file is the subagent's
+      // when every command whose run holds it is a subagent's, or when the commands that name it
+      // are all subagents' (a lead command running alongside only overlapped it; seq is in µs)
+      const owner = (p) => {
+        const writers = writersOf(events, prev, tree.now.files[p].m);
+        if (writers.length && writers.every((e) => e.agent)) return writers.at(-1);
+        const named = writers.filter((e) => commandNames(e.cmd, p));
+        return named.length && named.every((e) => e.agent) ? named.at(-1) : null;
+      };
+      const owners = entry.paths.filter((p) => tree.now.files[p]?.m !== undefined && tree.now.files[p].m >= prev / 1000 - 1000).map(owner);
+      if (owners.length && owners.every(Boolean)) entry.agentType = owners.at(-1).agentType;
     }
     ledger.unexplainedChanges = [...(ledger.unexplainedChanges ?? []), entry];
   }
   return true;
 }
+
+// a command names a file by its repo path or, after a cd, by its file name, either as a whole word
+const commandNames = (cmd, rel) => {
+  const word = (w) => new RegExp(`(?:^|[\\s/'"=])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[\\s'";|&)<>])`);
+  const text = String(cmd ?? "");
+  return word(rel).test(text) || word(rel.split("/").pop()).test(text);
+};
 
 function editedSince(ledger, events) {
   const since = ledger.openedSeq ?? 0;
