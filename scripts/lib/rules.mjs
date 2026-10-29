@@ -992,11 +992,17 @@ export function evaluate(state) {
   if (changed.some((p) => config.isUi(p)) && !waived(ledger, "driver")) {
     const driverCmd = driverCommand(config);
     if (!drivenAfter(state, after)) {
+      // a skill driver the repo does not have is no driver; a scripted drive (Playwright) counts once gate.json names it
+      const skill = /^skill:\s*([\w-]+)$/.exec(String(config.driver ?? ""))?.[1] ?? null;
+      const missing = skill !== null && Boolean(state.root) && !existsSync(path.join(state.root, ".claude", "skills", skill, "SKILL.md"));
+      const scripted = 'If you drive it with a script (a Playwright run), set `"driver": "cmd:<the command>"` in gate.json (not a config change mid-task) and run it after the last edit.';
       unmet.push({ rule: "R4", text: driverCmd !== null
         ? `UI files changed but the real surface was not driven after the last edit. Run \`${driverCmd}\` (the driver in gate.json) yourself, or get the user's waiver (\`gate waive driver "<reason>"\`).`
+        : missing
+        ? `UI files changed and gate.json names the ${config.driver} driver, but this repo has no .claude/skills/${skill}/SKILL.md. Run \`/done-gate:verify-setup\` to create it, drive the surface, or get the user's waiver (\`gate waive driver "<reason>"\`). ${scripted}`
         : config.driver
         ? "UI files changed but the real surface was not driven after the last edit. Run the project's /verify driver (phone viewport first), or get the user's waiver (`gate waive driver \"<reason>\"`)."
-        : "UI files changed and this repo has no /verify driver. Run `/done-gate:verify-setup` once to create it, drive the surface, or get the user's waiver (`gate waive driver \"<reason>\"`)." });
+        : `UI files changed and this repo has no /verify driver. Run \`/done-gate:verify-setup\` once to create it, drive the surface, or get the user's waiver (\`gate waive driver "<reason>"\`). ${scripted}` });
     }
   }
 
