@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { toPosixRel } from "./paths.mjs";
+import { headReflog } from "./tree.mjs";
 // guard.mjs imports this module back: both sides only call each other inside functions
 import { gitMoves, gitWrites, ownFileWrites, readsOnly, runsInline, scratchOnly } from "./guard.mjs";
 
@@ -96,10 +97,12 @@ export function eventsFromHookInput(input, root, repos = []) {
     // both flags are read from the whole command, since the stored text is cut: git when this
     // run may have moved HEAD itself, readOnly when the command cannot have written source
     const git = gitWrites(cmd);
+    // HEAD's newest reflog entries; those above the one the fence saw at its start are this command's
+    const reflog = git ? headReflog(root) : [];
     const readOnly = readsOnly(cmd);
     const own = ownEdits(input, cmd, root, b);
     const scratch = !readOnly && (own.length > 0 || scratchOnly(cmd));
-    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...toolUse(input), ...(background ? { background: true } : {}), ...(git ? { git: true, commits: !gitMoves(cmd) } : {}), ...(readOnly ? { readOnly: true } : {}), ...(runsInline(cmd) ? { runs: true } : {}), ...(scratch ? { scratch: true } : {}) }, ...own];
+    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...toolUse(input), ...(background ? { background: true } : {}), ...(git ? { git: true, commits: !gitMoves(cmd), ...(reflog.length ? { reflog } : {}) } : {}), ...(readOnly ? { readOnly: true } : {}), ...(runsInline(cmd) ? { runs: true } : {}), ...(scratch ? { scratch: true } : {}) }, ...own];
   }
   if (tool === "Agent" || tool === "Task") {
     return [{ ...b(), kind: "agent", tool, spawned: input.tool_input?.subagent_type ?? null }];

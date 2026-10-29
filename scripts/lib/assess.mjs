@@ -8,7 +8,7 @@ import { editedLast, implementationHash, writersOf } from "./rules.mjs";
 import { nextSeq } from "./events.mjs";
 import { evaluate } from "./rules.mjs";
 import { ensureSession, loadSession, saveSession } from "./session-state.mjs";
-import { diffSnapshots, gitChanged, gitDiffers, gitHead, gitNumstat, gitTracked, snapshot } from "./tree.mjs";
+import { diffSnapshots, gitChanged, gitDiffers, gitHead, gitNumstat, gitTracked, mergedIn, snapshot } from "./tree.mjs";
 import { repoPath } from "./paths.mjs";
 
 export function readVerify(dir) {
@@ -94,15 +94,21 @@ function editedSince(ledger, events) {
   return new Set(events.filter((e) => e.kind === "edit" && e.seq > since).map((e) => e.path));
 }
 
+// A reflog entry that only moved HEAD or recorded a merge; any other new entry (a commit, an amend,
+// a rebase or pull --rebase pick, am, cherry-pick, revert, a subject git adds later) is the session's own.
+const MOVE_ENTRY = /^(?:checkout|switch|reset|branch|commit \(merge\)|merge [^:]*|pull(?: [^(:]*)?|(?:pull --rebase|rebase)[^:]*\((?:start|finish|abort)\)):/;
+
 // A checkout, pull or rebase that only moved the tree to what commits hold (events.mjs).
 const gitMove = (e) => e.git === true && e.commits === false;
 
 // The changed files the task may have written since its baseline (a run's starts before open): its
 // edit, or its shell write or non-move command another session's last edit or command did not rival.
-export function ownWrites(holder, events, now, paths, others = []) {
+// `timed` judges a shell write by file times alone, for files a merge commit brought in: the
+// unexplained-change record would claim every file dirty at the merge for any command before it.
+export function ownWrites(holder, events, now, paths, others = [], { timed = false } = {}) {
   const since = holder.baseline?.seq ?? holder.openedSeq ?? 0;
   const edited = new Set(events.filter((e) => e.kind === "edit" && e.seq > since).map((e) => e.path));
-  const shell = new Set((holder.unexplainedChanges ?? []).filter((u) => u.writes).flatMap((u) => u.paths ?? []));
+  const shell = timed ? new Set() : new Set((holder.unexplainedChanges ?? []).filter((u) => u.writes).flatMap((u) => u.paths ?? []));
   // another session's background command is open-ended, so it never accounts for a write of this task
   const theirs = (p) => others.some((ev) => editedLast(ev, since, p, now.files[p]?.m) || writersOf(ev, since, now.files[p]?.m).some((e) => !e.background));
   // each command's run is timed against the events around it, git moves included
@@ -150,7 +156,7 @@ export function foldIntoBaseline(holder, paths, now, config) {
 }
 
 // Folds into the baseline a source file git changed since the HEAD last seen, clean against HEAD
-// and not the task's own; skipped once a git command of the task's may have committed.
+// and not the task's own; after a git command of the task's that may commit, only what merges brought in.
 function absorbForeign(root, ledger, now, config, events) {
   const base = ledger.baseline;
   const repos = ledger.repos ?? [];
@@ -170,17 +176,33 @@ function absorbForeign(root, ledger, now, config, events) {
     if (head && head !== last) ahead.push({ ...r, last, head });
   }
   if (!ahead.length) return false;
-  if (events.some((e) => e.kind === "command" && e.git && !gitMove(e) && e.seq > (ledger.openedSeq ?? 0))) return false;
+  // after a committing git command only what merge commits brought in is git's, less what the
+  // session's own commits changed; with a command's reflog unknown nothing folds, as before
+  const commits = events.filter((e) => e.kind === "command" && e.git && !gitMove(e) && e.seq > (ledger.openedSeq ?? 0));
+  const starts = new Map(events.filter((e) => e.kind === "command-start" && "reflogTop" in e).map((e) => [e.toolUseId, e.reflogTop]));
+  const same = (a, b) => Boolean(a && b) && a.join("\t") === b.join("\t");
+  // a command's own entries: those above its start's top (all of them when the reflog was empty)
+  const madeBy = (e) => {
+    if (!e.reflog || !starts.has(e.toolUseId)) return null;
+    const top = starts.get(e.toolUseId);
+    const at = top ? e.reflog.findIndex((r) => same(r, top)) : e.reflog.length;
+    return at < 0 ? null : e.reflog.slice(0, at);
+  };
+  const made = commits.map(madeBy);
+  const known = made.every((m) => m !== null);
+  const mine = known ? made.flat().filter(([, , subject]) => !MOVE_ENTRY.test(subject)).map(([sha]) => sha) : [];
+  const changedBy = ahead.map((r) => (!commits.length ? gitChanged(r.dir, r.last, r.head) : known && !r.prefix ? mergedIn(r.dir, r.last, r.head, [...new Set(mine)]) : null));
+  if (changedBy.some((c) => c === null)) return false;
   const committed = new Set();
-  for (const r of ahead) {
+  ahead.forEach((r, i) => {
     if (r.prefix) ledger.foreignHeads = { ...ledger.foreignHeads, [r.prefix]: r.head };
     else ledger.foreignHead = r.head;
-    for (const p of gitChanged(r.dir, r.last, r.head)) committed.add(`${r.key}${p}`);
-  }
+    for (const p of changedBy[i]) committed.add(`${r.key}${p}`);
+  });
   // what a late-declared repo held uncommitted at declaration is this run's, whoever commits it
   const held = new Set(base.untrackedAtHead ?? []);
   const candidates = diffSnapshots(base, now).changed.filter((p) => config.isSource(p) && committed.has(p) && base.files[p]?.h !== "HEAD" && !held.has(p));
-  const own = ownWrites(ledger, events, now, candidates);
+  const own = ownWrites(ledger, events, now, candidates, [], { timed: commits.length > 0 });
   const moved = candidates.filter((p) => !own.has(p));
   const dirty = moved.length ? gitNumstat(root, moved, "HEAD", { repos }) : new Map();
   // an untracked file is not what HEAD holds, though git diff HEAD does not list it

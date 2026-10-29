@@ -6,6 +6,7 @@ import { leadDelegates, policyFor } from "./size.mjs";
 import { appendEvents, nextSeq, readEvents, toolUse } from "./events.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { ancestorPids, pidsDir } from "./context.mjs";
+import { headReflog } from "./tree.mjs";
 
 // Files only the gate's own verbs may write. A model that could edit these could
 // forge its evidence, so the deny is unconditional and every attempt is logged.
@@ -1025,7 +1026,9 @@ export const verbs = {
       recordSessionPids(ctx);
       // a command's run is timed from here, not from the session's previous event
       const id = toolUse(ctx.input ?? {});
-      if (ctx.session && ctx.input?.tool_name === "Bash" && id.toolUseId) appendEvents(ctx.stateDir, ctx.session, [{ ...stamp(), kind: "command-start", ...id }]);
+      // a git command's newest reflog entry before it runs: the entries above it at its end are its own
+      const top = ctx.input?.tool_name === "Bash" && gitWrites(String(ctx.input?.tool_input?.command ?? "")) ? headReflog(ctx.root, 1) : null;
+      if (ctx.session && ctx.input?.tool_name === "Bash" && id.toolUseId) appendEvents(ctx.stateDir, ctx.session, [{ ...stamp(), kind: "command-start", ...id, ...(top ? { reflogTop: top[0] ?? null } : {}) }]);
       return;
     }
     appendEvents(ctx.stateDir, ctx.session, [

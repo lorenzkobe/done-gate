@@ -115,6 +115,39 @@ export function gitChanged(root, from, to) {
   }
 }
 
+// The commits on the first-parent chain git log walks for `args`, each with whether it is a merge
+// and the files it changed against its first parent, from one git log call.
+function firstParentChain(root, args) {
+  const out = git(root, ["log", "--first-parent", "--diff-merges=first-parent", "--name-only", "--no-renames", "-z", "--format=%x01%P", ...args]);
+  return out.split("\x01").filter(Boolean).map((chunk) => {
+    const [parents, ...names] = chunk.split("\0");
+    return { merge: parents.trim().split(" ").length > 1, files: names.map((n) => n.replace(/^\n/, "")).filter(Boolean) };
+  });
+}
+
+// HEAD's newest reflog entries as [commit, unix seconds, subject]: what a git command did to HEAD.
+export function headReflog(root, n = 30) {
+  try {
+    return git(root, ["log", "-g", `-n${n}`, "--date=unix", "--format=%H%x09%gd%x09%gs", "HEAD"]).trim().split("\n").filter(Boolean).map((l) => {
+      const [sha, at, subject] = l.split("\t");
+      return [sha, Number(/\{(\d+)\}/.exec(at)?.[1] ?? 0), subject ?? ""];
+    });
+  } catch {
+    return [];
+  }
+}
+
+// What merge commits brought in from `from` to `to`, less every file the session's own commits
+// (`own`, commit ids) changed against their first parent. Null if git fails.
+export function mergedIn(root, from, to, own) {
+  try {
+    const mine = new Set(own.flatMap((sha) => firstParentChain(root, ["-1", sha]).flatMap((c) => c.files)));
+    return new Set(firstParentChain(root, [`${from}..${to}`]).filter((c) => c.merge).flatMap((c) => c.files).filter((p) => !mine.has(p)));
+  } catch {
+    return null;
+  }
+}
+
 const DIFFERS_CHUNK = 500;
 
 // The paths among `rels` whose working copy differs from a commit; null when git cannot answer.
