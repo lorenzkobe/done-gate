@@ -7,6 +7,30 @@ evidence is (a run folder, a session, a command and its output).
 
 ## Open
 
+From the 0.20.0 review (`docs/reviews/review-0.20.0.md`, 66 runs over rollcall, kwenta-web and
+courtly, 2026-10-21 to 10-29). Details and evidence are in that file's sections.
+
+- 2026-10-25, rollcall: 8 runs were only a rebase or a branch switch. Each was measured large
+  from the commits it brought in, then waived step by step (about 65 waivers). R1 is still the
+  most common block. (3.1)
+- 2026-10-22 to 10-29, sibling work repos: all 5 runs opened inside a sibling repo were
+  abandoned, because the session's hook events are filed under the repo the session started in.
+  (3.2)
+- 2026-10-21 to 10-29, rollcall: `gate setup` never ran, so 0.20's test loop never applied there.
+  The per-ticket verify list was dropped and re-added in 37 of 39 runs. `test_db.sh run <files>`
+  isn't counted as a test command (5 R18 waivers). (3.3)
+- 2026-10-25, rollcall: `gate open` crashed with EISDIR in `addFiles` (`tree.mjs:238`); a
+  directory listed by git was read as a file. (3.4)
+- 2026-10-26, kwenta-web, run ios-input-zoom: a `node -e` repro was marked readOnly, so `--ran`
+  couldn't close repro or rootcause and both were waived. (3.5)
+- 2026-10-21 to 10-29, all three repos: 28 denials were helpers editing their own findings file
+  with a shell command. (3.6)
+- kwenta-web, 5 runs: worker shell edits were credited to the lead (`delegate` waivers). (3.7)
+- kwenta-web, 3 runs: reviewer-2 hit the 3-round cap, and the last fix lines were lead-reviewed.
+  (3.8)
+- All repos: `driver` was the most waived step (19). The waived runs used Playwright, couldn't
+  reach localhost from Chrome, or had a surface that can't be driven at all. (3.9)
+
 - 2026-10-19, done-gate, run version-0-19-0: a version bump (three manifests, one line each, no
   source file changed, measured tiny) still needed a reviewer, because the plan's three files
   predicted "small" and the gate reopened the review step that was marked N/A. A whole helper run
