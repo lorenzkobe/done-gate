@@ -9,12 +9,14 @@ import { checkRelease, UPDATE_COMMANDS } from "./release.mjs";
 import { needsSetup } from "./setup.mjs";
 
 const DAY_MS = 24 * 3600 * 1000;
-const STALE_MS = 14 * DAY_MS;
+// How long the gate keeps its records: long enough to mine a year of runs for friction.
+const KEEP_MS = 365 * DAY_MS;
 
-// Session folders grow without end: once a day, those whose events and state are both untouched
-// for 14 days go, except this session, no-session, and any session an open run, or a run changed
-// in that time, lists (its rules and report read their events).
-function pruneSessions(ctx) {
+// Records grow without end: once a day, a done run whose ledger is untouched for a year goes,
+// then each session folder whose events and state are untouched that long, except this session,
+// no-session, and any session an open run, or a run changed in that time, lists (its rules and
+// report read their events). An open run and an unreadable ledger are never removed.
+function pruneLogs(ctx) {
   const dir = path.join(ctx.stateDir, "sessions");
   const marker = path.join(ctx.stateDir, "last-prune");
   const mtime = (f) => statSync(f, { throwIfNoEntry: false })?.mtimeMs ?? 0;
@@ -26,15 +28,18 @@ function pruneSessions(ctx) {
     const file = path.join(runs, run, "ledger.json");
     try {
       const ledger = loadLedger(path.join(runs, run));
-      if (isDone(ledger) && Date.now() - mtime(file) >= STALE_MS) continue;
+      if (isDone(ledger) && Date.now() - mtime(file) >= KEEP_MS) {
+        rmSync(path.join(runs, run), { recursive: true, force: true });
+        continue;
+      }
       for (const s of ledger.sessions ?? []) keep.add(s);
     } catch {
-      // an unreadable ledger keeps nothing
+      // an unreadable ledger keeps nothing and is left for a person to look at
     }
   }
   for (const name of readdirSync(dir)) {
     const folder = path.join(dir, name);
-    if (keep.has(name) || Date.now() - Math.max(mtime(path.join(folder, "events.jsonl")), mtime(path.join(folder, "state.json")), mtime(folder)) < STALE_MS) continue;
+    if (keep.has(name) || Date.now() - Math.max(mtime(path.join(folder, "events.jsonl")), mtime(path.join(folder, "state.json")), mtime(folder)) < KEEP_MS) continue;
     rmSync(folder, { recursive: true, force: true });
   }
 }
@@ -60,7 +65,7 @@ export const verbs = {
       }
     }
     try {
-      pruneSessions(ctx);
+      pruneLogs(ctx);
     } catch (error) {
       recordGateError(error, "session-start");
     }

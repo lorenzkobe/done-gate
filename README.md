@@ -210,8 +210,10 @@ checked.
   commit through git (anything but a move counts as one). For what the check cannot see (a
   stash pop, another terminal's edit), `gate rebaseline "<why>"` takes the changes the task
   did not write out of it, after asking the user; the report names them and the reason.
-- **Its own storage stays bounded.** Once a day, session-start removes session folders untouched
-  for 14 days that no recent run lists; the report embeds helper files up to 40 KB and names the rest.
+- **Its own storage stays bounded.** Records are kept a year, long enough to mine for friction:
+  once a day, session-start removes done runs whose ledger is untouched for a year, then session
+  folders untouched for a year that no open or recent run lists; an open run is never removed. The
+  report embeds helper files up to 40 KB and names the rest.
 - **Zero friction when nothing changed.** Questions, investigations, a second terminal in
   the same repo: the tree hash is unchanged, the gate stays silent.
 - **Helpers write their file first.** A skeptic, reviewer or arbiter may only read its packet

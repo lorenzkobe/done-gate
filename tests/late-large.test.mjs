@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, write, gate, lookedUp } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
@@ -127,10 +127,14 @@ test("C6 boundary: the report embeds helper files up to 40 KB of text and names 
   assert.match(report, /review-2\.md[^\n]*not embedded|not embedded[^\n]*review-2\.md/);
 });
 
-test("C7 happy: session-start removes session folders untouched for 14 days that no open run lists, at most once a day", () => {
+test("C7 happy: session-start removes session folders untouched for a year that no open run lists, at most once a day", () => {
   const repo = planned("ll-c7");
   const sessions = path.join(stateDir(repo), "sessions");
-  const old = new Date(Date.now() - 20 * 24 * 3600 * 1000);
+  const old = new Date(Date.now() - 400 * 24 * 3600 * 1000);
+  const weeks = new Date(Date.now() - 20 * 24 * 3600 * 1000);
+  mkdirSync(path.join(sessions, "WEEKS"), { recursive: true });
+  writeFileSync(path.join(sessions, "WEEKS", "events.jsonl"), "");
+  for (const f of [path.join(sessions, "WEEKS", "events.jsonl"), path.join(sessions, "WEEKS")]) utimesSync(f, weeks, weeks);
   for (const id of ["OLD", "OLD-LISTED", "RECENT"]) {
     mkdirSync(path.join(sessions, id), { recursive: true });
     writeFileSync(path.join(sessions, id, "events.jsonl"), "");
@@ -145,6 +149,7 @@ test("C7 happy: session-start removes session folders untouched for 14 days that
   assert.equal(existsSync(path.join(sessions, "OLD")), false, "the stale session folder stayed");
   assert.equal(existsSync(path.join(sessions, "OLD-LISTED")), true, "a folder an open run lists was removed");
   assert.equal(existsSync(path.join(sessions, "RECENT")), true, "a recent folder was removed");
+  assert.equal(existsSync(path.join(sessions, "WEEKS")), true, "a folder 20 days old is kept for the year");
   // once a day: a second stale folder made now waits for tomorrow
   mkdirSync(path.join(sessions, "OLD2"), { recursive: true });
   utimesSync(path.join(sessions, "OLD2"), old, old);
@@ -228,4 +233,41 @@ test("C11 refused: the prune never removes this session, no-session, or a sessio
   utimesSync(path.join(idle, "ledger.json"), old, old);
   run(repo, "session-start", [], JSON.stringify({ session_id: "S9", cwd: repo, hook_event_name: "SessionStart", session_start_source: "resume" }), "S9");
   for (const id of ["S9", "no-session", "ACTIVE", "STATE-ONLY", "CLOSED-RUN", "IDLE-OPEN"]) assert.equal(existsSync(path.join(sessions, id)), true, `${id} was removed`);
+});
+
+// Run folders were kept forever: a done run untouched for a year goes, with the sessions only it listed.
+test("C2 happy: session-start removes done runs untouched for a year, keeps open, recent and unreadable ones", () => {
+  const repo = planned("ll-expiry");
+  const runs = path.join(stateDir(repo), "runs");
+  const sessions = path.join(stateDir(repo), "sessions");
+  const old = new Date(Date.now() - 400 * 24 * 3600 * 1000);
+  const months = new Date(Date.now() - 200 * 24 * 3600 * 1000);
+  const copy = (name, status, sessionIds, when) => {
+    const dir = path.join(runs, name);
+    cpSync(runDir(repo), dir, { recursive: true });
+    const ledger = loadLedger(dir);
+    Object.assign(ledger, { slug: name, status, sessions: sessionIds });
+    saveLedger(dir, ledger);
+    utimesSync(path.join(dir, "ledger.json"), when, when);
+  };
+  for (const id of ["ONLY-OLD-RUN", "OPEN-RUN", "RECENT-RUN"]) {
+    mkdirSync(path.join(sessions, id), { recursive: true });
+    writeFileSync(path.join(sessions, id, "events.jsonl"), "");
+    for (const f of [path.join(sessions, id, "events.jsonl"), path.join(sessions, id)]) utimesSync(f, old, old);
+  }
+  copy("old-closed", "closed", ["ONLY-OLD-RUN"], old);
+  copy("old-open", "open", ["OPEN-RUN"], old);
+  copy("months-closed", "closed", ["RECENT-RUN"], months);
+  mkdirSync(path.join(runs, "broken"), { recursive: true });
+  writeFileSync(path.join(runs, "broken", "ledger.json"), "{not json");
+  utimesSync(path.join(runs, "broken", "ledger.json"), old, old);
+  run(repo, "session-start", [], JSON.stringify({ session_id: "S9", cwd: repo, hook_event_name: "SessionStart", session_start_source: "startup" }), "S9");
+  assert.equal(existsSync(path.join(runs, "old-closed")), false, "a done run a year old stayed");
+  assert.equal(existsSync(path.join(sessions, "ONLY-OLD-RUN")), false, "a session only the removed run listed stayed");
+  assert.equal(existsSync(path.join(runs, "old-open")), true, "an open run was removed");
+  assert.equal(existsSync(path.join(sessions, "OPEN-RUN")), true, "an open run's session was removed");
+  assert.equal(existsSync(path.join(runs, "months-closed")), true, "a done run under a year old was removed");
+  assert.equal(existsSync(path.join(sessions, "RECENT-RUN")), true, "a recent run's session was removed");
+  assert.equal(existsSync(path.join(runs, "broken")), true, "an unreadable run was removed");
+  assert.equal(existsSync(runDir(repo)), true, "the current run was removed");
 });
