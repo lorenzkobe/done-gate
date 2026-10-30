@@ -55,7 +55,7 @@ const GLOB = /[*?[{]/;
 // programs that read a folder without running its tests: never the testFiles wrapper
 const CHECKERS = new Set(["ruff", "eslint", "prettier", "black", "flake8", "pylint", "mypy", "pyright", "tsc", "biome", "isort", "stylelint", "rubocop", "golangci-lint", "shellcheck"]);
 const DROPS = new Set(["--deselect", "--ignore", "--ignore-glob", "-k"]);
-const shellWord = (w) => (/^[\w@%+=:,./{}-]+$/.test(w) ? w : `'${w.replace(/'/g, `'\\''`)}'`);
+export const shellWord = (w) => (/^[\w@%+=:,./{}-]+$/.test(w) ? w : `'${w.replace(/'/g, `'\\''`)}'`);
 
 // The wrapper a verify command already runs named test files through (a test database script,
 // a container): its words before the first path, {files}, then its flags after the last path

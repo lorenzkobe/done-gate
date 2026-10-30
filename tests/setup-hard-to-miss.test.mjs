@@ -179,3 +179,12 @@ test("C8 edge: setup keeps a call of a one-word template's program that runs no 
   const { json } = proposal(makeRepo("shm-ow8", { ...ONE_WORD, ".claude/gate.json": JSON.stringify({ tests: ["tests/**"], testFiles: "./run.sh {files}", verify: ["./run.sh lint"] }) }));
   assert.deepEqual(json.verify, ["./run.sh lint", { related: true }]);
 });
+
+test("C9 edge: the setup refusal's --setup-later line keeps the --repo and --old-version-ok it was given", () => {
+  const repo = makeRepo("shm-c9-flags", JEST);
+  started(repo);
+  said(repo, "fine, carry on");
+  const r = run(repo, "open", ["t", "feature", "--repo", "../x y", "--old-version-ok", "fine, carry on"]);
+  assert.notEqual(r.status, 0, r.stdout);
+  assert.ok(r.stderr.includes(`gate open t feature --repo '../x y' --old-version-ok 'fine, carry on' --setup-later "<their words, at least three>"`), r.stderr);
+});

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { gate, here, write } from "./helpers.mjs";
 
@@ -105,4 +105,53 @@ test("C7 refused: gate attach from the wrong repo is refused with the open --rep
   const r = shellVerb(other, id, "attach", "t");
   assert.notEqual(r.status, 0, r.stdout);
   assert.ok(r.stderr.includes(`cd ${main} && gate open t --repo ${other}`), r.stderr);
+});
+
+// From docs/after-0.21.0.md, limit 8: the printed line must run as printed.
+test("C1 reported-surface: paths with spaces are quoted in the printed line", () => {
+  const top = path.join(here, ".tmp", "sib spaces");
+  rmSync(top, { recursive: true, force: true });
+  const main = repoAt(path.join(top, "main repo"));
+  const other = repoAt(path.join(top, "other repo"));
+  const id = session("sp1");
+  prompted(main, id);
+  const r = shellVerb(other, id, "open", "t", "bugfix");
+  assert.notEqual(r.status, 0, r.stdout);
+  assert.ok(r.stderr.includes(`cd '${main}' && gate open t bugfix --repo '${other}'`), r.stderr);
+});
+
+test("C2 edge: the other flags come back, a relative --repo made absolute from the refused folder", () => {
+  const { top, main, other } = pair("sib-flags");
+  const third = repoAt(path.join(top, "third"));
+  const id = session("fl1");
+  prompted(main, id);
+  const r = shellVerb(other, id, "open", "t", "bugfix", "--repo", "../third", "--old-version-ok", "go on, it's fine", "--setup-later", "later please");
+  assert.notEqual(r.status, 0, r.stdout);
+  assert.ok(r.stderr.includes(`cd ${main} && gate open t bugfix --old-version-ok 'go on, it'\\''s fine' --setup-later 'later please' --repo ${third} --repo ${other}`), r.stderr);
+});
+
+test("C4 edge: a --repo naming either folder itself is left out, so the printed line opens as printed", () => {
+  const { main, other } = pair("sib-self");
+  const id = session("self");
+  prompted(main, id);
+  const r = shellVerb(other, id, "open", "t", "bugfix", "--repo", "../main", "--repo", ".");
+  assert.notEqual(r.status, 0, r.stdout);
+  assert.ok(r.stderr.includes(`cd ${main} && gate open t bugfix --repo ${other}\``), r.stderr);
+});
+
+test("C5 refused: with a newer release known, the wrong folder is refused first with the cd line", () => {
+  const { top, main, other } = pair("sib-newer");
+  const home = path.join(top, "home");
+  mkdirSync(path.join(home, ".claude"), { recursive: true });
+  writeFileSync(path.join(home, ".claude", "done-gate-release.json"), JSON.stringify({ latest: "99.0.0", checkedAt: new Date().toISOString() }));
+  const id = session("newer");
+  prompted(main, id);
+  const env = { ...process.env, DONE_GATE_SESSION: id, DONE_GATE_HOME: home };
+  delete env.CLAUDE_PROJECT_DIR;
+  delete env.CLAUDE_CODE_SESSION_ID;
+  const r = spawnSync(process.execPath, [gate, "open", "t", "bugfix", "--repo", "../third"], { cwd: other, encoding: "utf8", env });
+  assert.notEqual(r.status, 0, r.stdout);
+  assert.ok(r.stderr.includes(`cd ${main} && gate open t bugfix --repo ${path.join(top, "third")} --repo ${other}`), r.stderr);
+  const here = spawnSync(process.execPath, [gate, "open", "t", "bugfix", "--repo", "../other"], { cwd: main, encoding: "utf8", env });
+  assert.ok(here.stderr.includes("`gate open t bugfix --repo ../other --old-version-ok \"<their words, at least three>\"`"), here.stderr);
 });

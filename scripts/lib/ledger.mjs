@@ -6,7 +6,7 @@ import { loadConfig, repoConfig } from "./config.mjs";
 import { nextSeq, readEvents } from "./events.mjs";
 import { repoPath } from "./paths.mjs";
 import { ensureSession, loadSession, saveSession, updateSession } from "./session-state.mjs";
-import { needsSetup } from "./setup.mjs";
+import { needsSetup, shellWord } from "./setup.mjs";
 import { baseCopyPath, diffSnapshots, gitHead, gitNumstat, gitTop, gitTracked, snapshot, taskBaseline, withRepoAtHead, withRepos, withoutRepos } from "./tree.mjs";
 import { emptyTier } from "./size.mjs";
 // size.mjs imports assess.mjs, which imports this module: loadPolicy is only ever called at
@@ -403,22 +403,35 @@ function eventsElsewhere(ctx) {
   return [...siblings, ...ancestors].find((dir) => dir !== ctx.root && has(dir)) ?? null;
 }
 
-function refuseElsewhere(ctx, verb) {
+const shellLine = (words) => words.map(shellWord).join(" ");
+const realOf = (dir) => {
+  try {
+    return realpathSync(dir);
+  } catch {
+    return path.resolve(dir);
+  }
+};
+
+// `words` is the verb and its arguments as the command from the other folder must repeat them; a
+// declared repo that is either folder itself would be refused there, so it is left out
+function refuseElsewhere(ctx, words, repos = []) {
   const home = eventsElsewhere(ctx);
-  if (home) throw new UsageError(`this session's hook events are filed under ${home}, the repo it started in, so a run in ${ctx.root} would never see its searches, runs or your messages. Run it from there and declare this repo: \`cd ${home} && gate ${verb} --repo ${ctx.root}\``);
+  if (!home) return;
+  const others = repos.filter((r) => ![home, ctx.root].some((d) => realOf(d) === realOf(r)));
+  throw new UsageError(`this session's hook events are filed under ${home}, the repo it started in, so a run in ${ctx.root} would never see its searches, runs or your messages. Run it from there and declare this repo: \`cd ${shellWord(home)} && gate ${shellLine([...words, ...[...others, ctx.root].flatMap((r) => ["--repo", r])])}\``);
 }
 
 // A session shown the setup notice at its start cannot open a run until the repo is set up or
 // set aside: the notice alone went unread in busy sessions, and gate.json cannot change once a
 // run is open. The user's own words for "later" hold for the rest of the session.
-function refuseSetup(ctx, slug, playbook, later) {
+function refuseSetup(ctx, words, later) {
   const session = loadSession(ctx.stateDir, ctx.session);
   if (!session?.setupNoticed || session.setupLater || !needsSetup(ctx.root)) return;
   if (later && saidSince(readEvents(ctx.stateDir, ctx.session), session.baselineSeq ?? 0, later)) {
     updateSession(ctx.stateDir, ctx.session, { setupLater: later.trim() });
     return;
   }
-  const again = `gate open ${[slug, playbook].filter(Boolean).join(" ")}`;
+  const again = `gate ${shellLine(words)}`;
   throw new UsageError(`this repo is not set up for the faster test loop, and gate.json cannot change once a run is open. Run \`gate setup\` now, check its proposal and show it to the user: on their yes \`gate setup --apply [edited.json] --user-ok "<their words>"\`, on a no \`gate setup --decline --user-ok "<their words>"\`. If they want to decide later: \`${again} --setup-later "<their words, at least three>"\`${later ? ` (the user did not say "${later}" in this session)` : ""}.`);
 }
 
@@ -448,13 +461,17 @@ export const verbs = {
     if (!slug) throw new UsageError("usage: gate open <slug> <feature|bugfix|refactor|plan|investigation> [--repo <path>]");
     // a newer release is the user's call: update, or say (once a session) to carry on with this
     // one; joining a run that is already open is not a new task
+    // each refusal prints the command that works, with every other flag this one was given
+    const said = (key, words) => (words ? [key, words] : []);
+    const named = repos.flatMap((r) => ["--repo", r]);
+    // a run opened elsewhere sees none of this session's events, its words for an old version included
+    refuseElsewhere(ctx, ["open", slug, ...(playbook ? [playbook] : []), ...said("--old-version-ok", oldOk), ...said("--setup-later", setupLater)], repos.map((r) => path.resolve(ctx.root, r)));
     const latest = knownNewer(ctx.version);
     const joining = openRuns(ctx.stateDir).some(({ ledger }) => ledger.slug === slug);
     if (latest && !joining && !saidSince(readEvents(ctx.stateDir, ctx.session), 0, oldOk)) {
-      throw new UsageError(`done-gate ${latest} is out and this session runs ${ctx.version}: tell the user and ask. To update: ${UPDATE_COMMANDS}. To carry on with ${ctx.version}: \`gate open ${slug} ${playbook ?? "<playbook>"} --old-version-ok "<their words, at least three>"\``);
+      throw new UsageError(`done-gate ${latest} is out and this session runs ${ctx.version}: tell the user and ask. To update: ${UPDATE_COMMANDS}. To carry on with ${ctx.version}: \`gate open ${shellWord(slug)} ${playbook ? shellWord(playbook) : "<playbook>"}${named.length || setupLater ? ` ${shellLine([...named, ...said("--setup-later", setupLater)])}` : ""} --old-version-ok "<their words, at least three>"\``);
     }
-    refuseElsewhere(ctx, `open ${[slug, playbook].filter(Boolean).join(" ")}`);
-    if (!joining) refuseSetup(ctx, slug, playbook, setupLater);
+    if (!joining) refuseSetup(ctx, ["open", slug, ...(playbook ? [playbook] : []), ...named, ...said("--old-version-ok", oldOk)], setupLater);
     const { dir, ledger } = openLedger(ctx, slug, playbook, repos);
     printOpen(ctx, dir, ledger);
   },
@@ -468,7 +485,7 @@ export const verbs = {
   attach(ctx) {
     const [slug] = ctx.args;
     if (!slug) throw new UsageError("usage: gate attach <slug>");
-    refuseElsewhere(ctx, `open ${slug}`);
+    refuseElsewhere(ctx, ["open", slug]);
     const { dir, ledger } = attachLedger(ctx, slug);
     printOpen(ctx, dir, ledger);
   },
