@@ -343,7 +343,9 @@ before the code.
 `gate note plan --files a.ts,b.ts` predicts the tier before the diff exists, so a small
 feature skips the design critique up front and a tiny one skips the reviewer too; if the diff
 then outgrows the prediction, the step comes back and the gate says so. Tiny is reached only
-by evidence: a plan naming exactly one source file, or a measurement with no estimated lines. `gate size` prints the
+by evidence: a plan naming exactly one source file, or a measurement with no estimated lines. A
+plan naming no source file predicts small, except while no source file has changed (a version
+bump), where the measurement decides and the reviewer can be N/A. `gate size` prints the
 numbers. The skeptic step is on the feature, bugfix and refactor playbooks at standard and
 large; it cannot close without a finished, recorded `skeptic-<n>.md` whose Act-on items are
 all closed. The policy is in `models.json`. Aim for at most ten helper invocations per task

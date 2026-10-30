@@ -374,7 +374,7 @@ export const verbs = {
       if (!step) throw new UsageError(`no step "${ref}"`);
       if (step.key === "close") throw new UsageError("step {close} is closed by `gate close`, which closes the run once `gate check` is clean; run `gate close`");
       if (state === "SKIPPED" && step.key && EVIDENCED_KEYS.has(step.key)) {
-        throw new UsageError(`step {${step.key}} has script/agent evidence and cannot be SKIPPED — ${Object.hasOwn(NO_WAIVER, step.key) ? `it has no waiver either. ${NO_WAIVER[step.key]}.` : `do it, or get the user's waiver with \`gate waive ${step.key} "<reason>"\``}`);
+        throw new UsageError(`step {${step.key}} has script/agent evidence and cannot be SKIPPED — ${Object.hasOwn(NO_WAIVER, step.key) ? `it has no waiver either. ${NO_WAIVER[step.key]}.` : `do it,${step.key === "tests" ? ' close it `gate step tests na "<why>"` when this change touches no source file,' : ""} or get the user's waiver with \`gate waive ${step.key} "<reason>"\``}`);
       }
       if (step.key === "context" && ledger.lookups) throw new UsageError('step {context} is closed by `gate note context "Traced: … · Related: … · Research: …"` after you search the code and memory yourself; run that instead.');
       if (state === "N/A" && (step.key === "repro" || step.key === "rootcause")) {

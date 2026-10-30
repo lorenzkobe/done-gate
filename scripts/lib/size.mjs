@@ -177,7 +177,7 @@ export function leadDelegates(ledger, policy = policyFor(ledger)) {
 // predicted stays null until `gate note plan --files` names the files; the measured diff
 // alone then decides, so a task that never predicts is judged by what it actually changed.
 export function emptyTier() {
-  return { predicted: null, predictedFiles: [], declared: null, measured: null, autoNa: [], predictedSeq: null, grewAt: null };
+  return { predicted: null, predictedFiles: [], predictedSized: null, declared: null, measured: null, autoNa: [], predictedSeq: null, grewAt: null };
 }
 
 // A tier record from an older ledger, or a damaged one, is normalised rather than trusted.
@@ -188,6 +188,8 @@ export function tierOf(ledger) {
   return {
     predicted: typeof t.predicted === "string" ? t.predicted : null,
     predictedFiles: Array.isArray(t.predictedFiles) ? t.predictedFiles : [],
+    // how many source files the plan named; null on a ledger from before 0.21.0
+    predictedSized: typeof t.predictedSized === "number" ? t.predictedSized : null,
     declared: typeof t.declared === "string" ? t.declared : null,
     measured: t.measured && typeof t.measured === "object" ? t.measured : null,
     autoNa: Array.isArray(t.autoNa) ? t.autoNa : [],
@@ -318,6 +320,7 @@ export function applyPrediction(ledger, policy, config, paths, declared = null) 
   const delegated = delegatedTier(policy, pred.tier);
   tier.predicted = pred.tier;
   tier.predictedFiles = paths;
+  tier.predictedSized = pred.files;
   // R16 counts the lead's source edits from the moment the task became a delegated size;
   // a later re-prediction never moves that mark forward and erases a standing finding
   if (delegated && tier.predictedSeq === null) tier.predictedSeq = nextSeq();
@@ -339,9 +342,13 @@ export function applyPrediction(ledger, policy, config, paths, declared = null) 
   return { ...pred, tier: pred.tier };
 }
 
+// A plan naming no source file predicts a placeholder size; while no source file has changed
+// (a version bump), the measurement alone decides.
 export function effectiveTier(policy, ledger, measured) {
-  const predicted = tierOf(ledger).predicted;
+  const t = tierOf(ledger);
   const measuredTier = measured?.tier ?? null;
+  const placeholder = t.predictedSized === 0 && !t.declared && measuredTier !== null && measured.files === 0;
+  const predicted = placeholder ? null : t.predicted;
   return tierMax(policy, predicted, measuredTier) ?? "standard";
 }
 

@@ -252,3 +252,78 @@ test("C17 refused: an untiered plan ledger with source edits still gets R5; a ti
   write(unpredicted, "src/a.ts", lines(30));
   assert.ok(blocks(check(unpredicted), "R5"), check(unpredicted));
 });
+
+// From docs/after-0.21.0.md and docs/friction.md (version-0-19-0): a bump names only non-source
+// files, so its prediction is a placeholder; the measurement decides once there is one.
+const BUMP = { files: { "package.json": "{\"version\": \"1.0.0\"}\n", "src/b.ts": "export const b = 1;\n", ".claude/gate.json": JSON.stringify({ source: ["src/**"], tests: ["tests/**"], verify: [] }) }, playbook: "refactor", planFiles: "package.json" };
+const bumped = (name, extra = {}) => {
+  const { repo } = opened(name, { ...BUMP, ...extra });
+  write(repo, "package.json", "{\"version\": \"1.0.1\"}\n");
+  return repo;
+};
+
+test("C1 reported-surface: a plan naming no source file with no source change: a review N/A by hand holds", () => {
+  const repo = bumped("tiny-bump1");
+  cli(repo, "step", ["review", "na", "version strings only"]);
+  const out = check(repo);
+  assert.equal(stepOf(repo, "review").state, "N/A", out);
+  assert.ok(!/\{review\}/.test(out), out);
+});
+
+test("C2 refused: the same plan, then source edits past tiny: the review comes back blank", () => {
+  const repo = bumped("tiny-bump2");
+  cli(repo, "step", ["review", "na", "version strings only"]);
+  write(repo, "src/a.ts", "export const a = 2;\n");
+  write(repo, "src/b.ts", "export const b = 2;\n");
+  check(repo);
+  assert.equal(stepOf(repo, "review").state, null);
+});
+
+test("C3 boundary: a declared size over a no-source plan still holds over the measurement", () => {
+  const repo = bumped("tiny-bump3");
+  cli(repo, "note", ["plan", "Bump. No hot path.", "--files", "package.json", "--size", "small"]);
+  cli(repo, "step", ["review", "na", "version strings only"]);
+  check(repo);
+  assert.equal(stepOf(repo, "review").state, null);
+});
+
+test("C4 edge: a ledger from before the field keeps the old rule: the placeholder small holds", () => {
+  const repo = bumped("tiny-bump4");
+  const ledger = ledgerOf(repo);
+  delete ledger.tier.predictedSized;
+  writeFileSync(ledgerFile(repo), JSON.stringify(ledger, null, 2));
+  cli(repo, "step", ["review", "na", "version strings only"]);
+  check(repo);
+  assert.equal(stepOf(repo, "review").state, null);
+});
+
+test("C5 reported-surface: gate step tests skipped names the N/A route beside the waiver", () => {
+  const repo = bumped("tiny-bump5");
+  const r = run(repo, "step", ["tests", "skipped", "pins exist"]);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /gate step tests na "<why>"/);
+  assert.match(r.stderr, /gate waive tests/);
+});
+
+test("C6 refused: a no-source plan then one source file edited by a few lines: the review stays required", () => {
+  const repo = bumped("tiny-bump6");
+  cli(repo, "step", ["review", "na", "version strings only"]);
+  write(repo, "src/a.ts", "export const a = 2;\n");
+  check(repo);
+  assert.equal(stepOf(repo, "review").state, null);
+});
+
+test("C7 edge: re-planning both ways rewrites the count: a source plan brings back the old rule, a no-source plan the new one", () => {
+  const repo = bumped("tiny-bump7");
+  cli(repo, "note", ["plan", "Bump and a module.", "--files", "package.json,src/a.ts,src/b.ts"]);
+  assert.equal(ledgerOf(repo).tier.predictedSized, 2);
+  cli(repo, "step", ["review", "na", "version strings only"]);
+  check(repo);
+  assert.equal(stepOf(repo, "review").state, null, "standard by prediction keeps the reviewer");
+  cli(repo, "note", ["plan", "Bump only.", "--files", "package.json"]);
+  assert.equal(ledgerOf(repo).tier.predictedSized, 0);
+  cli(repo, "step", ["review", "na", "version strings only"]);
+  check(repo);
+  assert.equal(stepOf(repo, "review").state, "N/A");
+  assert.equal(ledgerOf(repo).tier.predictedSized, 0, "a check keeps the field");
+});
