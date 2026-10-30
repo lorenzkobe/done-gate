@@ -134,3 +134,48 @@ test("C9 refused: R18: with no testFiles the wrapper is not a test command, and 
   const set = makeRepo("shm-c9b", { ...WRAPPED([]), ".claude/gate.json": JSON.stringify({ tests: ["tests/**"], testFiles: "scripts/test_db.sh run {files} -q" }) });
   assert.deepEqual(gapsFor(set, "ruff check tests/test_a.py").map((g) => g.id), ["C1"]);
 });
+
+// From docs/after-0.21.0.md, limits 1 and 2: a one-word template matched every call of its
+// program, and a linter naming a folder was taken as the template.
+const ONE_WORD = { "run.sh": "#!/bin/sh\n", "tests/test_a.py": "def test_a():\n    pass\n", "tests/test_b.py": "def test_b():\n    pass\n", ".claude/gate.json": JSON.stringify({ tests: ["tests/**"], testFiles: "./run.sh {files}" }) };
+
+test("C1 refused: a one-word template: a call naming no test path is not a test run of the whole folder", () => {
+  assert.deepEqual(gapsFor(makeRepo("shm-ow1", ONE_WORD), "./run.sh lint").map((g) => g.id), ["C1"]);
+});
+
+test("C2 happy: a one-word template still covers the test files a call names, and only those", () => {
+  const repo = makeRepo("shm-ow2", ONE_WORD);
+  assert.deepEqual(gapsFor(repo, "./run.sh tests/test_a.py"), []);
+  assert.deepEqual(gapsFor(repo, "./run.sh tests/test_b.py").map((g) => g.id), ["C1"]);
+});
+
+test("C3 boundary: a template of two words or more run with no path still covers the folder it runs in", () => {
+  const repo = makeRepo("shm-ow3", { ...WRAPPED([]), ".claude/gate.json": JSON.stringify({ tests: ["tests/**"], testFiles: "scripts/test_db.sh run {files} -q" }) });
+  assert.deepEqual(gapsFor(repo, "scripts/test_db.sh run -q"), []);
+});
+
+test("C4 refused: setup never takes a linter naming the repo folder as testFiles", () => {
+  const { json } = proposal(makeRepo("shm-lint1", WRAPPED(["ruff check ."])));
+  assert.equal(json.testFiles, "python3 -m pytest {files} -q");
+});
+
+test("C5 edge: setup skips a linter listed before the wrapper and takes the wrapper", () => {
+  const { json } = proposal(makeRepo("shm-lint2", WRAPPED(["ruff check tests/", "npx eslint tests/", "scripts/test_db.sh run tests/ -q"])));
+  assert.equal(json.testFiles, "scripts/test_db.sh run {files} -q");
+});
+
+test("C6 edge: setup takes no template from a script that names only the repo folder", () => {
+  const { json } = proposal(makeRepo("shm-lint3", { ...WRAPPED(["./lint.sh ."]), "lint.sh": "#!/bin/sh\n" }));
+  assert.equal(json.testFiles, "python3 -m pytest {files} -q");
+});
+
+test("C7 boundary: a one-word template run bare or with flags only still covers the folder", () => {
+  const repo = makeRepo("shm-ow7", ONE_WORD);
+  assert.deepEqual(gapsFor(repo, "./run.sh"), []);
+  assert.deepEqual(gapsFor(repo, "./run.sh -q"), []);
+});
+
+test("C8 edge: setup keeps a call of a one-word template's program that runs no tests as it is", () => {
+  const { json } = proposal(makeRepo("shm-ow8", { ...ONE_WORD, ".claude/gate.json": JSON.stringify({ tests: ["tests/**"], testFiles: "./run.sh {files}", verify: ["./run.sh lint"] }) }));
+  assert.deepEqual(json.verify, ["./run.sh lint", { related: true }]);
+});

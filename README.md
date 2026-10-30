@@ -457,7 +457,9 @@ open (R13). Until one of them is done, that session's `gate open` refuses; the u
 off for the session with `gate open <slug> <playbook> --setup-later "<their words>"`. To change
 your mind later, edit gate.json in a task run like any config change. A verify command that
 starts like the `testFiles` template (a wrapper such as `scripts/test_db.sh run …`) counts as a
-test command for coverage.
+test command for coverage; with a one-word template (`./run.sh {files}`), a call whose next word
+is a plain word (`./run.sh lint`) does not. `gate setup` never takes a lint, format or type-check
+command (`ruff check .`), or one naming only the repo folder, as the template.
 
 Test what changed while working, and the wider area once at the end:
 

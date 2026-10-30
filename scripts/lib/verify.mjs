@@ -205,10 +205,14 @@ function runnerAt(words) {
 }
 // gate.json's testFiles template (`scripts/test_db.sh run {files} -q`) is the repo's own test
 // runner: a segment that starts with its words before {files} runs tests, its paths after them.
+// A one-word lead is a program that may do more than test (`./run.sh lint`): a plain word after it
+// is another task, while nothing, a flag or a path is a test run.
 function templateAt(words, template) {
   const parts = template ? template.trim().split(/\s+/) : [];
   const lead = parts.slice(0, Math.max(0, parts.indexOf("{files}")));
-  return lead.length && lead.every((w, i) => words[i] === w) ? lead.length - 1 : -1;
+  if (!lead.length || !lead.every((w, i) => words[i] === w)) return -1;
+  const next = words[lead.length];
+  return lead.length > 1 || next === undefined || /^-|[/.*?[]/.test(next) ? lead.length - 1 : -1;
 }
 const testRunnerAt = (words, template) => {
   const at = runnerAt(words);

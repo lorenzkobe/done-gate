@@ -52,6 +52,8 @@ function runner(root) {
 }
 
 const GLOB = /[*?[{]/;
+// programs that read a folder without running its tests: never the testFiles wrapper
+const CHECKERS = new Set(["ruff", "eslint", "prettier", "black", "flake8", "pylint", "mypy", "pyright", "tsc", "biome", "isort", "stylelint", "rubocop", "golangci-lint", "shellcheck"]);
 const DROPS = new Set(["--deselect", "--ignore", "--ignore-glob", "-k"]);
 const shellWord = (w) => (/^[\w@%+=:,./{}-]+$/.test(w) ? w : `'${w.replace(/'/g, `'\\''`)}'`);
 
@@ -67,15 +69,16 @@ function wrapperOf(root, cmd, files, config) {
       continue;
     }
     // a test file by the repo's globs, a folder, or a glob over files; never the program itself
+    // the repo folder itself names no tests: `./lint.sh .` reads everything
     const isPath = (w, i) => {
       if (i === 0 || w.startsWith("-")) return false;
       const bare = w.split("::")[0].replace(/\/$/, "");
       if (GLOB.test(bare)) return files.some((f) => matchGlob(bare, f));
       const abs = path.join(root, bare);
-      return existsSync(abs) && (statSync(abs).isDirectory() || config.isTest(bare));
+      return abs !== root && existsSync(abs) && (statSync(abs).isDirectory() || config.isTest(bare));
     };
     const at = words.map((w, i) => (isPath(w, i) ? i : -1)).filter((i) => i >= 0);
-    if (!at.length || at[0] === 0) continue;
+    if (!at.length || at[0] === 0 || words.slice(0, at[0]).some((w) => CHECKERS.has(path.basename(w)))) continue;
     const rest = [];
     for (let i = at.at(-1) + 1; i < words.length; i++) {
       if (DROPS.has(words[i])) i++;
