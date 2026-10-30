@@ -8,7 +8,7 @@ import { baseCopy, fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs"
 import { ROLES, flag, outsideRepos, positional } from "./verbs.mjs";
 import { repoPath, toPosixRel } from "./paths.mjs";
 import { OWN_FILE } from "./guard.mjs";
-import { LOOKUP_EXAMPLE, REVIEW_CAP, capUnitsOf, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify, verifyProblem } from "./rules.mjs";
+import { LOOKUP_EXAMPLE, REVIEW_CAP, fixCheckDone, capUnitsOf, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify, verifyProblem } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { nextSeq } from "./events.mjs";
@@ -487,6 +487,9 @@ export const verbs = {
       const e = parseEntry(entry);
       if ((r.files ?? []).includes(e.path)) return true;
       if (!e.from) return (r.files ?? []).some((x) => pathOf(x) === e.path);
+      // a fix gives its lines new keys, so a round also counts when a slice it saw, as briefed,
+      // overlaps this one
+      if ((r.files ?? []).map(parseEntry).some((x) => x.path === e.path && x.from && x.from <= e.to && e.from <= x.to)) return true;
       const keys = new Set(changedUnitsOf(state, e.path).filter((u) => u.pos >= e.from && u.pos <= e.to).map((u) => u.key));
       return (r.units?.[e.path] ?? []).some((k) => keys.has(k));
     };
@@ -503,9 +506,14 @@ export const verbs = {
     // they changed, once every finding of the role on those files is closed; never a second one
     const pieceFiles = piece ? piece.files.map(pathOf) : reviewScope(state);
     const roleRounds = state.ledger.huddles.filter((h) => h.role === role);
+    // a fix-check is used once its own helper stopped or while it runs; one cut off is briefed again
+    const fixChecks = roleRounds.filter((h) => h.fixCheck && (h.files ?? []).some((e) => pieceFiles.includes(pathOf(e))))
+      .map((h) => ({ h, run: helperRun(state, role, h.file, h.briefSeq ?? 0) }));
+    const live = fixChecks.find((f) => f.run.running);
+    if (reviewing && live) throw new UsageError(`${role}: the fix-check round ${live.h.file} is still running; wait for its helper to stop, then \`gate huddle add ${role} --file ${live.h.file}\``);
     const fixCheck = reviewing && done >= REVIEW_CAP && (unseen ?? []).some((u) => pieceFiles.includes(pathOf(u)))
       && roleRounds.every((h) => h.actOn.every((a) => a.closed))
-      && !roleRounds.some((h) => h.fixCheck && (h.files ?? []).some((e) => pieceFiles.includes(pathOf(e))));
+      && !fixChecks.some((f) => fixCheckDone(state, f.h));
     // the fix-check is a file's last round, so it takes every unreviewed part of each file at once
     const split = fixCheck && piece ? (unseen ?? []).filter((u) => pieceFiles.includes(pathOf(u)) && !piece.files.includes(u) && !piece.files.includes(pathOf(u))) : [];
     if (split.length && !stillOpen) {

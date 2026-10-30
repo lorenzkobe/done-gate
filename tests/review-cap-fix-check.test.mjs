@@ -120,3 +120,90 @@ test("C6 refused: a fix-check that leaves out part of a file's unreviewed lines 
   assert.ok(part.stderr.includes(`--files ${entries.join(",")}`), part.stderr);
   assert.equal(run(repo, "brief", "reviewer-2", "--files", entries.join(",")).status, 0);
 });
+
+// From docs/after-0.21.0.md, limits 3 and 4: a fix gives its lines new keys, so rounds on a slice
+// never reached the cap; and a fix-check cut off before its helper stopped used up the file's one.
+const BIG = "src/big.ts";
+function sliced(name) {
+  const repo = opened(name);
+  const abs = path.join(repo, BIG);
+  write(repo, BIG, Array.from({ length: 600 }, (_, i) => `export const v${i} = ${i};`).join("\n") + "\n");
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: abs }, tool_response: {} });
+  return repo;
+}
+function sliceRound(repo, n, entry, { stop = true } = {}) {
+  const brief = run(repo, "brief", "reviewer", "--files", entry);
+  if (brief.status !== 0) return brief;
+  const file = /Your file is .*\/(review-\d+\.md)/.exec(brief.stdout)[1];
+  const agent = { agent_id: `rs-${n}`, agent_type: "done-gate:reviewer" };
+  hook(repo, { hook_event_name: "SubagentStart", ...agent });
+  lookedUp(repo, { agent: agent.agent_id, role: "reviewer" });
+  writeFileSync(path.join(runDir(repo), file), `# Review ${n}\n\n## Act on\n- off by one at ${BIG}:6 — wrong\n## Consider\n- none\n## Noted\n- none\n## Dismissed\n- none\n## Evidence verdict\n- tests: ok\n`);
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: path.join(runDir(repo), file) }, tool_response: {}, ...agent });
+  if (stop) hook(repo, { hook_event_name: "SubagentStop", ...agent });
+  assert.equal(run(repo, "huddle", "add", "reviewer", "--file", file).status, 0);
+  const abs = path.join(repo, BIG);
+  write(repo, BIG, readFileSync(abs, "utf8").replace(/^export const v5 = .*$/m, `export const v5 = ${1000 + n};`));
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: abs }, tool_response: {} });
+  assert.equal(run(repo, "huddle", "resolve", ledgerOf(repo).huddles.at(-1).actOn[0].id, "--evidence", "src/pay.ts:1", "fixed").status, 0);
+  return brief;
+}
+const slicePending = (repo) => /--files (\S+?)`/.exec(ruleLine(repo, "R5"))?.[1];
+
+test("C1 reported-surface: a slice whose fixed lines keep coming back gets three rounds and one fix-check, then the cap", () => {
+  const repo = sliced("rcf-s1");
+  assert.equal(sliceRound(repo, 1, `${BIG}:1-400`).status, 0);
+  for (const n of [2, 3]) assert.equal(sliceRound(repo, n, slicePending(repo).split(",").find((e) => e.startsWith(BIG))).status, 0, `round ${n}`);
+  const fixCheck = sliceRound(repo, 4, slicePending(repo).split(",").filter((e) => e.startsWith(BIG)).join(","));
+  assert.equal(fixCheck.status, 0, fixCheck.stderr);
+  assert.equal(ledgerOf(repo).huddles.at(-1).fixCheck, true, "round 4 is the fix-check");
+  assert.doesNotMatch(ruleLine(repo, "R5"), new RegExp(`${BIG}:`), "the fix-check ended the slice's review");
+  assert.ok(capped(run(repo, "brief", "reviewer", "--files", `${BIG}:6-7`)));
+});
+
+test("C2 boundary: a range no earlier slice round overlapped is still briefed", () => {
+  const repo = sliced("rcf-s2");
+  assert.equal(sliceRound(repo, 1, `${BIG}:1-400`).status, 0);
+  for (const n of [2, 3]) assert.equal(sliceRound(repo, n, `${BIG}:6-7`).status, 0, `round ${n}`);
+  const other = run(repo, "brief", "reviewer", "--files", `${BIG}:401-600`);
+  assert.equal(other.status, 0, other.stderr);
+});
+
+test("C3 refused: a fix-check cut off before its helper stopped can be briefed again, and ends the file once one stops", () => {
+  const repo = opened("rcf-s3");
+  for (const n of [1, 2, 3]) round(repo, "reviewer", n);
+  const cut = run(repo, "brief", "reviewer");
+  assert.equal(cut.status, 0, cut.stderr);
+  const file = /Your file is .*\/(review-\d+\.md)/.exec(cut.stdout)[1];
+  writeFileSync(path.join(runDir(repo), file), "# Review 4\n\n## Act on\n- none\n## Consider\n- none\n## Noted\n- none\n## Dismissed\n- none\n## Evidence verdict\n- tests: ok\n");
+  assert.equal(run(repo, "huddle", "add", "reviewer", "--file", file).status, 0);
+  assert.match(ruleLine(repo, "R5"), /src\/pay\.ts/, "the cut-off round covers nothing");
+  round(repo, "reviewer", 5, { finding: false });
+  assert.equal(ledgerOf(repo).huddles.at(-1).fixCheck, true);
+  assert.equal(ruleLine(repo, "R5"), "");
+  assert.ok(capped(run(repo, "brief", "reviewer")));
+});
+
+test("C5 refused: a fix-check whose own helper has not stopped is not ended by another reviewer's stop, and a second one is refused while it runs", () => {
+  const repo = opened("rcf-s5");
+  for (const n of [1, 2, 3]) round(repo, "reviewer", n);
+  const live = run(repo, "brief", "reviewer");
+  assert.equal(live.status, 0, live.stderr);
+  const file = /Your file is .*\/(review-\d+\.md)/.exec(live.stdout)[1];
+  const mine = { agent_id: "fc-live", agent_type: "done-gate:reviewer" };
+  hook(repo, { hook_event_name: "SubagentStart", ...mine });
+  lookedUp(repo, { agent: mine.agent_id, role: "reviewer" });
+  writeFileSync(path.join(runDir(repo), file), "# Review 4\n\n## Act on\n- none\n## Consider\n- none\n## Noted\n- none\n## Dismissed\n- none\n## Evidence verdict\n- tests: ok\n");
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: path.join(runDir(repo), file) }, tool_response: {}, ...mine });
+  const added = run(repo, "huddle", "add", "reviewer", "--file", file);
+  assert.equal(added.status, 0, added.stderr);
+  const other = { agent_id: "rv-other", agent_type: "done-gate:reviewer" };
+  hook(repo, { hook_event_name: "SubagentStart", ...other });
+  hook(repo, { hook_event_name: "SubagentStop", ...other });
+  assert.match(ruleLine(repo, "R5"), /src\/pay\.ts/, "another reviewer's stop does not end the file");
+  const again = run(repo, "brief", "reviewer");
+  assert.notEqual(again.status, 0);
+  assert.match(again.stderr, /still running/);
+  hook(repo, { hook_event_name: "SubagentStop", ...mine });
+  assert.equal(ruleLine(repo, "R5"), "", "its own stop ends the file");
+});

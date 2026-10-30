@@ -526,7 +526,17 @@ export function helperRun(state, role, file, since, now = Date.now()) {
     const own = events.filter((e) => e.agent === id);
     return now - Date.parse(own[own.length - 1].ts) < HELPER_MAX_MS && !own.some((e) => e.kind === "subagent-stop");
   });
-  return { ran: ids.length > 0, running };
+  const stopped = ids.some((id) => events.some((e) => e.agent === id && e.kind === "subagent-stop"));
+  return { ran: ids.length > 0, running, stopped };
+}
+
+// A fix-check round counts once the helper that worked on its file stopped; another helper's
+// stop says nothing about it. A round no helper can be tied to keeps the older test: any stop
+// of the role after its brief.
+export function fixCheckDone(state, round) {
+  const since = round.briefSeq ?? 0;
+  const run = helperRun(state, round.role, round.file, since);
+  return run.ran ? run.stopped : (state.events ?? []).some((e) => e.kind === "subagent-stop" && e.seq > since && isRole(e.agentType, round.role));
 }
 
 // Review rounds per reviewer role; past it a round is briefed only for a file no round saw.
@@ -622,7 +632,8 @@ export function uncovered(state, role, after = lastEditSeq(state, state.config, 
     if (!stop) return false;
     // the fix-check round after the cap is the last; at the cap an open finding is fixed and
     // resolved (R5/R9 name it), not briefed again
-    if (round.fixCheck || !round.actOn.length || seenBy > REVIEW_CAP) return true;
+    if (round.fixCheck) return fixCheckDone(state, round);
+    if (!round.actOn.length || seenBy > REVIEW_CAP) return true;
     if (!round.actOn.every((a) => a.closed)) return seenBy >= REVIEW_CAP;
     return after < stop.seq || (key !== null && keptLine(round, rel, key, counts));
   };
@@ -634,7 +645,7 @@ export function uncovered(state, role, after = lastEditSeq(state, state.config, 
       continue;
     }
     // a fix inside the fix-check round gives its lines new keys; the round still ends the file's review
-    if (seeing.some((h) => h.fixCheck && stopOf(h))) continue;
+    if (seeing.some((h) => h.fixCheck && fixCheckDone(state, h))) continue;
     const whole = (h) => h.files.includes(rel);
     const keyed = (h) => Array.isArray(h.units?.[rel]);
     if (seeing.every((h) => whole(h) && !keyed(h))) {
