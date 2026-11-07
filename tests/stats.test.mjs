@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, gate, pluginRoot, here } from "./helpers.mjs";
 import { readsOnly } from "../scripts/lib/guard.mjs";
@@ -319,7 +319,7 @@ test("C16 reported surface: help and README name the verb, and the fence reads i
   const repo = makeRepo("stats-c16");
   const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
   assert.match(spawnSync(process.execPath, [gate, "help"], { encoding: "utf8", env }).stdout, /^ {2}stats /m);
-  assert.match(readFileSync(path.join(pluginRoot, "README.md"), "utf8"), /`stats \[--days n\] \[--version x\]`/);
+  assert.match(readFileSync(path.join(pluginRoot, "README.md"), "utf8"), /`stats \[--days n\] \[--version x\]/);
   assert.equal(readsOnly(`node ${gate} stats --days 7`), true);
 });
 
@@ -1326,4 +1326,203 @@ test("C86 edge: an unreadable file loses that file only: a folder named like a t
   assert.equal(r.stderr, "");
   assert.match(line(tokensOf(r.stdout), "tokens:"), /1 of 2 runs/);
   assert.ok(!existsSync(path.join(repo, ".claude", "gate", "gate-error.log")));
+});
+
+// Saving: what the file holds must survive being read on a laptop that has no run records.
+function saveTarget(name) {
+  const dir = path.join(here, ".tmp", `${name}-out`);
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  return path.join(dir, "numbers.json");
+}
+
+function save(repo, file, { home = null, args = [], cwd } = {}) {
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1", ...(home ? { DONE_GATE_HOME: home } : {}) };
+  return spawnSync(process.execPath, [gate, "stats", "--save", file, ...args], { encoding: "utf8", env, cwd });
+}
+
+function privateRepo(name) {
+  const repo = makeRepo(name);
+  const home = homeFor(name);
+  writeRun(repo, "2026-01-02-secret-slug-feature", hourRun(["S1"], {
+    slug: "secret-slug-feature",
+    playbook: "feature",
+    changedAtClose: ["src/secret-path.ts", "tests/secret-test.test.ts"],
+    tier: { predictedFiles: ["src/other.ts"], measured: { tier: "standard", lines: 200 } },
+    waivers: [{ key: "driver", reason: "SECRET-WAIVER-REASON" }],
+    huddles: [{ role: "reviewer", file: "review-1.md", actOn: [finding({ text: "SECRET-FINDING", closed: "tests/secret-test.test.ts:SECRET-TEST-NAME" })] }],
+  }));
+  writeRun(repo, "2026-01-03-secret-slug-fix", hourRun(["S1"], { slug: "secret-slug-fix", playbook: "bugfix", openedAt: atMinute(90), closedAt: atMinute(120), openedSeq: seqAt(90), changedAtClose: ["src/secret-path.ts"] }));
+  writeEvents(repo, "S1", [
+    userPrompt(1, "SECRET-PROMPT"),
+    deny(2, "done-gate: helpers write through SECRET-REFUSAL-WORDS here", { cmd: "rm SECRET-COMMAND" }),
+    deny(3, "done-gate: that command writes gate evidence files (.claude/gate/...): `SECRET-BESIDE-COMMAND` is not a plain read."),
+    block(4, ["R5"]),
+    reviewerStart(5),
+    stopAt(10),
+  ]);
+  writeTranscript(home, "S1", [usageLine(1, "m1", 50, "SECRET-TRANSCRIPT-TEXT")]);
+  writeHelper(home, "S1", "custom", [usageLine(2, "m2", 20)], { agentType: "my-secret-agent" });
+  writeHelper(home, "S1", "plugin", [usageLine(3, "m3", 30)], { agentType: "vercel:deployment-expert" });
+  writeHelper(home, "S1", "known", [usageLine(4, "m4", 40)], { agentType: "done-gate:reviewer" });
+  return { repo, home };
+}
+
+test("C90 happy: the file holds the repo's name, the plugin version, the window and the numbers the report prints", () => {
+  const { repo, home } = privateRepo("stats-s1");
+  const file = saveTarget("stats-s1");
+  const r = save(repo, file, { home, args: ["--days", "5"] });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /numbers\.json/);
+  assert.doesNotMatch(r.stdout, /median minutes/);
+  const saved = JSON.parse(readFileSync(file, "utf8"));
+  assert.equal(saved.format, 1);
+  assert.equal(saved.repo, "stats-s1");
+  assert.equal(saved.pluginVersion, JSON.parse(readFileSync(path.join(pluginRoot, ".claude-plugin", "plugin.json"), "utf8")).version);
+  assert.equal(saved.days, 5);
+  assert.equal(saved.version, null);
+  assert.ok(Number.isFinite(Date.parse(saved.savedAt)));
+  assert.equal(saved.numbers.outcome, "2 closed");
+  assert.match(saved.numbers["median minutes, closed runs / standard"], /45 min \(2 of 2 runs\)/);
+  assert.match(saved.numbers["findings / reviewer"], /findings 1/);
+  assert.match(saved.numbers.refusals, /^2,/);
+  assert.match(saved.numbers["refusals / read beside another command"], /lead 1, helper 0/);
+  assert.match(saved.numbers["refusals / all others"], /lead 1, helper 0/);
+  assert.match(saved.numbers["bugs after close (estimate)"], /1 of 2 runs/);
+  assert.match(saved.numbers["tokens / standard"], /median/);
+  assert.match(saved.numbers["rule rates / R5"], /too few/);
+  assert.match(saved.numbers["tokens / reviewer"], /40 output/);
+  assert.match(saved.numbers["tokens / other"], /50 output/);
+  assert.equal(saved.numbers["median minutes, closed runs"], undefined, "a heading line holds no number");
+  assert.ok(!Object.keys(saved.numbers).some((k) => k.startsWith("done-gate stats")), "the printed heading is not a number");
+});
+
+test("C91 refused: no run name, command, file path, refusal reason, waiver reason or message text reaches the file", () => {
+  const { repo, home } = privateRepo("stats-s2");
+  const file = saveTarget("stats-s2");
+  assert.equal(save(repo, file, { home }).status, 0);
+  const text = readFileSync(file, "utf8");
+  assert.doesNotMatch(text, /SECRET|secret/);
+  assert.doesNotMatch(text, /src\/|tests\/|\.claude|\/private|\/Users/);
+  assert.doesNotMatch(text, /2026-01-0/);
+  assert.doesNotMatch(text, /my-secret-agent|vercel/);
+  const printed = okIn(repo, home);
+  assert.match(printed, /2026-01-03-secret-slug-fix/, "the screen still names the runs for a person to read");
+  assert.match(printed, /vercel:deployment-expert: 30 output/);
+});
+
+test("C92 edge: missing stays missing and not recorded stays not recorded", () => {
+  const repo = makeRepo("stats-s3");
+  writeRun(repo, "old", closedRun({ daysAgo: 400 }));
+  const file = saveTarget("stats-s3");
+  assert.equal(save(repo, file).status, 0);
+  const { numbers } = JSON.parse(readFileSync(file, "utf8"));
+  assert.equal(numbers["median minutes, closed runs / standard"], "missing");
+  assert.equal(numbers.findings, "missing");
+  assert.equal(numbers.tokens, "missing");
+  assert.equal(numbers["lapsed waivers"], "not recorded");
+  assert.doesNotMatch(JSON.stringify(numbers), /\b0\b/);
+});
+
+test("C93 edge: no state folder still saves, with missing throughout, and creates no state folder", () => {
+  const repo = makeRepo("stats-s4");
+  const file = saveTarget("stats-s4");
+  assert.equal(save(repo, file).status, 0);
+  const { numbers } = JSON.parse(readFileSync(file, "utf8"));
+  assert.match(numbers.runs, /missing/);
+  assert.ok(!existsSync(path.join(repo, ".claude", "gate")));
+});
+
+test("C94 refused: no value, a folder, a missing parent, an existing file or link, and anywhere inside the repo, with nothing written", () => {
+  const repo = makeRepo("stats-s5");
+  writeRun(repo, "one", closedRun());
+  const out = path.dirname(saveTarget("stats-s5"));
+  const existing = path.join(out, "existing.json");
+  writeFileSync(existing, "keep me");
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
+  const bare = spawnSync(process.execPath, [gate, "stats", "--save"], { encoding: "utf8", env });
+  assert.equal(bare.status, 1);
+  assert.match(bare.stderr, /usage: gate stats/);
+  const flagged = spawnSync(process.execPath, [gate, "stats", "--save", "--days", "5"], { encoding: "utf8", env });
+  assert.equal(flagged.status, 1);
+  const linkIntoRepo = path.join(out, "link");
+  symlinkSync(path.join(repo, "src"), linkIntoRepo);
+  const dangling = path.join(out, "dangling.json");
+  symlinkSync(path.join(out, "nowhere.json"), dangling);
+  const inRepo = [
+    path.join(repo, "numbers.json"),
+    path.join(repo, "src", "numbers.json"),
+    path.join(repo, ".claude", "gate", "numbers.json"),
+    path.join(repo, ".claude", "gate.json"),
+    path.join(linkIntoRepo, "numbers.json"),
+    path.join(out, "..", path.basename(repo), "numbers.json"),
+  ];
+  for (const target of [out, path.join(out, "no-such-folder", "numbers.json"), existing, dangling, ...inRepo]) {
+    const r = save(repo, target);
+    assert.equal(r.status, 1, target);
+    assert.match(r.stderr, /--save/, target);
+    assert.equal(r.stdout, "", target);
+  }
+  assert.equal(readFileSync(existing, "utf8"), "keep me");
+  assert.ok(!existsSync(path.join(out, "nowhere.json")), "a dangling link was followed");
+  assert.ok(!existsSync(path.join(repo, "numbers.json")));
+  assert.ok(!existsSync(path.join(repo, "src", "numbers.json")));
+
+  const readOnly = path.join(out, "read-only");
+  mkdirSync(readOnly);
+  chmodSync(readOnly, 0o555);
+  const denied = save(repo, path.join(readOnly, "numbers.json"));
+  chmodSync(readOnly, 0o755);
+  assert.equal(denied.status, 1);
+  assert.match(denied.stderr, /--save/);
+  assert.ok(!existsSync(path.join(repo, ".claude", "gate", "numbers.json")));
+  assert.ok(!existsSync(path.join(repo, ".claude", "gate", "gate-error.log")));
+});
+
+test("C98 edge: a further repo of the open run is inside the repo too", () => {
+  const repo = makeRepo("stats-s9");
+  const other = makeRepo("stats-s9-other");
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  assert.equal(spawnSync("git", ["add", "."], { cwd: other }).status, 0);
+  assert.equal(spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"], { cwd: other }).status, 0);
+  const opened = spawnSync(process.execPath, [gate, "open", "two-repos", "feature", "--repo", other], { encoding: "utf8", env });
+  assert.equal(opened.status, 0, opened.stderr);
+  const r = save(repo, path.join(other, "numbers.json"));
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /--save/);
+  assert.ok(!existsSync(path.join(other, "numbers.json")));
+});
+
+test("C95 boundary: files saved from two repos parse and share labels", () => {
+  const one = privateRepo("stats-s6");
+  const two = privateRepo("stats-s6b");
+  const fileOne = saveTarget("stats-s6");
+  const fileTwo = saveTarget("stats-s6b");
+  assert.equal(save(one.repo, fileOne, { home: one.home }).status, 0);
+  assert.equal(save(two.repo, fileTwo, { home: two.home }).status, 0);
+  const [a, b] = [fileOne, fileTwo].map((f) => JSON.parse(readFileSync(f, "utf8")));
+  assert.notEqual(a.repo, b.repo);
+  assert.deepEqual(Object.keys(a.numbers).sort(), Object.keys(b.numbers).sort());
+  assert.deepEqual(a.numbers, b.numbers);
+});
+
+test("C96 idempotent: the state folder is unchanged after a save, and a relative path lands where the command ran", () => {
+  const { repo, home } = privateRepo("stats-s7");
+  const state = path.join(repo, ".claude", "gate");
+  const before = snapshot(state);
+  const dir = path.dirname(saveTarget("stats-s7"));
+  const r = save(repo, "relative.json", { home, cwd: dir });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(existsSync(path.join(dir, "relative.json")));
+  assert.deepEqual(snapshot(state), before);
+});
+
+test("C97 reported surface: help and README name --save and say nothing is sent", () => {
+  const repo = makeRepo("stats-s8");
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
+  assert.match(spawnSync(process.execPath, [gate, "help"], { encoding: "utf8", env }).stdout, /stats \[--days n\] \[--version x\] \[--save <file>\]/);
+  const readme = readFileSync(path.join(pluginRoot, "README.md"), "utf8");
+  assert.match(readme, /`stats \[--days n\] \[--version x\] \[--save <file>\]`/);
+  assert.match(readme, /sends nothing/);
 });

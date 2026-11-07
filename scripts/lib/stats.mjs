@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, readdirSync, readFileSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
@@ -12,9 +12,11 @@ import { flag } from "./verbs.mjs";
 
 // `gate stats` reads past run records and writes nothing: no buildState, no report path, no
 // crash that would log a gate error. What the records do not hold prints "missing", never 0.
-const USAGE = "usage: gate stats [--days n] [--version x]";
+const USAGE = "usage: gate stats [--days n] [--version x] [--save <file>]";
 const WRONG_USAGE = 'usage: gate stats wrong <R#> "<the user\'s words, at least three>"';
-const FLAGS = new Set(["--days", "--version"]);
+const FLAGS = new Set(["--days", "--version", "--save"]);
+// other agents' names are free text the user or a plugin chose, so a saved file says "other"
+const GATE_ROLES = new Set(["skeptic", "qa", "worker", "reviewer", "reviewer-2", "arbiter"]);
 const DAY_MS = 24 * 3600 * 1000;
 const SIZES = ["tiny", "small", "standard", "large"];
 const REVIEWERS = new Set(["reviewer", "reviewer-2"]);
@@ -28,6 +30,7 @@ const SESSION_ID = /^[\w-]+$/;
 const REVIEWER_TYPE = /^(?:done-gate:)?reviewer(?:-2)?$/;
 const NOT_A_FAILURE = new Set(["finished", "waiting"]);
 const REFUSAL_WORDS = 4;
+const BESIDE = "read beside another command";
 const GATE_FILE = /\.claude\/gate|(?:review2?|skeptic|arbiter|worker)-\d+\.md|ledger\.md/;
 const NAMES_A_FILE = /\/|\w\.\w/;
 const SEQ_PER_MINUTE = 6e7;
@@ -51,7 +54,9 @@ function parseArgs(args) {
   if (args.includes("--days") && !/^[1-9]\d*$/.test(days ?? "")) throw new UsageError(USAGE);
   const version = flag(args, "--version");
   if (args.includes("--version") && (!version || version.startsWith("--"))) throw new UsageError(USAGE);
-  return { days: days ? Number(days) : 30, version };
+  const save = flag(args, "--save");
+  if (args.includes("--save") && (!save || save.startsWith("--"))) throw new UsageError(USAGE);
+  return { days: days ? Number(days) : 30, version, save };
 }
 
 // Only what stats reads: one repo's ledgers came to 189 MB, mostly baselines and review units.
@@ -292,7 +297,7 @@ function largeLines(closed) {
 
 // An estimate: a bugfix touching code a run closed in the month before it. It misses a feature run
 // that fixes a bug and counts a fix of an older bug, so the names are printed for a person to read.
-function afterCloseLines(closed, every, configOf) {
+function afterCloseLines(closed, every, configOf, forFile) {
   const label = "bugs after close (estimate):";
   const onTime = closed.filter((l) => !l.closedLate);
   const fixes = onTime.filter((l) => l.playbook === "bugfix");
@@ -316,7 +321,7 @@ function afterCloseLines(closed, every, configOf) {
   }
   if (!onTime.length || (fixes.length && notJudged === fixes.length)) return [`${label} ${MISSING}`];
   const out = [`${label} ${ofRuns(found.length, onTime.length)}${notJudged ? `, not judged ${notJudged} of ${fixes.length} bugfix runs` : ""}`];
-  if (found.length) out.push(`  named: ${found.sort().join(", ")}`);
+  if (found.length && !forFile) out.push(`  named: ${found.sort().join(", ")}`);
   return out;
 }
 
@@ -351,11 +356,11 @@ function sessionRecords(stateDir, session) {
 function refusalGroup(reason) {
   const text = String(reason ?? "").replace(/^done-gate:\s*/, "");
   const quoted = /`([^`]*)` is not a plain read/.exec(text)?.[1];
-  if (/^reading the gate folder beside/.test(text) || (quoted !== undefined && !GATE_FILE.test(quoted))) return "read beside another command";
+  if (/^reading the gate folder beside/.test(text) || (quoted !== undefined && !GATE_FILE.test(quoted))) return BESIDE;
   return text.split(/\s+/).slice(0, REFUSAL_WORDS).map((word) => (NAMES_A_FILE.test(word) ? "<file>" : word)).join(" ").replace(/[:,.]+$/, "");
 }
 
-function refusalLines(counted) {
+function refusalLines(counted, forFile) {
   const denies = counted.filter((e) => e.kind === "deny" && !e.delegate);
   if (!denies.length) return ["refusals: none, hand-offs left out"];
   const groups = new Map();
@@ -363,6 +368,10 @@ function refusalLines(counted) {
     const group = refusalGroup(e.reason);
     if (!groups.has(group)) groups.set(group, { lead: 0, helper: 0 });
     groups.get(group)[e.agent ? "helper" : "lead"] += 1;
+  }
+  if (forFile) {
+    const beside = groups.get(BESIDE) ?? { lead: 0, helper: 0 };
+    return [`refusals: ${denies.length}, hand-offs left out`, `  ${BESIDE}: lead ${beside.lead}, helper ${beside.helper}`, `  all others: lead ${denies.filter((e) => !e.agent).length - beside.lead}, helper ${denies.filter((e) => e.agent).length - beside.helper}`];
   }
   const rows = [...groups].sort(([a, m], [b, n]) => n.lead + n.helper - m.lead - m.helper || a.localeCompare(b));
   return [`refusals: ${denies.length}, hand-offs left out`, ...rows.map(([group, n]) => `  ${group}: lead ${n.lead}, helper ${n.helper}`)];
@@ -471,7 +480,7 @@ function failureLines(counted) {
 
 // Each event counts once however many run stretches hold it: an event is judged against every run
 // naming its session, not run by run, and a turn crossing a close is still one turn.
-function eventLines(recordsOf, closed, every, { version, cutoff }) {
+function eventLines(recordsOf, closed, every, { version, cutoff, forFile }) {
   const records = new Map();
   for (const session of new Set(closed.flatMap((l) => l.sessions))) records.set(session, recordsOf(session));
   const runRecords = closed.map((ledger) => ({ ledger, records: ledger.sessions.flatMap((s) => records.get(s) ?? []).filter(inRun(ledger)).sort((a, b) => a.seq - b.seq) }));
@@ -482,7 +491,7 @@ function eventLines(recordsOf, closed, every, { version, cutoff }) {
   const all = [...records.values()].flat();
   const counted = all.filter((e) => inSomeRun(closed, e));
   const outside = version ? [] : all.filter((e) => e.kind === "block" && e.seq / 1000 >= cutoff && !inSomeRun(every, e));
-  return [`events: ${ofRuns(covered, closed.length)}`, ...refusalLines(counted), ...stoppedLines(counted, outside), ...reviewTimeLines(runRecords), ...failureLines(counted), end];
+  return [`events: ${ofRuns(covered, closed.length)}`, ...refusalLines(counted, forFile), ...stoppedLines(counted, outside), ...reviewTimeLines(runRecords), ...failureLines(counted), end];
 }
 
 // Every stopped turn on disk per rule, with the verdicts that still have their block. Verdicts and
@@ -631,7 +640,7 @@ function projectFolders() {
 const compact = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${oneDecimal(n)}`);
 
 // Each line or helper counts once, in the run opened first of those holding its time.
-async function tokenLines(closed) {
+async function tokenLines(closed, forFile) {
   const runs = closed.filter((l) => !l.closedLate && minutesOf(l) !== null).sort((a, b) => Date.parse(a.openedAt) - Date.parse(b.openedAt));
   const folders = projectFolders();
   const tally = new Map(runs.map((l) => [l, { lead: 0, helpers: 0 }]));
@@ -658,7 +667,8 @@ async function tokenLines(closed) {
         if (!run) continue;
         const output = [...rows.values()].reduce((sum, row) => sum + row.output, 0);
         tally.get(run).helpers += output;
-        const role = roleOf(file);
+        const named = roleOf(file);
+        const role = forFile && !GATE_ROLES.has(named) ? "other" : named;
         roles.set(role, (roles.get(role) ?? 0) + output);
       }
     }
@@ -677,7 +687,51 @@ async function tokenLines(closed) {
   return [`tokens: ${ofRuns(counted.length, runs.length)}`, ...SIZES.map(sizeLine), ...roleRows.map(([role, n]) => `  ${role}: ${compact(n)} output, ${Math.round((n / helperTotal) * 100)}% of helper output`)];
 }
 
-async function report(ctx, { days, version }) {
+// Where a saved file may go: a new file outside the repo, where it can never read as a change to
+// the task or to the gate's own files. A failed write is the caller's to fix, not a gate error.
+function saveTarget(ctx, file) {
+  const target = path.resolve(file);
+  let parent;
+  try {
+    parent = realpathSync.native(path.dirname(target));
+  } catch {
+    throw new UsageError(`gate stats --save: the folder of ${target} does not exist`);
+  }
+  const inside = (root) => {
+    const rel = path.relative(realpathSync.native(root), parent);
+    return rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+  };
+  if ([ctx.root, ...ctx.repos.map((r) => r.root).filter((r) => existsSync(r))].some(inside)) {
+    throw new UsageError(`gate stats --save: ${target} is inside the repo, where it would count as a change; save it outside`);
+  }
+  return path.join(parent, path.basename(target));
+}
+
+function writeSaved(target, saved) {
+  try {
+    writeFileSync(target, `${JSON.stringify(saved, null, 2)}\n`, { flag: "wx" });
+  } catch (error) {
+    throw new UsageError(`gate stats --save: cannot write ${target} as a new file (${error.code ?? error.message})`);
+  }
+}
+
+// The printed lines as a flat map, so saved and printed numbers cannot drift: a top line is its own
+// label, and a line under it is "<top> / <label>". A top line with no value only names the section.
+function numbersOf(lines) {
+  const numbers = {};
+  let section = "";
+  for (const line of lines) {
+    const row = line.trimStart();
+    const at = row.indexOf(": ");
+    const label = at < 0 ? row.replace(/:$/, "") : row.slice(0, at);
+    const value = at < 0 ? null : row.slice(at + 2);
+    if (row === line) section = label;
+    if (value !== null) numbers[row === line ? label : `${section} / ${label}`] = value;
+  }
+  return numbers;
+}
+
+async function report(ctx, { days, version, forFile = false }) {
   const heading = `done-gate stats: ${path.basename(ctx.root)}, last ${days} days, ${version ? `version ${version}` : "all versions"}`;
   const read = readRuns(ctx.stateDir);
   const cutoff = Date.now() - days * DAY_MS;
@@ -698,9 +752,9 @@ async function report(ctx, { days, version }) {
   out.push(...(closed.length ? findingLines(closed, configOf) : [`findings: ${MISSING}`]));
   out.push(...(closed.length ? waiverLines(closed) : [`waivers: ${MISSING}`]));
   out.push("could-not-run waivers: not recorded", "lapsed waivers: not recorded");
-  out.push(...planLines(closed, configOf), ...largeLines(closed), ...afterCloseLines(closed, read?.ledgers ?? [], configOf));
+  out.push(...planLines(closed, configOf), ...largeLines(closed), ...afterCloseLines(closed, read?.ledgers ?? [], configOf, forFile));
   const recordsOf = sessionReader(ctx.stateDir);
-  out.push(...eventLines(recordsOf, closed, read?.ledgers ?? [], { version, cutoff }), ...rateLines(ctx.stateDir, recordsOf), ...(await tokenLines(closed)));
+  out.push(...eventLines(recordsOf, closed, read?.ledgers ?? [], { version, cutoff, forFile }), ...rateLines(ctx.stateDir, recordsOf), ...(await tokenLines(closed, forFile)));
   return out;
 }
 
@@ -710,6 +764,22 @@ export const verbs = {
       recordVerdict(ctx, ctx.args.slice(1));
       return;
     }
-    for (const line of await report(ctx, parseArgs(ctx.args))) ctx.out(line);
+    const options = parseArgs(ctx.args);
+    if (options.save) {
+      const target = saveTarget(ctx, options.save);
+      const [, ...lines] = await report(ctx, { ...options, forFile: true });
+      writeSaved(target, {
+        format: 1,
+        repo: path.basename(ctx.root),
+        pluginVersion: ctx.version,
+        savedAt: new Date().toISOString(),
+        days: options.days,
+        version: options.version ?? null,
+        numbers: numbersOf(lines),
+      });
+      ctx.out(`saved ${target}: numbers only, nothing was sent`);
+      return;
+    }
+    for (const line of await report(ctx, options)) ctx.out(line);
   },
 };
