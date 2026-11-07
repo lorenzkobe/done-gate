@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate } from "./helpers.mjs";
+import { makeRepo, write, gate, here } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 
@@ -365,4 +365,220 @@ test("C29 refused: an onlyNew command whose output places a finding in a test fi
   withLine5Changed(repo);
   cli(repo, "verify");
   assert.notEqual(verifyJson(repo).commands[0].exit, 0);
+});
+
+// Batch 3.4: the same tree is not tested twice, code moved during a run records nothing green, and
+// verify.json keeps a short history.
+const COUNT = (name) => `sh -c 'echo x >> ../${name}.count'`;
+const runsOf = (repo, name) => {
+  const file = path.join(path.dirname(repo), `${name}.count`);
+  return existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").length : 0;
+};
+const counted = (name, extra = {}, files = {}) => {
+  rmSync(path.join(here, ".tmp", `${name}.count`), { force: true });
+  return opened(name, [{ cmd: COUNT(name), ...extra }], files);
+};
+const aged = (repo) => {
+  const ledger = ledgerOf(repo);
+  delete ledger.rules;
+  saveLedger(runDir(repo), ledger);
+};
+
+test("3.4 C1 gate verify twice on the same tree runs each command once, and the second closes the step", () => {
+  const repo = counted("rv-34c1");
+  cli(repo, "verify");
+  assert.equal(runsOf(repo, "rv-34c1"), 1);
+  const out = cli(repo, "verify");
+  assert.equal(runsOf(repo, "rv-34c1"), 1);
+  assert.match(out, /skipped: already green on this exact tree/);
+  assert.equal(ledgerOf(repo).steps.find((s) => s.key === "verify").state, "DONE");
+  const [row] = verifyJson(repo).commands;
+  assert.equal(row.covers, true);
+  assert.ok(verifyJson(repo).greenTree[row.cmd]);
+});
+
+test("3.4 C2 a doc edit re-runs, a red command re-runs, an added command runs", () => {
+  const doc = counted("rv-34c2");
+  cli(doc, "verify");
+  write(doc, "docs/notes.md", "# changed\n");
+  cli(doc, "verify");
+  assert.equal(runsOf(doc, "rv-34c2"), 2);
+
+  const redName = "rv-34c2r";
+  rmSync(path.join(here, ".tmp", `${redName}.count`), { force: true });
+  const red = opened(redName, [`sh -c 'echo x >> ../${redName}.count; exit 1'`]);
+  cli(red, "verify");
+  cli(red, "verify");
+  assert.equal(runsOf(red, redName), 2);
+
+  const added = counted("rv-34c2a");
+  cli(added, "verify");
+  cli(added, "verify", ["--add", "true"]);
+  cli(added, "verify");
+  assert.equal(runsOf(added, "rv-34c2a"), 1);
+  assert.deepEqual(ranCmds(added), ["true"]);
+});
+
+test("3.4 C2 changed related files re-run, as the resolved command differs", () => {
+  const repo = opened("rv-34c2f", [{ related: true }], { "tests/a.test.ts": "test('a', () => {});\n", ".claude/gate.json": JSON.stringify({ testFiles: "sh -c 'true' {files}", verify: [{ related: true }] }) });
+  write(repo, "tests/a.test.ts", "test('a2', () => {});\n");
+  cli(repo, "verify");
+  assert.equal(verifyJson(repo).commands[0].skipped, undefined);
+  cli(repo, "verify");
+  assert.equal(verifyJson(repo).commands[0].covers, true);
+  assert.deepEqual(verifyJson(repo).commands[0].files, ["tests/a.test.ts"]);
+  write(repo, "tests/b.test.ts", "test('b', () => {});\n");
+  cli(repo, "verify");
+  assert.equal(verifyJson(repo).commands[0].skipped, undefined);
+  assert.deepEqual(verifyJson(repo).commands[0].files, ["tests/a.test.ts", "tests/b.test.ts"]);
+});
+
+test("3.4 C3 --force runs everything, the final command too; external never skips", () => {
+  const name = "rv-34c3";
+  rmSync(path.join(here, ".tmp", `${name}.count`), { force: true });
+  const repo = opened(name, [COUNT(name), { cmd: `sh -c 'echo f >> ../${name}.final.count'`, when: "final" }]);
+  rmSync(path.join(path.dirname(repo), `${name}.final.count`), { force: true });
+  cli(repo, "verify");
+  cli(repo, "verify", ["--force"]);
+  assert.equal(runsOf(repo, name), 2);
+  assert.equal(runsOf(repo, `${name}.final`), 1, "--force runs the final command too");
+
+  const ext = counted("rv-34c3e", { external: true });
+  cli(ext, "verify");
+  cli(ext, "verify");
+  assert.equal(runsOf(ext, "rv-34c3e"), 2);
+  const schema = JSON.parse(readFileSync(new URL("../gate.schema.json", import.meta.url), "utf8"));
+  assert.ok(JSON.stringify(schema.properties.verify).includes('"external"'));
+});
+
+test("3.4 C4 a skip keeps R18 clean and the packet calls verify fresh", () => {
+  const verify = [{ cmd: ok("pytest", "tests"), when: "always" }];
+  const repo = opened("rv-34c4", verify, { "tests/a.test.py": "def test_a(): pass\n" });
+  cli(repo, "note", ["task", "t"]);
+  cli(repo, "case", ["add", "a case", "--kind", "happy"]);
+  cli(repo, "case", ["close", "C1", "--test", "tests/a.test.py:test_a"]);
+  cli(repo, "verify");
+  assert.equal(ruleLines(cli(repo, "check"), "R18"), "");
+  cli(repo, "verify");
+  assert.equal(verifyJson(repo).commands[0].covers, true);
+  assert.equal(ruleLines(cli(repo, "check"), "R18"), "");
+  const packet = /^packet: (.+)$/m.exec(cli(repo, "brief", ["reviewer"]))[1];
+  assert.match(readFileSync(packet, "utf8"), /verify\.json is fresh/);
+});
+
+test("3.4 C5 an old run with no stamp still runs every command", () => {
+  const repo = counted("rv-34c5");
+  aged(repo);
+  cli(repo, "verify");
+  cli(repo, "verify");
+  assert.equal(runsOf(repo, "rv-34c5"), 2);
+  assert.equal(verifyJson(repo).greenTree, undefined);
+});
+
+test("3.4 C6 a command that edits a source file records nothing green, leaves the step open and names it; the next clean run goes green", () => {
+  const flag = "rv-34c6.flag";
+  rmSync(path.join(here, ".tmp", flag), { force: true });
+  const repo = opened("rv-34c6", [`sh -c 'test -e ../${flag} || { touch ../${flag}; echo "export const moved = 1;" >> src/a.ts; }'`]);
+  const out = cli(repo, "verify");
+  assert.match(out, /src\/a\.ts/);
+  assert.doesNotMatch(out, /all 1 green/);
+  const record = verifyJson(repo);
+  assert.deepEqual(record.greenAt, {});
+  assert.deepEqual(record.greenTree ?? {}, {});
+  assert.equal(ledgerOf(repo).steps.find((s) => s.key === "verify").state, null);
+  assert.match(cli(repo, "verify"), /all 1 green/);
+  assert.equal(ledgerOf(repo).steps.find((s) => s.key === "verify").state, "DONE");
+  assert.equal(Object.keys(verifyJson(repo).greenAt).length, 1);
+});
+
+test("3.4 C7 a docs change during the run still records green", () => {
+  const repo = opened("rv-34c7", ["sh -c 'echo more >> docs/notes.md'"]);
+  assert.match(cli(repo, "verify"), /all 1 green/);
+  assert.equal(ledgerOf(repo).steps.find((s) => s.key === "verify").state, "DONE");
+  assert.equal(Object.keys(verifyJson(repo).greenAt).length, 1);
+});
+
+test("3.4 C8 history grows, survives a skip, stops at 20; an old verify.json with none still reads", () => {
+  const repo = counted("rv-34c8");
+  cli(repo, "verify");
+  cli(repo, "verify");
+  const [first, second] = verifyJson(repo).history;
+  assert.equal(first.ran.length, 1);
+  assert.equal(first.skipped, 0);
+  assert.deepEqual(second.ran, []);
+  assert.equal(second.skipped, 1);
+  assert.equal(second.sourceHash, first.sourceHash);
+  assert.equal(second.treeHash, first.treeHash);
+  assert.equal(typeof first.ms, "number");
+  assert.ok(first.at);
+
+  const file = path.join(runDir(repo), "verify.json");
+  const old = verifyJson(repo);
+  old.history = Array.from({ length: 20 }, (_, i) => ({ at: "t", sourceHash: `s${i}`, treeHash: `t${i}`, ran: ["c"], skipped: 0, ms: 1 }));
+  writeFileSync(file, JSON.stringify(old));
+  cli(repo, "verify");
+  const history = verifyJson(repo).history;
+  assert.equal(history.length, 20);
+  assert.equal(history[0].sourceHash, "s1", "the oldest fell off");
+
+  const { history: _gone, ...none } = verifyJson(repo);
+  writeFileSync(file, JSON.stringify(none));
+  cli(repo, "verify");
+  assert.equal(verifyJson(repo).history.length, 1);
+  assert.equal(ruleLines(cli(repo, "check"), "R3"), "");
+});
+
+test("3.4 C10 a skip of a related entry keeps its case tests in R18's list", () => {
+  const repo = opened("rv-34c10", [{ related: true }], { "tests/a.test.ts": "test('a', () => {});\n", ".claude/gate.json": JSON.stringify({ testFiles: "sh -c 'true' {files}", verify: [{ related: true }] }) });
+  cli(repo, "note", ["task", "t"]);
+  cli(repo, "case", ["add", "a case", "--kind", "happy"]);
+  cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:a"]);
+  write(repo, "tests/a.test.ts", "test('a2', () => {});\n");
+  cli(repo, "verify");
+  cli(repo, "verify");
+  assert.equal(verifyJson(repo).commands[0].covers, true);
+  assert.equal(ruleLines(cli(repo, "check"), "R18"), "");
+});
+
+test("3.4 C11 a when-source test command on the same tree is a fresh skip; one skipped because only tests changed stays not fresh", () => {
+  const verify = [{ cmd: ok("pytest", "tests"), when: "source" }];
+  const repo = opened("rv-34c11", verify, { "tests/a.test.py": "def test_a(): pass\n" });
+  write(repo, "src/a.ts", "export const a = 2;\n");
+  cli(repo, "note", ["task", "t"]);
+  cli(repo, "case", ["add", "a case", "--kind", "happy"]);
+  cli(repo, "case", ["close", "C1", "--test", "tests/a.test.py:test_a"]);
+  cli(repo, "verify");
+  cli(repo, "verify");
+  const [row] = verifyJson(repo).commands;
+  assert.equal(row.covers, true);
+  assert.equal(ruleLines(cli(repo, "check"), "R18"), "");
+  assert.match(readFileSync(/^packet: (.+)$/m.exec(cli(repo, "brief", ["reviewer"]))[1], "utf8"), /verify\.json is fresh/);
+
+  write(repo, "tests/a.test.py", "def test_a2(): pass\n");
+  cli(repo, "verify");
+  assert.equal(verifyJson(repo).commands[0].covers, undefined);
+  assert.match(readFileSync(/^packet: (.+)$/m.exec(cli(repo, "brief", ["reviewer"]))[1], "utf8"), /not fresh/);
+});
+
+test("3.4 C12 a skip of an onlyNew entry keeps the old findings it ignored, in the record and the report", () => {
+  const lint = "sh -c 'echo src/a.ts:1: old finding; exit 1'";
+  const repo = opened("rv-34c12", [{ cmd: lint, onlyNew: true }]);
+  write(repo, "src/a.ts", Array.from({ length: 20 }, (_, i) => `export const a${i} = ${i};`).join("\n") + "\nexport const more = 1;\n");
+  cli(repo, "verify");
+  assert.equal(verifyJson(repo).commands[0].oldFindings, 1);
+  assert.match(cli(repo, "verify"), /1 old finding/);
+  const [row] = verifyJson(repo).commands;
+  assert.equal(row.covers, true);
+  assert.equal(row.oldFindings, 1);
+  assert.equal(row.rawExit, 1);
+  assert.match(cli(repo, "report"), /old lint finding/);
+});
+
+test("3.4 C13 verify then verify --final on one source hash is no re-run", () => {
+  const repo = opened("rv-34c13", ["true", { cmd: "sh -c true", when: "final" }]);
+  cli(repo, "verify");
+  cli(repo, "verify", ["--final"]);
+  const history = verifyJson(repo).history;
+  assert.equal(history[0].sourceHash, history[1].sourceHash);
+  assert.equal(history[0].ran.some((c) => history[1].ran.includes(c)), false);
 });

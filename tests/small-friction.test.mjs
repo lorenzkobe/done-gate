@@ -636,7 +636,7 @@ test("H3.1: a verify command added after a green verify blocks the close until i
   assert.notEqual(close.status, 0, "the run closed with an added command that never ran");
   assert.notEqual(ledgerOf(repo).status, "closed");
 
-  assert.match(cli(repo, "verify").stdout, /all 2 green/);
+  assert.match(cli(repo, "verify").stdout, /all 1 green/);
   assert.equal(added.runs(), 1);
   assert.equal(ruleLines(cli(repo, "check").stdout, "R3"), "");
 

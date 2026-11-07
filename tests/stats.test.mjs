@@ -1526,3 +1526,23 @@ test("C97 reported surface: help and README name --save and say nothing is sent"
   assert.match(readme, /`stats \[--days n\] \[--version x\] \[--save <file>\]`/);
   assert.match(readme, /sends nothing/);
 });
+
+test("C98 happy: verify re-runs count the runs on an unchanged source hash; none recorded is missing, and a save keeps only the number", () => {
+  const repo = makeRepo("st-c98");
+  assert.match(ok(repo), /verify re-runs: missing/);
+  writeRun(repo, "2026-a", closedRun());
+  writeFileSync(path.join(runsOf(repo), "2026-a", "verify.json"), JSON.stringify({ history: [
+    { at: "t", sourceHash: "s1", treeHash: "t1", ran: ["lint"], skipped: 1, ms: 1 },
+    { at: "t", sourceHash: "s1", treeHash: "t1", ran: ["suite"], skipped: 1, ms: 1 },
+    { at: "t", sourceHash: "s1", treeHash: "t2", ran: ["lint"], skipped: 1, ms: 1 },
+    { at: "t", sourceHash: "s1", treeHash: "t2", ran: [], skipped: 2, ms: 0 },
+    { at: "t", sourceHash: "s2", treeHash: "t3", ran: ["lint"], skipped: 1, ms: 1 },
+  ] }));
+  writeRun(repo, "2026-b", closedRun());
+  writeFileSync(path.join(runsOf(repo), "2026-b", "verify.json"), JSON.stringify({ commands: [] }));
+  assert.match(ok(repo), /verify re-runs: 1 of 4 verifies that ran, in 1 of 2 runs/);
+  const saved = path.join(path.dirname(repo), "st-c98.json");
+  rmSync(saved, { force: true });
+  ok(repo, ["--save", saved]);
+  assert.match(readFileSync(saved, "utf8"), /verify re-runs/);
+});

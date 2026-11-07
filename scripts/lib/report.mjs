@@ -77,7 +77,7 @@ export function verifyLines(verify, { tails = true, unfinished = null } = {}) {
   const out = [];
   for (const c of verify.commands) {
     if (c.skipped) {
-      out.push(`- – \`${c.cmd}\`${verifyWhere(c)} — skipped: ${c.skipped}`);
+      out.push(`- – \`${c.cmd}\`${verifyWhere(c)} — skipped: ${c.skipped}${c.oldFindings ? ` (${plural(c.oldFindings, "old lint finding")} ignored)` : ""}`);
       continue;
     }
     out.push(`- ${c.exit === 0 && !c.timedOut ? "✓" : "✗"} \`${c.cmd}\`${verifyWhere(c)} — ${c.timedOut ? "timed out" : `exit ${c.exit}`}${c.oldFindings ? ` (exit ${c.rawExit}: ${plural(c.oldFindings, "old finding")} off this task's lines ignored: ${c.oldList.join(", ")}${c.oldFindings > c.oldList.length ? ", …" : ""})` : ""}, ${(c.ms / 1000).toFixed(1)}s`);

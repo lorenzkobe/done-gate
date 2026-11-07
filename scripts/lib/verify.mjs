@@ -6,7 +6,7 @@ import { segments, withoutHeredocs } from "./guard.mjs";
 import { buildState } from "./assess.mjs";
 import { currentLedger, isDone, loadLedger, saveLedger } from "./ledger.mjs";
 import { nextSeq } from "./events.mjs";
-import { diffTextOf, implementationHash, sourceHash, verifyKey, verifyWhere, workOutSteps } from "./rules.mjs";
+import { diffTextOf, implementationHash, newRules, sourceHash, verifyKey, verifyWhere, workOutSteps } from "./rules.mjs";
 import { repoPath } from "./paths.mjs";
 import { loadSession } from "./session-state.mjs";
 import { diffSnapshots, parseHunks, snapshot } from "./tree.mjs";
@@ -338,7 +338,7 @@ export function coverageGaps(state) {
       const cwd = repoRoot(c.repo ?? null);
       return cwd ? testScopes(c.cmd, cwd, (abs) => config.isTest(path.relative(root, abs).split(path.sep).join("/")), config.testFiles) : [];
     });
-  const listed = new Set(verify.commands.filter((c) => !c.skipped && c.exit === 0 && !c.timedOut && Array.isArray(c.files)).flatMap((c) => c.files));
+  const listed = new Set(verify.commands.filter((c) => (c.covers || (!c.skipped && c.exit === 0 && !c.timedOut)) && Array.isArray(c.files)).flatMap((c) => c.files));
   const gaps = [];
   for (const c of ledger.cases ?? []) {
     const rel = caseTestFile(c, root, config);
@@ -380,7 +380,9 @@ export function verifyEntries(config, ledger) {
 
 const VERIFY_STEPS = new Set(["verify", "verify-before"]);
 
-export async function runVerify(ctx, { stepKey = "verify", final = false } = {}) {
+const HISTORY_KEPT = 20;
+
+export async function runVerify(ctx, { stepKey = "verify", final = false, force = false } = {}) {
   const current = currentLedger(ctx.stateDir, ctx.session);
   if (!current || isDone(current.ledger)) {
     throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
@@ -418,6 +420,16 @@ export async function runVerify(ctx, { stepKey = "verify", final = false } = {})
   // still covers its test files, and --final reruns it once tests changed
   const greenSource = lastGreen(file, "greenSource");
   const sourceNow = sourceHash(snap, config);
+  // what each command last went green on: the whole tree and the command as it ran. An ignored
+  // file (.env) is not in the tree, so a command that reads one declares itself external
+  const stamped = newRules(current.ledger);
+  const greenTree = lastGreen(file, "greenTree");
+  const greenOnThisTree = (entry, key, cmd) => stamped && !force && !entry.external && greenTree[key]?.tree === snap.hash && greenTree[key]?.cmd === cmd;
+  const repeated = (row, key) => {
+    const { tree: _tree, cmd: _cmd, ...old } = greenTree[key];
+    ctx.err(`verify: ${row.cmd}${verifyWhere(row)} skipped (green on this exact tree already)`);
+    return { ...row, ...old, skipped: "already green on this exact tree", covers: true, ms: 0 };
+  };
   // with serialTests verify waits for any `gate test` and holds the lock while it runs
   let lock = null;
   try {
@@ -436,14 +448,18 @@ export async function runVerify(ctx, { stepKey = "verify", final = false } = {})
     const name = `${entry.cmd}${verifyWhere(row)}`;
     const isFinal = entry.when === "final";
     if (isFinal) row.final = true;
+    if (!entry.related && greenOnThisTree(entry, key, entry.cmd)) {
+      commands.push(repeated(row, key));
+      continue;
+    }
     const scope = entry.when === "source" || isFinal ? scopeOf(entry.repo ?? null) : null;
-    if (scope && !scope.changed) {
+    if (scope && !scope.changed && !force) {
       ctx.err(`verify: ${name} skipped (no implementation change)`);
       commands.push({ ...row, skipped: "no implementation change (tests or docs only)", ms: 0 });
       continue;
     }
     const sameCode = isFinal && greenSource[key] === sourceNow;
-    if (scope && greenAt[key] === scope.implementation && !(isFinal && final && !sameCode)) {
+    if (scope && !force && greenAt[key] === scope.implementation && !(isFinal && final && !sameCode)) {
       ctx.err(`verify: ${name} skipped (green on this implementation already)`);
       commands.push({ ...row, skipped: "already green on this code", ms: 0, ...(sameCode ? { covers: true } : {}) });
       continue;
@@ -468,6 +484,10 @@ export async function runVerify(ctx, { stepKey = "verify", final = false } = {})
       }
       row.files = files;
       run = { ...entry, cmd: config.testFiles.split("{files}").join(files.map(quote).join(" ")) };
+      if (greenOnThisTree(entry, key, run.cmd)) {
+        commands.push(repeated(row, key));
+        continue;
+      }
     }
     ctx.err(`verify: ${name} (timeout ${entry.timeout}s)`);
     const { output, ...result } = { ...row, ...(await runCommand(run, entry.cwd ?? ctx.root, { onSpawn: (pgid) => lock?.setGroup(pgid), env: lock ? { [HELD_ENV]: String(process.pid) } : {} })) };
@@ -481,13 +501,31 @@ export async function runVerify(ctx, { stepKey = "verify", final = false } = {})
     if (result.exit === 0 && !result.timedOut) {
       greenAt[key] = scopeOf(entry.repo ?? null).implementation;
       if (isFinal) greenSource[key] = sourceNow;
+      const { oldFindings, oldList, rawExit } = result;
+      greenTree[key] = { tree: snap.hash, cmd: run.cmd, ...(oldFindings ? { oldFindings, oldList, rawExit } : {}) };
     } else {
       delete greenAt[key];
       delete greenSource[key];
+      delete greenTree[key];
     }
     ctx.err(`  → ${result.timedOut ? "TIMED OUT" : `exit ${result.exit}`} in ${(result.ms / 1000).toFixed(1)}s`);
   }
-  const record = { startedAt, finishedAt: new Date().toISOString(), sourceHash: sourceNow, greenAt, greenSource, commands };
+  // code that moved while the commands ran was not what they judged: none of this counts as green
+  const after = stamped ? snapshot(ctx.root, snap, repos) : snap;
+  const moved = sourceHash(after, config) === sourceNow ? [] : diffSnapshots(snap, after).changed.filter((p) => config.isSource(p));
+  const greens = moved.length
+    ? { greenAt: lastGreen(file), greenSource: lastGreen(file, "greenSource"), greenTree: lastGreen(file, "greenTree") }
+    : { greenAt, greenSource, ...(stamped ? { greenTree } : {}) };
+  const before = lastGreen(file, "history");
+  const history = [...(Array.isArray(before) ? before : []), {
+    at: startedAt,
+    sourceHash: sourceNow,
+    treeHash: snap.hash,
+    ran: commands.filter((c) => !c.skipped).map(verifyKey),
+    skipped: commands.filter((c) => c.skipped).length,
+    ms: commands.reduce((sum, c) => sum + (c.ms ?? 0), 0),
+  }].slice(-HISTORY_KEPT);
+  const record = { startedAt, finishedAt: new Date().toISOString(), sourceHash: sourceNow, ...greens, commands, history };
   // written whole: a Stop hook may read it while a background verify is still writing
   writeFileSync(`${file}.${process.pid}.tmp`, JSON.stringify(record, null, 2));
   renameSync(`${file}.${process.pid}.tmp`, file);
@@ -497,13 +535,13 @@ export async function runVerify(ctx, { stepKey = "verify", final = false } = {})
   const red = commands.filter((c) => !c.skipped && (c.exit !== 0 || c.timedOut));
   const ledger = loadLedger(current.dir);
   const step = ledger.steps.find((s) => s.key === stepKey);
-  if (step && red.length === 0) {
+  if (step && red.length === 0 && !moved.length) {
     Object.assign(step, { state: "DONE", evidence: "verify.json", note: `${commands.length} command(s) green`, seq: nextSeq() });
     // judged from the tree this run started on: an edit during the commands is the next check's
     if (stepKey === "verify") workOutSteps(ledger, config, touched, implementationHash(snap, config));
   }
   saveLedger(current.dir, ledger);
-  return { record, red, dir: current.dir };
+  return { record, red, moved, dir: current.dir };
 }
 
 export const verbs = {
@@ -516,10 +554,11 @@ export const verbs = {
     }
     const stepIdx = ctx.args.indexOf("--step");
     const stepKey = stepIdx >= 0 ? ctx.args[stepIdx + 1] ?? null : "verify";
-    const { record, red, dir } = await runVerify(ctx, { stepKey, final: ctx.args.includes("--final") });
+    const force = ctx.args.includes("--force");
+    const { record, red, moved, dir } = await runVerify(ctx, { stepKey, force, final: force || ctx.args.includes("--final") });
     for (const c of record.commands) {
       if (c.skipped) {
-        ctx.out(`– ${c.cmd}${verifyWhere(c)} — skipped: ${c.skipped}`);
+        ctx.out(`– ${c.cmd}${verifyWhere(c)} — skipped: ${c.skipped}${c.oldFindings ? ` (${c.oldFindings} old finding${c.oldFindings === 1 ? "" : "s"} off this task's lines ignored)` : ""}`);
         continue;
       }
       const green = c.exit === 0 && !c.timedOut;
@@ -528,7 +567,8 @@ export const verbs = {
     }
     const ran = record.commands.filter((c) => !c.skipped).length;
     if (record.commands.some((c) => c.owed)) ctx.out("final check owed: run `gate verify --final` once your edits are done (it may run in the background while review runs)");
-    ctx.out(red.length ? `${red.length} of ${ran} red — fix and run \`gate verify\` again` : `all ${ran} green — step {${stepKey}} closed with verify.json`);
+    if (moved.length) ctx.out(`source changed while verify ran (${moved.slice(0, 5).join(", ")}): nothing recorded green and step {${stepKey}} stays open; run \`gate verify\` again once nothing is writing`);
+    else ctx.out(red.length ? `${red.length} of ${ran} red — fix and run \`gate verify\` again` : `all ${ran} green — step {${stepKey}} closed with verify.json`);
     // the lead runs verify after its edits, so the advice reaches it mid-run, not only in the report
     const ledger = loadLedger(dir);
     const advice = splitAdvice(policyFor(ledger), ledger.tier?.measured);

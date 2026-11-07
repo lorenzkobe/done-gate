@@ -105,7 +105,7 @@ test("C4 happy: a final command is owed after a plain verify, runs once with --f
 
   resetProbe(repo);
   cli(repo, "verify", ["--final"]);
-  assert.deepEqual(probeRuns(repo).map((r) => r.tag), ["QUICK", "FINAL"]);
+  assert.deepEqual(probeRuns(repo).map((r) => r.tag), ["FINAL"], "the tree did not move, so QUICK is not run again");
   assert.equal(r3(repo), "");
 
   resetProbe(repo);
@@ -178,6 +178,7 @@ test("C10 edge: the related entry is 'related tests' in verify output and the pa
   assert.match(/## Test command\n([\s\S]*?)(?=\n## |$)/.exec(packet)[1], /related tests/);
   assert.doesNotMatch(packet, /`undefined`/);
   cli(repo, "verify", ["--drop", "related tests"]);
+  write(repo, "docs/notes.md", "# the tree moved, so QUICK runs again\n");
   resetProbe(repo);
   cli(repo, "verify");
   assert.deepEqual(probeRuns(repo).map((r) => r.tag), ["QUICK"]);

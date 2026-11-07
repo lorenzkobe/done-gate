@@ -138,7 +138,7 @@ function normaliseVerify(entries, fallbackTimeout) {
     if (e.related === true) return { cmd: RELATED, related: true, timeout: Number(e.timeout ?? fallbackTimeout), when: "always" };
     const cmd = String(e.cmd);
     const when = WHEN.has(e.when) ? e.when : BUILD_ONLY.test(cmd) ? "source" : "always";
-    return { cmd, timeout: Number(e.timeout ?? fallbackTimeout), when, ...(e.onlyNew === true ? { onlyNew: true } : {}) };
+    return { cmd, timeout: Number(e.timeout ?? fallbackTimeout), when, ...(e.onlyNew === true ? { onlyNew: true } : {}), ...(e.external === true ? { external: true } : {}) };
   });
 }
 

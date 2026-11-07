@@ -303,3 +303,9 @@ test("decline is allowed beside a stale run and refused beside a fresh or own on
     assert.notEqual(run(repo, "setup", ["--decline", "--user-ok", "no thanks not now"]).status, 0);
   }
 });
+
+test("3.4: gate setup keeps a verify entry's external flag, on a final command and a plain one", () => {
+  const repo = makeRepo("ts-external", { ...JEST, ".claude/gate.json": JSON.stringify({ verify: [{ cmd: "npm run test", external: true }, { cmd: "npm run db", external: true }] }) });
+  const { json } = proposal(repo);
+  assert.deepEqual(json.verify.filter((v) => v.external).map((v) => v.cmd), ["npm run test", "npm run db"]);
+});

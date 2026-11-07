@@ -392,34 +392,21 @@ test("C6 boundary: a docs-only change skips the source-only command and still ru
 // C7
 // ---------------------------------------------------------------------------
 
-test("C7 idempotent: two verify runs on the same tree record the same commands, skips and source hash", () => {
+test("C7 idempotent: two verify runs on the same tree record the same green maps, skips and source hash", () => {
   const repo = repoWithVerify("when-c7", [
     { cmd: tagged("ALWAYS-RAN"), when: "always" },
     { cmd: tagged("SOURCE-RAN"), when: "source" },
   ]);
   write(repo, "tests/a.test.ts", "test('a', () => { /* changed */ });\n");
 
-  // everything that is allowed to differ between two runs of the same tree
-  const VOLATILE = new Set(["ms", "at", "ts", "startedAt", "finishedAt", "timestamp", "durationMs"]);
-  const stable = (value) => {
-    if (Array.isArray(value)) return value.map(stable);
-    if (value && typeof value === "object") {
-      return Object.fromEntries(
-        Object.entries(value)
-          .filter(([k]) => !VOLATILE.has(k))
-          .map(([k, v]) => [k, stable(v)]),
-      );
-    }
-    return value;
-  };
-
   cli(repo, "verify");
   const first = verifyJson(repo);
   cli(repo, "verify");
   const second = verifyJson(repo);
 
-  assert.deepEqual(stable(second), stable(first), "verify is idempotent once timings are removed");
-  assert.equal(second.sourceHash, first.sourceHash);
+  for (const field of ["greenAt", "greenSource", "greenTree", "sourceHash"]) assert.deepEqual(second[field], first[field], field);
+  assert.equal(second.commands[0].covers, true, "the second run did not run it again");
+  assert.deepEqual(second.commands.map((c) => c.cmd), first.commands.map((c) => c.cmd));
   assert.equal(typeof second.commands[1].skipped, "string", "the skip survives the second run");
 });
 

@@ -442,6 +442,13 @@ a recorded, successful run of the lead's after the last edit (`gate step driver 
 returned>" --ran "<part of the command or url>"`), and R4 holds it until then. The gate proves the
 call ran, not that it reached the endpoint.
 
+In a new run `gate verify` does not run a command again on a tree it is already green on: the
+whole tree and the command as resolved must match, so a doc edit runs it again. `--force` runs
+everything; `"external": true` on a verify entry runs it on such a tree too (`when` still applies), for a command that reads what the
+tree does not hold (an ignored `.env`, a service). Source that moves while verify runs records
+nothing green and leaves the step open, naming the files. `verify.json` keeps the last 20 runs,
+and `gate stats` counts the verifies that ran a command again on the same source hash.
+
 A green `gate verify` closes the driver and schema steps by itself, as N/A, when this code cannot
 reach them: only tests or docs changed, or the repo lists its globs (`ui` and `api` for driver,
 `schema` for schema; an empty list counts) and no changed file matches. A later edit opens them

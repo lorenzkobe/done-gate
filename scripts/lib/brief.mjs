@@ -230,7 +230,7 @@ function testCommands(state) {
 // runs the case tests instead of the whole command again: on a shared test database a second
 // full run only queues behind the first.
 function freshness(state) {
-  const problem = verifyProblem(state, { final: false }) ?? ((state.verify.commands ?? []).some((c) => c.skipped && !c.final && runsTests(c.cmd)) ? { reason: "a test command was skipped, so tests added since never ran under it" } : null);
+  const problem = verifyProblem(state, { final: false }) ?? ((state.verify.commands ?? []).some((c) => c.skipped && !c.covers && !c.final && runsTests(c.cmd)) ? { reason: "a test command was skipped, so tests added since never ran under it" } : null);
   if (problem) return [`verify.json is not fresh (${problem.reason}): run the test command yourself.`];
   const files = [...new Set([
     ...state.ledger.cases.map((c) => caseTestFile(c, state.root, state.config)).filter(Boolean),

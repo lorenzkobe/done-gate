@@ -731,6 +731,32 @@ function numbersOf(lines) {
   return numbers;
 }
 
+// A verify that ran a command again on a source hash the command already ran on. A normal run then
+// the --final check share a hash but no command, so that pair is no re-run.
+function reRunLines(closed, stateDir) {
+  const histories = closed.map((l) => {
+    try {
+      return JSON.parse(readFileSync(path.join(runsDir(stateDir), l.name, "verify.json"), "utf8")).history ?? null;
+    } catch {
+      return null;
+    }
+  }).filter(Boolean);
+  if (!histories.length) return [`verify re-runs: ${MISSING}`];
+  let ran = 0;
+  let again = 0;
+  for (const history of histories) {
+    const seen = new Map();
+    for (const entry of history) {
+      if (!entry.ran?.length) continue;
+      ran += 1;
+      const before = seen.get(entry.sourceHash) ?? new Set();
+      if (entry.ran.some((cmd) => before.has(cmd))) again += 1;
+      seen.set(entry.sourceHash, new Set([...before, ...entry.ran]));
+    }
+  }
+  return [`verify re-runs: ${again} of ${ran} verifies that ran, in ${ofRuns(histories.length, closed.length)}`];
+}
+
 async function report(ctx, { days, version, forFile = false }) {
   const heading = `done-gate stats: ${path.basename(ctx.root)}, last ${days} days, ${version ? `version ${version}` : "all versions"}`;
   const read = readRuns(ctx.stateDir);
@@ -752,7 +778,7 @@ async function report(ctx, { days, version, forFile = false }) {
   out.push(...(closed.length ? findingLines(closed, configOf) : [`findings: ${MISSING}`]));
   out.push(...(closed.length ? waiverLines(closed) : [`waivers: ${MISSING}`]));
   out.push("could-not-run waivers: not recorded", "lapsed waivers: not recorded");
-  out.push(...planLines(closed, configOf), ...largeLines(closed), ...afterCloseLines(closed, read?.ledgers ?? [], configOf, forFile));
+  out.push(...reRunLines(closed, ctx.stateDir), ...planLines(closed, configOf), ...largeLines(closed), ...afterCloseLines(closed, read?.ledgers ?? [], configOf, forFile));
   const recordsOf = sessionReader(ctx.stateDir);
   out.push(...eventLines(recordsOf, closed, read?.ledgers ?? [], { version, cutoff, forFile }), ...rateLines(ctx.stateDir, recordsOf), ...(await tokenLines(closed, forFile)));
   return out;
