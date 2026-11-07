@@ -89,6 +89,8 @@ function wrapperOf(root, cmd, files, config) {
   return null;
 }
 
+const API_LAYOUTS = ["app/api", "pages/api", "src/app/api", "src/pages/api"];
+
 // A repo is asked once: when it has tests and its gate.json has no usable testFiles key. An
 // explicit null is a recorded no.
 export function needsSetup(root) {
@@ -154,7 +156,8 @@ export function proposeSetup(root) {
     const at = entries.findIndex((e) => typeof e === "object" && e.when === "final");
     entries.splice(at < 0 ? entries.length : at, 0, { related: true });
   }
-  const proposal = { ...raw, ...(testFiles ? { testFiles } : {}), verify: entries };
+  const api = Array.isArray(raw.api) ? [] : API_LAYOUTS.filter((dir) => files.some((f) => f.startsWith(`${dir}/`))).map((dir) => `${dir}/**`);
+  const proposal = { ...raw, ...(testFiles ? { testFiles } : {}), ...(api.length ? { api } : {}), verify: entries };
   if (!testFiles) delete proposal.testFiles;
   if (!testFiles) notes.push('No test runner was detected: fill in testFiles by hand, the command that runs given test files with {files} where they go, then add { "related": true } to verify.');
   else if (usable(raw.testFiles)) notes.push("testFiles is the one gate.json already has.");
@@ -164,6 +167,7 @@ export function proposeSetup(root) {
   if (wrapped && /(?:^|[^a-z])(?:db|database|postgres|mysql|mongo|docker|compose)(?![a-z])/i.test(wrapped.template)) notes.push("That wrapper looks like a shared test database: test runs through it likely must not overlap, so \"serialTests\": true is probably right.");
   if (!entries.some((e) => typeof e === "object" && e.when === "final")) notes.push('No test command to run as the final check: add one with "when": "final" (the area suite, green at HEAD).');
   else notes.push("The final command must pass at HEAD: deselect failures that are already there, or every close blocks on them. Narrow it to the area you work in if the whole suite is slow; CI runs the full suite.");
+  if (api.length) notes.push(`api is read from the folders here (${api.join(", ")}): a change there closes on a recorded call to the endpoint. Add other server routes, or use [] if this repo serves none.`);
   notes.push('Ask the user whether tests share one database or folder; if they do, add "serialTests": true so test runs never overlap.');
   return { proposal, notes };
 }

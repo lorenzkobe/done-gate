@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { delegatedTier, effectiveTier, policyFor, requires } from "./size.mjs";
+import { nextSeq } from "./events.mjs";
+import { blank, delegatedTier, effectiveTier, policyFor, requires } from "./size.mjs";
 import { baseCopy, changedUnits, fileDiff, gitTracked, hasReindent, indentMatters, sliceEnd } from "./tree.mjs";
 import { scanDiff } from "./slop.mjs";
 import { coverageGaps } from "./verify.mjs";
@@ -901,6 +902,49 @@ export function unfinishedFile(full) {
 const REVIEW_WAIVER = { reviewer: "review", "reviewer-2": "review-2" };
 export const WAIVERS = { driver: "R4", review: "R5", "review-2": "R9", schema: "R6", tests: "R7", qa: "R7", slop: "R10", "gate-config": "R13", lookups: "R17", coverage: "R18", "qa-pass": "R7" };
 
+export const newRules = (ledger) => (ledger?.rules ?? 0) >= 1;
+
+// A test or doc file is no surface: nobody drives it or probes it, whatever a glob says. A run from
+// before the stamp keeps reading the globs alone.
+const surfaceOf = (ledger, config, changed, matches) => changed.filter((p) => matches(p) && (!newRules(ledger) || (!config.isTest(p) && !config.isDoc(p))));
+export const uiFiles = (ledger, config, changed) => surfaceOf(ledger, config, changed, config.isUi);
+export const schemaFiles = (ledger, config, changed) => surfaceOf(ledger, config, changed, config.isSchema);
+
+// The changed files that keep a step open: what driving reaches, what a probe reaches.
+const STEP_SURFACE = {
+  driver: { files: (ledger, config, changed) => surfaceOf(ledger, config, changed, (p) => config.isUi(p) || config.isApi(p)), declared: (d) => d.ui && d.api, names: "UI or API" },
+  schema: { files: schemaFiles, declared: (d) => d.schema, names: "schema" },
+};
+export const stepSurfaceFiles = (key, ledger, config, changed) => STEP_SURFACE[key]?.files(ledger, config, changed) ?? [];
+
+// On a green verify: driver and schema need no hand close when this code cannot reach them, because
+// only tests or docs changed, or the repo declared its globs and none matched. The mark holds the
+// hash judged, so an edit takes it back. Each repo of a multi-repo run has its own globs: left by hand.
+export function workOutSteps(ledger, config, touched, hash) {
+  if (!newRules(ledger) || ledger.repos?.length) return;
+  const code = touched.filter((p) => config.isSource(p) && !config.isTest(p) && !config.isDoc(p));
+  for (const [key, surface] of Object.entries(STEP_SURFACE)) {
+    const step = ledger.steps.find((s) => s.key === key);
+    if (!step || !(step.state === null || step.auto)) continue;
+    const clear = !surface.files(ledger, config, touched).length && (!code.length || surface.declared(config.declared));
+    if (clear) Object.assign(step, { state: "N/A", note: `worked out: no ${surface.names} file changed`, evidence: null, auto: hash, seq: nextSeq() });
+    else if (step.auto) blank(step);
+  }
+}
+
+// A worked-out step goes back to open when the code it judged moved or a matching file changed. The
+// hash alone would miss a matching file outside the source globs. True when one went back.
+export function reopenWorkedOut(ledger, config, changed, hash) {
+  let moved = false;
+  for (const key of Object.keys(STEP_SURFACE)) {
+    const step = ledger.steps?.find((s) => s.key === key);
+    if (!step?.auto || (step.auto === hash && !stepSurfaceFiles(key, ledger, config, changed).length)) continue;
+    blank(step);
+    moved = true;
+  }
+  return moved;
+}
+
 const orWaive = (key) => ` Or get the user's waiver (\`gate waive ${key} "<reason>"\`).`;
 
 function waived(ledger, key) {
@@ -1024,7 +1068,7 @@ export function evaluate(state) {
   const after = lastEditSeq(state, config, ledger);
 
   // R4: UI changed → the real surface was driven after the last edit
-  if (changed.some((p) => config.isUi(p)) && !waived(ledger, "driver")) {
+  if (uiFiles(ledger, config, changed).length && !waived(ledger, "driver")) {
     const driverCmd = driverCommand(config);
     if (!drivenAfter(state, after)) {
       // a skill driver the repo does not have is no driver; a scripted drive (Playwright) counts once gate.json names it
@@ -1059,7 +1103,7 @@ export function evaluate(state) {
   }
 
   // R6: schema changed → the real-schema probe happened
-  if (changed.some((p) => config.isSchema(p)) && !waived(ledger, "schema")) {
+  if (schemaFiles(ledger, config, changed).length && !waived(ledger, "schema")) {
     const step = (ledger.steps ?? []).find((s) => s.key === "schema");
     if (!step || step.state !== "DONE" || !step.evidence) {
       unmet.push({ rule: "R6", text: `schema files changed: run the new/changed reader once against the real database (hit the endpoint in dev, or run the query) and close the schema step on that run with \`gate step schema done "<what it returned>" --ran "<part of the command or url>"\`. N/A is not allowed here.${orWaive("schema")}` });

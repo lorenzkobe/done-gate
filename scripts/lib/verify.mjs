@@ -6,7 +6,7 @@ import { segments, withoutHeredocs } from "./guard.mjs";
 import { buildState } from "./assess.mjs";
 import { currentLedger, isDone, loadLedger, saveLedger } from "./ledger.mjs";
 import { nextSeq } from "./events.mjs";
-import { diffTextOf, implementationHash, sourceHash, verifyKey, verifyWhere } from "./rules.mjs";
+import { diffTextOf, implementationHash, sourceHash, verifyKey, verifyWhere, workOutSteps } from "./rules.mjs";
 import { repoPath } from "./paths.mjs";
 import { loadSession } from "./session-state.mjs";
 import { diffSnapshots, parseHunks, snapshot } from "./tree.mjs";
@@ -499,6 +499,8 @@ export async function runVerify(ctx, { stepKey = "verify", final = false } = {})
   const step = ledger.steps.find((s) => s.key === stepKey);
   if (step && red.length === 0) {
     Object.assign(step, { state: "DONE", evidence: "verify.json", note: `${commands.length} command(s) green`, seq: nextSeq() });
+    // judged from the tree this run started on: an edit during the commands is the next check's
+    if (stepKey === "verify") workOutSteps(ledger, config, touched, implementationHash(snap, config));
   }
   saveLedger(current.dir, ledger);
   return { record, red, dir: current.dir };

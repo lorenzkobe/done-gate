@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { buildState, readVerifyStarted, unmetCount } from "./assess.mjs";
-import { evaluate, unfinishedVerify } from "./rules.mjs";
+import { evaluate, uiFiles, unfinishedVerify } from "./rules.mjs";
 import { loadLedger, runsDir, section } from "./ledger.mjs";
 import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
@@ -380,8 +380,7 @@ function reviewLine2(ledger) {
 
 function appLine(state) {
   const { config, changed } = state;
-  const ui = changed.filter((p) => config.isUi(p));
-  if (!ui.length) return "No screen change.";
+  if (!uiFiles(state.ledger, config, changed).length) return "No screen change.";
   // the same clock R4 uses, so line 4 and the missing list can never disagree
   const driven = drivenAfter(state, lastEditSeq(state, config, state.ledger));
   if (!driven) return "App not yet driven after the last change.";

@@ -8,10 +8,10 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { briefOf, caseOpen, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
+import { briefOf, caseOpen, newRules, stepSurfaceFiles, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
 import { assess, buildState, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
-import { gitHead, withoutRepos } from "./tree.mjs";
+import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
 import { appendEvents, readEvents } from "./events.mjs";
 
 // The report of a run that is no longer current: the same renderer `gate report` uses.
@@ -39,6 +39,7 @@ export function finalise(ctx, state) {
   return ledger;
 }
 
+const SURFACE_KEYS = new Set(["driver", "schema"]);
 // Steps whose evidence comes from a script or an agent: DONE or WAIVED only.
 export const EVIDENCED_KEYS = new Set(["context", "verify", "verify-before", "driver", "review", "tests", "qa", "skeptic", "close", "repro", "rootcause"]);
 // Steps that claim something was run: DONE only on a run the hooks recorded.
@@ -378,6 +379,13 @@ export const verbs = {
       if (state === "N/A" && (step.key === "repro" || step.key === "rootcause")) {
         throw new UsageError(`step {${step.key}} cannot be N/A: a bug fix with no ${step.key === "repro" ? "reproduction" : "root cause"} is a guess. Do it, or get the user's waiver with \`gate waive ${step.key} "<reason>"\``);
       }
+      if (state === "N/A" && newRules(ledger) && SURFACE_KEYS.has(step.key)) {
+        // the tree alone: a full assess here would reopen the N/A steps it judges as a next check does
+        const repos = ledger.repos ?? [];
+        const tree = snapshot(ctx.root, loadSession(ctx.stateDir, ctx.session)?.lastTree ?? ledger.baseline, repos);
+        const owed = stepSurfaceFiles(step.key, ledger, loadConfig(ctx.root, repos), diffSnapshots(ledger.baseline, tree).changed);
+        if (owed.length) throw new UsageError(`step {${step.key}} cannot be N/A: ${owed.slice(0, 5).join(", ")} changed. Do it, or get the user's waiver with \`gate waive ${step.key} "<reason>"\``);
+      }
       if (state === "DONE" && RUN_KEYS.has(step.key)) {
         const runs = ranEvents(gateState);
         if (ran !== undefined && ran !== null && ran.trim().length < 4) throw new UsageError("--ran needs at least four characters of the command or url, enough to name one run");
@@ -403,6 +411,7 @@ export const verbs = {
         const openItems = huddles.flatMap((h) => h.actOn.filter((a) => !a.closed));
         if (openItems.length) throw new UsageError(`step {skeptic}: Act-on item(s) still open: ${openItems.map(openItem).join(", ")}. Answer each, then \`gate huddle resolve <id> --evidence <pointer>\`.`);
       }
+      delete step.auto;
       Object.assign(step, { state, note: note || null, evidence: evidence ?? null, seq: nextSeq() });
     });
     ctx.out(by ? `step ${ref} → ${state} by \`${ranText(by).slice(0, 80)}\`${by.exit == null ? "" : ` exit ${by.exit}`} (events#${by.seq})` : `step ${ref} → ${state}`);
@@ -644,7 +653,10 @@ export const verbs = {
       // a step with no script or agent evidence is closed by hand; a waiver there would clear nothing a rule reads
       if (!rule && !EVIDENCED_KEYS.has(key)) throw new UsageError(`step {${key}} has no waiver: close it with \`gate step ${key} done|skipped|na "<note>"\`. ${valid}`);
       ledger.waivers.push({ key, reason, seq: nextSeq(), ...(flagged ? { lines: flagged } : {}) });
-      if (step) Object.assign(step, { state: "WAIVED", note: reason, evidence: null, seq: nextSeq() });
+      if (step) {
+        delete step.auto;
+        Object.assign(step, { state: "WAIVED", note: reason, evidence: null, seq: nextSeq() });
+      }
       if (flagged) return `the ${flagged.length} slop line${flagged.length === 1 ? "" : "s"} flagged now; a new one is flagged again`;
       return [rule, step ? `step {${key}}` : null].filter(Boolean).join(" and ");
     });

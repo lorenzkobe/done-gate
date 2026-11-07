@@ -266,6 +266,8 @@ export function openLedger(ctx, slug, playbook, repoPaths = []) {
     openedSeq: nextSeq(),
     // the lead and its helpers search code and memory first (gate note context, R17)
     lookups: true,
+    // which rules this run opened under: what a later release tightens reaches new runs only (newRules)
+    rules: 1,
     closedAt: null,
     sessions: [ctx.session],
     ...(repos.length ? { repos } : {}),

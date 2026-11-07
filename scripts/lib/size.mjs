@@ -300,7 +300,8 @@ export function requiredSteps(policy, tier, ledger) {
   return optionalSteps(ledger).filter((key) => roles.includes(STEP_ROLE[key]));
 }
 
-function blank(step) {
+export function blank(step) {
+  delete step.auto;
   Object.assign(step, { state: null, note: null, evidence: null, seq: nextSeq() });
 }
 

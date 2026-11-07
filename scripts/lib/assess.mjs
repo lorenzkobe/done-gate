@@ -4,7 +4,7 @@ import { loadConfig } from "./config.mjs";
 import { appendEvents, readEvents } from "./events.mjs";
 import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
 import { delegatedTier, leadDelegates, measure, policyFor, reconcileTier, tiered } from "./size.mjs";
-import { editedLast, implementationHash, writersOf } from "./rules.mjs";
+import { editedLast, implementationHash, reopenWorkedOut, writersOf } from "./rules.mjs";
 import { nextSeq } from "./events.mjs";
 import { evaluate } from "./rules.mjs";
 import { ensureSession, loadSession, saveSession } from "./session-state.mjs";
@@ -294,6 +294,7 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
   let tier = null;
   if (current) {
     let flipped = stampSourceChange(current.ledger, implementationHash(now, config), events, { now, config }) || absorbed;
+    if (reopenWorkedOut(current.ledger, config, diff.changed, implementationHash(now, config))) flipped = true;
     if (tiered(current.ledger)) {
       const measured = measure({ config, policy, diff, baseline, now, root: ctx.root, dir: current.dir, repos });
       if (reconcileTier(current.ledger, policy, measured).length) flipped = true;

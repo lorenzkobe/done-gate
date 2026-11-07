@@ -423,6 +423,7 @@ main root, whatever the shell's directory. `gate open`, `gate attach` and
   "tests":    ["tests/**"],
   "ui":       ["src/app/**", "src/components/**"],
   "schema":   ["src/lib/data/db.ts", "supabase/migrations/**"],
+  "api":      ["app/api/**"],
   "highRisk": ["src/lib/payments/**", "src/lib/auth/**", "supabase/migrations/**"],
   "verify":   ["npm run lint", { "cmd": "npm run test", "timeout": 1500 }, { "cmd": "npm run build", "when": "source" }],
   "checks":   ["claude-md-budget", "migration-number"],
@@ -433,6 +434,13 @@ main root, whatever the shell's directory. `gate open`, `gate attach` and
   "serialTests": true
 }
 ```
+
+A green `gate verify` closes the driver and schema steps by itself, as N/A, when this code cannot
+reach them: only tests or docs changed, or the repo lists its globs (`ui` and `api` for driver,
+`schema` for schema; an empty list counts) and no changed file matches. A later edit opens them
+again, and `gate step driver|schema na` is refused while a matching file is changed. A repo that
+never listed a glob closes that step by hand, as before. Test and doc files are never a surface,
+whatever a glob says. A multi-repo run closes these by hand, since each repo has its own globs.
 
 `testFiles` is the command that runs given test files, with `{files}` where they go. `gate test
 <test files>` runs it on files of this repo the tests globs match (each passed as one quoted

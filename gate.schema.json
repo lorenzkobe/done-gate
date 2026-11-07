@@ -35,6 +35,13 @@
       },
       "description": "Globs whose change requires a real-schema probe (R6). Default: none."
     },
+    "api": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Globs whose change is driven by calling the endpoint. Default: none. With ui and api both listed (an empty list counts), a green verify closes the driver step itself when no such file changed; with schema listed, the same for the schema step."
+    },
     "docs": {
       "type": "array",
       "items": {
