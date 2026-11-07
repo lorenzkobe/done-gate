@@ -113,6 +113,17 @@ test("R4: a UI change needs a driver run (browser event or /verify skill) after 
   assert.ok(!ids(clean({ changed: ["src/lib/x.ts", "tests/a.test.ts"] })).includes("R4"), "non-UI change needs no driver");
 });
 
+test("R4: an edit to the driver file after the drive makes the drive stale", () => {
+  const withDriver = makeRepo("rules2-driver", { ".claude/gate.json": JSON.stringify({ source: ["src/**", "tests/**", ".claude/skills/**"], tests: ["tests/**"], ui: ["src/app/**"] }), ".claude/skills/verify/SKILL.md": "drive\n" });
+  const config = loadConfig(withDriver);
+  const changed = ["src/app/page.tsx", "tests/a.test.ts", ".claude/skills/verify/drive.mjs"];
+  const edit = { seq: 10, kind: "edit", path: "src/app/page.tsx", agent: null };
+  const drive = { seq: 11, kind: "browser", agent: null };
+  const later = { seq: 12, kind: "edit", path: ".claude/skills/verify/drive.mjs", agent: null };
+  assert.ok(!ids(clean({ config, changed, events: [edit, drive], root: withDriver })).includes("R4"), "driven after the last edit");
+  assert.ok(ids(clean({ config, changed, events: [edit, drive, later], root: withDriver })).includes("R4"), "the driver changed after the drive");
+});
+
 test("R4 names the missing driver when the repo has none configured", () => {
   const noDriver = loadConfig(makeRepo("rules2-nodriver"));
   const u = evaluate(clean({ config: noDriver, changed: ["src/app/page.tsx", "tests/a.test.ts"] })).find((x) => x.rule === "R4");

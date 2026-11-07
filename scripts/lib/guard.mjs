@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
@@ -811,6 +812,10 @@ function outgrown(ledger, config, rel) {
 
 // Where inline code writes: a literal (or a name given one) as open(…, "w"/"a"/"x") or as the
 // target of writeFile, appendFile and kin. Any other write leaves the target unknown.
+// `f.endswith('.test.ts')` tests a name and writes nothing by it. A literal with a folder in it, or
+// compared whole, could be the file written, so it stays a possible target.
+const SUFFIX_TEST = /\.(?:ends?[wW]ith|starts?[wW]ith|includes)\(\s*\(?\s*(?:["'`][^"'`\s/]*["'`]\s*,?\s*)+\)?\s*\)/g;
+const HOME_UNSURE = /\bHOME\b|\b(?:source|eval)\b|(?:^|[;&|]\s*)\.\s/;
 function inlineWriteTargets(raw) {
   const targets = [];
   let unknown = false;
@@ -818,7 +823,8 @@ function inlineWriteTargets(raw) {
   const dirs = [];
   for (const seg of segments(withoutHeredocs(raw))) {
     const { words } = shift(seg);
-    if (["cd", "pushd"].includes(words[0]?.text)) dirs.push(words[1]?.text ?? "~");
+    // a bare cd goes home; a bare pushd swaps the stack, so it is a folder the gate cannot follow
+    if (["cd", "pushd"].includes(words[0]?.text)) dirs.push(words[1]?.text ?? (words[0].text === "cd" ? "~" : "-"));
     const code = words.length ? inlineCode(words[0].text, words.slice(1), raw) : null;
     if (code === null || !INLINE_WRITE.test(code) && !/\.write_(?:text|bytes)\s*\(/.test(code)) continue;
     // a name given a literal exactly once; one assigned again could hold anything at the write
@@ -831,16 +837,19 @@ function inlineWriteTargets(raw) {
       return name && names[name] ? names[name] : null;
     };
     // a relative target is read from the folder the command moved to
-    // from the last absolute cd on; ~, $VAR and - are folders the gate cannot follow
+    // from the last absolute cd on; $VAR, - and ~user are folders the gate cannot follow, and so
+    // is ~ once anything could have moved home or left a subshell or a pushd behind
     const place = (t) => {
       if (t.startsWith("/") || !dirs.length) return t;
       let base = "";
       for (const d of dirs) {
-        if (/^[~$-]|\$/.test(d)) {
+        const fromHome = /^~(?:\/|$)/.test(d) && !HOME_UNSURE.test(withoutHeredocs(raw)) && !/[()]|\bpopd\b/.test(bare(raw));
+        if (!fromHome && /^[~$-]|\$/.test(d)) {
           lost ||= t;
           return null;
         }
-        base = d.startsWith("/") ? d : path.posix.join(base, d);
+        const dir = fromHome ? path.posix.join(homedir(), d.slice(1)) : d;
+        base = dir.startsWith("/") ? dir : path.posix.join(base, dir);
       }
       return path.posix.normalize(path.posix.join(base, t));
     };
@@ -944,12 +953,12 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
     if (linked) return { deny: true, reason: `done-gate: that command writes ${linked}, which is in the gate's evidence folder. Evidence is written only by \`gate\` verbs.`, paths: [] };
     // the lead's shell write to code waits for the plan like an Edit does
     if (!where.unreadable && !HELPER_ROLES.some((r) => agentType === `done-gate:${r}` || agentType === r) && agentType !== "done-gate:worker") {
-      const isCode = (p) => p && !isScratch(p) && (config.isSource(p) || config.isTest(p));
+      const isCode = (p) => p && !isScratch(p) && !config.isDriverFile(p) && (config.isSource(p) || config.isTest(p));
       const code = new Set(shellWrites(cmd).outside.filter((p) => !isScratch(p)).map((p) => toPosixRel(root, p, repos)).filter(isCode));
       const inline = inlineWriteTargets(cmd);
       for (const t of inline.targets) if (isCode(toPosixRel(root, t, repos))) code.add(toPosixRel(root, t, repos));
       // a write whose target cannot be read, in code that names a code file, may be writing it
-      if (inline.unknown) for (const m of cmd.matchAll(/["'`]([^"'`\s]+\.\w+)["'`]/g)) if (isCode(toPosixRel(root, m[1], repos))) code.add(toPosixRel(root, m[1], repos));
+      if (inline.unknown) for (const m of cmd.replace(SUFFIX_TEST, "").matchAll(/["'`]([^"'`\s]+\.\w+)["'`]/g)) if (isCode(toPosixRel(root, m[1], repos))) code.add(toPosixRel(root, m[1], repos));
       // moved to a folder the gate cannot follow: any relative write there may be code
       const shown = [...code, ...(inline.lost ? [`${inline.lost} (in a folder the gate cannot follow)`] : [])];
       const why = shown.length ? notReadyToEdit(ledger) : null;
@@ -976,7 +985,7 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
       return { deny: true, reason: `done-gate: ${rel} is gate evidence and is written only by \`gate\` verbs.`, paths };
     }
   }
-  const code = paths.filter((p) => !isScratch(p) && (config.isSource(p) || config.isTest(p)));
+  const code = paths.filter((p) => !isScratch(p) && !config.isDriverFile(p) && (config.isSource(p) || config.isTest(p)));
   // an unreadable run is the gate's own failure: it fails open, as the hooks do, rather than ask for a second run
   const notReady = code.length && !where.unreadable ? notReadyToEdit(ledger) : null;
   if (notReady) return { deny: true, reason: `done-gate: ${code.join(", ")} is code, and ${notReady}.`, paths };

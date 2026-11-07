@@ -970,7 +970,7 @@ export function evaluate(state) {
   for (const text of checkFailures) unmet.push({ rule: "R10", text });
 
   if (!ledger) {
-    const own = ownChanges(state, src);
+    const own = ownChanges(state, src.filter((p) => !config.isDriverFile(p)));
     if (own.length) {
       unmet.push({
         rule: "R1",

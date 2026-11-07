@@ -197,6 +197,9 @@ export function loadConfig(root, repos = []) {
   const hash = createHash("sha1").update(explicit ? JSON.stringify(judged) : "defaults").update("\n").update(verifyList).digest("hex");
   const legacyHash = createHash("sha1").update(existsSync(file) ? readFileSync(file, "utf8") : "defaults").update("\n").update(verifyList).digest("hex");
   const opts = { ignoreCase: IGNORE_CASE };
+  // the skill folder of the repo's driver; a driver given as a command has none
+  const driverSkill = resolved.driver ? /^skill:\s*([\w-]+)$/.exec(resolved.driver)?.[1] : "verify";
+  const driverFolder = driverSkill ? `.claude/skills/${driverSkill}` : null;
   const not = (globs) => (p) => !matchAny(globs, p, opts);
   const main = {
     isSource: (p) =>
@@ -208,6 +211,7 @@ export function loadConfig(root, repos = []) {
     isSchema: (p) => matchAny(resolved.schema, p, opts),
     isDoc: (p) => matchAny(resolved.docs, p, opts),
     isHighRisk: (p) => matchAny(resolved.highRisk, p, opts),
+    isDriverFile: (p) => Boolean(driverFolder) && matchAny([`${driverFolder}/**`], p, opts) && !p.split("/").includes(".."),
   };
   if (!repos.length) return { ...resolved, hash, legacyHash, ...main };
   // each repo's config is loaded once; its verify list and hash are read from here too

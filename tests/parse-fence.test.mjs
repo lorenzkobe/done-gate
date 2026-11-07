@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isDraft, parseFindings } from "../scripts/lib/rules.mjs";
+import { evaluate, isDraft, parseFindings } from "../scripts/lib/rules.mjs";
 import { decide, readsOnly, scratchOnly } from "../scripts/lib/guard.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { makeRepo, gate } from "./helpers.mjs";
@@ -646,7 +646,7 @@ test("C11 refused and edge: inline code is judged by what it writes: a code targ
     `cd ${repo} && python3 - <<'EOF'\nout='docs/report.md'\nopen(out,'w').write(open('src/a.ts').read())\nEOF`,
   ]) assert.equal(decide(bash(cmd), repo, cfg, null, null).deny, false, cmd);
   assert.match(decide(bash(`cd ${repo} && python3 -c "open('src/a.ts','w').write('x')"`), repo, cfg, null, null).reason ?? "", /writes src\/a\.ts/, "an absolute cd into the repo is followed");
-  const lostWrite = decide(bash(`cd ~/x && python3 -c "open('a.ts','w').write('x')"`), repo, cfg, null, null);
+  const lostWrite = decide(bash(`cd $X && python3 -c "open('a.ts','w').write('x')"`), repo, cfg, null, null);
   assert.equal(lostWrite.deny, true);
   assert.ok(lostWrite.paths.every((p) => !/cannot follow/.test(p)), "the note stays in the reason, not the path");
   for (const cmd of [
@@ -853,5 +853,95 @@ test("a role with no Edit tool is told Write only, and one with it hears both", 
   assert.doesNotMatch(told("done-gate:reviewer", "review-1.md"), /Edit/);
   assert.match(told("done-gate:skeptic", "skeptic-1.md"), /Use the Write tool on/);
   assert.match(told("done-gate:worker", "worker-1.md"), /Use the Edit or Write tool on/);
+});
+}
+
+{
+const repo = makeRepo("fence-home-driver");
+const cfg = loadConfig(repo);
+const lead = (command, config = cfg) => decide({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: repo, session_id: "S1" }, repo, config, null, null);
+const edit = (rel, config = cfg) => decide({ hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: path.join(repo, rel) }, cwd: repo, session_id: "S1" }, repo, config, null, null);
+const pyWrite = (name) => `python3 - <<'E'\nopen('${name}','w').write('x')\nE`;
+const withHome = (home, run) => {
+  const before = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    return run();
+  } finally {
+    process.env.HOME = before;
+  }
+};
+
+test("a lead script writing under ~ passes with no run open, by cd ~/x and by bare cd", () => {
+  for (const cmd of [`cd ~/.claude/projects/x/memory && ${pyWrite("note.md")}`, `cd ~ && ${pyWrite("notes.txt")}`, `cd && ${pyWrite("notes.txt")}`]) {
+    assert.equal(lead(cmd).deny, false, cmd);
+  }
+});
+
+test("a command that could move home, ~user, a stray pushd and a ~ path into the repo's source stay refused", () => {
+  for (const cmd of [
+    `HOME=${repo}/src; cd ~ && ${pyWrite("a.ts")}`,
+    `export HOME=${repo}/src; cd ~ && ${pyWrite("a.ts")}`,
+    `env HOME=${repo}/src sh -c true; cd ~ && ${pyWrite("a.ts")}`,
+    `read HOME; cd ~ && ${pyWrite("a.ts")}`,
+    `unset HOME; cd ~ && ${pyWrite("a.ts")}`,
+    `source env.sh; cd ~ && ${pyWrite("a.ts")}`,
+    `. env.sh; cd ~ && ${pyWrite("a.ts")}`,
+    `eval "$X"; cd ~ && ${pyWrite("a.ts")}`,
+    `cd ~other/x && ${pyWrite("a.ts")}`,
+    `cd ${repo}/src; pushd /tmp; pushd; ${pyWrite("a.ts")}`,
+    `(cd ~/x && true); ${pyWrite("src/a.ts")}`,
+    `pushd ~/x; popd; ${pyWrite("src/a.ts")}`,
+  ]) assert.equal(lead(cmd).deny, true, cmd);
+  const into = withHome(path.dirname(repo), () => lead(`cd ~/${path.basename(repo)}/src && ${pyWrite("a.ts")}`));
+  assert.equal(into.deny, true);
+  assert.match(into.reason, /writes src\/a\.ts/);
+});
+
+test("a name test by suffix is not a target; a literal compared whole, with a folder, or listed stays a possible one", () => {
+  const unknown = (check, target = "f + '.bak'") => `python3 - <<'E'\nfor f in files:\n  if ${check}: open(${target},'w')\nE`;
+  for (const check of ["f.endswith('.test.ts')", "f.startswith('.eslintrc.js')", "f.endswith(('.test.ts', '.spec.ts'))"]) {
+    assert.equal(lead(unknown(check)).deny, false, check);
+  }
+  assert.equal(lead(`node -e "for (const f of files) if (f.endsWith('.test.ts') || f.includes('.spec.ts')) require('fs').writeFileSync(f + '.x', '')"`).deny, false);
+  for (const cmd of [
+    unknown("f == 'src/a.ts'", "f"),
+    unknown("f in ['src/a.ts']", "f"),
+    unknown("f.endswith('src/a.ts')", "f"),
+    `python3 - <<'E'\nfor f in ['src/a.ts', 'src/b.ts']:\n  open(f,'w')\nE`,
+    `python3 - <<'E'\n[open(f,'w') for f in ('src/a.ts',)]\nE`,
+    `python3 - <<'E'\np=compute()\nopen(p,'w').write('src/a.ts')\nE`,
+    `python3 - <<'E'\nname='.eslintrc.js'\np=name+''\nopen(p,'w')\nE`,
+  ]) assert.equal(lead(cmd).deny, true, cmd);
+});
+
+const withSource = makeRepo("fence-driver-source", { ".claude/gate.json": JSON.stringify({ source: ["src/**", ".claude/skills/**"] }) });
+const driverCfg = loadConfig(withSource);
+const named = makeRepo("fence-driver-named", { ".claude/gate.json": JSON.stringify({ source: ["src/**", ".claude/skills/**"], driver: "skill:drive" }) });
+const namedCfg = loadConfig(named);
+
+test("a driver file edit passes with no run, by Edit and by shell, and is not R1", () => {
+  assert.equal(driverCfg.isSource(".claude/skills/verify/drive.mjs"), true, "it stays source");
+  assert.equal(driverCfg.isDriverFile(".claude/skills/verify/drive.mjs"), true);
+  const fence = (input) => decide({ hook_event_name: "PreToolUse", cwd: withSource, session_id: "S1", ...input }, withSource, driverCfg, null, null);
+  assert.equal(fence({ tool_name: "Write", tool_input: { file_path: path.join(withSource, ".claude/skills/verify/drive.mjs") } }).deny, false);
+  assert.equal(fence({ tool_name: "Bash", tool_input: { command: "cat > .claude/skills/verify/SKILL.md <<'E'\nx\nE" } }).deny, false);
+  const named2 = decide({ hook_event_name: "PreToolUse", cwd: named, session_id: "S1", tool_name: "Write", tool_input: { file_path: path.join(named, ".claude/skills/drive/run.mjs") } }, named, namedCfg, null, null);
+  assert.equal(named2.deny, false, "the skill gate.json names");
+  assert.deepEqual(evaluate({ config: driverCfg, ledger: null, changed: [".claude/skills/verify/drive.mjs"], now: { hash: "x", files: {} }, events: [], root: withSource }).filter((u) => u.rule === "R1"), []);
+  assert.equal(evaluate({ config: driverCfg, ledger: null, changed: ["src/a.ts"], now: { hash: "x", files: {} }, events: [], root: withSource }).some((u) => u.rule === "R1"), true);
+});
+
+test("another skill's folder, a look-alike path and a repo naming another skill are still refused", () => {
+  const fence = (root, config, file) => decide({ hook_event_name: "PreToolUse", cwd: root, session_id: "S1", tool_name: "Write", tool_input: { file_path: path.join(root, file) } }, root, config, null, null);
+  assert.equal(fence(withSource, driverCfg, ".claude/skills/other/x.mjs").deny, true);
+  assert.equal(fence(withSource, driverCfg, ".claude/skills/verify-more/x.mjs").deny, true);
+  assert.equal(fence(withSource, driverCfg, "src/.claude/skills/verify/x.mjs").deny, true);
+  assert.equal(fence(named, namedCfg, ".claude/skills/verify/x.mjs").deny, true, "this repo's driver is drive");
+  assert.equal(driverCfg.isDriverFile(".claude/skills/verify/../other/x.mjs"), false);
+  for (const driver of ["cmd:npx playwright test", "skill:a/b"]) {
+    const other = makeRepo("fence-driver-cmd", { ".claude/gate.json": JSON.stringify({ source: ["src/**", ".claude/skills/**"], driver }) });
+    assert.equal(fence(other, loadConfig(other), ".claude/skills/verify/x.mjs").deny, true, driver);
+  }
 });
 }
