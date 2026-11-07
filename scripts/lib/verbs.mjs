@@ -12,6 +12,7 @@ import { LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, sai
 import { assess, broughtSinceOpen, buildState, cleanAtHead, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
+import { weakened } from "./slop.mjs";
 import { pointerFile } from "./verify.mjs";
 import { endStanding, waiveStanding } from "./standing.mjs";
 import { appendEvents, readEvents } from "./events.mjs";
@@ -31,6 +32,7 @@ export function finalise(ctx, state) {
   ledger.closedAt = new Date().toISOString();
   ledger.closedTreeHash = state.now.hash;
   ledger.changedAtClose = state.changed;
+  ledger.weakened = weakened(state);
   if (state.tier) ledger.tier = state.tier;
   saveLedger(state.dir, ledger);
   const session = loadSession(ctx.stateDir, ctx.session);

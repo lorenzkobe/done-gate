@@ -137,6 +137,16 @@ export function headReflog(root, n = 30) {
   }
 }
 
+// A file as a commit holds it; empty when git has no such file or there is no commit to read.
+export function contentAt(root, ref, rel) {
+  if (!ref || rel.startsWith("../")) return "";
+  try {
+    return git(root, ["show", `${ref}:${rel}`]);
+  } catch {
+    return "";
+  }
+}
+
 // Whether git ignores a path; a path git cannot judge counts as not ignored.
 export function gitIgnored(root, rel) {
   try {

@@ -1,4 +1,5 @@
-import { parseHunks } from "./tree.mjs";
+import { diffTextOf } from "./rules.mjs";
+import { contentAt, parseHunks } from "./tree.mjs";
 
 // The greppable slop patterns from antislop-code, scanned over the added lines of a diff.
 // Judgment calls (a comment that restates the code, a hedging name, comment length) stay
@@ -69,6 +70,75 @@ export function scanDiff(text) {
       const found = PATTERNS.find(([, test]) => test(comment));
       if (found) out.push({ line: l.pos, pattern: found[0], text: raw.trim() });
     }
+  }
+  return out;
+}
+
+const SKIP_ADDED = /\.skip\(|\bx(?:it|test|describe)\(|\bpytest\.mark\.skip|\bt\.Skip(?:Now|f)?\(|@Disabled\b/;
+const SUPPRESSION = /\beslint-disable|@ts-ignore|\bnoqa\b|\bnolint\b/i;
+const TEST_NAME = /^\s*(?:(it|test|describe|xit|xtest|xdescribe)((?:\.\w+)*)\s*\(\s*(["'`])(.+?)\3|def\s+(test_\w+)|func\s+(Test\w+))/;
+
+// A test declared on this line: its name, and whether it runs. A line opening with a comment
+// marker declares nothing, so a test commented out is a test gone.
+function declared(line) {
+  const m = TEST_NAME.exec(line);
+  if (!m) return null;
+  return { name: m[4] ?? m[5] ?? m[6], live: !/^x/.test(m[1] ?? "") && !/\.skip\b/.test(m[2] ?? "") };
+}
+
+const shown = (line) => (line.trim().length > 80 ? `${line.trim().slice(0, 77)}...` : line.trim());
+
+function codeFinding(raw) {
+  const comment = commentOf(raw);
+  if (comment && SUPPRESSION.test(comment.body)) return `suppression added: ${shown(raw)}`;
+  if (/#\s*noqa\b/i.test(raw)) return `suppression added: ${shown(raw)}`;
+  const code = comment ? comment.before : raw;
+  const at = code.search(SKIP_ADDED);
+  return at >= 0 && !openQuoteAt(code, at) ? `skip added: ${shown(raw)}` : null;
+}
+
+// What this task did to its tests, as lines for the report: skips and suppressions added, test files
+// deleted, tests removed. A test that reappears anywhere under its name was moved or skipped, not
+// removed, and in one file a new running test offsets one that went, as a rename does. Advice only:
+// no rule reads it.
+export function weakened(state) {
+  const { config, changed, diff, ledger } = state;
+  const out = [];
+  const addedNames = new Set();
+  const files = [];
+  for (const rel of changed.filter((p) => !config.isDoc(p))) {
+    const isTest = config.isTest(rel);
+    if (diff?.deleted?.includes(rel)) {
+      if (isTest) files.push({ rel, deleted: true, removed: contentAt(state.root, ledger.baseline?.head, rel).split("\n").map(declared).filter(Boolean).map((d) => d.name), live: [] });
+      continue;
+    }
+    const file = { rel, removed: [], live: [] };
+    for (const hunk of parseHunks(diffTextOf(state, rel)).hunks) {
+      for (const l of hunk.lines) {
+        const raw = l.text.slice(1);
+        if (l.tag === "+") {
+          const finding = codeFinding(raw);
+          if (finding) out.push(`${rel}: ${finding}`);
+        }
+        const decl = isTest && (l.tag === "+" || l.tag === "-") ? declared(raw) : null;
+        if (!decl) continue;
+        if (l.tag === "-") file.removed.push(decl.name);
+        else {
+          addedNames.add(decl.name);
+          if (decl.live) file.live.push(decl.name);
+        }
+      }
+    }
+    if (isTest) files.push(file);
+  }
+  for (const { rel, deleted, removed, live } of files) {
+    const gone = removed.filter((name) => !addedNames.has(name));
+    if (deleted) {
+      if (!removed.length || gone.length) out.push(`${rel}: test file deleted`);
+      continue;
+    }
+    const renamedTo = live.filter((name) => !removed.includes(name)).length;
+    for (const name of gone.slice(renamedTo)) out.push(`${rel}: test removed: ${name}`);
   }
   return out;
 }

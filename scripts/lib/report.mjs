@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { buildState, readVerifyStarted, unmetCount } from "./assess.mjs";
 import { evaluate, uiFiles, unfinishedVerify } from "./rules.mjs";
+import { weakened } from "./slop.mjs";
 import { loadLedger, runsDir, section } from "./ledger.mjs";
 import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
@@ -127,11 +128,16 @@ export function actOnRows(ledger, dir, reviews, { embed = true } = {}) {
   return out;
 }
 
+// A closed run's diff may have moved on, so it reads what was stored at close. An abandoned run's
+// changes carry to the next run, whose report lists them.
+const weakenedIn = (state) => (state.ledger.status === "open" ? weakened(state) : state.ledger.weakened ?? []);
+
 export function attentionLines(state, unmet) {
   const { ledger, events } = state;
   const denies = deniesIn(ledger, events).length;
   const handoffs = events.filter((e) => e.kind === "deny" && e.delegate && inRun(ledger)(e)).length;
   const out = [];
+  for (const line of weakenedIn(state)) out.push(`- weakened: ${line}`);
   const advice = splitAdvice(policyFor(ledger), ledger.tier?.measured);
   if (advice) out.push(`- ${advice}`);
   for (const w of ledger.waivers) out.push(`- ${w.could ? "could not run" : "waived"} ${w.key}: ${w.reason ?? w.quote}${w.words ? ` (the user: "${w.words}")` : ""}${w.batch ? ` — standing, batch ${w.batch}` : ""}${w.lapsed ? (w.ended ? " — ended with gate waive --end" : " — lapsed: the code changed after it") : ""}`);
@@ -411,6 +417,8 @@ const FOR_YOU_MAX = 6;
 function forYouLine(state, unmet) {
   const { ledger } = state;
   const items = [];
+  const thinner = weakenedIn(state);
+  if (thinner.length) items.push(`tests weakened: ${thinner.slice(0, 3).map(plain).join(", ")}${thinner.length > 3 ? `, and ${thinner.length - 3} more` : ""}`);
   const said = (w) => (w.words ? ` (you said: "${w.words}")` : "");
   for (const w of ledger.waivers) {
     if (w.ended) items.push(`your standing OK for batch ${w.batch} was ended: ${plain(w.reason ?? w.quote)}${said(w)}`);

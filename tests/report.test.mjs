@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync, execSync, execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, write, gate, here, pluginRoot, doneArgs, lookedUp, waiveArgs, asOldRun, naArgs } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
@@ -1100,3 +1100,169 @@ test("C5 boundary: identical consecutive pauses collapse to one line with a coun
   assert.deepEqual(pauseLines([p("A", "x"), p("B", "x"), p("C", "y")]), ["- A to B (x2): x", "- C: y"]);
   assert.deepEqual(pauseLines([p("A", "x")]), ["- A: x"]);
 });
+
+// Batch 3.10: a run that weakens its tests says so, and is not stopped for it.
+{
+const env = (repo) => ({ ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" });
+const run = (repo, verb, args = []) => spawnSync(process.execPath, [gate, verb, ...args], { encoding: "utf8", env: env(repo) });
+function cli(repo, verb, args = []) {
+  const r = run(repo, verb, args);
+  assert.equal(r.status, 0, r.stderr);
+  return r;
+}
+const ledgerOf = (repo) => {
+  const stateDir = path.join(repo, ".claude", "gate");
+  const { current, lastClosed } = loadSession(stateDir, "S1");
+  return JSON.parse(readFileSync(path.join(stateDir, "runs", current ?? lastClosed, "ledger.json"), "utf8"));
+};
+const committedRepo = (name, files) => {
+  const repo = makeRepo(name, { ".gitignore": "node_modules/\nignored.txt\n.claude/gate/\n", ...files });
+  execFileSync("git", ["add", "-A"], { cwd: repo });
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base"], { cwd: repo });
+  cli(repo, "open", ["t", "feature"]);
+  return repo;
+};
+const weakenedOf = (repo) => ledgerWeakened(cli(repo, "report").stdout);
+const ledgerWeakened = (full) => full.split("\n").filter((l) => /^- weakened:/.test(l)).join("\n");
+
+test("3.10 C1 each kind is listed", () => {
+  const repo = committedRepo("rep-w1", {
+    "tests/a.test.ts": "it('one', () => {});\nit('two', () => {});\n",
+    "tests/gone.test.ts": "it('gone', () => {});\n",
+    "tests/b.test.py": "def test_b():\n    pass\n",
+    "tests/c_test.go": "package c\n",
+    "tests/D.test.java": "class D {}\n",
+    "src/x.ts": "export const x = 1;\n",
+    "src/y.py": "x = 1\n",
+    "src/z.go": "package z\n",
+  });
+  write(repo, "tests/a.test.ts", "it('one', () => {});\nit.skip('three', () => {});\nxit('four', () => {});\n");
+  rmSync(path.join(repo, "tests/gone.test.ts"));
+  write(repo, "tests/b.test.py", "@pytest.mark.skip\ndef test_b():\n    pass\n");
+  write(repo, "tests/c_test.go", "package c\nfunc TestC(t *testing.T) {\n\tt.Skip(\"later\")\n}\n");
+  write(repo, "tests/D.test.java", "class D {\n  @Disabled\n  void a() {}\n}\n");
+  write(repo, "src/x.ts", "// eslint-disable-next-line no-console\n// @ts-ignore\nexport const x = 1;\n");
+  write(repo, "src/y.py", "x = 1  # noqa\n");
+  write(repo, "src/z.go", "package z // nolint\n");
+  const lines = weakenedOf(repo);
+  for (const expected of [/it\.skip/, /xit\(/, /pytest\.mark\.skip/, /t\.Skip/, /@Disabled/, /eslint-disable/, /@ts-ignore/, /noqa/, /nolint/, /tests\/gone\.test\.ts/, /two/]) {
+    assert.match(lines, expected, lines);
+  }
+});
+
+test("3.10 C2 a moved test is not reported as removed", () => {
+  const moved = committedRepo("rep-w2", { "tests/a.test.ts": "it('kept', () => {});\nit('moves', () => {});\n", "tests/b.test.ts": "it('other', () => {});\n" });
+  write(moved, "tests/a.test.ts", "it('kept', () => {});\n");
+  write(moved, "tests/b.test.ts", "it('other', () => {});\nit('moves', () => {});\n");
+  assert.equal(weakenedOf(moved), "");
+
+  const file = committedRepo("rep-w3", { "tests/a.test.ts": "it('kept', () => {});\n" });
+  rmSync(path.join(file, "tests/a.test.ts"));
+  write(file, "tests/unit/a.test.ts", "it('kept', () => {});\n");
+  assert.equal(weakenedOf(file), "");
+
+  const renamed = committedRepo("rep-w4", { "tests/a.test.ts": "it('old name', () => {});\n" });
+  write(renamed, "tests/a.test.ts", "it('new name', () => {});\n");
+  assert.equal(weakenedOf(renamed), "");
+});
+
+test("3.10 C3 no finding, no line; skip in a string or a test name, and a doc, are not findings", () => {
+  const clean = committedRepo("rep-w5", { "src/x.ts": "export const x = 1;\n" });
+  write(clean, "src/x.ts", "export const x = 2;\n");
+  assert.equal(weakenedOf(clean), "");
+  assert.doesNotMatch(cli(clean, "report", ["--brief"]).stdout, /weakened/);
+
+  const quoted = committedRepo("rep-w6", { "src/x.ts": "export const x = 1;\n", "tests/a.test.ts": "it('a', () => {});\n" });
+  write(quoted, "src/x.ts", `export const x = "use it.skip( or // eslint-disable here";\n`);
+  write(quoted, "tests/a.test.ts", "it('a', () => {});\nit('explains it.skip( in a name', () => {});\n");
+  write(quoted, "docs/notes.md", "Use `it.skip(` and `// @ts-ignore` with care.\n");
+  assert.equal(weakenedOf(quoted), "");
+});
+
+test("3.10 C4 a run adding it.skip shows it first in the short report, and nothing about it blocks", () => {
+  const repo = committedRepo("rep-w7", { ".claude/gate.json": JSON.stringify({ testFiles: null, verify: ["true"] }), "tests/a.test.ts": "it('a', () => {});\n" });
+  lookedUp(repo);
+  cli(repo, "note", ["task", "Add a thing. [inferred]"]);
+  cli(repo, "note", ["context", "Traced: tests/a.test.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: local"]);
+  cli(repo, "note", ["plan", "A test tweak."]);
+  cli(repo, "case", ["add", "it holds", "--kind", "happy"]);
+  cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:a"]);
+  write(repo, "tests/a.test.ts", "it('a', () => {});\nit.skip('later', () => {});\n");
+  const brief = cli(repo, "report", ["--brief"]).stdout;
+  const forYou = brief.split("\n").find((l) => l.startsWith("For you:"));
+  assert.match(forYou, /^For you: [^;]*it\.skip/, forYou);
+  assert.doesNotMatch(cli(repo, "check").stdout, /it\.skip/);
+});
+
+test("3.10 C5 a closed run's report keeps what was stored at close after the tree moves on", () => {
+  const repo = committedRepo("rep-w8", { ".claude/gate.json": JSON.stringify({ testFiles: null, verify: ["sh bin/pytest tests"] }), "bin/pytest": "true\n", "tests/a.test.ts": "it('a', () => {});\n" });
+  lookedUp(repo);
+  cli(repo, "note", ["task", "Add a thing. [inferred]"]);
+  cli(repo, "note", ["context", "Traced: tests/a.test.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: local"]);
+  cli(repo, "note", ["plan", "A test tweak."]);
+  cli(repo, "case", ["add", "it holds", "--kind", "happy"]);
+  cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:a"]);
+  write(repo, "tests/a.test.ts", "it('a', () => {});\nit.skip('later', () => {});\n");
+  cli(repo, "verify");
+  for (const s of ledgerOf(repo).steps) if (!s.state && s.key !== "close") run(repo, "step", [s.key, "na", "fixture"]);
+  run(repo, "close");
+  assert.equal(ledgerOf(repo).status, "closed");
+  assert.equal(ledgerOf(repo).weakened.length, 1);
+  write(repo, "tests/a.test.ts", "it('a', () => {});\n");
+  assert.match(cli(repo, "report").stdout, /it\.skip/);
+});
+
+test("3.10 C6 a deleted test file is read from its last commit: 40 deleted and one added under the name is reported; a rename with the same tests is not", () => {
+  const many = Array.from({ length: 40 }, (_, i) => `it('case ${i}', () => {});`).join("\n") + "\n";
+  const shrunk = committedRepo("rep-w9", { "tests/a.test.ts": many });
+  rmSync(path.join(shrunk, "tests/a.test.ts"));
+  write(shrunk, "tests/unit/a.test.ts", "it('case 0', () => {});\n");
+  assert.match(weakenedOf(shrunk), /tests\/a\.test\.ts: test file deleted/);
+
+  const renamed = committedRepo("rep-w10", { "tests/foo.test.ts": "it('kept', () => {});\n" });
+  rmSync(path.join(renamed, "tests/foo.test.ts"));
+  write(renamed, "tests/bar.spec.ts", "it('kept', () => {});\n");
+  assert.equal(weakenedOf(renamed), "");
+
+  const unread = committedRepo("rep-w11", { "tests/data.test.ts": "const table = [];\n" });
+  rmSync(path.join(unread, "tests/data.test.ts"));
+  assert.match(weakenedOf(unread), /tests\/data\.test\.ts: test file deleted/);
+});
+
+test("3.10 C7 a test turned into it.skip is one finding; one commented out counts as removed; an old closed run and an abandoned run print nothing", () => {
+  const skipped = committedRepo("rep-w12", { "tests/a.test.ts": "it('a', () => {});\n" });
+  write(skipped, "tests/a.test.ts", "it.skip('a', () => {});\n");
+  const lines = weakenedOf(skipped).split("\n");
+  assert.equal(lines.length, 1, lines.join("\n"));
+  assert.match(lines[0], /skip added/);
+
+  const commented = committedRepo("rep-w13", { "tests/a.test.ts": "it('a', () => {});\n" });
+  write(commented, "tests/a.test.ts", "// it('a', () => {});\n");
+  assert.match(weakenedOf(commented), /test removed: a/);
+
+  const abandoned = committedRepo("rep-w14", { "tests/a.test.ts": "it('a', () => {});\n" });
+  write(abandoned, "tests/a.test.ts", "it.skip('a', () => {});\n");
+  cli(abandoned, "abandon", ["t", "this case stops here"]);
+  const dir = path.join(abandoned, ".claude", "gate", "runs");
+  const name = readdirSync(dir)[0];
+  assert.doesNotMatch(readFileSync(path.join(dir, name, "report.md"), "utf8"), /weakened/);
+
+  const old = committedRepo("rep-w15", { ".claude/gate.json": JSON.stringify({ testFiles: null, verify: ["sh bin/pytest tests"] }), "bin/pytest": "true\n", "tests/a.test.ts": "it('a', () => {});\n" });
+  lookedUp(old);
+  cli(old, "note", ["task", "Add a thing. [inferred]"]);
+  cli(old, "note", ["context", "Traced: tests/a.test.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: local"]);
+  cli(old, "note", ["plan", "A test tweak."]);
+  cli(old, "case", ["add", "it holds", "--kind", "happy"]);
+  cli(old, "case", ["close", "C1", "--test", "tests/a.test.ts:a"]);
+  write(old, "tests/a.test.ts", "it('a', () => {});\nit('b', () => {});\n");
+  cli(old, "verify");
+  for (const s of ledgerOf(old).steps) if (!s.state && s.key !== "close") run(old, "step", [s.key, "na", "fixture"]);
+  run(old, "close");
+  assert.equal(ledgerOf(old).status, "closed");
+  const file = path.join(old, ".claude", "gate", "runs", readdirSync(path.join(old, ".claude", "gate", "runs"))[0], "ledger.json");
+  const { weakened: _none, ...before } = JSON.parse(readFileSync(file, "utf8"));
+  writeFileSync(file, JSON.stringify(before));
+  write(old, "tests/a.test.ts", "it.skip('a', () => {});\n");
+  assert.doesNotMatch(cli(old, "report").stdout, /weakened/);
+});
+}

@@ -332,6 +332,10 @@ checked.
   `~` or `../` resolves (a plan kept outside the repo); a directory or an empty path does not.
 - **A run can span repos.** See [Working across repos](#working-across-repos). A run with no
   further repo costs and behaves as before.
+- **Weakened tests are named.** The report lists skips and suppressions the task added, test files
+  it deleted and tests it removed, first under For you. A test that reappears under its name counts
+  as moved, and a new test offsets one that went, as a rename does, so a replaced test does not show.
+  This is advice: no rule reads it.
 - **What it cannot know.** Whether a test asserts the right thing. It makes that visible
   instead: case → test mapping and the reviewer's own file, so a human can check them in
   two minutes.
