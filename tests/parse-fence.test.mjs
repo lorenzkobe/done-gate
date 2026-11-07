@@ -397,12 +397,12 @@ test("C11 edge: the edit-tool hint goes only to the caller that owns the file", 
   for (const [role, file] of [["reviewer", "review-6.md"], ["reviewer-2", "review2-2.md"], ["skeptic", "skeptic-1.md"], ["arbiter", "arbiter-1.md"], ["worker", "worker-4.md"]]) {
     const v = decide(bash(sedOn(file), as(role)), repo, cfg);
     assert.equal(v.deny, true, `${role} ${file}`);
-    assert.match(v.reason, new RegExp(`Edit or Write tool on ${file.replace(".", "\\.")}`), `${role}: ${v.reason}`);
+    assert.match(v.reason, new RegExp(`Use the ${role === "worker" ? "Edit or Write" : "Write"} tool on ${file.replace(".", "\\.")}`), `${role}: ${v.reason}`);
   }
   for (const [who, file] of [[{}, "review-6.md"], [as("reviewer"), "review2-2.md"], [as("worker"), "review-6.md"]]) {
     const v = decide(bash(sedOn(file), who), repo, cfg);
     assert.equal(v.deny, true, file);
-    assert.doesNotMatch(v.reason, /Edit or Write tool/, `${who.agent_type ?? "lead"} on ${file}: ${v.reason}`);
+    assert.doesNotMatch(v.reason, /Write tool/, `${who.agent_type ?? "lead"} on ${file}: ${v.reason}`);
   }
   const helperLedger = decide(bash(`cat >> ${RUN}/ledger.md <<'EOF'\nx\nEOF`, as("worker")), repo, cfg);
   assert.equal(helperLedger.deny, true);
@@ -708,3 +708,150 @@ test("C6 edge: only the lead is held; a helper edits the files its packet names,
 test("C5 happy: once the plan names the new file, the edit passes", () => {
   assert.equal(decide(editOf("src/new.ts", "Write"), repo, cfg, RUN_REL, grown(["src/a.ts", "src/b.ts", "src/c.ts", "src/new.ts"], 13)).deny, false);
 });
+
+{
+const repo = makeRepo("fence-reads-own");
+const cfg = loadConfig(repo);
+const RUN_DIR = ".claude/gate/runs/2026-11-07-x";
+const asked = (command, agent_type) => ({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: repo, session_id: "S1", ...(agent_type ? { agent_id: "A1", agent_type } : {}) });
+const verdict = (command, agent_type) => decide(asked(command, agent_type), repo, cfg, RUN_DIR);
+
+test("the listing forms, /usr/bin/grep and rtk read pass beside a gate path", () => {
+  for (const cmd of [
+    `/usr/bin/grep x ${RUN_DIR}/verify.json`,
+    `/bin/cat ${RUN_DIR}/verify.json`,
+    `git tag --list; cat ${RUN_DIR}/verify.json`,
+    `git tag -l 'v*'; ls ${RUN_DIR}`,
+    `git tag; ls ${RUN_DIR}`,
+    `git tag --contains abc; ls ${RUN_DIR}`,
+    `git branch; ls ${RUN_DIR}`,
+    `git branch -a; ls ${RUN_DIR}`,
+    `git branch -vv; ls ${RUN_DIR}`,
+    `git branch -r --contains abc; ls ${RUN_DIR}`,
+    `git branch --show-current; ls ${RUN_DIR}`,
+    `git branch --merged main; ls ${RUN_DIR}`,
+    `git reflog; ls ${RUN_DIR}`,
+    `git reflog -5; ls ${RUN_DIR}`,
+    `git reflog show main; ls ${RUN_DIR}`,
+    `git --no-pager log -1; ls ${RUN_DIR}`,
+    `git -C . --no-pager diff; ls ${RUN_DIR}`,
+    `rtk read ${RUN_DIR}/ledger.md`,
+    `sed -n '/^## Work/,/^## Why/p' ${RUN_DIR}/ledger.md`,
+  ]) assert.equal(verdict(cmd).deny, false, cmd);
+});
+
+test("other paths, write forms and names stay refused beside a gate path", () => {
+  for (const cmd of [
+    `/usr/local/bin/grep x ${RUN_DIR}/verify.json`,
+    `/bin/sed -i s/a/b/ ${RUN_DIR}/verify.json`,
+    `./bin/cat ${RUN_DIR}/verify.json`,
+    `git tag -d v1; ls ${RUN_DIR}`,
+    `git tag -a v1; ls ${RUN_DIR}`,
+    `git tag v1; ls ${RUN_DIR}`,
+    `git tag -l -d v1; ls ${RUN_DIR}`,
+    `git branch -D x; ls ${RUN_DIR}`,
+    `git branch -d x; ls ${RUN_DIR}`,
+    `git branch x; ls ${RUN_DIR}`,
+    `git branch -m a b; ls ${RUN_DIR}`,
+    `git branch -a x; ls ${RUN_DIR}`,
+    `git branch -u origin/x; ls ${RUN_DIR}`,
+    `git branch --list -D x; ls ${RUN_DIR}`,
+    `git reflog expire --all; ls ${RUN_DIR}`,
+    `git reflog delete HEAD@{0}; ls ${RUN_DIR}`,
+    `git --no-pager commit -m x; ls ${RUN_DIR}`,
+    `git -c core.pager=evil log; ls ${RUN_DIR}`,
+    `rtk read x > ${RUN_DIR}/ledger.json`,
+  ]) assert.equal(verdict(cmd).deny, true, cmd);
+});
+
+test("a reviewer's write through /bin/ or /usr/bin/ is refused", () => {
+  for (const cmd of ["/bin/rm src/a.ts", "/usr/bin/tee src/a.ts", "rtk proxy /bin/rm src/a.ts", "'/bin/rm' src/a.ts",
+    "/usr/bin/cd /tmp; rm src/a.ts", "sed -i'' s/a/b/ src/a.ts", "sed \"-i\" s/a/b/ src/a.ts", "find . | xargs /bin/rm", "git --no-pager commit -am x", "git -c a=b commit -am x", "git --git-dir .git commit -am x"]) {
+    assert.equal(verdict(cmd, "done-gate:reviewer").deny, true, cmd);
+  }
+});
+
+test("a helper's cd into the run folder then a write to its own file passes", () => {
+  for (const [cmd, role] of [
+    [`cd ${RUN_DIR} && cat > worker-2.md <<'E'\nx\nE`, "done-gate:worker"],
+    [`cd ${RUN_DIR} && cat >> worker-2.md <<'E'\nx\nE`, "done-gate:worker"],
+    [`cd ${RUN_DIR} && sed -i '' s/a/b/ review-1.md`, "done-gate:reviewer"],
+    [`cd ${RUN_DIR} && sed -i '' '/^- /d' review-1.md`, "done-gate:reviewer"],
+    [`cd ${RUN_DIR} && sed -i '' 's/old word/better/g' review-1.md`, "done-gate:reviewer"],
+    [`cd "${repo}/${RUN_DIR}" && cat > skeptic-1.md <<'E'\nx\nE`, "done-gate:skeptic"],
+  ]) assert.equal(verdict(cmd, role).deny, false, cmd);
+  const logged = spawnSync(process.execPath, [gate, "log"], {
+    input: JSON.stringify({ ...asked(`cd ${RUN_DIR} && cat > worker-2.md <<'E'\nx\nE`, "done-gate:worker"), hook_event_name: "PostToolUse", tool_response: {} }),
+    encoding: "utf8", env: envFor(repo),
+  });
+  assert.equal(logged.status, 0, logged.stderr);
+  const events = readFileSync(path.join(repo, ".claude/gate/sessions/S1/events.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.ok(events.some((e) => e.kind === "edit" && e.path === `${RUN_DIR}/worker-2.md`), "the write logs an edit event");
+});
+
+test("the cd form stays refused when it reaches anything but the helper's own file", () => {
+  for (const cmd of [
+    `cd ${RUN_DIR} && cat > worker-2.md; echo x > ledger.json`,
+    `cd ${RUN_DIR} && cat > ledger.json`,
+    `cd ${RUN_DIR} && cat > review-1.md`,
+    `cd ${RUN_DIR} && cat > worker-$n.md`,
+    `cd ${RUN_DIR} && python3 - <<'E'\nopen('ledger.json', 'w').write('{}')\nE`,
+    `cd ${RUN_DIR} && python3 - <<'E'\nopen('worker-2.md', 'w').write('x')\nopen('verify.json', 'w').write('{}')\nE`,
+    `cd ${RUN_DIR}/../.. && cat > worker-2.md`,
+    `cd ${RUN_DIR} && cd .. && cat > worker-2.md`,
+    `cd ${RUN_DIR} && cat > worker-2.md && git commit -am x`,
+    `cd ${RUN_DIR} && cat > worker-2.md; gzip ledger.json`,
+    `cd ${RUN_DIR} && ln -sf ledger.json worker-2.md`,
+    `cd ${RUN_DIR} && cat > worker-2.md; awk 'BEGIN { print "x" > "ledger.json" }'`,
+    `cd ${RUN_DIR} && sed -i '' 's/a/b/w ledger.json' worker-2.md`,
+    `cd ${RUN_DIR} && sed -i '' 's/a/b/;w ledger.json' worker-2.md`,
+    `cd ${RUN_DIR} && sed -i '' 's/a/b/; w ledger.json' worker-2.md`,
+    `cd ${RUN_DIR} && sed -i '' -e 's/a/b/' -e 'w ledger.json' worker-2.md`,
+    `cd ${RUN_DIR} && sed -i '' 's/a/b/;{w ledger.json}' worker-2.md`,
+    `cd ${RUN_DIR} && sed -i '' '1!w ledger.json' worker-2.md`,
+    `cd ${RUN_DIR} && sed -i '' '/a/!w ledger.json' worker-2.md`,
+    `cd ${RUN_DIR} && sed -i '' -f x.sed worker-2.md`,
+    `cd ${RUN_DIR} && echo x > worker-2.md; echo y >&ledger.json`,
+    `cd ${RUN_DIR} && echo x > worker-2.md; echo y >& ledger.json`,
+    `cd ${RUN_DIR} && echo x > worker-2.md; echo y &>ledger.json`,
+    `cd ${RUN_DIR} && echo x > worker-2.md; sed -i'' s/a/b/ ledger.json`,
+    `cd ${RUN_DIR} && echo x > worker-2.md; sed "-i" s/a/b/ ledger.json`,
+    `cd ${RUN_DIR} && echo x > worker-2.md; sed -i'' s/a/b/ led*`,
+    `cd ${RUN_DIR} && echo x > "worker-2.md"; echo y > "ledger.json"`,
+    `cd ${RUN_DIR} && echo x > worker-2.md; tee "ledger.json"`,
+    `cd ${RUN_DIR} && f=ledger.json; echo x > worker-2.md; echo y > $f`,
+    `cd ${RUN_DIR} && sed -i '' --file=x.sed worker-2.md`,
+    `cd ${RUN_DIR} && sed -i '' -e 's/a/b/' worker-2.md`,
+    `cd ${RUN_DIR} && sed -i '' 's/a/b/' worker-2.md --file=x.sed`,
+    `cd ${RUN_DIR} && sed -i '' 's/a/b/w ledger.json' worker-2.md`,
+    `cd ${RUN_DIR} && cat > worker-2.md; rm ledger.json`,
+    `cd ${RUN_DIR} && cat > worker-2.md $(rm ledger.json)`,
+    `cd ${RUN_DIR} && echo x | tee ledger.json worker-2.md`,
+  ]) assert.equal(verdict(cmd, "done-gate:worker").deny, true, cmd);
+});
+
+test("a read beside another command names the part to run alone, and a real write keeps its wording", () => {
+  const beside = verdict(`npx vitest run x; ls ${RUN_DIR}`).reason;
+  assert.match(beside, /reading the gate folder beside `npx vitest run x`/);
+  assert.match(beside, /Run `npx vitest run x` as its own command/);
+  assert.doesNotMatch(beside, /writes gate evidence/);
+  const write = verdict(`echo x >> ${RUN_DIR}/verify.json`).reason;
+  assert.match(write, /writes gate evidence files/);
+  assert.doesNotMatch(write, /as its own command/);
+  for (const leads of [`cd ${RUN_DIR} && rm ledger.json`, `D=${RUN_DIR}; rm $D/ledger.json`, `for f in ${RUN_DIR}/*; do rm $f; done`, `ls ${RUN_DIR} | xargs rm`]) {
+    const v = verdict(leads);
+    assert.equal(v.deny, true, leads);
+    assert.doesNotMatch(v.reason, /as its own command/, `running this part alone would still reach the gate folder: ${leads}`);
+  }
+  const both = verdict(`npm test; echo x >> ${RUN_DIR}/verify.json`).reason;
+  assert.match(both, /writes gate evidence files/, "the write decides when both are there");
+});
+
+test("a role with no Edit tool is told Write only, and one with it hears both", () => {
+  const told = (role, file) => verdict(`sed -i '' s/a/b/ ${RUN_DIR}/${file}; cat ${RUN_DIR}/ledger.json`, role).reason;
+  assert.match(told("done-gate:reviewer", "review-1.md"), /Use the Write tool on/);
+  assert.doesNotMatch(told("done-gate:reviewer", "review-1.md"), /Edit/);
+  assert.match(told("done-gate:skeptic", "skeptic-1.md"), /Use the Write tool on/);
+  assert.match(told("done-gate:worker", "worker-1.md"), /Use the Edit or Write tool on/);
+});
+}

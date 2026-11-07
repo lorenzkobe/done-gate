@@ -262,16 +262,28 @@ const PAGER_OFF = /^\w*PAGER=(?:cat|less|more)?$/;
 const RUNS_COMMAND = /^(?:\w*PAGER|\w*EDITOR|VISUAL|LESSOPEN|LESSCLOSE|GIT_EXTERNAL_DIFF|GIT_SSH(?:_COMMAND)?|BROWSER)=/;
 const KEYWORDS = new Set(["do", "then", "else", "elif", "if", "while", "until", "!", "time", "{", "}"]);
 const HEADERS = new Set(["for", "case", "select", "done", "fi", "esac", "in"]);
+// Only the system folders count: /usr/local/bin/grep or ./bin/cat can be anything. /usr/bin/cd
+// stays as typed: it never moves the shell, so it must not read as `cd`.
+const systemProgram = (text) => {
+  const name = text.replace(/^\/(?:usr\/)?bin\/(?=[^/]+$)/, "");
+  return name === "cd" ? text : name;
+};
 function shift(seg) {
   const words = seg.filter((w, i) => w.text !== "" || seg.slice(0, i).some((x) => x.text !== ""));
   let envChanged = false;
+  let rtkRead = false;
   while (words.length && (words[0].assign || (!words[0].quoted && (words[0].text === "rtk" || KEYWORDS.has(words[0].text))))) {
     if (/^PATH=/.test(words[0].text)) envChanged = true; // a planted binary could stand in for cat
     if (words[0].assign && RUNS_COMMAND.test(words[0].text) && !PAGER_OFF.test(words[0].text)) envChanged = true; // as a prefix or exported already, it makes a reader run a command
     // `rtk proxy <cmd>` runs the command unfiltered
-    if (words.shift().text === "rtk" && words[0]?.text === "proxy" && !words[0].quoted) words.shift();
+    if (words.shift().text !== "rtk" || words[0]?.quoted) continue;
+    if (words[0]?.text === "proxy") words.shift();
+    else if (words[0]?.text === "read") rtkRead = true;
   }
   if (words.length && !words[0].quoted && HEADERS.has(words[0].text)) return { words: [], envChanged };
+  if (words.length) words[0] = { ...words[0], text: systemProgram(words[0].text) };
+  // `rtk read <file>` prints a file; plain `read` sets a variable
+  if (rtkRead) words[0] = { ...words[0], text: "cat" };
   return { words, envChanged };
 }
 
@@ -287,8 +299,8 @@ function inlineCode(program, args, raw) {
 }
 
 // a w command sits at the start of a sed script or after an address (`/x/w f`, `1w f`, `$w f`)
-// or as an s flag
-const SED_W = /(?:^|[/\d$}])[wW]\s*\S/;
+// or as an s flag, or as a later command after `;`, `{`, `!`, a newline or a space
+const SED_W = /(?:^|[/\d$};{!\n])[wW]\s*\S|\s[wW]\s+\S/;
 
 // The scripts a sed call runs: its -e values, else its first operand. Only these can hold a
 // w command; the file operands are paths, where `/w` is a folder or file name.
@@ -342,8 +354,37 @@ function readSetsPlainNames(args) {
   return true;
 }
 
+const LISTS_ONLY = /^(?:-[arv]+|--all|--remotes|--verbose)$/;
+const LISTING = /^(?:-l|--list|--contains|--no-contains|--merged|--no-merged|--points-at|--show-current)(?:=|$)/;
+const TAG_WRITE = /^(?:-[a-zA-Z]*[adsfmuF]|--delete|--annotate|--sign|--local-user|--force|--message|--file|--edit)/;
+const BRANCH_WRITE = /^(?:-[a-zA-Z]*[dDmMcCfu]|--delete|--move|--copy|--force|--set-upstream|--unset-upstream|--edit-description|--track|--no-track|--create-reflog)/;
+function listsOnly(rest, writes) {
+  if (rest.some((a) => writes.test(a))) return false;
+  return !rest.length || rest.some((a) => LISTING.test(a)) || rest.every((a) => LISTS_ONLY.test(a));
+}
+
+// The verb past git's own options, which `-c` and `--no-pager` must not hide from the helper fence.
+function gitVerb(args) {
+  for (let i = 0; i < args.length; i++) {
+    const word = args[i].text;
+    if (/^(?:-C|-c|--git-dir|--work-tree|--namespace|--exec-path)$/.test(word)) i++;
+    else if (!word.startsWith("-")) return word;
+  }
+  return undefined;
+}
+
 function gitReads(args) {
-  const [verb, sub] = (args[0]?.text === "-C" ? args.slice(2) : args).map((a) => a.text);
+  const words = args.map((a) => a.text);
+  for (;;) {
+    if (words[0] === "-C") words.splice(0, 2);
+    else if (words[0] === "--no-pager") words.shift();
+    else break;
+  }
+  const [verb, sub] = words;
+  const rest = words.slice(1);
+  if (verb === "tag") return listsOnly(rest, TAG_WRITE);
+  if (verb === "branch") return listsOnly(rest, BRANCH_WRITE);
+  if (verb === "reflog") return sub === undefined || sub === "show" || sub === "exists" || sub.startsWith("-");
   return GIT_READ.has(verb) || (verb === "stash" && (sub === "list" || sub === "show"));
 }
 
@@ -587,7 +628,7 @@ export function shellWrites(raw) {
       }
       if (!rest.length) continue;
       const [first, ...args] = rest;
-      const program = first.text;
+      const program = systemProgram(first.text);
       const flag = (re) => args.some((a) => !a.quoted && re.test(a.text));
       if (program === "cd") {
         const r = args[0] ? resolve(args[0].text) : null;
@@ -596,12 +637,12 @@ export function shellWrites(raw) {
         continue;
       }
       if (program === "git") {
-        const verb = args[0]?.text === "-C" ? args[2]?.text : args[0]?.text;
+        const verb = gitVerb(args);
         if (GIT_WRITE.has(verb) && !gitReads(args)) blind.push(`git ${verb} changes the repo`);
         continue;
       }
       if (program === "xargs") {
-        const next = pathArgs(args)[0]?.text;
+        const next = systemProgram(pathArgs(args)[0]?.text ?? "");
         if (next && (WRITERS[next] || ["sed", "perl", "git", "tar", "dd"].includes(next))) blind.push(`xargs ${next} writes where its input says`);
         continue;
       }
@@ -612,7 +653,7 @@ export function shellWrites(raw) {
       const code = inlineCode(program, args, text);
       if (code !== null && INLINE_WRITE.test(code)) blind.push(`${program} inline code writes`);
       if (program === "perl" && flag(WRITING_FLAG.perl)) for (const a of pathArgs(args, ["-e", "-E"])) target(a.text, "perl -i on");
-      if (program === "sed" && flag(/^-[a-zA-Z]*[iI]|^--in-place/)) {
+      if (program === "sed" && args.some((a) => /^-[a-zA-Z]*[iI]|^--in-place/.test(a.text))) {
         const files = pathArgs(args, ["-e", "-f", "--expression", "--file"]);
         for (const a of flag(/^-[ef]$|^--expression|^--file/) ? files : files.slice(1)) target(a.text, "sed -i on");
       }
@@ -719,6 +760,8 @@ const shown = (seg) => {
   const text = seg.map((w) => (w.quoted && (w.text === "" || /\s/.test(w.text)) ? `'${w.text}'` : w.text)).join(" ");
   return text.length > 120 ? `${text.slice(0, 120)}…` : text;
 };
+const LEADS_TO_GATE = /(?:^|[;&|(\s])cd\s+["']?[^\s;&|]*\.claude\/gate|=["']?[^\s;&|]*\.claude\/gate|\bfor\s+\w+\s+in\b[^;]*\.claude\/gate/;
+const NO_EDIT_TOOL = new Set(["reviewer", "reviewer-2", "skeptic", "arbiter"]);
 function evidenceDeny(cmd, agentType) {
   const parts = notReads(cmd);
   const touchesGate = (seg) => {
@@ -730,10 +773,12 @@ function evidenceDeny(cmd, agentType) {
   const owner = named && (named[2] ? FILE_OWNER[named[2]] : null);
   const caller = agentType?.replace(/^done-gate:/, "") ?? null;
   const owns = named && (named[2] ? owner === caller : agentType === null);
+  // The other part names no gate path and nothing leads it there: the fence just cannot judge the two together.
+  if (part && !touchesGate(part) && !LEADS_TO_GATE.test(withoutHeredocs(cmd)) && !parts.some((seg) => /\$|^xargs\b/.test(seg.map((w) => w.text).join(" ")))) return `done-gate: reading the gate folder beside \`${shown(part)}\` is refused, because the fence cannot tell the two apart. Run \`${shown(part)}\` as its own command.`;
   return [
     `done-gate: that command writes gate evidence files (.claude/gate/...)${part ? `: \`${shown(part)}\` is not a plain read` : ""}.`,
     "Evidence is written only by `gate` verbs; read it with cat, grep or `gate report`.",
-    owns ? `Use the Edit or Write tool on ${named[1]} instead.` : "",
+    owns ? `Use the ${NO_EDIT_TOOL.has(caller) ? "Write" : "Edit or Write"} tool on ${named[1]} instead.` : "",
   ].filter(Boolean).join(" ");
 }
 
@@ -829,6 +874,18 @@ const OWN_PREFIX = { ...OWN_FILE, worker: "worker" };
 // The findings files a helper's shell command writes when every write is one of them: its role's
 // <prefix>-<n>.md in a run dir, each target known, no git write, no other evidence named once
 // those paths are taken out. Anything else is [] and the evidence fence decides as before.
+const CD_FORM_OBSCURES = /[$`*?[]|>&|&>|[\w.-]+\.(?:jsonl?|md|tsv)\b|current-session/;
+const CD_FORM_PROGRAMS = new Set(["cd", "cat", "tee", "sed", "echo", "printf"]);
+// A sed script could write any file in the folder, so only a plain substitution or delete passes,
+// with no option but -i or an extended-regex flag.
+const PLAIN_SED_SCRIPT = /^(?:s\/(?:[^/\\\n]|\\.)*\/(?:[^/\\\n]|\\.)*\/[gIi\d]*|\/(?:[^/\\\n]|\\.)*\/d|\d+(?:,\d+)?d)$/;
+function cdFormWriter(seg) {
+  const [first, ...args] = shift(seg).words;
+  if (!CD_FORM_PROGRAMS.has(first?.text)) return false;
+  if (first.text !== "sed") return true;
+  const operands = args.filter((a) => a.text !== "" && !/^-(?:i|E|r|iE|Ei)$/.test(a.text));
+  return PLAIN_SED_SCRIPT.test(operands[0]?.text ?? "") && operands.slice(1).every((a) => !a.text.startsWith("-"));
+}
 export function ownFileWrites(raw, agentType, root) {
   const prefix = OWN_PREFIX[String(agentType ?? "").replace(/^done-gate:/, "")];
   if (!prefix || gitWrites(raw)) return [];
@@ -842,7 +899,14 @@ export function ownFileWrites(raw, agentType, root) {
   if (!written.every((t) => own.test(rel(t) ?? "") || isScratch(t))) return [];
   const targets = [...new Set(written.map(rel).filter((t) => own.test(t ?? "")))];
   if (!targets.length) return [];
-  const rest = String(raw).replace(new RegExp(`[^\\s'"=]*\\.claude/gate/runs/[^/\\s'"]+/${prefix}-\\d+\\.md`, "g"), "OWN");
+  const named = String(raw).replace(new RegExp(`[^\\s'"=]*\\.claude/gate/runs/[^/\\s'"]+/${prefix}-\\d+\\.md`, "g"), "OWN");
+  const rest = named.replace(/\bcd\s+(["']?)[^\s'";&|]*\.claude\/gate\/runs\/[^/\s'";&|]+\/?\1(?=\s|;|&|\||$)/g, "cd OWN");
+  // Inside the run folder a bare ledger.json names nothing the check below can see. So the cd form
+  // takes only writers whose targets are read, spells every name out, and names no other file there.
+  if (rest !== named) {
+    const spelled = withoutHeredocs(rest).replace(new RegExp(`\\b${prefix}-\\d+\\.md\\b`, "g"), "OWN");
+    if (CD_FORM_OBSCURES.test(spelled) || !notReads(raw).every(cdFormWriter)) return [];
+  }
   return EVIDENCE_IN_COMMAND.test(rest) || namesGateDir(withoutHeredocs(rest)) ? [] : targets;
 }
 
