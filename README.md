@@ -170,7 +170,10 @@ a test edit or a fold of what git brought does not. A surface that cannot run at
 `gate waive driver|schema "…" --could-not-run --user-ok "<their words>"`, and the report says
 "could not run", never N/A. In a run with a tests step `tests`, `qa` and `R7` have no waiver; a
 change with only json, yaml, toml, lock, CSS or image files owes no test. A `plan` run may still
-waive tests. In a new run the words are required: three or more, said by the user in
+waive tests. A batch of runs shares one OK: `gate waive <key> --standing "<batch>" --user-ok "<words naming the
+check and the batch>"` lasts 14 days (not for tests or slop), `gate open <slug> <playbook> --batch
+<name>` copies it into a run, where it holds for that run whatever is edited, every report lists it,
+and `gate waive --end <batch>` stops it and takes back the copies in open runs. In a new run the words are required: three or more, said by the user in
 this task, naming what is given up (the key or a word like it: drive, click, screen for
 `driver`), not saying the opposite, and for a check on code said after the last code edit. An
 old run waives on the reason alone. The keys: `driver` (R4),

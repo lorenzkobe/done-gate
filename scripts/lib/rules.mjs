@@ -1012,12 +1012,16 @@ export function lapseWaivers(ledger, hash) {
   let moved = false;
   for (const w of ledger.waivers ?? []) {
     if (w.lapsed || !w.code || w.code === hash) continue;
-    w.lapsed = true;
+    lapseWaiver(ledger, w);
     moved = true;
-    const step = ledger.steps?.find((s) => s.key === w.key);
-    if (step && !waived(ledger, w.key) && (step.state === "WAIVED" || step.state === "COULD NOT RUN")) blank(step);
   }
   return moved;
+}
+
+export function lapseWaiver(ledger, w, why = {}) {
+  Object.assign(w, { lapsed: true }, why);
+  const step = ledger.steps?.find((s) => s.key === w.key);
+  if (step && !waived(ledger, w.key) && (step.state === "WAIVED" || step.state === "COULD NOT RUN")) blank(step);
 }
 
 // Changes these never need a test for: nothing in them runs as code.

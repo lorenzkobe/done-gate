@@ -382,7 +382,8 @@ test("3.6 C11 coverage is a check on code; skeptic and rootcause take earlier wo
 test("3.6 C12 no line in the gate's code teaches gate waive with a reason and no --user-ok", () => {
   const dir = path.join(pluginRoot, "scripts", "lib");
   const teaches = readdirSync(dir).filter((f) => f.endsWith(".mjs")).flatMap((f) => readFileSync(path.join(dir, f), "utf8").split("\n"));
-  const lessons = teaches.filter((l) => /gate waive [^`\n]*"<|gate waive <key[^`]*"/.test(l));
+  // ending a standing waiver gives nothing up, so it takes no words
+  const lessons = teaches.filter((l) => /gate waive (?!--end)[^`\n]*"<|gate waive <key[^`]*"/.test(l));
   assert.ok(lessons.length > 5, `${lessons.length} lines`);
   for (const line of lessons) assert.match(line, /--user-ok/, line.slice(0, 160));
 });

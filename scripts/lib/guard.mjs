@@ -13,8 +13,8 @@ import { newRules } from "./rules.mjs";
 
 // Files only the gate's own verbs may write. A model that could edit these could
 // forge its evidence, so the deny is unconditional and every attempt is logged.
-const EVIDENCE_FILES = new Set(["events.jsonl", "verify.json", "verify.started.json", "decisions.tsv", "ledger.json", "blocks.json", "state.json", "gate-error.log", "current-session"]);
-const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(events\.jsonl|verify\.json|verify\.started\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json|current-session|pids\/\d+|brief-[a-z0-9-]+-\d+\.md|(?:review2?|skeptic|arbiter|worker)-\d+\.md|runs\/[^/\s]+\/base(?![\w.-]))/;
+const EVIDENCE_FILES = new Set(["standing.json", "events.jsonl", "verify.json", "verify.started.json", "decisions.tsv", "ledger.json", "blocks.json", "state.json", "gate-error.log", "current-session"]);
+const EVIDENCE_IN_COMMAND = /\.claude\/gate\/\S*(standing\.json|events\.jsonl|verify\.json|verify\.started\.json|decisions\.tsv|ledger\.json|blocks\.json|state\.json|current-session|pids\/\d+|brief-[a-z0-9-]+-\d+\.md|(?:review2?|skeptic|arbiter|worker)-\d+\.md|runs\/[^/\s]+\/base(?![\w.-]))/;
 // a command that writes and names the state dir in any spelling (`cd .claude && cd gate`, `D=.claude/gate; cd $D`,
 // pushd) can reach evidence through a relative path; gate.json is ordinary config
 const namesGateDir = (text) => {

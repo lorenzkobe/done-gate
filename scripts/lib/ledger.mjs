@@ -13,6 +13,7 @@ import { emptyTier } from "./size.mjs";
 // verb time, never at module top level, or the cycle would hit a TDZ error.
 import { loadPolicy } from "./size.mjs";
 import { implementationHash, saidSince } from "./rules.mjs";
+import { carryStanding, requireLiveBatch } from "./standing.mjs";
 import { knownNewer, UPDATE_COMMANDS } from "./release.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
@@ -424,7 +425,7 @@ const realOf = (dir) => {
 
 // `words` is the verb and its arguments as the command from the other folder must repeat them; a
 // declared repo that is either folder itself would be refused there, so it is left out
-function refuseElsewhere(ctx, words, repos = []) {
+export function refuseElsewhere(ctx, words, repos = []) {
   const home = eventsElsewhere(ctx);
   if (!home) return;
   const others = repos.filter((r) => ![home, ctx.root].some((d) => realOf(d) === realOf(r)));
@@ -451,6 +452,7 @@ export const verbs = {
     const repos = [];
     let oldOk = "";
     let setupLater = "";
+    let batch = "";
     for (let i = 0; i < ctx.args.length; i++) {
       const arg = ctx.args[i];
       const named = arg.startsWith("--repo=") ? arg.slice(7) : arg === "--repo" ? ctx.args[++i] : null;
@@ -459,12 +461,15 @@ export const verbs = {
       else if (arg === "--setup-later") {
         setupLater = ctx.args[++i] ?? "";
         if (!setupLater.trim() || setupLater.startsWith("--")) throw new UsageError('--setup-later needs the user\'s words: gate open <slug> <playbook> --setup-later "<their words>"');
+      } else if (arg === "--batch") {
+        batch = ctx.args[++i] ?? "";
+        if (!batch.trim() || batch.startsWith("--")) throw new UsageError("--batch needs a batch name: gate open <slug> <playbook> --batch <name>");
       } else if (arg === "--old-version-ok") {
         oldOk = ctx.args[++i] ?? "";
         if (!oldOk.trim() || oldOk.startsWith("--")) throw new UsageError('--old-version-ok needs the user\'s words: gate open <slug> <playbook> --old-version-ok "<their words>"');
       }
       // an ignored flag would open the run without what it asked for
-      else if (arg.startsWith("--")) throw new UsageError(`gate open: unknown option ${arg} (have: --repo <path>, --old-version-ok "<the user's words>", --setup-later "<the user's words>")`);
+      else if (arg.startsWith("--")) throw new UsageError(`gate open: unknown option ${arg} (have: --repo <path>, --batch <name>, --old-version-ok "<the user's words>", --setup-later "<the user's words>")`);
       else rest.push(arg);
     }
     const [slug, playbook] = rest;
@@ -475,14 +480,19 @@ export const verbs = {
     const said = (key, words) => (words ? [key, words] : []);
     const named = repos.flatMap((r) => ["--repo", r]);
     // a run opened elsewhere sees none of this session's events, its words for an old version included
-    refuseElsewhere(ctx, ["open", slug, ...(playbook ? [playbook] : []), ...said("--old-version-ok", oldOk), ...said("--setup-later", setupLater)], repos.map((r) => path.resolve(ctx.root, r)));
+    refuseElsewhere(ctx, ["open", slug, ...(playbook ? [playbook] : []), ...said("--old-version-ok", oldOk), ...said("--setup-later", setupLater), ...said("--batch", batch)], repos.map((r) => path.resolve(ctx.root, r)));
     const latest = knownNewer(ctx.version);
     const joining = openRuns(ctx.stateDir).some(({ ledger }) => ledger.slug === slug);
     if (latest && !joining && !saidSince(readEvents(ctx.stateDir, ctx.session), 0, oldOk)) {
-      throw new UsageError(`done-gate ${latest} is out and this session runs ${ctx.version}: tell the user and ask. To update: ${UPDATE_COMMANDS}. To carry on with ${ctx.version}: \`gate open ${shellWord(slug)} ${playbook ? shellWord(playbook) : "<playbook>"}${named.length || setupLater ? ` ${shellLine([...named, ...said("--setup-later", setupLater)])}` : ""} --old-version-ok "<their words, at least three>"\``);
+      throw new UsageError(`done-gate ${latest} is out and this session runs ${ctx.version}: tell the user and ask. To update: ${UPDATE_COMMANDS}. To carry on with ${ctx.version}: \`gate open ${shellWord(slug)} ${playbook ? shellWord(playbook) : "<playbook>"}${named.length || setupLater || batch ? ` ${shellLine([...named, ...said("--setup-later", setupLater), ...said("--batch", batch)])}` : ""} --old-version-ok "<their words, at least three>"\``);
     }
-    if (!joining) refuseSetup(ctx, ["open", slug, ...(playbook ? [playbook] : []), ...named, ...said("--old-version-ok", oldOk)], setupLater);
+    if (!joining) refuseSetup(ctx, ["open", slug, ...(playbook ? [playbook] : []), ...named, ...said("--old-version-ok", oldOk), ...said("--batch", batch)], setupLater);
+    if (batch && joining) {
+      const held = openRuns(ctx.stateDir).find(({ ledger }) => ledger.slug === slug).ledger.batch;
+      if (held !== batch) throw new UsageError(`run ${slug} is already open${held ? ` in batch ${held}` : ""}: --batch applies only when a run opens`);
+    } else if (batch) requireLiveBatch(ctx.stateDir, batch);
     const { dir, ledger } = openLedger(ctx, slug, playbook, repos);
+    if (batch && !joining) carryStanding(ctx, dir, ledger, batch);
     printOpen(ctx, dir, ledger);
   },
   repo(ctx) {

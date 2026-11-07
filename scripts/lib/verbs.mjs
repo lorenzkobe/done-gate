@@ -13,6 +13,7 @@ import { assess, broughtSinceOpen, buildState, cleanAtHead, foldIntoBaseline, ot
 import { loadSession, saveSession } from "./session-state.mjs";
 import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
 import { pointerFile } from "./verify.mjs";
+import { endStanding, waiveStanding } from "./standing.mjs";
 import { appendEvents, readEvents } from "./events.mjs";
 
 // The report of a run that is no longer current: the same renderer `gate report` uses.
@@ -669,8 +670,17 @@ export const verbs = {
   },
 
   waive(ctx) {
+    if (ctx.args.includes("--end")) {
+      endStanding(ctx, flag(ctx.args, "--end"));
+      return;
+    }
     const [named, ...why] = positional(ctx.args);
     const reason = why.join(" ").trim();
+    if (ctx.args.includes("--standing")) {
+      if (!named) throw new UsageError('usage: gate waive <key> --standing "<batch>" --user-ok "<the user\'s words>"');
+      waiveStanding(ctx, /^R\d+$/.test(named) ? Object.keys(WAIVERS).find((k) => WAIVERS[k] === named) ?? named : named, flag(ctx.args, "--standing"), flag(ctx.args, "--user-ok"), reason);
+      return;
+    }
     const usage = 'usage: gate waive <key|stepKey|R#> "<why>" --user-ok "<their words>"';
     if (!named || !reason) throw new UsageError(usage);
     const words = flag(ctx.args, "--user-ok");
