@@ -43,7 +43,7 @@ Write the file in this shape:
 - cases: <k>/<n> tests match their case
 ```
 
-"Act on" is for things that would block a real PR. Do not number findings; the gate assigns the ids when the file is recorded. Cite real lines. Never invent a caller. If you could not verify something, say "unverified".
+One bullet per finding, with any detail indented beneath it and its `file:line` on the top bullet, the only line recorded; a follow-on line at the top level is recorded as another finding. "Act on" is for things that would block a real PR. Do not number findings; the gate assigns the ids when the file is recorded. Cite real lines. Never invent a caller. If you could not verify something, say "unverified".
 
 If the worker disputes a finding, your next file has a `## Disputes` section: one line per disputed id, `- H<k>.<i> — withdrawn: <reason>` or `- H<k>.<i> — upheld: <reason and a pointer>`. Do not restate the original finding. New findings still go under `## Act on`.
 

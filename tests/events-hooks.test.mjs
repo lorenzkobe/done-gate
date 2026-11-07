@@ -175,6 +175,16 @@ test("the QA agent may write only under the tests globs", () => {
   assert.equal(decide(input("Write", `${repo}/.claude/gate/runs/x/ledger.md`, qa), repo, cfg).deny, true);
 });
 
+test("a QA shell write to a test or source file is refused and names the Write tool", () => {
+  const qa = { agent_id: "A1", agent_type: "done-gate:qa" };
+  const bash = (command) => ({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: repo, session_id: "S1", ...qa });
+  for (const command of ["cat > tests/new.test.ts <<'EOF'\nx\nEOF", "echo x > src/a.ts"]) {
+    const verdict = decide(bash(command), repo, cfg);
+    assert.equal(verdict.deny, true, command);
+    assert.match(verdict.reason, /use the Write tool/, command);
+  }
+});
+
 test("the reviewer may write only its own review-<n>.md inside the open task's run dir, and nothing at all when no ledger is open", () => {
   // A helper's file belongs to the session's own task, so the rule needs a real open run dir.
   const open = makeRepo("guard-open", { ".claude/gate.json": JSON.stringify({ tests: ["tests/**"] }) });

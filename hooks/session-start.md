@@ -11,7 +11,7 @@ Rules that hold even before the skill loads:
 - Search first, questions included: before stating code, setup or a past decision as fact, search the code (e.g. SocratiCode) and the memory (e.g. MemPalace) before grep, and confirm a hit with grep/Read; when either tool is missing or the project is not indexed, tell the user.
 - If the ask is unclear, clarify FIRST with a simple, detailed explanation of the readings and your recommendation; the user prefers a question to a fix that still misbehaves.
 - To pause for the user mid-task, use AskUserQuestion or end your message with a final line `PAUSED: <what you need>`.
-- Never edit `.claude/gate/runs/**` by hand except `ledger.md`; use the `gate` verbs.
+- Never edit `.claude/gate/runs/**` by hand except `ledger.md`; use the `gate` verbs. Locally the gate is tamper-evident: a determined agent can still write its evidence, and only required CI is out of its reach.
 
 This composes with other session mandates (superpowers etc.): their skill discipline stands; done-gate is the definition of done. If you were dispatched as a subagent, ignore this block.
 </EXTREMELY_IMPORTANT>

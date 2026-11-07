@@ -199,7 +199,9 @@ checked.
 - **Can't code before the plan.** An edit to a source or test file, by the edit tools or a
   shell write, is refused until a run is open with the Task, Context, Plan and a case its
   playbook asks for.
-- **Can't forge evidence, can't invent a waiver.** See above.
+- **Tamper-evident, not tamper-proof.** Locally the gate is tamper-evident: a determined agent
+  can still write its evidence, and only required CI is out of its reach. Waivers and refusals
+  are listed in the report, so what happened stays visible.
 - **Fails open, loudly.** A bug in the gate itself stamps `GATE ERROR`; in a hook it exits 0,
   because a hook that could wedge every session in every repo would cost more than one
   unreported task. A `gate` command that crashes exits 1, so a `gate … && next` chain stops.

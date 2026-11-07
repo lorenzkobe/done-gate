@@ -6,52 +6,61 @@ description: The done-gate workflow. Use before any task that changes source fil
 # done-gate
 
 Start each Bash command with `gate() { node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs" "$@"; };`
-(not `$G`). Every verb prints a `next:` line: follow it. `gate check` lists what is unmet (R1-R10, R13, R15, R16, R17, R18). You are the lead: plan, size, delegate, report; below large, edit.
+Every verb prints a `next:` line: follow it. `gate check` lists what is unmet (R1-R10, R13, R15, R16, R17, R18).
 
 ## The loop
 
 1. `gate open <slug> <feature|bugfix|refactor|plan|investigation>`.
-2. Before any edit: `gate note task "<the ask, quoted, then your words>"`; understand
-   first: search code and memory before grep (missing: ask the user;
-   `--no-code|--no-memory "<why>" --user-ok "<words>"`), trace, then `gate note context "Traced: <file:line pointers> Related:
-   <what depends on it> Research: <what you looked up, or none needed: why>"`;
-   `gate note plan "<approach>" --files a.ts,b.ts [--size large]` (the files predict the
-   size; tiny: no reviewer), then
-   `gate case add "<case>" --kind <happy|edge|refused|boundary|idempotent|reported-surface|performance|click>`
-   per row, in that order (R2). The plan names the hot paths, their data sizes and cost
-   shape (one pass, one query) or says "no hot path"; a `performance` row names the size
-   that matters and what must not happen there; a `click` row per new link, button
-   or tab, closed by a real click after the last edit (`gate case close C<n> --click`).
-3. Tests first, from the case table, red before green: spawn the
-   skeptic and write the tests in the same turn; fold its findings into the case table.
-   `gate brief <role>` prints each helper's prompt:
-   `done-gate:skeptic` (`skeptic-<n>.md`), `done-gate:qa` (blind tests, large),
-   `done-gate:worker` (edits its packet's files, answers reviews in `worker-<n>.md`),
-   `done-gate:reviewer` (`review-<n>.md`), `done-gate:reviewer-2` (high-risk/large, `review2-<n>.md`),
-   `done-gate:arbiter`.
+2. Before any edit: `gate note task "<the ask, quoted, then your words>"`; search code and
+   memory before grep (missing: ask the user), trace, then `gate note context "Traced: … Related:
+   … Research: …"`; `gate note plan "<approach>" --files a.ts,b.ts [--size large]` (the files
+   predict the size; tiny: no reviewer), naming hot paths, data sizes and cost shape or "no hot
+   path"; then per row (R2)
+   `gate case add "<case>" --kind <happy|edge|refused|boundary|idempotent|reported-surface|performance|click>`;
+   a `click` row per new link, button or tab.
+3. Tests first, from the case table, red before green: spawn the skeptic and write the tests
+   in the same turn; fold its findings into the cases. `gate brief <role>` prints the prompt of
+   each `done-gate:<role>` helper: skeptic (`skeptic-<n>.md`), qa (blind tests, large), worker,
+   reviewer, reviewer-2 (high-risk/large), arbiter.
 4. Tiny, small, standard: implement yourself. No slop: no comment that restates code,
    narrates, numbers steps, labels a block, echoes a signature or marks an end; no banner;
    no hedging name (helper); no guard with no case behind it; no docstring on a
    trivial function; no TODO without a task, console.log or commented-out code; no emoji.
-   Why, in one line, two at most; keep workaround notes. Large: never edit source;
-   `gate brief worker` per piece, spawn `done-gate:worker`.
-5. Review: `gate brief reviewer` (`--files a,b` per piece past the 400-line cap), spawn, `gate huddle add reviewer --file review-<n>.md`; high-risk/large: brief
-   reviewer-2 too, spawn both at once; `gate verify` may run in the background.
-   Below large: fix and `gate huddle resolve H<k>.<i> --evidence <ptr>`. Large: `gate brief
-   worker`, SendMessage the worker its packet, then `gate huddle reply --file
-   worker-<n>.md`. Same reviewer until a round is clean, three rounds + a fix-check; still disputed: `gate brief arbiter --item H<k>.<i>`, `done-gate:arbiter`. Disagree:
-   `gate huddle dispute H<k>.<i> "<why>" --evidence <ptr>`, one round.
-6. `gate verify` after the last edit, Bash timeout 600000 ms. Drive the real UI if it
-   changed (R4); probe the real schema likewise (R6).
-7. Not everything shown? `gate note caveat "<what>"`. `gate close`, then paste `gate report --brief` as your final message, at most two plain
-   lines before it; never "ledger", "huddle" or a rule number.
+   Why, in one line, two at most; keep workaround notes. Large: never edit source; `gate brief
+   worker` per piece, spawn `done-gate:worker`.
+5. Review: `gate brief reviewer` (`--files a,b` past the 400-line cap), spawn,
+   `gate huddle add reviewer --file review-<n>.md`; high-risk/large: reviewer-2 too, both
+   at once. Below large: fix and `gate huddle resolve H<k>.<i> --evidence <ptr>`. Large: `gate brief
+   worker`, SendMessage the worker its packet, then `gate huddle reply --file worker-<n>.md`.
+   Until a round is clean, three rounds + a fix-check; still disputed: `gate brief arbiter --item
+   H<k>.<i>`. Disagree: `gate huddle dispute`, one round.
+6. `gate verify` after the last edit, Bash timeout 600000 ms or in the background. Drive the
+   real UI if it changed (R4); probe the real schema likewise (R6).
+7. Not everything shown? `gate note caveat`. `gate close`, then paste
+   `gate report --brief` as your final message; never "ledger", "huddle" or a rule number.
+
+## Common sense
+
+1. Do what was agreed, the simplest way that works.
+2. If the plan has to change, say so first.
+3. Answer the question you were asked before anything else.
+4. If you are told to stop, stop.
+5. If a rule gets in the way of doing the obvious right thing, say so. Do not work around it.
+6. Do not do work nobody asked for.
+7. Before a slow step, ask whether a quicker one answers the same question.
+
+Never reshape work to fit a rule. Same failure twice: stop and work out why. Only the user
+accepts a known gap. Plan so each file is edited once. When unsure, trace the code and the task
+first, and ask only what they can't answer. New code: needed at all, already here, standard
+library, installed dependency, one line, then the minimum; never cut validation or the ask. End
+with what you skipped or did not check: `gate note caveat`.
 
 ## Rules throughout
 
 - Two readings of the ask: `AskUserQuestion` before step 2. New ask mid-run: new run.
 - A helper that stops mid-file: `gate brief <role>` again; a fresh one continues
   from the file.
-- Waiting for a helper ends the turn; its hand-back wakes you. A dead session's open run: `gate abandon <slug> "<reason>"`.
+- A dead session's open run: `gate abandon`.
 - Ceiling: ten helpers a task.
 - A step you cannot do: ask the user, then `gate waive <key> "<why>"`.
 - Never hand-edit `.claude/gate/runs/**` except `ledger.md`. No commits unless asked; the

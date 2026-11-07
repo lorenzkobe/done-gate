@@ -59,6 +59,7 @@ export const verbs = {
   doctor(ctx) {
     ctx.out(`done-gate ${ctx.version} · node ${process.version} · ${process.platform}`);
     ctx.out(`repo: ${ctx.root}`);
+    ctx.out("protection: locally the gate is tamper-evident: a determined agent can still write its evidence, and only required CI is out of its reach");
     const config = loadConfig(ctx.root);
     ctx.out(`config: ${config.explicit ? configPath(ctx.root) : "defaults (no .claude/gate.json)"}`);
     ctx.out(`  source: ${config.source.join(", ")}${config.sourceExclude.length ? ` (excluding ${config.sourceExclude.join(", ")})` : ""}`);

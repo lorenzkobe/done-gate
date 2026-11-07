@@ -51,6 +51,49 @@ test("C5 reported-surface: the brief says research noted when Context is written
   assert.match(cli(repo, "report", "--brief"), /research noted/);
 });
 
+test("the skill holds the seven common sense rules, the ladder, and the edit-once and trace-first advice, under the byte limit", () => {
+  const skill = read("skills/gate/SKILL.md");
+  const flat = skill.replace(/\s+/g, " ");
+  for (const rule of [
+    "Do what was agreed, the simplest way that works",
+    "If the plan has to change, say so first",
+    "Answer the question you were asked before anything else",
+    "If you are told to stop, stop",
+    "If a rule gets in the way of doing the obvious right thing, say so",
+    "Do not do work nobody asked for",
+    "Before a slow step, ask whether a quicker one answers the same question",
+    "Never reshape work to fit a rule",
+    "Same failure twice: stop and work out why",
+    "Only the user accepts a known gap",
+    "needed at all, already here, standard library, installed dependency, one line, then the minimum",
+    "End with what you skipped or did not check",
+    "Plan so each file is edited once",
+    "When unsure, trace the code and the task first, and ask only what they can't answer",
+  ]) assert.ok(flat.includes(rule), `SKILL.md is missing: ${rule}`);
+  assert.ok(Buffer.byteLength(skill) < 4096, `SKILL.md is ${Buffer.byteLength(skill)} bytes`);
+});
+
+test("QA is told to write tests with the Write tool", () => {
+  assert.match(read("agents/qa.md"), /with the Write tool/);
+});
+
+test("the reviewer, second reviewer and plan check write one bullet per finding, detail indented beneath it", () => {
+  for (const role of ["reviewer", "reviewer-2", "skeptic"]) {
+    assert.match(read(`agents/${role}.md`), /One bullet per finding, with any detail indented beneath it and its `file:line` on the top bullet/, role);
+  }
+});
+
+const TAMPER = /tamper-evident: a determined agent can still write its evidence/;
+
+test("doctor, session start and the README say the gate is tamper-evident, and the README no longer claims evidence can't be forged", () => {
+  const repo = makeRepo("lt-tamper");
+  assert.match(cli(repo, "doctor"), TAMPER);
+  assert.match(read("hooks/session-start.md"), TAMPER);
+  const readme = read("README.md").replace(/\s+/g, " ");
+  assert.match(readme, TAMPER);
+  assert.doesNotMatch(readme, /Can't forge/);
+});
+
 test("C6 boundary: playbooks.md has no paragraph the parser drops, and the dead read hint is gone", () => {
   const dropped = read("skills/gate/playbooks.md").split("\n").filter((l) => l.trim() && !/^#/.test(l) && !/^\d+\.\s/.test(l));
   assert.deepEqual(dropped, [], "every line in playbooks.md is a numbered step that reaches a ledger");

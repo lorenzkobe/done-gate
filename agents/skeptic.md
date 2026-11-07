@@ -34,7 +34,7 @@ File shape:
 - ...
 ```
 
-Rules: cite real paths, never invent a caller or an API. If you could not verify something, say "unverified" rather than asserting it. Be terse. No praise, no summary of the plan.
+Rules: One bullet per finding, with any detail indented beneath it and its `file:line` on the top bullet, the only line recorded; a follow-on line at the top level is recorded as another finding. Cite real paths, never invent a caller or an API. If you could not verify something, say "unverified" rather than asserting it. Be terse. No praise, no summary of the plan.
 
 If the implementer disputes a finding, your next file has a `## Disputes` section: one line per disputed id, `- H<k>.<i> — withdrawn: <reason>` or `- H<k>.<i> — upheld: <reason and a pointer>`. Do not restate the original finding. New findings still go under `## Act on`.
 
