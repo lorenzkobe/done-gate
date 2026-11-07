@@ -35,6 +35,7 @@ const VERBS = {
   setup: { hook: false, load: () => import("./lib/setup.mjs") },
   check: { hook: false, load: () => import("./lib/check.mjs") },
   report: { hook: false, load: () => import("./lib/report.mjs") },
+  stats: { hook: false, load: () => import("./lib/stats.mjs") },
   steps: { hook: false, load: () => import("./lib/ledger.mjs") },
   next: { hook: false, load: () => import("./lib/next.mjs") },
   size: { hook: false, load: () => import("./lib/size.mjs") },

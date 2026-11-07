@@ -370,6 +370,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `decide <phase> <decision> <why> <evidence> <result>` | append a decision-log row |
 | `brief <skeptic\|qa\|worker\|reviewer\|reviewer-2\|arbiter> [--files a,b \| a.ts:1-400] [--item H#.#]` | write the helper's packet and print its spawn prompt; a packet is numbered like the file it names; a worker's `--files` are the files it owns |
 | `abandon <slug> "<reason>"` | give a run up: marks it abandoned with the reason; it stops attaching to sessions and blocking turns |
+| `stats [--days n] [--version x]` | read this repo's past runs and print the numbers: runs by outcome, median minutes per size, per role rounds, findings, closed as wrong and closed on a test, waivers. Default the last 30 days, by when a run opened; `--version` keeps one plugin version. It writes nothing and prints `missing` for what was not recorded, never 0 |
 | `check` · `steps` · `size` · `report [--brief]` · `close` · `doctor` · `help` | unmet items only · every step · the report, short or full · close a clean run · inspect config · the verbs |
 
 ## Working across repos
