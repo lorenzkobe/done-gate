@@ -290,10 +290,13 @@ export function userSaid(ledger, events, words) {
   return saidSince(events, lookupWindowFrom(ledger, events), words);
 }
 
-export function saidSince(events, from, words) {
+export const saidSince = (events, from, words) => Boolean(saidAt(events, from, words));
+
+// The user's newest message holding these words.
+export function saidAt(events, from, words) {
   const norm = (s) => String(s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
   const want = norm(words);
-  if (want.split(" ").length < 3) return false;
+  if (want.split(" ").length < 3) return null;
   // "do not go on without it" holds the words but says the opposite
   const meant = (text) => {
     const t = norm(text);
@@ -302,7 +305,7 @@ export function saidSince(events, from, words) {
     }
     return false;
   };
-  return events.some((e) => e.seq > from && !e.agent && !e.handback && (e.kind === "answer" || (e.kind === "prompt" && !NOT_THE_USER.test(e.text ?? ""))) && meant(e.text));
+  return events.findLast((e) => e.seq > from && !e.agent && !e.handback && (e.kind === "answer" || (e.kind === "prompt" && !NOT_THE_USER.test(e.text ?? ""))) && meant(e.text)) ?? null;
 }
 
 // The MCP servers set up for this repo, by kind: the user's ~/.claude.json (its own list and

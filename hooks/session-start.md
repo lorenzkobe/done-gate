@@ -10,6 +10,7 @@ Rules that hold even before the skill loads:
 - Facts, not assumptions, in read-only work too: a claim about code, data or behaviour cites what you ran or read (a command and its output, a `file:line`); one you did not check is labelled "unverified", never stated as fact. Run it when that is cheap: a run outranks a read, and a finding read off config alone is unverified. A bug's reproduction and root cause close on a run the gate recorded (`gate step repro done … --ran "<command>"`).
 - Search first, questions included: before stating code, setup or a past decision as fact, search the code (e.g. SocratiCode) and the memory (e.g. MemPalace) before grep, and confirm a hit with grep/Read; when either tool is missing or the project is not indexed, tell the user.
 - If the ask is unclear, clarify FIRST with a simple, detailed explanation of the readings and your recommendation; the user prefers a question to a fix that still misbehaves.
+- When the user calls a stopped turn wrong, record it: `gate stats wrong <R#> "<their words>"`.
 - To pause for the user mid-task, use AskUserQuestion or end your message with a final line `PAUSED: <what you need>`.
 - Never edit `.claude/gate/runs/**` by hand except `ledger.md`; use the `gate` verbs. Locally the gate is tamper-evident: a determined agent can still write its evidence, and only required CI is out of its reach.
 

@@ -689,7 +689,7 @@ test("C46 edge: events outside the run's stretch are not counted", () => {
     block(70, ["R8"]),
     deny(70, "done-gate: helpers write through the after"),
   ]);
-  const out = ok(repo);
+  const out = ok(repo).split("rule rates:")[0];
   assert.equal(line(out, "R5"), undefined);
   assert.equal(line(out, "R8"), undefined);
   assert.match(line(out, "refusals:"), /none/);
@@ -725,7 +725,7 @@ test("C56 edge: a block outside every run prints as outside any run, at least n,
   const repo = makeRepo("stats-e15");
   writeRun(repo, "one", hourRun());
   writeEvents(repo, "S1", [block(-10, ["R1"]), userPrompt(1), block(2, ["R5"]), userPrompt(70), block(71, ["R1"]), block(72, ["R1"])]);
-  const out = ok(repo);
+  const out = ok(repo).split("rule rates:")[0];
   assert.equal(line(out, "R1"), undefined);
   assert.match(line(out, "outside any run:"), /at least 2 turns \(R1 2\)/);
   assert.equal(line(ok(repo, ["--version", "0.21.0"]), "outside any run:"), undefined);
@@ -868,4 +868,197 @@ test("C53 idempotent: the state folder stays unchanged with sessions present", (
   const before = snapshot(state);
   ok(repo);
   assert.deepEqual(snapshot(state), before);
+});
+
+// Rule verdicts: each pair is one user turn stopped by the rule.
+function stoppedTurns(n, rule, startMinute = 1) {
+  return Array.from({ length: n }, (_, i) => [userPrompt(startMinute + i * 2), block(startMinute + i * 2 + 1, [rule])]).flat();
+}
+const verdict = (minute, rule, blockMinute, blockSession = "S1", words = `said at ${minute}`) => ({ seq: seqAt(minute), kind: "rule-wrong", rule, words, blockSeq: seqAt(blockMinute), blockSession });
+
+function wrong(repo, args, { session = "S1" } = {}) {
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  if (session) env.DONE_GATE_SESSION = session;
+  else delete env.DONE_GATE_SESSION;
+  return spawnSync(process.execPath, [gate, "stats", "wrong", ...args], { encoding: "utf8", env });
+}
+
+const eventsFile = (repo, session = "S1") => path.join(repo, ".claude", "gate", "sessions", session, "events.jsonl");
+const WORDS = "that block was wrong";
+
+test("C60 boundary: 19 turns is too few; 20 turns with none, 1, 2 and 5 wrong print none, 5%, 10% probation, 25% ask", () => {
+  const repo = makeRepo("stats-r1");
+  writeEvents(repo, "S1", stoppedTurns(19, "R5"));
+  assert.match(line(ok(repo), "R5"), /19 turns stopped, too few/);
+
+  const verdicts = (n) => Array.from({ length: n }, (_, i) => verdict(100 + i, "R5", 2 + i * 2));
+  for (const [n, expected] of [[0, /^ *R5: 0 of 20 turns wrong, 0%$/], [1, /^ *R5: 1 of 20 turns wrong, 5%$/], [2, /^ *R5: 2 of 20 turns wrong, 10%, probation$/], [5, /^ *R5: 5 of 20 turns wrong, 25%, ask$/]]) {
+    const at20 = makeRepo(`stats-r1-${n}`);
+    writeEvents(at20, "S1", [...stoppedTurns(20, "R5"), ...verdicts(n)]);
+    const rate = ok(at20).split("\n").filter((l) => /^ *R5: /.test(l)).at(-1);
+    assert.match(rate, expected);
+  }
+});
+
+test("C61 edge: rates ignore --days and read sessions no run in the window names", () => {
+  const repo = makeRepo("stats-r2");
+  writeRun(repo, "one", hourRun());
+  writeEvents(repo, "S1", [userPrompt(1)]);
+  writeEvents(repo, "old", stoppedTurns(20, "R8").map((e) => ({ ...e, seq: e.seq - 40 * 864e5 * 1000 })));
+  const out = ok(repo, ["--days", "2"]);
+  assert.match(line(out, "rule rates:"), /every record/);
+  assert.equal(line(out, "turns stopped:").includes("R8"), false);
+  assert.match(out.split("\n").filter((l) => /^ *R8: /.test(l)).at(-1), /0 of 20 turns wrong/);
+
+  const unnamed = makeRepo("stats-r2d");
+  writeRun(unnamed, "one", hourRun());
+  writeEvents(unnamed, "S1", [userPrompt(1)]);
+  writeEvents(unnamed, "unnamed", [block(2, ["R1"])]);
+  const seen = ok(unnamed);
+  assert.equal(line(seen, "outside any run:"), undefined, "a session no window run names stays out of the window's lines");
+  assert.match(line(seen, "R1"), /1 turn/);
+
+  const none = makeRepo("stats-r2b");
+  assert.match(line(ok(none), "rule rates:"), /missing/);
+
+  const quiet = makeRepo("stats-r2c");
+  writeEvents(quiet, "S1", [userPrompt(1)]);
+  assert.match(line(ok(quiet), "rule rates:"), /no stopped turns/);
+});
+
+test("C62 happy: a verdict the user said binds the newest stopped turn, is appended, and moves that rule's rate only", () => {
+  const repo = makeRepo("stats-r3");
+  writeEvents(repo, "S1", [...stoppedTurns(20, "R5"), ...stoppedTurns(20, "R8", 50), userPrompt(95, WORDS)]);
+  const rate = (rule) => ok(repo).split("\n").filter((l) => new RegExp(`^ *${rule}: `).test(l)).at(-1);
+  assert.match(rate("R5"), /0 of 20 turns wrong/);
+  const r = wrong(repo, ["R5", WORDS]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /R5/);
+  const recorded = readFileSync(eventsFile(repo), "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.kind === "rule-wrong");
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].rule, "R5");
+  assert.equal(recorded[0].words, WORDS);
+  assert.equal(recorded[0].blockSeq, seqAt(1 + 19 * 2 + 1));
+  assert.equal(recorded[0].blockSession, "S1");
+  assert.match(rate("R5"), /1 of 20 turns wrong, 5%/);
+  assert.match(rate("R8"), /0 of 20 turns wrong/);
+});
+
+test("C63 refused: unheard words, two words, a helper's words, no session, a bad rule and missing words, with nothing written", () => {
+  const repo = makeRepo("stats-r4");
+  writeEvents(repo, "S1", [
+    ...stoppedTurns(1, "R5"),
+    userPrompt(20, "that block was wrong"),
+    { ...userPrompt(21, "a helper says this"), agent: "h1" },
+    { ...userPrompt(22, "<agent-message>the helper thinks so too</agent-message>"), handback: true },
+    userPrompt(23, "it was not that bad"),
+  ]);
+  const before = readFileSync(eventsFile(repo), "utf8");
+  for (const [args, opts, why] of [
+    [["R5", "words nobody said here"], {}, /did not say/],
+    [["R5", "was wrong"], {}, /did not say/],
+    [["R5", "a helper says this"], {}, /did not say/],
+    [["R5", "the helper thinks so too"], {}, /did not say/],
+    [["R5", WORDS], { session: null }, /session/],
+    [["R5x", WORDS], {}, /usage: gate stats wrong/],
+    [["R5"], {}, /usage: gate stats wrong/],
+    [[], {}, /usage: gate stats wrong/],
+    [["R5", WORDS, "extra"], {}, /usage: gate stats wrong/],
+  ]) {
+    const r = wrong(repo, args, opts);
+    assert.equal(r.status, 1, args.join(" "));
+    assert.match(r.stderr, why, args.join(" "));
+  }
+  assert.equal(readFileSync(eventsFile(repo), "utf8"), before);
+  assert.ok(!existsSync(path.join(repo, ".claude", "gate", "gate-error.log")));
+});
+
+test("C64 refused: no stopped turn naming the rule, or every such turn judged", () => {
+  const repo = makeRepo("stats-r5");
+  writeEvents(repo, "S1", [...stoppedTurns(1, "R8"), userPrompt(20, WORDS), userPrompt(21, "this one too please")]);
+  const none = wrong(repo, ["R5", WORDS]);
+  assert.equal(none.status, 1);
+  assert.match(none.stderr, /no stopped turn/);
+
+  const early = makeRepo("stats-r5b");
+  writeEvents(early, "S1", [userPrompt(1, WORDS), block(2, ["R5"])]);
+  const before = wrong(early, ["R5", WORDS]);
+  assert.equal(before.status, 1, "words said before the block cannot judge it");
+  assert.match(before.stderr, /no stopped turn/);
+  assert.equal(wrong(repo, ["R8", WORDS]).status, 0);
+  const judged = wrong(repo, ["R8", "this one too please"]);
+  assert.equal(judged.status, 1);
+  assert.match(judged.stderr, /no stopped turn/);
+});
+
+test("C65 edge: verdicts bind newest first across sessions, never twice on a turn, and not on another rule's turn", () => {
+  const repo = makeRepo("stats-r6");
+  writeEvents(repo, "other", [userPrompt(10), block(11, ["R5"]), block(12, ["R5"])]);
+  writeEvents(repo, "S1", [userPrompt(1), block(2, ["R5"]), userPrompt(5), block(6, ["R8"]), userPrompt(30, "first thing I said"), userPrompt(31, "second thing I said"), userPrompt(32, "third thing I said")]);
+  const bound = () => readFileSync(eventsFile(repo), "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.kind === "rule-wrong").at(-1);
+  assert.equal(wrong(repo, ["R5", "first thing I said"]).status, 0);
+  assert.deepEqual([bound().blockSession, bound().blockSeq], ["other", seqAt(12)]);
+  assert.equal(wrong(repo, ["R5", "second thing I said"]).status, 0);
+  assert.deepEqual([bound().blockSession, bound().blockSeq], ["S1", seqAt(2)]);
+  assert.equal(wrong(repo, ["R5", "third thing I said"]).status, 1);
+  assert.equal(wrong(repo, ["R8", "third thing I said"]).status, 0);
+});
+
+test("C66 refused: one message of the user's judges one turn per rule, and the same sentence said later judges a new block", () => {
+  const repo = makeRepo("stats-r7");
+  writeEvents(repo, "S1", [...stoppedTurns(2, "R5"), ...stoppedTurns(1, "R8", 6), userPrompt(20, `yes, ${WORDS}, sorry`)]);
+  assert.equal(wrong(repo, ["R5", WORDS]).status, 0);
+  const again = wrong(repo, ["R5", WORDS]);
+  assert.equal(again.status, 1);
+  assert.match(again.stderr, /already/);
+  const phrase = wrong(repo, ["R5", "block was wrong"]);
+  assert.equal(phrase.status, 1, "part of the same message is still that message");
+  assert.match(phrase.stderr, /already/);
+  assert.equal(wrong(repo, ["R8", WORDS]).status, 0, "the same message may judge another rule");
+
+  const later = makeRepo("stats-r7b");
+  const events = [...stoppedTurns(1, "R5"), userPrompt(10, WORDS), userPrompt(11), block(12, ["R5"]), userPrompt(13, WORDS)];
+  writeEvents(later, "S1", events);
+  assert.equal(wrong(later, ["R5", WORDS]).status, 0);
+  const bound = readFileSync(eventsFile(later), "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.kind === "rule-wrong").at(-1);
+  assert.equal(bound.blockSeq, seqAt(12));
+  assert.equal(bound.saidSeq, seqAt(13));
+});
+
+test("C67 edge: a verdict whose block is gone counts for nothing", () => {
+  const repo = makeRepo("stats-r8");
+  writeEvents(repo, "S1", [...stoppedTurns(20, "R5"), verdict(100, "R5", 2, "pruned")]);
+  assert.match(ok(repo).split("\n").filter((l) => /^ *R5: /.test(l)).at(-1), /0 of 20 turns wrong/);
+});
+
+test("C68 idempotent: plain gate stats writes nothing with verdicts present", () => {
+  const repo = makeRepo("stats-r9");
+  writeEvents(repo, "S1", [...stoppedTurns(2, "R5"), verdict(100, "R5", 2)]);
+  const state = path.join(repo, ".claude", "gate");
+  const before = snapshot(state);
+  ok(repo);
+  ok(repo, ["--days", "2"]);
+  assert.deepEqual(snapshot(state), before);
+});
+
+test("C69 reported surface: a verdict leaves gate check and the ledger alone in an open run, and help and README name it", () => {
+  const repo = makeRepo("stats-r10");
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  const run = (...args) => spawnSync(process.execPath, [gate, ...args], { encoding: "utf8", env });
+  assert.equal(run("open", "open-one", "feature").status, 0);
+  const start = Date.now() * 1000;
+  const added = [...stoppedTurns(1, "R5"), userPrompt(20, WORDS)].map((e, i) => JSON.stringify({ session: "S1", agent: null, ...e, seq: start + i }));
+  mkdirSync(path.dirname(eventsFile(repo)), { recursive: true });
+  writeFileSync(eventsFile(repo), `${existsSync(eventsFile(repo)) ? readFileSync(eventsFile(repo), "utf8") : ""}${added.join("\n")}\n`);
+  const ledgerFile = path.join(runsOf(repo), readdirSync(runsOf(repo))[0], "ledger.json");
+  const check = run("check").stdout;
+  const ledger = readFileSync(ledgerFile, "utf8");
+  assert.equal(wrong(repo, ["R5", WORDS]).status, 0);
+  assert.equal(run("check").stdout, check);
+  assert.equal(readFileSync(ledgerFile, "utf8"), ledger);
+  assert.match(run("help").stdout, /stats wrong <R#>/);
+  assert.match(readFileSync(path.join(pluginRoot, "README.md"), "utf8"), /`stats wrong <R#> "<words>"`/);
+  assert.match(readFileSync(path.join(pluginRoot, "hooks", "session-start.md"), "utf8"), /`gate stats wrong <R#> "<their words>"`/);
 });

@@ -2,16 +2,17 @@ import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { UsageError } from "./context.mjs";
-import { HANDBACK, noticeCause, readEvents } from "./events.mjs";
+import { appendEvents, HANDBACK, nextSeq, noticeCause, readEvents } from "./events.mjs";
 import { loadLedger, runsDir } from "./ledger.mjs";
 import { inRun, PLAIN_RULES } from "./report.mjs";
-import { NOT_THE_USER } from "./rules.mjs";
+import { NOT_THE_USER, saidAt } from "./rules.mjs";
 import { outsidePlan, tierOf } from "./size.mjs";
 import { flag } from "./verbs.mjs";
 
 // `gate stats` reads past run records and writes nothing: no buildState, no report path, no
 // crash that would log a gate error. What the records do not hold prints "missing", never 0.
 const USAGE = "usage: gate stats [--days n] [--version x]";
+const WRONG_USAGE = 'usage: gate stats wrong <R#> "<the user\'s words, at least three>"';
 const FLAGS = new Set(["--days", "--version"]);
 const DAY_MS = 24 * 3600 * 1000;
 const SIZES = ["tiny", "small", "standard", "large"];
@@ -29,6 +30,9 @@ const REFUSAL_WORDS = 4;
 const GATE_FILE = /\.claude\/gate|(?:review2?|skeptic|arbiter|worker)-\d+\.md|ledger\.md/;
 const NAMES_A_FILE = /\/|\w\.\w/;
 const SEQ_PER_MINUTE = 6e7;
+const RATE_MIN_TURNS = 20;
+const PROBATION_AT = 0.1;
+const ASK_AT = 0.25;
 const MISSING = "missing";
 
 const ofRuns = (n, m) => `${n} of ${m} runs`;
@@ -335,6 +339,7 @@ function sessionRecords(stateDir, session) {
         ...(e.kind === "deny" ? { reason: e.reason, delegate: e.delegate } : {}),
         ...(e.kind === "block" ? { rules: list(e.rules) } : {}),
         ...(e.kind === "prompt" ? { cause: noticeCause(e.text)?.cause } : {}),
+        ...(e.kind === "rule-wrong" ? { rule: e.rule, saidSeq: e.saidSeq, blockSeq: e.blockSeq, blockSession: e.blockSession } : {}),
       };
     });
   } catch {
@@ -465,9 +470,9 @@ function failureLines(counted) {
 
 // Each event counts once however many run stretches hold it: an event is judged against every run
 // naming its session, not run by run, and a turn crossing a close is still one turn.
-function eventLines(ctx, closed, every, { version, cutoff }) {
+function eventLines(recordsOf, closed, every, { version, cutoff }) {
   const records = new Map();
-  for (const session of new Set(closed.flatMap((l) => l.sessions))) records.set(session, sessionRecords(ctx.stateDir, session));
+  for (const session of new Set(closed.flatMap((l) => l.sessions))) records.set(session, recordsOf(session));
   const runRecords = closed.map((ledger) => ({ ledger, records: ledger.sessions.flatMap((s) => records.get(s) ?? []).filter(inRun(ledger)).sort((a, b) => a.seq - b.seq) }));
   const covered = runRecords.filter((r) => r.records.length).length;
   const end = "lead-turn failures: not recorded";
@@ -477,6 +482,82 @@ function eventLines(ctx, closed, every, { version, cutoff }) {
   const counted = all.filter((e) => inSomeRun(closed, e));
   const outside = version ? [] : all.filter((e) => e.kind === "block" && e.seq / 1000 >= cutoff && !inSomeRun(every, e));
   return [`events: ${ofRuns(covered, closed.length)}`, ...refusalLines(counted), ...stoppedLines(counted, outside), ...reviewTimeLines(runRecords), ...failureLines(counted), end];
+}
+
+// Every stopped turn on disk per rule, with the verdicts that still have their block. Verdicts and
+// blocks live in the same logs, so they are pruned together.
+function ruleRecords(stateDir, recordsOf) {
+  const dir = path.join(stateDir, "sessions");
+  if (!existsSync(dir)) return null;
+  const turns = new Map();
+  const blockTurn = new Map();
+  const verdicts = [];
+  for (const session of readdirSync(dir)) {
+    for (const e of recordsOf(session)) {
+      if (e.kind === "rule-wrong") verdicts.push(e);
+      if (e.kind !== "block") continue;
+      const key = `${e.session}#${e.turn}`;
+      blockTurn.set(`${e.session}#${e.seq}`, key);
+      for (const rule of e.rules) {
+        if (!turns.has(rule)) turns.set(rule, new Map());
+        const ofRule = turns.get(rule);
+        if (!ofRule.has(key)) ofRule.set(key, []);
+        ofRule.get(key).push({ session: e.session, seq: e.seq });
+      }
+    }
+  }
+  const judged = new Map();
+  for (const v of verdicts) {
+    const key = blockTurn.get(`${v.blockSession}#${v.blockSeq}`);
+    if (!key) continue;
+    if (!judged.has(v.rule)) judged.set(v.rule, new Set());
+    judged.get(v.rule).add(key);
+  }
+  return { turns, judged, verdicts };
+}
+
+function rateText(rule, turns, wrongTurns) {
+  if (turns < RATE_MIN_TURNS) return `${rule}: ${ofTurns(turns)} stopped, too few${wrongTurns ? `, ${wrongTurns} judged wrong` : ""}`;
+  const rate = wrongTurns / turns;
+  const label = rate >= ASK_AT ? ", ask" : rate >= PROBATION_AT ? ", probation" : "";
+  return `${rule}: ${wrongTurns} of ${turns} turns wrong, ${Math.round(rate * 100)}%${label}`;
+}
+
+function rateLines(stateDir, recordsOf) {
+  const records = ruleRecords(stateDir, recordsOf);
+  if (!records) return [`rule rates: ${MISSING}`];
+  if (!records.turns.size) return ["rule rates: no stopped turns"];
+  const rows = [...records.turns].map(([rule, keys]) => [rule, keys.size, records.judged.get(rule)?.size ?? 0]);
+  rows.sort(([a, m], [b, n]) => n - m || String(a).localeCompare(String(b)));
+  return ["rule rates: every record, ignoring --days", ...rows.map(([rule, turns, wrongTurns]) => `  ${rateText(rule, turns, wrongTurns)}`)];
+}
+
+function sessionReader(stateDir) {
+  const known = new Map();
+  return (session) => {
+    if (!known.has(session)) known.set(session, sessionRecords(stateDir, session));
+    return known.get(session);
+  };
+}
+
+// The one write in stats. One message of the user's judges one turn per rule, and only a turn
+// stopped before they said it; a phrase cut from that message is still that message.
+function recordVerdict(ctx, [rule, words, ...rest]) {
+  if (!/^R\d+$/.test(rule ?? "") || !words?.trim() || rest.length) throw new UsageError(WRONG_USAGE);
+  if (!ctx.session) throw new UsageError("gate stats wrong: no session is known here, so nothing can show the user said it");
+  const said = saidAt(readEvents(ctx.stateDir, ctx.session), 0, words);
+  if (!said) throw new UsageError(`the user did not say "${words}" in this session; a verdict on a rule is theirs: ask them`);
+  const { turns, judged, verdicts } = ruleRecords(ctx.stateDir, sessionReader(ctx.stateDir)) ?? { turns: new Map(), judged: new Map(), verdicts: [] };
+  if (verdicts.some((v) => v.rule === rule && v.saidSeq === said.seq)) throw new UsageError(`that message of the user's was already used for ${rule}; one message judges one turn`);
+  const unjudged = [...(turns.get(rule) ?? [])].filter(([key]) => !judged.get(rule)?.has(key));
+  const before = unjudged.flatMap(([, blocks]) => blocks).filter((b) => b.seq < said.seq);
+  if (!before.length) throw new UsageError(`no stopped turn naming ${rule} before the user's words is left without a verdict`);
+  const block = before.reduce((newest, b) => (b.seq > newest.seq ? b : newest));
+  const at = new Date().toISOString();
+  appendEvents(ctx.stateDir, ctx.session, [{ seq: nextSeq(), ts: at, session: ctx.session, agent: null, agentType: null, kind: "rule-wrong", rule, words: words.trim(), saidSeq: said.seq, blockSeq: block.seq, blockSession: block.session }]);
+  ctx.out(`${rule} marked wrong on the turn it stopped at ${new Date(block.seq / 1000).toISOString()}`);
+  const after = ruleRecords(ctx.stateDir, sessionReader(ctx.stateDir));
+  ctx.out(rateText(rule, after.turns.get(rule).size, after.judged.get(rule)?.size ?? 0));
 }
 
 function report(ctx, { days, version }) {
@@ -501,12 +582,17 @@ function report(ctx, { days, version }) {
   out.push(...(closed.length ? waiverLines(closed) : [`waivers: ${MISSING}`]));
   out.push("could-not-run waivers: not recorded", "lapsed waivers: not recorded");
   out.push(...planLines(closed, configOf), ...largeLines(closed), ...afterCloseLines(closed, read?.ledgers ?? [], configOf));
-  out.push(...eventLines(ctx, closed, read?.ledgers ?? [], { version, cutoff }));
+  const recordsOf = sessionReader(ctx.stateDir);
+  out.push(...eventLines(recordsOf, closed, read?.ledgers ?? [], { version, cutoff }), ...rateLines(ctx.stateDir, recordsOf));
   return out;
 }
 
 export const verbs = {
   stats(ctx) {
+    if (ctx.args[0] === "wrong") {
+      recordVerdict(ctx, ctx.args.slice(1));
+      return;
+    }
     for (const line of report(ctx, parseArgs(ctx.args))) ctx.out(line);
   },
 };

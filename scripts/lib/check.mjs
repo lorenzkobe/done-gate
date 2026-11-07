@@ -26,6 +26,7 @@ const HELP = `gate <verb>: node <plugin>/scripts/gate.mjs <verb>
   close                                                     close the run when check is clean
   report [--brief]                                          the run's report (paste --brief as the final message)
   stats [--days n] [--version x]                            read past runs of this repo and print the numbers; writes nothing, prints missing for what was not recorded
+  stats wrong <R#> "<words>"                                the user calls a stopped turn wrong: record it on the newest such turn before their words; only moves that rule's rate
   waive <key> "<why>" · decide <phase> <decision> <why> <evidence> <result> · abandon <slug> "<why>"
   rebaseline "<why>"                                        take changes that are not this task's (another terminal, a stash pop) out of it
   steps · size · doctor · help`;
