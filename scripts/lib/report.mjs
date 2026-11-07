@@ -58,7 +58,7 @@ export function summaryLine(ledger, events, unmet, after = 0) {
   const naCases = ledger.cases.filter((c) => c.na).length;
   const denies = deniesIn(ledger, events).length;
   return (
-    `DONE ${count("DONE")} · SKIPPED ${count("SKIPPED")} · WAIVED ${count("WAIVED")} · N/A ${count("N/A")} · blank ${blank} · ` +
+    `DONE ${count("DONE")} · SKIPPED ${count("SKIPPED")} · WAIVED ${count("WAIVED")} · ${count("COULD NOT RUN") ? `COULD NOT RUN ${count("COULD NOT RUN")} · ` : ""}N/A ${count("N/A")} · blank ${blank} · ` +
     `cases ${closedCases}/${ledger.cases.length} closed (${naCases} n/a) · ` +
     `blocked writes to gate files ${denies} · gate: ${unmet.length ? `${unmetCount(unmet)} unmet` : "clean"}`
   );
@@ -134,7 +134,7 @@ export function attentionLines(state, unmet) {
   const out = [];
   const advice = splitAdvice(policyFor(ledger), ledger.tier?.measured);
   if (advice) out.push(`- ${advice}`);
-  for (const w of ledger.waivers) out.push(`- waived ${w.key}: ${w.reason ?? w.quote}${w.words ? ` (the user: "${w.words}")` : ""}`);
+  for (const w of ledger.waivers) out.push(`- ${w.could ? "could not run" : "waived"} ${w.key}: ${w.reason ?? w.quote}${w.words ? ` (the user: "${w.words}")` : ""}${w.lapsed ? " — lapsed: the code changed after it" : ""}`);
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) out.push(`- skipped: ${s.text} — ${s.note}`);
   for (const a of ledger.huddles.flatMap((h) => h.actOn).filter((x) => x.dispute)) out.push(`- disputed ${a.id}: ${a.dispute.why} [${a.dispute.evidence}] — ${a.dispute.verdict ?? "unanswered"}${a.dispute.reviewerReason ? `; reviewer: ${a.dispute.reviewerReason}` : ""}${a.dispute.arbiterReason ? `; arbiter: ${a.dispute.arbiterReason}` : ""}`);
   if (denies) out.push(`- ${denies} denied write(s) to gate evidence files (see events)`);
@@ -411,7 +411,12 @@ const FOR_YOU_MAX = 6;
 function forYouLine(state, unmet) {
   const { ledger } = state;
   const items = [];
-  for (const w of ledger.waivers) items.push(`skipped with your OK: ${plain(w.reason ?? w.quote)}${w.words ? ` (you said: "${w.words}")` : ""}`);
+  const said = (w) => (w.words ? ` (you said: "${w.words}")` : "");
+  for (const w of ledger.waivers) {
+    if (w.lapsed) items.push(`your OK no longer holds, the code changed after it: ${plain(w.reason ?? w.quote)}${said(w)}`);
+    else if (w.could) items.push(`could not run ${w.key === "schema" ? "the real schema" : "the app"}: ${plain(w.reason)}${said(w)}`);
+    else items.push(`skipped with your OK: ${plain(w.reason ?? w.quote)}${said(w)}`);
+  }
   for (const a of ledger.huddles.flatMap((h) => h.actOn)) {
     if (!a.dispute) continue;
     const v = a.dispute.verdict;

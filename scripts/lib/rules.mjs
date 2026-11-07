@@ -991,8 +991,26 @@ export function reopenWorkedOut(ledger, config, changed, hash) {
 const orWaive = (key) => ` Or get the user's waiver (\`gate waive ${key} "<reason>" --user-ok "<their words>"\`).`;
 
 function waived(ledger, key) {
-  return (ledger.waivers ?? []).some((w) => w.key === key);
+  return (ledger.waivers ?? []).some((w) => w.key === key && !w.lapsed);
 }
+
+// A waiver of a check on this code holds for this code: the hash it was given on, kept by a waive in
+// a new run. Moving past it takes the waiver back and reopens its step; the record stays, marked.
+export const LAPSING = new Set(["driver", "review", "review-2", "schema", "qa-pass"]);
+export function lapseWaivers(ledger, hash) {
+  let moved = false;
+  for (const w of ledger.waivers ?? []) {
+    if (w.lapsed || !w.code || w.code === hash) continue;
+    w.lapsed = true;
+    moved = true;
+    const step = ledger.steps?.find((s) => s.key === w.key);
+    if (step && !waived(ledger, w.key) && (step.state === "WAIVED" || step.state === "COULD NOT RUN")) blank(step);
+  }
+  return moved;
+}
+
+// Changes these never need a test for: nothing in them runs as code.
+const NOT_CODE = /\.(?:json|jsonc|ya?ml|toml|lock|css|scss|sass|less|png|jpe?g|gif|svg|webp|avif|ico)$/i;
 
 // A ledger opened before the Context step existed is never asked for one.
 export function hasContextStep(ledger) {
@@ -1093,7 +1111,10 @@ export function evaluate(state) {
   const sizeNow = effectiveTier(state.policy ?? policyFor(ledger), ledger, state.tier?.measured ?? null);
   const large = src.length > 0 && delegatedTier(state.policy ?? policyFor(ledger), sizeNow);
   const grew = ledger.tier?.grewAt ? " (it grew there mid-task)" : "";
-  if (src.length) {
+  const testable = newRules(ledger) ? src.filter((p) => !NOT_CODE.test(p)) : src;
+  // a plan run has no tests step: there, and in an old run, the user may still give tests up
+  const testsWaivable = !newRules(ledger) || !ledger.steps?.some((s) => s.key === "tests");
+  if (testable.length) {
     // a blind QA pass: a QA helper that stopped during the run, whenever it ran
     const qaRan = (state.events ?? []).some((e) => e.kind === "subagent-stop" && isRole(e.agentType, "qa") && e.seq > (ledger.openedSeq ?? 0));
     if (large && !qaRan && !waived(ledger, "qa-pass")) {
@@ -1103,7 +1124,7 @@ export function evaluate(state) {
     if (!changed.some((p) => config.isTest(p)) && !waived(ledger, "tests") && !waived(ledger, "qa")) {
       unmet.push({
         rule: "R7",
-        text: `source changed (${list(src)}) but no test file changed. Write the tests for the case table (QA writes them at size large), or get the user's waiver (\`gate waive tests "<reason>" --user-ok "<their words>"\`).`,
+        text: `source changed (${list(testable)}) but no test file changed. Write the tests for the case table (QA writes them at size large)${testsWaivable ? ', or get the user\'s waiver (`gate waive tests "<reason>" --user-ok "<their words>"`)' : ""}.`,
       });
     }
   }

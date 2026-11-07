@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -97,6 +97,15 @@ export function readyToEdit(repo, { session = "S1", plan = [] } = {}) {
     const r = spawnSync(process.execPath, [gate, ...args], { encoding: "utf8", env });
     if (r.status !== 0) throw new Error(`readyToEdit: gate ${args.slice(0, 2).join(" ")}: ${r.stderr}`);
   }
+}
+
+// A run from before the rules stamp: the marker taken back out of the open ledger.
+export function asOldRun(repo, session = "S1") {
+  const stateDir = path.join(repo, ".claude", "gate");
+  const { current } = JSON.parse(readFileSync(path.join(stateDir, "sessions", session, "state.json"), "utf8"));
+  const ledgerFile = path.join(stateDir, "runs", current, "ledger.json");
+  const { rules: _gone, ...ledger } = JSON.parse(readFileSync(ledgerFile, "utf8"));
+  writeFileSync(ledgerFile, JSON.stringify(ledger, null, 2));
 }
 
 // The user's words for a waiver, logged as their message, and the args that waive on them. A rule

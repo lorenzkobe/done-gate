@@ -81,6 +81,7 @@ function readFields(ledger, dir) {
     repos: list(ledger.repos),
     changedAtClose: ledger.changedAtClose,
     waivers: list(ledger.waivers).filter(Boolean),
+    rules: ledger.rules,
     huddles: list(ledger.huddles).filter(Boolean).map((h) => ({ role: h.role, file: h.file, actOn: list(h.actOn).filter(Boolean) })),
   };
 }
@@ -777,7 +778,9 @@ async function report(ctx, { days, version, forFile = false }) {
   const configOf = configReader(ctx.root);
   out.push(...(closed.length ? findingLines(closed, configOf) : [`findings: ${MISSING}`]));
   out.push(...(closed.length ? waiverLines(closed) : [`waivers: ${MISSING}`]));
-  out.push("could-not-run waivers: not recorded", "lapsed waivers: not recorded");
+  const recorded = closed.filter((l) => l.rules).flatMap((l) => l.waivers);
+  const countOf = (flag) => (closed.some((l) => l.rules) ? String(recorded.filter((w) => w[flag]).length) : "not recorded");
+  out.push(`could-not-run waivers: ${countOf("could")}`, `lapsed waivers: ${countOf("lapsed")}`);
   out.push(...reRunLines(closed, ctx.stateDir), ...planLines(closed, configOf), ...largeLines(closed), ...afterCloseLines(closed, read?.ledgers ?? [], configOf, forFile));
   const recordsOf = sessionReader(ctx.stateDir);
   out.push(...eventLines(recordsOf, closed, read?.ledgers ?? [], { version, cutoff, forFile }), ...rateLines(ctx.stateDir, recordsOf), ...(await tokenLines(closed, forFile)));

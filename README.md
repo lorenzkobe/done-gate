@@ -164,7 +164,13 @@ attempt to finish, and a plain question gets one line saying how to pause.
 
 Waivers are the only way past a keyed step: the user OKs it, Claude records the reason and
 their words with `gate waive <key> "…" --user-ok "<their words>"`, and the report lists every
-waiver with the words. In a new run the words are required: three or more, said by the user in
+waiver with the words. A waiver of `driver`, `review`, `review-2`, `schema` or `qa-pass` holds for the
+code it was given on: an implementation edit lapses it, its rule comes back and its step reopens;
+a test edit or a fold of what git brought does not. A surface that cannot run at all is waived with
+`gate waive driver|schema "…" --could-not-run --user-ok "<their words>"`, and the report says
+"could not run", never N/A. In a run with a tests step `tests`, `qa` and `R7` have no waiver; a
+change with only json, yaml, toml, lock, CSS or image files owes no test. A `plan` run may still
+waive tests. In a new run the words are required: three or more, said by the user in
 this task, naming what is given up (the key or a word like it: drive, click, screen for
 `driver`), not saying the opposite, and for a check on code said after the last code edit. An
 old run waives on the reason alone. The keys: `driver` (R4),

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync, execSync, execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, here, pluginRoot, doneArgs, lookedUp, waiveArgs } from "./helpers.mjs";
+import { makeRepo, write, gate, here, pluginRoot, doneArgs, lookedUp, waiveArgs, asOldRun } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { actOnRows, pauseLines } from "../scripts/lib/report.mjs";
 import { unmetLines } from "../scripts/lib/assess.mjs";
@@ -31,6 +31,7 @@ test("report renders every section, the summary counts, and embeds the reviewer'
   cli(repo, "case", ["add", "renders badge", "--kind", "happy"]);
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:renders"]);
   cli(repo, "step", ["schema", "skipped", "no schema files"]);
+  asOldRun(repo);
   cli(repo, "waive", waiveArgs(repo, "driver", "skip the phone pass"));
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n- null venue crashes\n");
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
@@ -451,6 +452,7 @@ function c11Fixture(name, bin) {
   go("case", ["close", "C2", "--na", "covered by C1"]);
   go("note", ["context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   go("step", ["schema", "skipped", "no schema files"]);
+  asOldRun(repo);
   go("waive", waiveArgs(repo, "driver", "skip the phone pass"));
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n- null venue crashes\n");
   go("huddle", ["add", "reviewer", "--file", "review-1.md"]);

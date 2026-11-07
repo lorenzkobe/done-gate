@@ -8,7 +8,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { ON_CODE, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
+import { LAPSING, ON_CODE, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
 import { assess, broughtSinceOpen, buildState, cleanAtHead, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
@@ -59,7 +59,7 @@ export function flag(args, name) {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
-const BARE_FLAGS = new Set(["--click"]);
+const BARE_FLAGS = new Set(["--click", "--could-not-run"]);
 
 export function positional(args) {
   const out = [];
@@ -373,7 +373,7 @@ export const verbs = {
       if (!step) throw new UsageError(`no step "${ref}"`);
       if (step.key === "close") throw new UsageError("step {close} is closed by `gate close`, which closes the run once `gate check` is clean; run `gate close`");
       if (state === "SKIPPED" && step.key && EVIDENCED_KEYS.has(step.key)) {
-        throw new UsageError(`step {${step.key}} has script/agent evidence and cannot be SKIPPED — ${Object.hasOwn(NO_WAIVER, step.key) ? `it has no waiver either. ${NO_WAIVER[step.key]}.` : `do it,${step.key === "tests" ? ' close it `gate step tests na "<why>"` when this change touches no source file,' : ""} or get the user's waiver with \`gate waive ${step.key} "<reason>" --user-ok "<their words>"\``}`);
+        throw new UsageError(`step {${step.key}} has script/agent evidence and cannot be SKIPPED — ${Object.hasOwn(NO_WAIVER, step.key) ? `it has no waiver either. ${NO_WAIVER[step.key]}.` : step.key === "tests" && newRules(ledger) ? 'write them; `gate step tests na "<why>"` when this change holds no code (config, lockfile, CSS, images, docs). A code change with no test has no waiver' : `do it,${step.key === "tests" ? ' close it `gate step tests na "<why>"` when this change touches no source file,' : ""} or get the user's waiver with \`gate waive ${step.key} "<reason>" --user-ok "<their words>"\``}`);
       }
       if (step.key === "context" && ledger.lookups) throw new UsageError('step {context} is closed by `gate note context "Traced: … · Related: … · Research: …"` after you search the code and memory yourself; run that instead.');
       if (state === "N/A" && (step.key === "repro" || step.key === "rootcause")) {
@@ -644,6 +644,8 @@ export const verbs = {
     const key = byRule ? Object.keys(WAIVERS).find((k) => WAIVERS[k] === named) : named;
     const valid = `valid keys: ${Object.keys(WAIVERS).filter((k) => k !== "qa").map((k) => `${k} (${WAIVERS[k]})`).join(", ")}`;
     if (byRule && !key) throw new UsageError(`${named} has no waiver: do what \`gate check\` says for it. ${valid}`);
+    const couldNot = ctx.args.includes("--could-not-run");
+    if (couldNot && key !== "driver" && key !== "schema") throw new UsageError(`--could-not-run is for a surface that cannot run: driver or schema, not ${key}`);
     if (Object.hasOwn(NO_WAIVER, key)) throw new UsageError(`${key} cannot be waived: a rule with no waiver would still block behind the step. ${NO_WAIVER[key]}.`);
     const flagged = key === "slop" ? slopHits(buildState(ctx, {})).map((h) => h.key) : null;
     if (flagged && !flagged.length) throw new UsageError("gate waive slop: the slop check flags no line in this task's diff that a waiver does not already cover; there is nothing to waive");
@@ -659,6 +661,10 @@ export const verbs = {
       }
       // a step with no script or agent evidence is closed by hand; a waiver there would clear nothing a rule reads
       if (!rule && !EVIDENCED_KEYS.has(key)) throw new UsageError(`step {${key}} has no waiver: close it with \`gate step ${key} done|skipped|na "<note>"\`. ${valid}`);
+      if (couldNot && !newRules(ledger)) throw new UsageError("--could-not-run is for a run opened under the new rules; this one takes a plain waiver");
+      if (newRules(ledger) && (key === "tests" || key === "qa") && ledger.steps.some((s) => s.key === "tests")) {
+        throw new UsageError(`${key} cannot be waived in this run: a code change with no test has no waiver. Write the tests. (\`qa-pass\` covers only the blind QA pass at size large; a change with no code owes no test.)`);
+      }
       if (newRules(ledger)) {
         const tell = 'ask the user, naming what is given up, then pass --user-ok "<their words, at least three>"; a question\'s options must name it too, since an answer holds only the chosen label';
         if (!words) throw new UsageError(`giving up ${key} is the user's call: ${tell}`);
@@ -670,10 +676,11 @@ export const verbs = {
           throw new UsageError(`the user said "${words.trim()}" before the last code edit, about other code: ${tell}`);
         }
       }
-      ledger.waivers.push({ key, reason, ...(words ? { words: words.trim() } : {}), seq: nextSeq(), ...(flagged ? { lines: flagged } : {}) });
+      const onCode = newRules(ledger) && LAPSING.has(key) ? { code: ledger.lastSourceHash } : {};
+      ledger.waivers.push({ key, reason, ...(words ? { words: words.trim() } : {}), ...onCode, ...(couldNot ? { could: true } : {}), seq: nextSeq(), ...(flagged ? { lines: flagged } : {}) });
       if (step) {
         delete step.auto;
-        Object.assign(step, { state: "WAIVED", note: reason, evidence: null, seq: nextSeq() });
+        Object.assign(step, { state: couldNot ? "COULD NOT RUN" : "WAIVED", note: reason, evidence: null, seq: nextSeq() });
       }
       if (flagged) return `the ${flagged.length} slop line${flagged.length === 1 ? "" : "s"} flagged now; a new one is flagged again`;
       return [rule, step ? `step {${key}}` : null].filter(Boolean).join(" and ");

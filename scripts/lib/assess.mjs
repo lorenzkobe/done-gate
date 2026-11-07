@@ -4,7 +4,7 @@ import { loadConfig } from "./config.mjs";
 import { appendEvents, readEvents } from "./events.mjs";
 import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
 import { delegatedTier, leadDelegates, measure, policyFor, reconcileTier, tiered } from "./size.mjs";
-import { editedLast, implementationHash, reopenWorkedOut, writersOf } from "./rules.mjs";
+import { editedLast, implementationHash, lapseWaivers, reopenWorkedOut, writersOf } from "./rules.mjs";
 import { nextSeq } from "./events.mjs";
 import { evaluate } from "./rules.mjs";
 import { ensureSession, loadSession, saveSession } from "./session-state.mjs";
@@ -133,7 +133,12 @@ export function foldIntoBaseline(holder, paths, now, config) {
   }
   // the rest of the tree is as it was at that stamp, so only the folded files moved: the
   // hash follows with no stamp, whatever content they now have
-  if (rest === holder.lastSourceHash || rest === before) holder.lastSourceHash = implementationHash(now, config);
+  if (rest === holder.lastSourceHash || rest === before) {
+    const hash = implementationHash(now, config);
+    // the task's code did not move: a waiver given on it still holds
+    for (const w of holder.waivers ?? []) if (w.code === holder.lastSourceHash || w.code === before) w.code = hash;
+    holder.lastSourceHash = hash;
+  }
 }
 
 // The run's git commands that may commit, and the commit ids they made: known only when every such
@@ -313,6 +318,7 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
   if (current) {
     let flipped = stampSourceChange(current.ledger, implementationHash(now, config), events, { now, config }) || absorbed;
     if (reopenWorkedOut(current.ledger, config, diff.changed, implementationHash(now, config))) flipped = true;
+    if (lapseWaivers(current.ledger, implementationHash(now, config))) flipped = true;
     if (tiered(current.ledger)) {
       const measured = measure({ config, policy, diff, baseline, now, root: ctx.root, dir: current.dir, repos });
       if (reconcileTier(current.ledger, policy, measured).length) flipped = true;

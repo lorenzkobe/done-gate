@@ -367,7 +367,8 @@ test("C16 a hand close or waiver over a worked-out step drops its mark, and a bl
   assert.equal(stepOf(waived, "driver").auto, undefined);
   edit(waived, "src/server.ts", "export const s = 3;\n");
   cli(waived, "check");
-  assert.equal(stepOf(waived, "driver").state, "WAIVED");
+  assert.equal(stepOf(waived, "driver").state, null, "the waiver lapsed with the code, and left no worked-out mark behind");
+  assert.equal(stepOf(waived, "driver").auto, undefined);
 
   const blanked = opened("wo-c16-blank");
   edit(blanked, "src/server.ts", "export const s = 2;\n");

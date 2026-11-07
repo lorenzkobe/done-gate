@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, write, gate, pluginRoot, lookedUp, waiveArgs } from "./helpers.mjs";
 import { saveLedger } from "../scripts/lib/ledger.mjs";
@@ -383,4 +383,229 @@ test("3.6 C12 no line in the gate's code teaches gate waive with a reason and no
   const lessons = teaches.filter((l) => /gate waive [^`\n]*"<|gate waive <key[^`]*"/.test(l));
   assert.ok(lessons.length > 5, `${lessons.length} lines`);
   for (const line of lessons) assert.match(line, /--user-ok/, line.slice(0, 160));
+});
+
+// Batch 3.7: a waiver on code covers that code only; tests are not waived; and a surface that could
+// not run says so.
+const check = (repo) => cli(repo, "check").stdout;
+const ruleIn = (out, rule) => new RegExp(`\\b${rule}\\b`).test(out);
+const stepState = (repo, key) => ledgerOf(repo).steps.find((s) => s.key === key).state;
+const gitIn = (repo, ...args) => spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: repo, encoding: "utf8" });
+const committed = (name, files = {}) => {
+  const repo = makeRepo(name, { ".gitignore": "node_modules/\nignored.txt\n.claude/gate/\n", ...files });
+  gitIn(repo, "add", "-A");
+  gitIn(repo, "commit", "-qm", "base");
+  return repo;
+};
+const uiChanged = (name) => {
+  const repo = opened(name);
+  write(repo, "src/app/page.tsx", "export default () => 1;\n");
+  cli(repo, "check");
+  return repo;
+};
+const age = (repo) => {
+  const ledger = ledgerOf(repo);
+  delete ledger.rules;
+  saveLedger(runDir(repo), ledger);
+};
+
+test("3.7 C1 an edit lapses a driver waiver: R4 returns, the step goes blank, the record stays marked lapsed", () => {
+  const repo = uiChanged("verbs-l1");
+  cli(repo, "waive", waiveArgs(repo, "driver", "chrome is disconnected"));
+  assert.equal(ruleIn(check(repo), "R4"), false);
+  write(repo, "src/app/page.tsx", "export default () => 2;\n");
+  assert.equal(ruleIn(check(repo), "R4"), true);
+  assert.equal(stepState(repo, "driver"), null);
+  const [w] = waivers(repo);
+  assert.equal(w.lapsed, true);
+  assert.equal(w.reason, "chrome is disconnected");
+});
+
+test("3.7 C2 a test-only edit does not lapse it, and no assess right after the waiver does", () => {
+  const repo = uiChanged("verbs-l2");
+  cli(repo, "waive", waiveArgs(repo, "driver", "chrome is disconnected"));
+  check(repo);
+  check(repo);
+  assert.equal(waivers(repo)[0].lapsed, undefined);
+  write(repo, "tests/a.test.ts", "test('a2', () => {});\n");
+  assert.equal(ruleIn(check(repo), "R4"), false);
+  assert.equal(waivers(repo)[0].lapsed, undefined);
+  assert.equal(stepState(repo, "driver"), "WAIVED");
+});
+
+test("3.7 C3 a later waiver with new words clears the lapsed check", () => {
+  const repo = uiChanged("verbs-l3");
+  cli(repo, "waive", waiveArgs(repo, "driver", "first"));
+  write(repo, "src/app/page.tsx", "export default () => 2;\n");
+  check(repo);
+  cli(repo, "waive", waiveArgs(repo, "driver", "second"));
+  assert.equal(ruleIn(check(repo), "R4"), false);
+  assert.equal(stepState(repo, "driver"), "WAIVED");
+  assert.deepEqual(waivers(repo).map((w) => w.lapsed ?? false), [true, false]);
+});
+
+test("3.7 C4 an old waiver with no code never lapses", () => {
+  const repo = uiChanged("verbs-l4");
+  age(repo);
+  cli(repo, "waive", ["driver", "an old run's waiver"]);
+  assert.equal(waivers(repo)[0].code, undefined);
+  write(repo, "src/app/page.tsx", "export default () => 2;\n");
+  assert.equal(ruleIn(check(repo), "R4"), false);
+  assert.equal(waivers(repo)[0].lapsed, undefined);
+});
+
+test("3.7 C5 the report lists a lapsed waiver as lapsed, not as skipped with your OK, and stats counts both kinds", () => {
+  const repo = uiChanged("verbs-l5");
+  cli(repo, "waive", waiveArgs(repo, "driver", "chrome is disconnected"));
+  write(repo, "src/app/page.tsx", "export default () => 2;\n");
+  check(repo);
+  const full = cli(repo, "report").stdout;
+  assert.match(full, /waived driver: chrome is disconnected[^\n]*lapsed/);
+  const brief = cli(repo, "report", ["--brief"]).stdout;
+  assert.doesNotMatch(brief, /skipped with your OK: chrome is disconnected/);
+  assert.match(brief, /no longer holds/);
+
+  const closed = opened("verbs-l5b");
+  const ledger = ledgerOf(closed);
+  saveLedger(runDir(closed), { ...ledger, status: "closed", closedAt: new Date().toISOString(), waivers: [{ key: "driver", reason: "a", lapsed: true }, { key: "schema", reason: "b", could: true }, { key: "driver", reason: "c" }] });
+  const stats = cli(closed, "stats").stdout;
+  assert.match(stats, /could-not-run waivers: 1/);
+  assert.match(stats, /lapsed waivers: 1/);
+});
+
+test("3.7 C6 in a run with a tests step tests, qa and R7 are refused, pointing at qa-pass", () => {
+  const repo = opened("verbs-t1");
+  editsCode(repo);
+  for (const key of ["tests", "qa", "R7"]) {
+    says(repo, `you may skip the ${key} check`);
+    const r = waive(repo, key, "why", "--user-ok", `you may skip the ${key} check`);
+    assert.match(r.stderr, /cannot be waived/, key);
+    assert.match(r.stderr, /qa-pass/, key);
+  }
+  assert.equal(waivers(repo).length, 0);
+  assert.equal(ruleIn(check(repo), "R7"), true);
+});
+
+test("3.7 C7 a version bump and CSS need no test; one .ts beside them fires R7, and its text offers no waiver", () => {
+  const bump = opened("verbs-t2");
+  write(bump, "package.json", JSON.stringify({ name: "x", version: "2.0.0" }));
+  write(bump, "src/app.css", "a { color: red; }\n");
+  write(bump, "src/logo.png", "not really a png\n");
+  write(bump, "config.yaml", "a: 1\n");
+  assert.equal(ruleIn(check(bump), "R7"), false);
+
+  write(bump, "src/a.ts", "export const a = 'code';\n");
+  const line = check(bump).split("\n").find((l) => /\bR7\b/.test(l));
+  assert.ok(line, "one .ts brings R7 back");
+  assert.match(line, /src\/a\.ts/);
+  assert.doesNotMatch(line, /package\.json/);
+  assert.doesNotMatch(line, /gate waive/);
+});
+
+test("3.7 C8 a plan run may still waive tests, an old run may too, and an old qa waiver still counts", () => {
+  const plan = opened("verbs-t3", "plan");
+  editsCode(plan);
+  assert.match(check(plan), /gate waive tests/);
+  cli(plan, "waive", waiveArgs(plan, "tests", "a throwaway prototype"));
+  assert.equal(ruleIn(check(plan), "R7"), false);
+
+  const old = opened("verbs-t4");
+  age(old);
+  editsCode(old);
+  assert.match(check(old), /gate waive tests/);
+  cli(old, "waive", ["tests", "an old run's waiver"]);
+  assert.equal(ruleIn(check(old), "R7"), false);
+
+  const qa = opened("verbs-t5");
+  age(qa);
+  editsCode(qa);
+  cli(qa, "waive", ["qa", "an older ledger's key"]);
+  assert.equal(ruleIn(check(qa), "R7"), false);
+});
+
+const couldNotRun = (repo, key, reason) => {
+  const args = waiveArgs(repo, key, reason);
+  return cli(repo, "waive", [...args, "--could-not-run"]);
+};
+
+test("3.7 C9 --could-not-run needs the user's words, clears R4 and R6, lapses on an edit, and R8 does not call it blank", () => {
+  const repo = uiChanged("verbs-c1");
+  assert.match(waive(repo, "driver", "chrome is down", "--could-not-run").stderr, /--user-ok/);
+  couldNotRun(repo, "driver", "chrome is down");
+  assert.equal(stepState(repo, "driver"), "COULD NOT RUN");
+  const out = check(repo);
+  assert.equal(ruleIn(out, "R4"), false);
+  assert.doesNotMatch(out, /\{driver\}/);
+  write(repo, "src/app/page.tsx", "export default () => 2;\n");
+  assert.equal(ruleIn(check(repo), "R4"), true);
+  assert.equal(stepState(repo, "driver"), null);
+
+  const schema = makeRepo("verbs-c2", { ".claude/gate.json": JSON.stringify({ testFiles: null, schema: ["db/**"], source: ["db/**", "src/**"] }), "db/001.sql": "select 1;\n" });
+  cli(schema, "open", ["t", "feature"]);
+  write(schema, "db/001.sql", "select 2;\n");
+  assert.equal(ruleIn(check(schema), "R6"), true);
+  couldNotRun(schema, "schema", "no database here");
+  assert.equal(ruleIn(check(schema), "R6"), false);
+  assert.equal(stepState(schema, "schema"), "COULD NOT RUN");
+});
+
+test("3.7 C10 the summary, Steps and For you say could not run with the user's words, and never N/A", () => {
+  const repo = uiChanged("verbs-c3");
+  couldNotRun(repo, "driver", "chrome is down");
+  const full = cli(repo, "report").stdout;
+  assert.match(full, /COULD NOT RUN 1/);
+  assert.match(full, /\*\*COULD NOT RUN\*\*/);
+  const brief = cli(repo, "report", ["--brief"]).stdout;
+  assert.match(brief, /could not run[^\n]*chrome is down[^\n]*you said: "you may skip the driver check"/);
+  assert.doesNotMatch(brief, /skipped with your OK: chrome is down/);
+  assert.doesNotMatch(full, /driver[^\n]*N\/A/);
+});
+
+test("3.7 C11 --could-not-run is refused on any key but driver and schema", () => {
+  const repo = opened("verbs-c4");
+  says(repo, "you may skip the review check");
+  const r = waive(repo, "review", "why", "--user-ok", "you may skip the review check", "--could-not-run");
+  assert.match(r.stderr, /--could-not-run/);
+  assert.match(r.stderr, /driver/);
+  assert.equal(waivers(repo).length, 0);
+});
+
+test("3.7 C12 another session's commit folded with no stamp keeps the waiver: the task's code did not move", () => {
+  const repo = committed("verbs-l6", { "src/other.ts": "export const o = 1;\n" });
+  cli(repo, "open", ["t", "feature"]);
+  write(repo, "src/app/page.tsx", "export default () => 1;\n");
+  cli(repo, "check");
+  cli(repo, "waive", waiveArgs(repo, "driver", "chrome is disconnected"));
+  write(repo, "src/other.ts", "export const o = 'another session';\n");
+  gitIn(repo, "add", "src/other.ts");
+  gitIn(repo, "commit", "-qm", "another session's work");
+  assert.equal(ruleIn(check(repo), "R4"), false);
+  assert.equal(waivers(repo)[0].lapsed, undefined);
+  assert.deepEqual(ledgerOf(repo).foreign, ["src/other.ts"]);
+  write(repo, "src/app/page.tsx", "export default () => 2;\n");
+  assert.equal(ruleIn(check(repo), "R4"), true, "the task's own edit still lapses it");
+});
+
+test("3.7 C13 a change with no code runs through to gate close; the hints name how; a large lockfile asks for no QA pass", () => {
+  const repo = committed("verbs-t6");
+  cli(repo, "open", ["t", "feature"]);
+  lookedUp(repo);
+  cli(repo, "note", ["task", "Bump the version. [inferred]"]);
+  cli(repo, "note", ["context", CONTEXT]);
+  cli(repo, "note", ["plan", "A version bump.", "--files", "package.json"]);
+  cli(repo, "case", ["add", "the version reads 2.0.0", "--kind", "happy"]);
+  assert.match(cli(repo, "next").stdout, /gate step tests na/);
+  write(repo, "package.json", JSON.stringify({ name: "verbs-t6", version: "2.0.0", scripts: { lint: "true", test: "true", build: "true" } }));
+  cli(repo, "step", ["tests", "na", "a version bump holds no code"]);
+  cli(repo, "step", ["implement", "done", "bumped", "--evidence", "package.json"]);
+  cli(repo, "case", ["close", "C1", "--na", "read the file"]);
+  cli(repo, "verify");
+  for (const key of ["skeptic", "driver", "schema", "review"]) spawnSync(process.execPath, [gate, "step", key, "na", "a version bump"], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" } });
+  cli(repo, "close");
+  assert.equal(ledgerOf(repo).status, "closed");
+
+  const big = opened("verbs-t7");
+  write(big, "package-lock.json", JSON.stringify(Array.from({ length: 2000 }, (_, i) => `line ${i}`), null, 1));
+  const out = check(big);
+  assert.equal(ruleIn(out, "R7"), false, out);
 });

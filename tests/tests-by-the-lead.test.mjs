@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, waiveArgs } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, waiveArgs, asOldRun } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { DEFAULT_POLICY, loadPolicy } from "../scripts/lib/size.mjs";
@@ -159,6 +159,7 @@ test("C4 happy: feature, bugfix and refactor have a {tests} step (tests before c
 
 test("C5 edge: R7 names writing the tests and gate waive tests; a tests waiver satisfies it; an old ledger's qa waiver still does", () => {
   const repo = opened("tbl-c5-r7", ["src/a.ts"]);
+  asOldRun(repo);
   write(repo, "src/a.ts", "export const x = 2;\n");
   const r7 = lineStarting(cli(repo, "check").stdout.replace(/^\d+\. /gm, ""), "R7");
   assert.ok(r7, "R7 expected with source changed and no test file");

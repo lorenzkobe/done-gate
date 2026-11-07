@@ -302,7 +302,8 @@ test("C5 reported-surface: gate step tests skipped names the N/A route beside th
   const r = run(repo, "step", ["tests", "skipped", "pins exist"]);
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /gate step tests na "<why>"/);
-  assert.match(r.stderr, /gate waive tests/);
+  assert.doesNotMatch(r.stderr, /gate waive tests/);
+  assert.match(r.stderr, /no waiver/);
 });
 
 test("C6 refused: a no-source plan then one source file edited by a few lines: the review stays required", () => {
