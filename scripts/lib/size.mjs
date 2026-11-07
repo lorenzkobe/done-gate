@@ -20,11 +20,10 @@ export const DEFAULT_POLICY = Object.freeze({
     tiny: { maxFiles: 1, maxLines: 15, requires: [] },
     small: { maxFiles: 1, maxLines: 40, requires: ["reviewer"] },
     standard: { maxFiles: 10, maxLines: 400, requires: ["skeptic", "reviewer"] },
-    large: { requires: ["skeptic", "qa", "worker", "reviewer", "reviewer-2"] },
+    large: { requires: ["skeptic", "qa", "reviewer", "reviewer-2"] },
   },
   forceStandard: ["ui", "schema", "highRisk"],
-  // the size at which the lead stops editing and briefs a worker per piece; below it the lead
-  // implements with its own context
+  // the size that owes blind QA and the second reviewer
   delegatesAt: "large",
   // the most source lines one review round may cover; a larger change is reviewed in pieces
   reviewMaxLines: 400,
@@ -224,13 +223,12 @@ export function predictTier(policy, config, paths) {
 
 // Exact for tracked files clean at open (git) and files with a base copy; anything else is a
 // line-count delta flagged as an estimate. Whitespace-only lines count only where indentation is meaning.
-export function measure({ config, policy, diff, baseline, now, root, dir = null, quick = false, repos = [] }) {
+export function measure({ config, policy, diff, baseline, now, root, dir = null, repos = [] }) {
   const paths = sized(config, diff.changed);
   const dirty = new Set(baseline?.dirty ?? []);
-  // quick is the edit hook's shape: one git numstat per whitespace mode, no ls-files, no base copy read
-  const copies = new Map(quick ? [] : paths.map((p) => [p, baseCopy(dir, baseline, p, repos)]).filter(([, copy]) => copy));
-  const tracked = quick ? null : gitTracked(root, repos);
-  const exact = paths.filter((p) => !dirty.has(p) && !copies.has(p) && (quick || tracked.has(p) || diff.deleted.includes(p)));
+  const copies = new Map(paths.map((p) => [p, baseCopy(dir, baseline, p, repos)]).filter(([, copy]) => copy));
+  const tracked = gitTracked(root, repos);
+  const exact = paths.filter((p) => !dirty.has(p) && !copies.has(p) && (tracked.has(p) || diff.deleted.includes(p)));
   const indented = exact.filter(indentMatters);
   const plain = exact.filter((p) => !indentMatters(p));
   const ref = baseline?.head ?? "HEAD";
@@ -263,7 +261,7 @@ export function measure({ config, policy, diff, baseline, now, root, dir = null,
       continue;
     }
     // git was asked about this file and, whitespace ignored, found nothing changed
-    if (!row && !quick && headOf(p) && tracked.has(p) && !dirty.has(p) && !indentMatters(p)) {
+    if (!row && headOf(p) && tracked.has(p) && !dirty.has(p) && !indentMatters(p)) {
       details.push({ path: p, lines: 0, source: "git", estimate: false });
       continue;
     }

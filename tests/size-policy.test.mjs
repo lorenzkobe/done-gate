@@ -151,7 +151,7 @@ test("C1 boundary: loadPolicy returns models.json's policy; missing keys fall ba
   const p = loadPolicy();
   assert.deepEqual(p.tiers.small, { maxFiles: 1, maxLines: 40, requires: ["reviewer"] });
   assert.deepEqual(p.tiers.standard, { maxFiles: 10, maxLines: 400, requires: ["skeptic", "reviewer"] });
-  assert.deepEqual(p.tiers.large.requires, ["skeptic", "qa", "worker", "reviewer", "reviewer-2"]);
+  assert.deepEqual(p.tiers.large.requires, ["skeptic", "qa", "reviewer", "reviewer-2"]);
   assert.deepEqual(p.forceStandard, ["ui", "schema", "highRisk"]);
   assert.ok(!("ceiling" in p) && !("escalate" in p), "the unenforced ceiling and round-2 settings are gone");
   assert.deepEqual(p.tiers, shipped.tiers, "loadPolicy() must report what models.json actually says");
@@ -569,7 +569,7 @@ test("C16 happy: models.json carries the policy object and no escalate/never/cei
   assert.deepEqual(m.policy.tiers.tiny, { maxFiles: 1, maxLines: 15, requires: [] });
   assert.deepEqual(m.policy.tiers.small, { maxFiles: 1, maxLines: 40, requires: ["reviewer"] });
   assert.deepEqual(m.policy.tiers.standard, { maxFiles: 10, maxLines: 400, requires: ["skeptic", "reviewer"] });
-  assert.deepEqual(m.policy.tiers.large, { requires: ["skeptic", "qa", "worker", "reviewer", "reviewer-2"] });
+  assert.deepEqual(m.policy.tiers.large, { requires: ["skeptic", "qa", "reviewer", "reviewer-2"] });
   assert.deepEqual(m.policy.forceStandard, ["ui", "schema", "highRisk"]);
 
   for (const key of ["escalate", "never", "ceiling"]) {
@@ -1319,26 +1319,25 @@ test("C7 boundary: an untiered playbook prints no Tier block and no Size line", 
 // C9
 // ---------------------------------------------------------------------------
 
-test("C9 edge: at tier large the helpers line counts all five required helpers, and a reviewer-2 stop ticks the second reviewer", () => {
+test("C9 edge: at tier large the helpers line counts all four required helpers, and a reviewer-2 stop ticks the second reviewer", () => {
   const repo = largeTier("report-tier-c9");
   const required = REQUIRES("large");
-  assert.equal(required.length, 5, "anchor: models.json tiers.large.requires");
+  assert.equal(required.length, 4, "anchor: models.json tiers.large.requires");
   assert.ok(required.includes("reviewer-2"), "anchor: models.json tiers.large.requires");
 
   subagentStop(repo, "done-gate:skeptic");
   subagentStop(repo, "done-gate:qa");
-  subagentStop(repo, "done-gate:worker");
   subagentStop(repo, "done-gate:reviewer");
 
-  const four = lineStarting(cli(repo, "report").stdout, "helpers:");
-  assert.match(four, /^helpers: spawned 4 of 5\b/, four);
+  const three = lineStarting(cli(repo, "report").stdout, "helpers:");
+  assert.match(three, /^helpers: spawned 3 of 4\b/, three);
 
   subagentStop(repo, "done-gate:reviewer-2", { model: MODEL }); // the second reviewer
 
-  const five = lineStarting(cli(repo, "report").stdout, "helpers:");
-  assert.match(five, /^helpers: spawned 5 of 5 required\b/, five);
+  const all = lineStarting(cli(repo, "report").stdout, "helpers:");
+  assert.match(all, /^helpers: spawned 4 of 4 required\b/, all);
   for (const entry of required) {
-    assert.match(five, new RegExp(`${entry}[^,]*✓`), `${entry} is not ticked: ${five}`);
+    assert.match(all, new RegExp(`${entry}[^,]*✓`), `${entry} is not ticked: ${all}`);
   }
 });
 
@@ -1379,14 +1378,13 @@ test("C11 edge: a reviewer-2 stop satisfies the second reviewer", () => {
 
   subagentStop(repo, "done-gate:skeptic");
   subagentStop(repo, "done-gate:qa");
-  subagentStop(repo, "done-gate:worker");
   subagentStop(repo, "done-gate:reviewer");
   subagentStop(repo, "done-gate:reviewer-2", { model: MODEL });
 
   const report = cli(repo, "report").stdout;
 
   const helpers = lineStarting(report, "helpers:");
-  assert.match(helpers, /^helpers: spawned 5 of 5 required\b/, helpers);
+  assert.match(helpers, /^helpers: spawned 4 of 4 required\b/, helpers);
   for (const entry of required) {
     assert.match(helpers, new RegExp(`${entry}[^,]*✓`), `${entry} is not ticked: ${helpers}`);
   }

@@ -112,22 +112,19 @@ function editHook(repo, rel) {
   return JSON.parse(r.stdout.trim() || "null");
 }
 
-test("C6 reported-surface: the edit hook warns when a python re-indent crosses into large, the size `gate size` measures", () => {
+test("C6 reported-surface: a python re-indent measures as large in gate size", () => {
   const repo = committed("rb2-c6", { "app/m.py": pyFunctions(250) });
   cli(repo, "open", ["t", "feature"]);
   write(repo, "app/m.py", pyInClass(250));
-  const warned = editHook(repo, "app/m.py");
-  assert.match(warned?.hookSpecificOutput?.additionalContext ?? "", /size large/, JSON.stringify(warned));
   assert.match(cli(repo, "size").stdout, /^tier: large/m);
 });
 
-test("C7 boundary: a whitespace-only change to a .ts file still measures zero lines in the quick measure", () => {
+test("C7 boundary: a whitespace-only change to a .ts file measures zero lines", () => {
   const ts = Array.from({ length: 450 }, (_, i) => `export const a${i} = ${i};`).join("\n") + "\n";
   const repo = committed("rb2-c7", { "src/big.ts": ts });
   cli(repo, "open", ["t", "feature"]);
   write(repo, "src/big.ts", ts.split("\n").map((l) => (l ? `  ${l}` : l)).join("\n"));
-  const out = editHook(repo, "src/big.ts");
-  assert.equal(out?.hookSpecificOutput, undefined, `a re-indent of a .ts file warned: ${JSON.stringify(out)}`);
+  assert.match(cli(repo, "size").stdout, /0 lines/);
 });
 
 // ---- a sibling repo with no gate.json ----

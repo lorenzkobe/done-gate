@@ -159,19 +159,17 @@ attempt to finish, and a plain question gets one line saying how to pause.
 | R10 | a repo check failed: the slop scan found a banner comment, step narration, an empty label, an end marker, an emoji, a bare TODO or a `@param` that echoes its name on an added non-test line (`"slop": false` in gate.json turns it off between tasks; mid-task, `gate waive slop` clears a false positive), or an opted-in check (`claude-md-budget`, `migration-number`) |
 | R13 | `.claude/gate.json` or the plugin's `models.json` changed mid-task |
 | R15 | a helper's file lists more findings than the ledger recorded, a briefed skeptic, reviewer or arbiter stopped before finishing its file, or an Act-on item outside the reviewers' rounds is still open (a skeptic item added after its step closed, one typed by hand) |
-| R16 | the lead edited source itself at size large (a worker's job); waivable with `gate waive delegate` |
 | R17 | a skeptic, reviewer, reviewer-2, worker or arbiter that wrote its file or edited source made no code or no memory lookup since the run opened (QA: no memory lookup), less any kind the lead declared missing; waivable with `gate waive lookups` |
 | R18 | verify ran no test command covering a closed case's test file: lint and build never count, a test command that names paths covers only those (a `cd` is followed, `--ignore` and `--deselect file::name` take a file out); waivable with `gate waive coverage` |
 
 Waivers are the only way past a keyed step: the user OKs it, Claude records the reason
 with `gate waive <key> "…"`, and the report lists every waiver. The keys: `driver` (R4),
 `review` (R5), `schema` (R6), `tests` (R7), `review-2` (R9), `slop` (R10), `gate-config`
-(R13), `delegate` (R16), `lookups` (R17), or the key of a step whose waiving clears something. A rule number
-is taken for its key (`gate waive R16` records `delegate`). Any other key is refused with the
-valid ones listed (`worker` is pointed at `delegate`), and so are `verify`, `verify-before`,
-`context`, `close` and a rule with no waiver (R3): the message says what to run instead.
-`gate waive` prints what the key clears, and the unmet text of R5, R6, R9 and R16 names its
-key.
+(R13), `lookups` (R17), or the key of a step whose waiving clears something. A rule number
+is taken for its key (`gate waive R4` records `driver`). Any other key is refused with the
+valid ones listed, and so are `verify`, `verify-before`, `context`, `close` and a rule with no
+waiver (R3): the message says what to run instead. `gate waive` prints what the key clears,
+and the unmet text of R5, R6 and R9 names its key.
 
 ## Search first
 
@@ -258,14 +256,10 @@ checked.
   `gate attach <slug>` to continue it and `gate abandon <slug> "<reason>"` to mark it abandoned
   (reason in its report) so it no longer blocks anything. Nothing is finalised: the changes it
   left behind still count against the next ledger.
-- **The lead implements below size large.** It holds the context, so handing a piece to a
-  fresh worker would only lose it. At size large (`policy.delegatesAt` in `models.json`; a
-  plan naming more than ten files) the lead's own `Edit`/`Write` on source or tests is
-  refused and it is told to brief a worker per piece. A shell edit (`sed -i`, a heredoc) slips past this fence; the
-  Stop hook's R16 catches it after the fact from the event log. Any helper the lead spawns
-  may edit (a worker, or an implementer of its own); a shell change counts as the helper's
-  when every file that moved lies in a helper command's run and in none of the lead's. R16
-  counts from the moment the task became large, so edits made while it was smaller stand.
+- **The lead may edit at any size.** It holds the context, so handing a piece to a fresh worker
+  can lose it. Size large (`policy.delegatesAt` in `models.json`; a plan naming more than ten
+  files) brings blind QA and the second reviewer, whoever edits. Any helper the lead spawns
+  may edit too (a worker, or an implementer of its own).
 - **A new control is clicked, not just loaded.** A case of kind `click` (one per new or
   changed link, button or tab; the skeptic and the reviewer ask for them) cannot be closed
   with a test. `gate case close <id> --click events#<seq>` takes that click when it came after

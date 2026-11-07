@@ -651,37 +651,11 @@ test("C31 edge: a numbered list is read like a bulleted one: findings, replies, 
 // the early warning
 // ---------------------------------------------------------------------------
 
-function warningOf(out) {
-  assert.ok(out?.hookSpecificOutput, `the hook did not warn: ${JSON.stringify(out)}`);
-  assert.equal(out.hookSpecificOutput.hookEventName, "PostToolUse");
-  return out.hookSpecificOutput.additionalContext;
-}
-
-test("C10 happy: the lead edit that takes a standard-predicted run past 400 lines returns additionalContext naming the size and gate brief worker; the next edit is silent; a run predicted large, a test-file edit and a helper edit never warn", () => {
-  const policy = loadPolicy();
-  assert.equal(policy.tiers.standard.maxLines, 400);
-  assert.equal(policy.delegatesAt, "large");
-
+test("C10 happy: the lead edit that takes a standard-predicted run past 400 lines prints nothing, since the lead may edit at any size", () => {
   const repo = opened("mc-c10");
   assert.equal(ledgerOf(repo).tier.predicted, "standard");
   assert.deepEqual(edit(repo, "src/b.ts", lines(110, "b")), SILENT, "100 lines: still standard");
-  const text = warningOf(edit(repo, "src/b.ts", lines(420, "b")));
-  assert.match(text, /\b410\b/, text);
-  assert.match(text, /large/, text);
-  assert.match(text, /gate brief worker/, text);
-  assert.deepEqual(edit(repo, "src/b.ts", lines(430, "b")), SILENT, "once per run");
-
-  const LARGE = Array.from({ length: 11 }, (_, i) => `src/f${i + 1}.ts`);
-  const large = opened("mc-c10-large", { files: LARGE.join(",") });
-  assert.equal(ledgerOf(large).tier.predicted, "large");
-  assert.deepEqual(edit(large, "src/b.ts", lines(420, "b")), SILENT, "predicted large: the fence already says it");
-
-  const quiet = opened("mc-c10-quiet");
-  write(quiet, "src/b.ts", lines(420, "b")); // past 400 with no lead edit event
-  assert.deepEqual(edit(quiet, "tests/big.test.ts", "test('x', () => {});\n".repeat(50)), SILENT, "a test-file edit");
-  assert.deepEqual(edit(quiet, "src/b.ts", lines(425, "b"), { agent: "done-gate:worker" }), SILENT, "a helper edit");
-  const armed = warningOf(edit(quiet, "src/b.ts", lines(430, "b")));
-  assert.match(armed, /\b420\b/, armed);
+  assert.deepEqual(edit(repo, "src/b.ts", lines(420, "b")), SILENT, "past 400 lines");
 });
 
 test("C11 performance: the log hook on a non-edit tool call, with no ledger, or on an untiered playbook measures nothing and prints the silent output", () => {
@@ -691,11 +665,6 @@ test("C11 performance: the log hook on a non-edit tool call, with no ledger, or 
   assert.deepEqual(command(repo, "npm test", { exit: 0, env: shim.env }), SILENT);
   assert.deepEqual(hook(repo, { hook_event_name: "PostToolUse", tool_name: "Read", tool_input: { file_path: path.join(repo, "src/b.ts") } }, { env: shim.env }), SILENT);
   assert.deepEqual(diffCalls(shim.calls()), [], "no git diff for a non-edit tool call");
-  // the shim does see a measurement when there is one
-  shim.reset();
-  warningOf(edit(repo, "src/b.ts", lines(421, "b"), { env: shim.env }));
-  assert.equal(shim.calls().filter((c) => c.includes("--numstat")).length, 1, shim.calls().join("\n"));
-
   const none = committed("mc-c11-none");
   const noneShim = gitShim(none, "mc-c11-none");
   assert.deepEqual(edit(none, "src/b.ts", lines(420, "b"), { env: noneShim.env }), SILENT);
@@ -708,7 +677,7 @@ test("C11 performance: the log hook on a non-edit tool call, with no ledger, or 
   assert.deepEqual(diffCalls(planShim.calls()), [], "no git diff on an untiered playbook");
 });
 
-test("C27 performance: the edit-hook warning leaves ledger.tier.measured untouched and a test-file edit spawns no git diff", () => {
+test("C27 performance: an edit hook measures nothing and leaves ledger.tier.measured untouched", () => {
   const repo = opened("mc-c27");
   const shim = gitShim(repo, "mc-c27");
   write(repo, "src/b.ts", lines(60, "b"));
@@ -720,9 +689,9 @@ test("C27 performance: the edit-hook warning leaves ledger.tier.measured untouch
   assert.deepEqual(diffCalls(shim.calls()), [], "a test-file edit measures nothing");
 
   shim.reset();
-  warningOf(edit(repo, "src/b.ts", lines(420, "b"), { env: shim.env }));
-  assert.equal(shim.calls().filter((c) => c.includes("--numstat")).length, 1, `one numstat process:\n${shim.calls().join("\n")}`);
-  assert.deepEqual(ledgerOf(repo).tier.measured, measured, "the warning does not save its measurement");
+  assert.deepEqual(edit(repo, "src/b.ts", lines(420, "b"), { env: shim.env }), SILENT);
+  assert.equal(shim.calls().filter((c) => c.includes("--numstat")).length, 0, `no numstat process:\n${shim.calls().join("\n")}`);
+  assert.deepEqual(ledgerOf(repo).tier.measured, measured);
 });
 
 // ---------------------------------------------------------------------------

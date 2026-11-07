@@ -52,8 +52,6 @@ const NO_WAIVER = {
   context: 'Write it with `gate note context "Traced: … · Related: … · Research: …"`',
   close: "Run `gate close`",
 };
-// The helper that R16 names is a worker; the key that waives R16 is delegate.
-const NEAR_MISS = { worker: "delegate" };
 
 export function flag(args, name) {
   const i = args.indexOf(name);
@@ -641,7 +639,7 @@ export const verbs = {
       const rule = Object.hasOwn(WAIVERS, key) ? WAIVERS[key] : null;
       if (!rule && !step) {
         const stepKeys = ledger.steps.map((s) => s.key).filter((k) => k && EVIDENCED_KEYS.has(k) && !Object.hasOwn(NO_WAIVER, k) && !Object.hasOwn(WAIVERS, k));
-        throw new UsageError(`unknown waiver key "${key}"${Object.hasOwn(NEAR_MISS, key) ? `: for ${key} the key is ${NEAR_MISS[key]} (\`gate waive ${NEAR_MISS[key]} "<reason>"\`)` : ""}. ${valid}${stepKeys.length ? `; step keys of this run: ${stepKeys.join(", ")}` : ""}`);
+        throw new UsageError(`unknown waiver key "${key}". ${valid}${stepKeys.length ? `; step keys of this run: ${stepKeys.join(", ")}` : ""}`);
       }
       // a step with no script or agent evidence is closed by hand; a waiver there would clear nothing a rule reads
       if (!rule && !EVIDENCED_KEYS.has(key)) throw new UsageError(`step {${key}} has no waiver: close it with \`gate step ${key} done|skipped|na "<note>"\`. ${valid}`);

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { currentLedger, isDone } from "./ledger.mjs";
-import { leadDelegates, policyFor } from "./size.mjs";
+import { policyFor } from "./size.mjs";
 import { appendEvents, nextSeq, readEvents, toolUse } from "./events.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { ancestorPids, pidsDir } from "./context.mjs";
@@ -993,17 +993,6 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
   const tooBig = where.unreadable || input.agent_id ? null : code.map((p) => outgrown(ledger, config, p)).find(Boolean);
   if (tooBig) return { deny: true, reason: `done-gate: ${tooBig}.`, paths };
   const role = (r) => agentType === `done-gate:${r}` || agentType === r;
-  // at a delegated size (policy.delegatesAt, large by default) the lead hands source to a helper:
-  // a worker, or any implementer it spawns; the reading roles stay fenced below. A "delegate"
-  // waiver (R16 honours the same key) lifts this fence too.
-  const delegateWaived = Boolean(ledger) && (ledger.waivers ?? []).some((w) => w.key === "delegate");
-  const size = !input.agent_id && ledger && !delegateWaived ? leadDelegates(ledger) : null;
-  if (size) {
-    const owned = paths.filter((p) => config.isSource(p));
-    if (owned.length) {
-      return { deny: true, delegate: true, reason: `done-gate: size ${size}: the lead does not edit source; ${owned.join(", ")} belongs to a helper. Run \`gate brief worker\` and spawn done-gate:worker with the prompt it prints (or re-plan with \`gate note plan --files\` if this is really one small file).`, paths };
-    }
-  }
   if (role("skeptic")) {
     const outside = paths.filter((p) => !isSkepticFile(p) || !inCurrentRun(p, currentRun));
     if (outside.length) {
@@ -1108,7 +1097,6 @@ export const verbs = {
       {
         ...stamp(),
         kind: "deny",
-        delegate: verdict.delegate === true,
         tool: ctx.input?.tool_name ?? null,
         path: verdict.paths?.[0] ?? null,
         ...(ctx.input?.tool_name === "Bash" ? { cmd: String(ctx.input.tool_input?.command ?? "").slice(0, 200) } : {}),

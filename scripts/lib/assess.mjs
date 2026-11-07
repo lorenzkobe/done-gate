@@ -52,11 +52,9 @@ export function stampSourceChange(ledger, hash, events, tree = null) {
   const cause = events.filter((e) => (e.kind === "edit" || e.kind === "command") && e.seq > prev).pop();
   ledger.lastSourceHash = hash;
   ledger.lastSourceChangeSeq = first ? 0 : (cause?.seq ?? nextSeq());
-  // a change no edit-tool event explains came through the shell; R16 reads this list. A lead
-  // writing command since the last stamp keeps it the lead's unless the file times clear it.
+  // a change no edit-tool event explains came through the shell, or from another session
   if (!first && !events.some((e) => e.kind === "edit" && e.seq > prev)) {
-    const leadWrote = events.some((e) => e.kind === "command" && e.seq > prev && !e.agent && !e.readOnly && !e.scratch);
-    const entry = { seq: ledger.lastSourceChangeSeq, cmd: cause?.kind === "command" ? cause.cmd ?? null : null, agentType: leadWrote ? null : cause?.agentType ?? null };
+    const entry = { seq: ledger.lastSourceChangeSeq };
     // the files it may cover, and whether any command of this run since the last stamp could
     // have written them: with none, the change is another session's and may be absorbed later
     if (tree) {
@@ -65,29 +63,11 @@ export function stampSourceChange(ledger, hash, events, tree = null) {
       entry.writes = events.some((e) => e.kind === "command" && e.seq > prev && !e.readOnly && !gitMove(e));
       entry.prev = prev;
       entry.prevHash = prevHash;
-      // a subagent's write is first seen at the lead's next call: a moved file is the subagent's
-      // when every command whose run holds it is a subagent's, or when the commands that name it
-      // are all subagents' (a lead command running alongside only overlapped it; seq is in µs)
-      const owner = (p) => {
-        const writers = writersOf(events, prev, tree.now.files[p].m);
-        if (writers.length && writers.every((e) => e.agent)) return writers.at(-1);
-        const named = writers.filter((e) => commandNames(e.cmd, p));
-        return named.length && named.every((e) => e.agent) ? named.at(-1) : null;
-      };
-      const owners = entry.paths.filter((p) => tree.now.files[p]?.m !== undefined && tree.now.files[p].m >= prev / 1000 - 1000).map(owner);
-      if (owners.length && owners.every(Boolean)) entry.agentType = owners.at(-1).agentType;
     }
     ledger.unexplainedChanges = [...(ledger.unexplainedChanges ?? []), entry];
   }
   return true;
 }
-
-// a command names a file by its repo path or, after a cd, by its file name, either as a whole word
-const commandNames = (cmd, rel) => {
-  const word = (w) => new RegExp(`(?:^|[\\s/'"=])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[\\s'";|&)<>])`);
-  const text = String(cmd ?? "");
-  return word(rel).test(text) || word(rel.split("/").pop()).test(text);
-};
 
 function editedSince(ledger, events) {
   const since = ledger.openedSeq ?? 0;
@@ -235,33 +215,18 @@ function settleAtHead(root, ledger, now) {
   return settled;
 }
 
-// R16 counts the lead's edits from the moment the task became a size where the lead
-// delegates; a prediction sets that mark, and so does the first measurement that crosses.
-function markDelegated(ledger, policy, crossed = false) {
-  if (ledger.tier?.predictedSeq != null || delegatedTier(policy, ledger.tier?.predicted) || (!crossed && !leadDelegates(ledger, policy))) return false;
+// A task that reaches large marks when, and whether the plan said so: the report and the packets name it.
+function markDelegated(ledger, policy) {
+  if (ledger.tier?.predictedSeq != null || delegatedTier(policy, ledger.tier?.predicted) || !leadDelegates(ledger, policy)) return false;
   ledger.tier.predictedSeq = nextSeq();
   // the plan did not say large (a declared size raises the prediction): it grew there mid-task
   ledger.tier.grewAt = ledger.tier.predictedSeq;
   return true;
 }
 
-const plural = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;
-
-// Tells the lead at the edit that crosses into the delegated size, once per run; the
-// measurement is not saved, so the fence starts refusing at the next gate verb as before.
-function sizeWarning(root, ledger, config, now, logged) {
-  if (!tiered(ledger) || ledger.tierWarned) return null;
-  if (!logged.some((e) => e.kind === "edit" && config.isSource(e.path) && !config.isTest(e.path))) return null;
-  const policy = policyFor(ledger);
-  if (leadDelegates(ledger, policy) || (ledger.waivers ?? []).some((w) => w.key === "delegate")) return null;
-  const m = measure({ config, policy, diff: diffSnapshots(ledger.baseline, now), baseline: ledger.baseline, now, root, quick: true, repos: ledger.repos ?? [] });
-  if (!delegatedTier(policy, m.tier)) return null;
-  return `done-gate: this task now measures ${plural(m.lines, "line")} in ${plural(m.files, "source file")}, which is size ${m.tier}. At that size the lead does not edit source: the next gate verb records the size and from then on the fence refuses your source edits. Hand the rest to a worker now: run \`gate brief worker\` and spawn done-gate:worker with the prompt it prints.`;
-}
-
-// The hook's path, bounded: git is asked for HEAD only when the source hash moved, and for one
-// numstat only after a lead edit of a sized file on a run not yet warned. Never writes session.json (the Stop hook's).
-export function stampNow(ctx, logged = []) {
+// The hook's path, bounded: git is asked for HEAD only when the source hash moved. Never writes
+// session.json (the Stop hook's). What it returns goes back to the model as added context.
+export function stampNow(ctx) {
   const current = currentLedger(ctx.stateDir, ctx.session);
   if (!current || isDone(current.ledger)) return null;
   const { dir, ledger } = current;
@@ -273,13 +238,8 @@ export function stampNow(ctx, logged = []) {
   const hash = implementationHash(now, config);
   let changed = hash !== ledger.lastSourceHash && absorbForeign(ctx.root, ledger, now, config, events);
   if (stampSourceChange(ledger, hash, events, { now, config })) changed = true;
-  const warning = sizeWarning(ctx.root, ledger, config, now, logged);
-  if (warning) {
-    ledger.tierWarned = true;
-    markDelegated(ledger, policyFor(ledger), true);
-  }
-  if (changed || warning) saveLedger(dir, ledger);
-  return warning;
+  if (changed) saveLedger(dir, ledger);
+  return null;
 }
 
 // The events of every session in this repo but `own` that logged anything since `since`: R1 and

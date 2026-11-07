@@ -98,29 +98,28 @@ function counter(name) {
   return { file, cmd: `${NODE} count.mjs ${JSON.stringify(file)}`, runs: () => (existsSync(file) ? readFileSync(file, "utf8").length : 0) };
 }
 
-const VALID_KEYS = ["delegate", "driver", "review", "review-2", "schema", "tests", "slop", "gate-config"];
+const VALID_KEYS = ["driver", "review", "review-2", "schema", "tests", "slop", "gate-config"];
 
-test("C1 reported-surface: gate waive worker is refused, lists the valid keys and points at delegate; delegate and a step key are accepted", () => {
+test("C1 reported-surface: gate waive worker is refused and lists the valid keys; a rule key and a step key are accepted", () => {
   const repo = opened("sf-c1");
   const err = refused(repo, "waive", ["worker", "x"]);
   for (const key of VALID_KEYS) assert.ok(err.includes(key), `the refusal does not list "${key}":\n${err}`);
-  assert.match(err, /worker[\s\S]*delegate/, `the refusal does not point worker at delegate:\n${err}`);
   assert.deepEqual(ledgerOf(repo).waivers, [], "a refused waiver was stored");
 
   // a made-up key is refused the same way
   refused(repo, "waive", ["anything-at-all", "x"]);
   assert.deepEqual(ledgerOf(repo).waivers, []);
 
-  cli(repo, "waive", ["delegate", "user said the lead edits this one"]);
-  assert.deepEqual(ledgerOf(repo).waivers.map((w) => w.key), ["delegate"]);
+  cli(repo, "waive", ["driver", "user said there is nothing to drive"]);
+  assert.deepEqual(ledgerOf(repo).waivers.map((w) => w.key), ["driver"]);
 
   // skeptic is a step key of the feature playbook (skills/gate/playbooks.md, step 4) and not a rule key
   cli(repo, "waive", ["skeptic", "user said skip the design round"]);
-  assert.deepEqual(ledgerOf(repo).waivers.map((w) => w.key), ["delegate", "skeptic"]);
+  assert.deepEqual(ledgerOf(repo).waivers.map((w) => w.key), ["driver", "skeptic"]);
   assert.equal(ledgerOf(repo).steps.find((s) => s.key === "skeptic").state, "WAIVED");
 });
 
-test("C2 happy: the unmet texts of R5, R6, R9 and R16 each name the gate waive key that clears them", () => {
+test("C2 happy: the unmet texts of R5, R6 and R9 each name the gate waive key that clears them", () => {
   const repo = opened("sf-c2", { "db/schema.sql": "create table a (id int);\n", ...config({ schema: ["db/**"], highRisk: ["src/a.ts"] }) });
   write(repo, "src/a.ts", REWRITE);
   write(repo, "db/schema.sql", "create table a (id int, name text);\n");
@@ -130,13 +129,6 @@ test("C2 happy: the unmet texts of R5, R6, R9 and R16 each name the gate waive k
     assert.ok(lines, `premise: ${rule} is unmet\n${out}`);
     assert.match(lines, new RegExp(`gate waive ${key}(?![\\w-])`), `${rule} does not name its key:\n${lines}`);
   }
-
-  const large = planned("sf-c2-large", LARGE_FILES, ["--files", LARGE.join(",")]);
-  leadEdit(large, "src/f0.ts");
-  write(large, "src/f0.ts", REWRITE);
-  const r16 = ruleLines(cli(large, "check").stdout, "R16");
-  assert.ok(r16, "premise: R16 is unmet for a lead edit at size large");
-  assert.match(r16, /gate waive delegate/, r16);
 });
 
 test("C3 reported-surface: gate case amend keeps the old text in history and reopens the case; the report shows the new text and that it was amended; an unknown id or empty text is refused", () => {
@@ -657,7 +649,7 @@ test("H3.1: a verify command added after a green verify blocks the close until i
   assert.equal(other.runs(), 0);
 });
 
-test("C21 refused: gate waive verify is refused and says to run gate verify; gate waive R16 is recorded as delegate; gate waive R3 is refused; waive prints what the key clears", () => {
+test("C21 refused: gate waive verify is refused and says to run gate verify; gate waive R4 is recorded as driver; gate waive R3 is refused; waive prints what the key clears", () => {
   const repo = opened("sf-c21");
   const verifyErr = refused(repo, "waive", ["verify", "x"]);
   assert.match(verifyErr, /gate verify/, verifyErr);
@@ -689,10 +681,10 @@ test("C21 refused: gate waive verify is refused and says to run gate verify; gat
   assert.match(refused(repo, "step", ["verify", "skipped", "x"]), /Run `gate verify`/);
   assert.match(refused(repo, "step", ["review", "skipped", "x"]), /gate waive review/);
 
-  const byRule = cli(repo, "waive", ["R16", "user said the lead edits this one"]).stdout;
-  assert.deepEqual(ledgerOf(repo).waivers.map((w) => [w.key, w.reason]), [["delegate", "user said the lead edits this one"]]);
-  assert.match(byRule, /delegate/, byRule);
-  assert.match(byRule, /R16/, `waive does not print what the key clears:\n${byRule}`);
+  const byRule = cli(repo, "waive", ["R4", "user said there is nothing to drive"]).stdout;
+  assert.deepEqual(ledgerOf(repo).waivers.map((w) => [w.key, w.reason]), [["driver", "user said there is nothing to drive"]]);
+  assert.match(byRule, /driver/, byRule);
+  assert.match(byRule, /R4/, `waive does not print what the key clears:\n${byRule}`);
 
   const byKey = cli(repo, "waive", ["schema", "no database in this repo"]).stdout;
   assert.match(byKey, /R6/, `waive does not print what the key clears:\n${byKey}`);

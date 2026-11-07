@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { delegatedTier, effectiveTier, leadDelegates, policyFor, requires } from "./size.mjs";
+import { delegatedTier, effectiveTier, policyFor, requires } from "./size.mjs";
 import { baseCopy, changedUnits, fileDiff, gitTracked, hasReindent, indentMatters, sliceEnd } from "./tree.mjs";
 import { scanDiff } from "./slop.mjs";
 import { coverageGaps } from "./verify.mjs";
@@ -896,7 +896,7 @@ export function unfinishedFile(full) {
 // Every waiver key a rule reads, with the rule it clears. "qa" is the key older ledgers
 // carry for tests.
 const REVIEW_WAIVER = { reviewer: "review", "reviewer-2": "review-2" };
-export const WAIVERS = { delegate: "R16", driver: "R4", review: "R5", "review-2": "R9", schema: "R6", tests: "R7", qa: "R7", slop: "R10", "gate-config": "R13", lookups: "R17", coverage: "R18", "qa-pass": "R7" };
+export const WAIVERS = { driver: "R4", review: "R5", "review-2": "R9", schema: "R6", tests: "R7", qa: "R7", slop: "R10", "gate-config": "R13", lookups: "R17", coverage: "R18", "qa-pass": "R7" };
 
 const orWaive = (key) => ` Or get the user's waiver (\`gate waive ${key} "<reason>"\`).`;
 
@@ -1115,25 +1115,6 @@ export function evaluate(state) {
     if (blankSteps.some((s) => s.key !== "close")) how.push('Close each with `gate step <n|key> done|skipped|na "<note>"`.');
     if (blankSteps.some((s) => s.key === "close")) how.push("{close} is closed by `gate close`, once nothing else is unmet.");
     unmet.push({ rule: "R8", text: `step(s) blank: ${blankSteps.map((s) => `${s.n}${s.key ? ` {${s.key}}` : ""}`).join(", ")}. ${how.join(" ")}` });
-  }
-
-  // R16: at a size where the lead delegates, the lead's own source edits after the plan are a
-  // worker's job. The fence stops the edit tools; this catches what slipped past it.
-  const delegated = waived(ledger, "delegate") ? null : leadDelegates(ledger, state.policy ?? undefined);
-  if (delegated) {
-    const since = ledger.tier?.predictedSeq ?? ledger.planSeq ?? 0;
-    // the lead's own edit-tool calls; any subagent's edit (a worker, an implementer) is delegation
-    const own = (state.events ?? []).filter((e) => implementationEdit(e, config) && !e.agent && e.seq > since);
-    if (own.length) {
-      unmet.push({ rule: "R16", text: `the lead edited ${list([...new Set(own.map((e) => e.path))])} at size ${delegated}; hand that piece to a worker (\`gate brief worker\`, spawn done-gate:worker) and let it own the file from here.${orWaive("delegate")}` });
-    }
-    // source changed with no edit-tool event to explain it: a shell edit, unless a subagent's
-    // command made it
-    const shell = (ledger.unexplainedChanges ?? []).filter((c) => c.seq > since && !c.agentType);
-    if (shell.length) {
-      const last = shell[shell.length - 1];
-      unmet.push({ rule: "R16", text: `source changed with no worker edit behind it (${last.cmd ? `after \`${String(last.cmd).slice(0, 60)}\`` : "a shell edit"}) at size ${delegated}; at this size only helpers edit source. Hand the piece to a worker (\`gate brief worker\`).${orWaive("delegate")}` });
-    }
   }
 
   // R18: verify ran every closed case's test file through a test command

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, write, gate, pluginRoot, lookedUp } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
@@ -87,138 +87,50 @@ test("C1 happy: at predicted standard the lead's Edit/Write on source and tests 
 // C2 happy — large: still fenced and still R16
 // ---------------------------------------------------------------------------
 
-test("C2 happy: at predicted large the lead's source edit is denied by the fence and flagged by R16 naming size large", () => {
+test("C2 happy: at predicted large the lead edits source by tool or shell and no rule asks for a worker", () => {
   const repo = opened("li-c2-large", LARGE_FILES);
   assert.equal(ledgerOf(repo).tier.predicted, "large");
-  const reason = fence(repo, "Edit", "src/f0.ts");
-  assert.ok(reason, "a lead Edit at large must be denied");
-  assert.match(reason, /\blarge\b/);
-  assert.match(reason, /gate brief worker/);
+  assert.equal(fence(repo, "Edit", "src/f0.ts"), null);
   write(repo, "src/f0.ts", "export const x = 2;\n");
   leadEdit(repo, "src/f0.ts");
-  const found = r16(repo);
-  assert.equal(found.length, 1, `one R16 expected:\n${found.join("\n")}`);
-  assert.match(found[0], /\blarge\b/);
-  assert.equal(typeof ledgerOf(repo).tier.predictedSeq, "number", "the delegation mark is stamped at large");
+  write(repo, "src/f1.ts", "export const x = 3;\n");
+  hook(repo, "log", { hook_event_name: "PostToolUse", tool_response: { exit_code: 0 }, tool_name: "Bash", tool_input: { command: "sed -i '' 's/1/3/' src/f1.ts" } });
+  assert.deepEqual(r16(repo), []);
+  assert.doesNotMatch(cli(repo, "check").stdout, /worker/);
+  assert.equal(typeof ledgerOf(repo).tier.predictedSeq, "number", "the mark is stamped at large");
 });
 
 // ---------------------------------------------------------------------------
 // C3 boundary — growth: only a measured large fences
 // ---------------------------------------------------------------------------
 
-test("C3 boundary: a small task that grows to a measured large fences the lead's next edit; one that grows only to standard does not", () => {
-  const toStandard = opened("li-c3-standard", ["src/a.ts"]);
-  write(toStandard, "src/a.ts", "export const a = 2;\n");
-  write(toStandard, "src/b.ts", "export const b = 1;\n");
-  write(toStandard, "src/c.ts", "export const c = 1;\n");
-  cli(toStandard, "check");
-  assert.equal(ledgerOf(toStandard).tier.measured.tier, "standard");
-  assert.equal(fence(toStandard, "Edit", "src/d.ts"), null, "measured standard does not fence");
-
-  const toLarge = opened("li-c3-large", ["src/a.ts"]);
-  for (const f of LARGE_FILES) write(toLarge, f, "export const y = 2;\n");
-  cli(toLarge, "check");
-  assert.equal(ledgerOf(toLarge).tier.measured.tier, "large");
-  // a planned file, so the growth rule (a new unplanned file) stays out of this
-  const reason = fence(toLarge, "Edit", "src/a.ts");
-  assert.ok(reason, "measured large fences the lead");
-  assert.match(reason, /\blarge\b/);
+test("C3 boundary: a small task that grows to a measured large still owes QA and the second reviewer, with no fence and nothing printed at the crossing", () => {
+  const repo = opened("li-c3-large", ["src/a.ts"]);
+  for (const f of LARGE_FILES) write(repo, f, "export const y = 2;\n");
+  const crossing = hook(repo, "log", { hook_event_name: "PostToolUse", tool_response: {}, tool_name: "Edit", tool_input: { file_path: path.join(repo, LARGE_FILES[0]) } });
+  assert.equal(crossing?.hookSpecificOutput, undefined, JSON.stringify(crossing));
+  const out = cli(repo, "check").stdout;
+  assert.equal(ledgerOf(repo).tier.measured.tier, "large");
+  assert.equal(fence(repo, "Edit", "src/a.ts"), null);
+  assert.match(out, /\bR7\b[^\n]*qa/i, out);
+  assert.match(out, /\bR9\b/, out);
+  assert.match(cli(repo, "report", ["--brief"]).stdout, /grew to large mid-task/);
 });
 
 // ---------------------------------------------------------------------------
 // C4 refused — gate brief worker below large
 // ---------------------------------------------------------------------------
 
-// a tool call as the PostToolUse hook sends it, from the lead or from a subagent
-const logged = (repo, payload) => hook(repo, "log", { hook_event_name: "PostToolUse", tool_response: { exit_code: 0 }, ...payload });
-const worker = { agent_id: "W1", agent_type: "done-gate:worker" };
-const big = (n) => Array.from({ length: n }, (_, k) => `export const v${k} = ${k};`).join("\n") + "\n";
-
-test("C1 reported-surface: a worker's shell write followed by a lead command that writes only scratch does not raise R16", () => {
-  const repo = opened("li-credit-shell", LARGE_FILES);
-  hook(repo, "log", { hook_event_name: "SubagentStart", ...worker });
-  write(repo, "src/f0.ts", "export const x = 2;\n");
-  logged(repo, { tool_name: "Bash", tool_input: { command: "python3 fix.py" }, ...worker });
-  hook(repo, "log", { hook_event_name: "SubagentStop", ...worker });
-  logged(repo, { tool_name: "Bash", tool_input: { command: "S=/tmp/x; mkdir -p $S" } });
-  assert.deepEqual(r16(repo), []);
-});
-
-test("C2 reported-surface: an Edit by a general-purpose implementer subagent at size large does not raise R16", () => {
-  const repo = opened("li-credit-implementer", LARGE_FILES);
-  write(repo, "src/f1.ts", "export const x = 3;\n");
-  logged(repo, { tool_name: "Edit", tool_input: { file_path: path.join(repo, "src/f1.ts") }, agent_id: "G1", agent_type: "general-purpose" });
-  assert.deepEqual(r16(repo), []);
-});
-
-test("C3 reported-surface: the lead's edits at predicted standard do not raise R16 when the task later measures large; a lead edit after that does", () => {
-  const repo = opened("li-credit-flip", STANDARD_FILES);
-  // 150 + 150 lines stay standard; the third edit is the one that crosses 400
-  for (const [i, n] of [[0, 150], [1, 150], [2, 300]]) {
-    write(repo, `src/f${i}.ts`, big(n));
-    leadEdit(repo, `src/f${i}.ts`);
-  }
-  assert.match(cli(repo, "size").stdout, /measured large/, "premise: the task measures large");
-  assert.deepEqual(r16(repo), [], "edits made at standard are the lead's to make");
-  write(repo, "src/f3.ts", "export const late = 1;\n");
-  leadEdit(repo, "src/f3.ts");
-  assert.match(r16(repo).join("\n"), /the lead edited src\/f3\.ts/);
-});
-
-test("C4 refused: at predicted large the lead's own Edit and a lead shell write with no subagent writer still raise R16", () => {
-  const repo = opened("li-credit-lead", LARGE_FILES);
-  write(repo, "src/f0.ts", "export const x = 4;\n");
-  leadEdit(repo, "src/f0.ts");
-  assert.match(r16(repo).join("\n"), /the lead edited src\/f0\.ts/);
-  const shell = opened("li-credit-lead-shell", LARGE_FILES);
-  write(shell, "src/f2.ts", "export const x = 5;\n");
-  logged(shell, { tool_name: "Bash", tool_input: { command: "sed -i '' 's/1/5/' src/f2.ts" } });
-  assert.match(r16(shell).join("\n"), /no worker edit behind it/);
-});
-
-test("C5 refused: a lead sed beside a reviewer's npm test in the same window is still the lead's shell edit", () => {
-  const repo = opened("li-credit-concurrent", LARGE_FILES);
-  const reviewer = { agent_id: "R1", agent_type: "done-gate:reviewer" };
-  hook(repo, "log", { hook_event_name: "SubagentStart", ...reviewer });
-  write(repo, "src/f2.ts", "export const x = 6;\n");
-  logged(repo, { tool_name: "Bash", tool_input: { command: "npm test" }, ...reviewer });
-  logged(repo, { tool_name: "Bash", tool_input: { command: "sed -i '' 's/1/6/' src/f2.ts" } });
-  assert.match(r16(repo).join("\n"), /no worker edit behind it/);
-});
-
-test("C6 edge: re-predicting standard after the task measured large keeps the mark, so a standing R16 stays", () => {
-  const repo = opened("li-credit-repredict", STANDARD_FILES);
-  for (const [i, n] of [[0, 150], [1, 150], [2, 300]]) {
-    write(repo, `src/f${i}.ts`, big(n));
-    leadEdit(repo, `src/f${i}.ts`);
-  }
-  cli(repo, "size");
-  write(repo, "src/f3.ts", "export const late = 1;\n");
-  leadEdit(repo, "src/f3.ts");
-  assert.match(r16(repo).join("\n"), /src\/f3\.ts/);
-  cli(repo, "note", ["plan", "Re-planned.", "--files", STANDARD_FILES.join(",")]);
-  assert.match(r16(repo).join("\n"), /src\/f3\.ts/, "the re-prediction did not move the mark");
-  cli(repo, "note", ["plan", "Re-planned large.", "--files", LARGE_FILES.join(",")]);
-  assert.match(r16(repo).join("\n"), /src\/f3\.ts/, "a re-prediction to large did not move it either");
-});
-
-test("C8 refused: a lead's background writing command beside a reviewer's npm test keeps the change the lead's", () => {
-  const repo = opened("li-credit-background", LARGE_FILES);
-  logged(repo, { tool_name: "Bash", tool_input: { command: "npx prettier --write src", run_in_background: true } });
-  write(repo, "src/f2.ts", "export const x = 7;\n");
-  logged(repo, { tool_name: "Bash", tool_input: { command: "npm test" }, agent_id: "R1", agent_type: "done-gate:reviewer" });
-  assert.match(r16(repo).join("\n"), /no worker edit behind it/);
-});
 
 test("C9 edge: mv and rsync are never scratch-only, since they can remove the source they read", () => {
   for (const cmd of ["mv src/a.ts /tmp/x/", "rsync --remove-source-files src/ /tmp/x/"]) assert.equal(scratchOnly(cmd), false, cmd);
   assert.equal(scratchOnly("S=/tmp/x; mkdir -p $S && cp src/a.ts $S/"), true);
 });
 
-test("C7 happy: at size large the fence lets a general-purpose implementer edit source; the lead and a reviewer stay fenced", () => {
+test("C7 happy: at size large a general-purpose implementer and the lead edit source; a reviewer stays fenced", () => {
   const repo = opened("li-credit-fence", LARGE_FILES);
   assert.equal(fence(repo, "Edit", "src/f0.ts", { agent_id: "G1", agent_type: "general-purpose" }), null);
-  assert.ok(fence(repo, "Edit", "src/f0.ts"), "the lead is fenced");
+  assert.equal(fence(repo, "Edit", "src/f0.ts"), null, "the lead edits");
   assert.ok(fence(repo, "Edit", "src/f0.ts", { agent_id: "R1", agent_type: "done-gate:reviewer" }), "a reviewer is fenced");
 });
 
@@ -250,15 +162,12 @@ test("C5 happy: models.json carries delegatesAt: large, loadPolicy exposes it, a
 // C6 idempotent — large is unchanged
 // ---------------------------------------------------------------------------
 
-test("C6 idempotent: at large a worker edits source and tests, another role does not, and a delegate waiver lifts the fence", () => {
+test("C6 idempotent: at large a worker edits source and tests, and another role does not", () => {
   const repo = opened("li-c6-large", LARGE_FILES);
   const worker = { agent_id: "W1", agent_type: "done-gate:worker" };
   assert.equal(fence(repo, "Edit", "src/f0.ts", worker), null, "worker edits source");
   assert.equal(fence(repo, "Write", "tests/a.test.ts", worker), null, "worker edits tests");
   assert.ok(fence(repo, "Edit", "src/f0.ts", { agent_id: "R1", agent_type: "done-gate:reviewer" }), "a reviewer never edits source");
-  assert.ok(fence(repo, "Edit", "src/f0.ts"), "the lead is fenced at large");
-  cli(repo, "waive", ["delegate", "user said so"]);
-  assert.equal(fence(repo, "Edit", "src/f0.ts"), null, "the waiver lifts the fence");
 });
 
 // ---------------------------------------------------------------------------
@@ -290,9 +199,92 @@ test("C8 happy: SKILL.md, hooks/session-start.md, README and agents/worker.md sa
   assert.match(start, /large[^.]{0,120}never edits? source|never edits? source[^.]{0,120}large/i, "session-start: fenced at large");
   assert.match(start, /standard[^.]{0,80}(edits? (it )?(itself|yourself)|lead edits)/i, "session-start: the lead edits at standard");
   const readme = read("README.md");
-  assert.match(readme, /R16[^\n]*\blarge\b/, "README R16 row names large");
+  assert.doesNotMatch(readme, /\bR16\b/, "README: the rule is gone");
   assert.doesNotMatch(readme, /delegates at size standard and up/i, "README: old wording");
   const worker = read("agents/worker.md");
   assert.match(worker, /size large/i, "worker.md description");
   assert.doesNotMatch(worker, /standard and above/i, "worker.md old wording");
+});
+
+test("gate waive delegate and gate waive R16 are refused, and worker gets no pointer", () => {
+  const repo = opened("li-no-delegate", LARGE_FILES);
+  for (const key of ["delegate", "R16", "worker"]) assert.match(refused(repo, "waive", [key, "x"]), /unknown waiver key|no waiver/, key);
+  assert.doesNotMatch(refused(repo, "waive", ["worker", "x"]), /delegate/);
+  assert.deepEqual(ledgerOf(repo).waivers, []);
+});
+
+test("an old ledger with a delegate waiver and a delegate deny event reads and reports clean", () => {
+  const repo = opened("li-old-delegate", LARGE_FILES);
+  const dir = runDir(repo);
+  const ledger = JSON.parse(readFileSync(path.join(dir, "ledger.json"), "utf8"));
+  ledger.waivers.push({ key: "delegate", reason: "user said so", seq: 1 });
+  writeFileSync(path.join(dir, "ledger.json"), JSON.stringify(ledger));
+  appendFileSync(path.join(stateDir(repo), "sessions", "S1", "events.jsonl"), `${JSON.stringify({ seq: Date.now() * 1000, ts: new Date().toISOString(), session: "S1", kind: "deny", delegate: true, tool: "Edit", path: "src/f0.ts", reason: "old" })}\n`);
+  assert.doesNotMatch(cli(repo, "check").stdout, /GATE ERROR|R16/);
+  const report = cli(repo, "report").stdout;
+  assert.match(report, /delegate/, "the old waiver still shows");
+  assert.match(report, /1 lead edit\(s\) fenced off/, "the old deny still reads as a hand-off");
+  assert.match(report, /blocked writes to gate files 0/);
+});
+
+test("a large run whose lead fixed the findings itself closes with no worker and no waiver", () => {
+  const repo = makeRepo("li-large-closes", {
+    ...Object.fromEntries(LARGE_FILES.map((f) => [f, "export const x = 1;\n"])),
+    "tests/a.test.ts": "x\n",
+    ".claude/gate.json": JSON.stringify({ testFiles: null, tests: ["tests/**"], verify: [{ cmd: "npm test" }] }),
+  });
+  execFileSync("git", ["add", "-A"], { cwd: repo });
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
+  cli(repo, "open", ["big", "feature"]);
+  cli(repo, "note", ["task", "A big change. [inferred]"]);
+  lookedUp(repo);
+  cli(repo, "note", ["context", "Traced: src/f0.ts:1 · Related: none: `grep -rn x src` · Research: none needed: a test fixture"]);
+  cli(repo, "note", ["plan", "Many files.", "--files", LARGE_FILES.join(",")]);
+  cli(repo, "case", ["add", "it works", "--kind", "happy"]);
+  const helper = (role, n, body) => {
+    const brief = run(repo, "brief", [role]);
+    assert.equal(brief.status, 0, brief.stderr);
+    const file = /Your file is .*\/([\w-]+\.md)/.exec(brief.stdout)?.[1];
+    const agent = { agent_id: `${role}-${n}`, agent_type: `done-gate:${role}` };
+    hook(repo, "log", { hook_event_name: "SubagentStart", ...agent });
+    lookedUp(repo, { agent: agent.agent_id, role });
+    if (file) {
+      writeFileSync(path.join(runDir(repo), file), body);
+      hook(repo, "log", { hook_event_name: "PostToolUse", tool_response: {}, tool_name: "Write", tool_input: { file_path: path.join(runDir(repo), file) }, ...agent });
+    }
+    hook(repo, "log", { hook_event_name: "SubagentStop", ...agent });
+    return file;
+  };
+  const clean = "# Skeptic\n\n## Act on\n- none\n## Consider\n- none\n## Noted\n- none\n## The one question\n- none\n";
+  const round = (act) => `# Review\n\n## Act on\n${act}\n## Consider\n- none\n## Noted\n- none\n## Dismissed\n- none\n## Evidence verdict\n- tests: x exit 0, 1 passed (unverified)\n- cases: 1/1 tests match their case\n`;
+  cli(repo, "huddle", ["add", "skeptic", "--file", helper("skeptic", 1, clean)]);
+  cli(repo, "step", ["skeptic", "done", "no findings", "--evidence", "skeptic-1.md"]);
+  helper("qa", 1, "");
+  cli(repo, "huddle", ["add", "qa", "--summary", "tests written"]);
+  for (const f of LARGE_FILES) {
+    write(repo, f, "export const x = 2;\n");
+    leadEdit(repo, f);
+  }
+  write(repo, "tests/a.test.ts", "y\n");
+  leadEdit(repo, "tests/a.test.ts");
+  cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:it works"]);
+  cli(repo, "step", ["tests", "done", "written", "--evidence", "tests/a.test.ts"]);
+  cli(repo, "step", ["implement", "done", "edited by the lead", "--evidence", "src/f0.ts"]);
+  cli(repo, "verify", []);
+  for (const key of ["driver", "schema"]) cli(repo, "step", [key, "na", "no such surface"]);
+  const first = helper("reviewer", 1, round("- off by one at src/f0.ts:1 — the total skips the last row"));
+  cli(repo, "huddle", ["add", "reviewer", "--file", first]);
+  cli(repo, "huddle", ["add", "reviewer-2", "--file", helper("reviewer-2", 1, round("- none"))]);
+  write(repo, "src/f0.ts", "export const x = 3;\n");
+  leadEdit(repo, "src/f0.ts");
+  cli(repo, "huddle", ["resolve", ledgerOf(repo).huddles.find((h) => h.file === first).actOn[0].id, "--evidence", "src/f0.ts:1"]);
+  cli(repo, "verify", []);
+  for (const [role, n] of [["reviewer", 2], ["reviewer-2", 2]]) cli(repo, "huddle", ["add", role, "--file", helper(role, n, round("- none"))]);
+  cli(repo, "step", ["review", "done", "clean", "--evidence", "review-2.md"]);
+  const dir = runDir(repo);
+  const closed = run(repo, "close", []);
+  assert.equal(closed.status, 0, `${closed.stdout}\n${closed.stderr}\n${cli(repo, "check").stdout}`);
+  assert.equal(loadLedger(dir).status, "closed");
+  assert.deepEqual(loadLedger(dir).waivers, []);
+  assert.match(cli(repo, "report").stdout, /helpers: spawned 4 of 4 required/);
 });

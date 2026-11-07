@@ -70,7 +70,7 @@ test("C1 happy: models.json and DEFAULT_POLICY name no model, requires are per t
   assert.ok(!("roles" in MODELS), "models.json still has a roles map");
   assert.deepEqual(MODELS.policy.tiers.small.requires, ["reviewer"]);
   assert.deepEqual(MODELS.policy.tiers.standard.requires, ["skeptic", "reviewer"]);
-  assert.deepEqual(MODELS.policy.tiers.large.requires, ["skeptic", "qa", "worker", "reviewer", "reviewer-2"]);
+  assert.deepEqual(MODELS.policy.tiers.large.requires, ["skeptic", "qa", "reviewer", "reviewer-2"]);
   assert.ok(!("escalate" in MODELS.policy) && !("ceiling" in MODELS.policy), "models.json keeps an unenforced setting");
   assert.doesNotMatch(JSON.stringify(MODELS), MODEL_NAME, "models.json names a model somewhere");
 
@@ -189,7 +189,7 @@ test("C6 happy: gate size and the report print helpers without model names, and 
 
   // at large a reviewer-2 stop ticks the second reviewer
   const large = opened("tbl-c6-large", LARGE_FILES);
-  assert.match(lineStarting(cli(large, "size").stdout, "requires:"), /^requires: skeptic, qa, worker, reviewer, reviewer-2\b/);
+  assert.match(lineStarting(cli(large, "size").stdout, "requires:"), /^requires: skeptic, qa, reviewer, reviewer-2\b/);
   stop(large, "R2", "done-gate:reviewer-2");
   const out = cli(large, "report").stdout;
   assert.match(lineStarting(out, "helpers:"), /reviewer-2 ✓/);
@@ -242,17 +242,15 @@ test("C8 happy: reviewer.md names weak tests as Act-on; README, SKILL.md and ses
 // C9 idempotent — large is unchanged
 // ---------------------------------------------------------------------------
 
-test("C9 idempotent: at tier large gate brief qa writes the packet, huddle add qa --summary is recorded, and the helpers line counts qa and worker", () => {
+test("C9 idempotent: at tier large gate brief qa writes the packet, huddle add qa --summary is recorded, and the helpers line counts qa", () => {
   const repo = opened("tbl-c9-large", LARGE_FILES);
   cli(repo, "brief", ["qa"]);
   cli(repo, "huddle", ["add", "qa", "--summary", "6 tests written"]);
   assert.equal(ledgerOf(repo).huddles[0].role, "qa");
   stop(repo, "Q1", "done-gate:qa");
-  stop(repo, "W1", "done-gate:worker");
   const helpers = lineStarting(cli(repo, "report").stdout, "helpers:");
   assert.match(helpers, /qa ✓/);
-  assert.match(helpers, /worker ✓/);
-  assert.match(helpers, /spawned 2 of 5 required/);
+  assert.match(helpers, /spawned 1 of 4 required/);
 });
 
 test("C3 reported-surface: the README and the models.json principle state the split; neither still says every helper runs on the session's model", () => {

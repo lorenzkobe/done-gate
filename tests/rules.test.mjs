@@ -332,7 +332,6 @@ test("C11 boundary: an edit logged before `gate open` blocks R2 only while the P
 const MODELS = JSON.parse(readFileSync(path.join(pluginRoot, "models.json"), "utf8"));
 const SMALL_MAX_FILES = MODELS.policy.tiers.small.maxFiles; // 1: one more file is standard
 const STANDARD_MAX_FILES = MODELS.policy.tiers.standard.maxFiles; // 10: one more file is large
-assert.ok(MODELS.policy.tiers.large.requires.includes("worker"), "anchor: models.json names the worker at large");
 assert.equal(MODELS.policy.delegatesAt, "large", "anchor: the lead delegates at large only");
 const WORKER = "done-gate:worker"; // the agent_type the Agent tool reports for that role
 
@@ -460,75 +459,13 @@ const clean = (over = {}) => {
 // C1
 // ---------------------------------------------------------------------------
 
-test("C1 refused: at predicted large, a lead edit event on src/a.ts after the plan is R16 naming the path and the size; the worker's edit is not", () => {
-  const repo = opened("rules-r16-c1");
-  const predicted = notePlan(repo, LARGE_FILES);
-  assert.match(predicted, /predicted large/, `${LARGE_FILES.length} files must predict large: ${predicted}`);
-
-  // the lead edits one file itself, the worker edits another
-  write(repo, "src/a.ts", "export const a = 2;\n");
-  leadEdit(repo, "src/a.ts");
-  write(repo, "src/b.ts", "export const b = 1;\n");
-  workerEdit(repo, "src/b.ts");
-
-  const size = effectiveSize(repo);
-  assert.equal(size, "large", "the prediction keeps the task at a delegating size");
-
-  const found = r16Lines(check(repo));
-  assert.equal(found.length, 1, `exactly one R16 item was expected:\n${check(repo)}`);
-  assert.match(found[0], /src\/a\.ts/, `R16 must name the file the lead edited: ${found[0]}`);
-  assert.match(found[0], new RegExp(`\\b${size}\\b`), `R16 must name the size: ${found[0]}`);
-  assert.ok(!/src\/b\.ts/.test(found[0]), `a worker's edit is not a violation: ${found[0]}`);
-});
-
 // ---------------------------------------------------------------------------
 // C2
 // ---------------------------------------------------------------------------
 
-test("C2 happy: at predicted small and standard, and on the untiered plan playbook, a lead edit event never produces R16", () => {
-  const small = opened("rules-r16-c2-small");
-  const predicted = notePlan(small, SMALL_FILES);
-  assert.match(predicted, /predicted tiny/, `${SMALL_FILES.length} file must predict tiny: ${predicted}`);
-  write(small, "src/a.ts", "export const a = 2;\n");
-  leadEdit(small, "src/a.ts");
-  assert.equal(effectiveSize(small), "small", "nothing outgrew the prediction");
-  assert.deepEqual(r16Lines(check(small)), [], "at small the lead edits its own source");
-
-  // standard: the lead still holds the context and edits itself
-  const standard = opened("rules-r16-c2-standard");
-  assert.match(notePlan(standard, STANDARD_FILES), /predicted standard/);
-  write(standard, "src/a.ts", "export const a = 2;\n");
-  leadEdit(standard, "src/a.ts");
-  assert.equal(effectiveSize(standard), "standard");
-  assert.deepEqual(r16Lines(check(standard)), [], "at standard the lead edits its own source");
-
-  // the plan playbook is not tiered at all: there is no size, so there is no delegation
-  const notes = committed("rules-r16-c2-plan");
-  cli(notes, "open", ["notes", "plan"]);
-  cli(notes, "note", ["task", "Write the spec. [inferred]"]);
-  cli(notes, "note", ["plan", "One document.", "--files", LARGE_FILES.join(",")]);
-  write(notes, "src/a.ts", "export const a = 2;\n");
-  leadEdit(notes, "src/a.ts");
-  assert.deepEqual(r16Lines(check(notes)), [], "an untiered playbook never delegates");
-});
-
 // ---------------------------------------------------------------------------
 // C3
 // ---------------------------------------------------------------------------
-
-test("C3 boundary: a lead edit before the plan stays clean when the size is re-predicted to large", () => {
-  const repo = opened("rules-r16-c3");
-
-  // the edit happens first, while nothing has been predicted at all
-  write(repo, "src/a.ts", "export const a = 2;\n");
-  leadEdit(repo, "src/a.ts");
-
-  notePlan(repo, SMALL_FILES); // predicted small
-  notePlan(repo, LARGE_FILES); // re-predicted large, after the edit
-
-  assert.equal(effectiveSize(repo), "large", "the second prediction is the one in force");
-  assert.deepEqual(r16Lines(check(repo)), [], "a re-prediction must not backdate a violation");
-});
 
 // ---------------------------------------------------------------------------
 // C4
@@ -613,30 +550,6 @@ test("C7 happy: `gate note plan --files` stamps tier.predictedSeq when the size 
 // C8
 // ---------------------------------------------------------------------------
 
-test("C8 boundary: a ledger with no tier.predictedSeq falls back to planSeq", () => {
-  const repo = opened("rules-r16-c8");
-
-  // an edit before the Plan, and one after it
-  write(repo, "src/b.ts", "export const b = 1;\n");
-  leadEdit(repo, "src/b.ts");
-  notePlan(repo, LARGE_FILES);
-  write(repo, "src/a.ts", "export const a = 2;\n");
-  leadEdit(repo, "src/a.ts");
-
-  // an older ledger, written before predictedSeq existed
-  const dir = runDir(repo);
-  const ledger = loadLedger(dir);
-  delete ledger.tier.predictedSeq;
-  saveLedger(dir, ledger);
-  assert.equal(loadLedger(dir).tier.predictedSeq, undefined);
-
-  const out = check(repo);
-  const found = r16Lines(out);
-  assert.equal(found.length, 1, `exactly one R16 item was expected:\n${out}`);
-  assert.match(found[0], /src\/a\.ts/, `the edit after planSeq is the violation: ${found[0]}`);
-  assert.ok(!/src\/b\.ts/.test(found[0]), `the edit before planSeq is not: ${found[0]}`);
-});
-
 // ---------------------------------------------------------------------------
 // C10
 // ---------------------------------------------------------------------------
@@ -656,22 +569,6 @@ function shellEdit(repo, agent = null) {
   write(repo, "src/a.ts", "export const a = 2;\n"); // the bytes land after the hook fires
 }
 
-test("C10 edge: at a delegated size a source change explained only by a worker's Bash call is not R16; the lead's own Bash call is", () => {
-  const byWorker = opened("rules-r16-c10-worker");
-  notePlan(byWorker, LARGE_FILES);
-  shellEdit(byWorker, { id: "W1", type: WORKER });
-  assert.equal(effectiveSize(byWorker), "large", "the prediction keeps the task at a delegating size");
-  assert.deepEqual(r16Lines(check(byWorker)), [], "the worker is the one allowed to edit, shell or tool");
-
-  const byLead = opened("rules-r16-c10-lead");
-  notePlan(byLead, LARGE_FILES);
-  shellEdit(byLead);
-  assert.equal(effectiveSize(byLead), "large");
-  const out = check(byLead);
-  const found = r16Lines(out);
-  assert.equal(found.length, 1, `a lead shell edit at a delegated size is R16:\n${out}`);
-  assert.match(found[0], /\blarge\b/, `R16 must name the size: ${found[0]}`);
-});
 }
 
 // ===== from tests/waivers.test.mjs =====

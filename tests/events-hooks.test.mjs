@@ -337,29 +337,22 @@ const stdinFixture = (name) =>
 const LARGE = Array.from({ length: 11 }, (_, i) => `src/f${i + 1}.ts`);
 const LARGE_EXTRA = Object.fromEntries(LARGE.map((f) => [f, "export const x = 1;\n"]));
 
-test("C1 refused: at predicted large the lead's Edit/Write/MultiEdit/NotebookEdit on source is denied, and the reason names the size and `gate brief worker`", () => {
+test("C1 happy: at predicted large the lead's Edit/Write/MultiEdit/NotebookEdit on source is allowed", () => {
   const repo = openedWith("fence-c1", { files: LARGE, extra: LARGE_EXTRA });
-  // the size the fence must name comes from the ledger the CLI wrote, not from the guard
   assert.equal(ledgerOf(repo).tier.predicted, "large");
-
-  const reason = fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts")));
-  assert.ok(reason, "a lead Edit on source at large must be denied");
-  assert.match(reason, /large/, reason);
-  assert.match(reason, /gate brief worker/, reason);
-  assert.match(reason, /done-gate:worker/, reason);
-  assert.match(reason, /src\/a\.ts/, reason);
-
-  // every editing tool, not just Edit
-  assert.ok(fence(repo, pre(repo, "Write", path.join(repo, "src/b.ts"))), "Write");
-  assert.ok(
+  assert.equal(fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts"))), null, "Edit");
+  assert.equal(fence(repo, pre(repo, "Write", path.join(repo, "src/b.ts"))), null, "Write");
+  assert.equal(
     fence(repo, {
       ...pre(repo, "MultiEdit", undefined),
       tool_input: { edits: [{ file_path: path.join(repo, "src/a.ts") }, { file_path: path.join(repo, "src/b.ts") }] },
     }),
+    null,
     "MultiEdit",
   );
-  assert.ok(
+  assert.equal(
     fence(repo, { ...pre(repo, "NotebookEdit", undefined), tool_input: { notebook_path: path.join(repo, "src/nb.ipynb") } }),
+    null,
     "NotebookEdit",
   );
 });
@@ -368,14 +361,6 @@ test("C1 happy: a plan naming two files predicts standard and the lead still edi
   const repo = openedWith("fence-c1-standard", { files: ["src/a.ts", "src/b.ts"] });
   assert.equal(ledgerOf(repo).tier.predicted, "standard");
   assert.equal(fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts"))), null, "the lead implements at standard");
-});
-
-test("a delegate waiver lets the lead edit source at predicted large", () => {
-  const repo = openedWith("fence-c1-waived", { files: LARGE, extra: LARGE_EXTRA });
-  assert.equal(ledgerOf(repo).tier.predicted, "large");
-  cli(repo, "waive", ["delegate", "user said so"]);
-
-  assert.equal(fence(repo, pre(repo, "Write", path.join(repo, "src/a.ts"))), null, "delegate waiver lifts the fence");
 });
 
 // ---------------------------------------------------------------------------
@@ -401,11 +386,11 @@ test("C2 happy: the lead still edits source when the prediction is small, when t
   assert.equal(fence(planned, pre(planned, "Edit", path.join(planned, "src/a.ts"))), null, "plan playbook");
 });
 
-test("C2 happy: bugfix and refactor are tiered too, so the lead is fenced there as well", () => {
+test("C2 happy: bugfix and refactor are tiered too, and the lead edits at large there as well", () => {
   for (const playbook of ["bugfix", "refactor"]) {
     const repo = openedWith(`fence-c2-${playbook}`, { playbook, files: LARGE, extra: LARGE_EXTRA });
     assert.equal(ledgerOf(repo).tier.predicted, "large", playbook);
-    assert.ok(fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts"))), playbook);
+    assert.equal(fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts"))), null, playbook);
   }
 });
 
@@ -413,7 +398,7 @@ test("C2 happy: bugfix and refactor are tiered too, so the lead is fenced there 
 // C3 — the boundary is config.isSource(), which covers tests and skips docs
 // ---------------------------------------------------------------------------
 
-test("C3 edge: a test file is denied to the lead like source; docs/notes.md and the run dir's ledger.md stay writable", () => {
+test("C3 edge: at large a test file is the lead's like source; docs/notes.md and the run dir's ledger.md stay writable", () => {
   const repo = openedWith("fence-c3", { files: LARGE, extra: LARGE_EXTRA });
   assert.equal(ledgerOf(repo).tier.predicted, "large");
 
@@ -423,10 +408,7 @@ test("C3 edge: a test file is denied to the lead like source; docs/notes.md and 
   assert.equal(cfg.isSource("docs/notes.md"), false);
   assert.equal(cfg.isSource(".claude/gate/runs/x/ledger.md"), false);
 
-  const denied = fence(repo, pre(repo, "Edit", path.join(repo, "tests/a.test.ts")));
-  assert.ok(denied, "tests are source for this fence");
-  assert.match(denied, /tests\/a\.test\.ts/, denied);
-  assert.match(denied, /gate brief worker/, denied);
+  assert.equal(fence(repo, pre(repo, "Edit", path.join(repo, "tests/a.test.ts"))), null, "tests are the lead's too");
 
   assert.equal(fence(repo, pre(repo, "Edit", path.join(repo, "docs/notes.md"))), null, "docs");
   assert.equal(fence(repo, pre(repo, "Write", path.join(runDir(repo), "ledger.md"))), null, "ledger.md");
@@ -465,41 +447,30 @@ test("C5 boundary: done-gate:qa is still refused source and still allowed tests 
 // C6 — the deny is evidence: an event, and a count in the report
 // ---------------------------------------------------------------------------
 
-test("C6 edge: a fenced lead edit is logged as a deny event and the report counts it", () => {
+test("C6 edge: a fenced write is logged as a deny event and the report counts it", () => {
   const repo = openedWith("fence-c6", { files: LARGE, extra: LARGE_EXTRA });
   assert.deepEqual(readEvents(stateDir(repo), "S1").filter((e) => e.kind === "deny"), [], "nothing denied yet");
 
-  assert.ok(fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts"))));
+  assert.ok(fence(repo, pre(repo, "Write", path.join(repo, ".claude/gate/runs/x/ledger.json"))));
 
   const denies = readEvents(stateDir(repo), "S1").filter((e) => e.kind === "deny");
   assert.equal(denies.length, 1);
   assert.equal(denies[0].session, "S1");
   assert.equal(denies[0].agentType ?? null, null, "the lead has no agent type");
-  // a delegation deny is a hand-off, not a blocked write: the report says so and keeps the count at 0
-  assert.match(cli(repo, "report").stdout, /blocked writes to gate files 0/);
-  assert.match(cli(repo, "report").stdout, /1 lead edit\(s\) fenced off/);
+  assert.match(cli(repo, "report").stdout, /blocked writes to gate files 1/);
 });
 
 // ---------------------------------------------------------------------------
 // C8 — a measured size can fence the lead even when the plan predicted small
 // ---------------------------------------------------------------------------
 
-test("C8 boundary: a plan that predicted small but has already grown to a measured large fences the lead's next source edit", () => {
+test("C8 boundary: a plan that predicted small and grew to a measured large leaves the lead free to edit", () => {
   const repo = openedWith("fence-c8", { files: ["src/a.ts"] });
   assert.equal(ledgerOf(repo).tier.predicted, "tiny", "the plan named one file");
-  assert.equal(fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts"))), null, "small and unmeasured: allowed");
-
-  // the task grows past ten files; `gate check` is what writes the measured tier into the ledger
   for (const f of LARGE) write(repo, f, "export const x = 2;\n");
   cli(repo, "check");
   assert.equal(ledgerOf(repo).tier.measured.tier, "large");
-
-  // a planned file, so the growth rule (a new unplanned file) stays out of this
-  const reason = fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts")));
-  assert.ok(reason, "the measured size fences the lead too");
-  assert.match(reason, /large/, reason);
-  assert.match(reason, /gate brief worker/, reason);
-  assert.match(reason, /done-gate:worker/, reason);
+  assert.equal(fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts"))), null);
 });
 
 test("C8 boundary: with no prediction and nothing measured yet the lead may still edit", () => {

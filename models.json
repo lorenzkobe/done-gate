@@ -26,7 +26,6 @@
         "requires": [
           "skeptic",
           "qa",
-          "worker",
           "reviewer",
           "reviewer-2"
         ]

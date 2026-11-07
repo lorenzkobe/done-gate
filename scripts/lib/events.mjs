@@ -184,7 +184,7 @@ export const verbs = {
     if ((failedBash || (ctx.input?.hook_event_name === "PostToolUse" && WRITING_TOOLS.has(ctx.input.tool_name))) && ctx.session && !ctx.input.agent_id) {
       try {
         const { stampNow } = await import("./assess.mjs");
-        warning = stampNow(ctx, events);
+        warning = stampNow(ctx);
       } catch {
         // a stamp is a courtesy; the next assess dates the change itself
       }

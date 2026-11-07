@@ -368,7 +368,7 @@ test("C6 happy: a slop line added in the declared repo is reported by the slop c
   assert.ok(hits[0].includes(`${p}/src/s.ts:2 step narration`), hits[0]);
 });
 
-test("C7 refused: at the delegated size the lead's Edit of ../other/src/a.py is refused and a worker's is allowed; below it the lead's is allowed; a reviewer may not edit it at either size", () => {
+test("C7 happy: at large the lead's and a worker's Edit of ../other/src/a.py are allowed, as they are below it; a reviewer may not edit it at either size", () => {
   const policy = loadPolicy();
   assert.equal(policy.delegatesAt, "large");
   const LARGE = Array.from({ length: policy.tiers.standard.maxFiles }, (_, i) => `src/f${i}.ts`);
@@ -376,11 +376,8 @@ test("C7 refused: at the delegated size the lead's Edit of ../other/src/a.py is 
   assert.equal(ledgerOf(big.repo).tier.predicted, "large");
   cli(big.repo, "case", ["add", "the change works", "--kind", "happy"]);
   const target = { file_path: path.join(big.other, "src/a.py") };
-  const reason = fence(big.repo, "Edit", target);
-  assert.ok(reason, "the lead's Edit of a declared repo's source file at large must be denied");
-  assert.match(reason, /\blarge\b/);
-  assert.ok(reason.includes(`${big.p}/src/a.py`), reason);
-  assert.ok(fence(big.repo, "Write", target), "Write too");
+  assert.equal(fence(big.repo, "Edit", target), null, "the lead edits a declared repo's source file at large");
+  assert.equal(fence(big.repo, "Write", target), null, "Write too");
   assert.equal(fence(big.repo, "Edit", target, "done-gate:worker"), null, "the worker edits it");
   assert.ok(fence(big.repo, "Edit", target, "done-gate:reviewer"), "a reviewer does not");
 
