@@ -390,6 +390,7 @@ function appLine(state) {
   // the same clock R4 uses, so line 4 and the missing list can never disagree
   const driven = drivenAfter(state, lastEditSeq(state, config, state.ledger));
   if (!driven) return "App not yet driven after the last change.";
+  if (driven.viaVerify) return `App driven by the e2e run in verify, after the last change (${driverCommand(config)}).`;
   return driven.kind === "command" ? `App driven after the last change (${driverCommand(config)}).` : "App driven after the last change.";
 }
 

@@ -477,6 +477,12 @@ does a zero beside any line counting a test that ran). A wrapper that prints no 
 `testRelated` template, the related entry runs it on the task's changed source and related test
 files, and it may find nothing when handed only source; `{ "related": true }` still needs `testFiles`.
 
+A verify entry equal to the `cmd:` driver is the drive when it goes green: `gate verify` logs the run
+and prints the pointer that closes the driver step, and one run closes every click case it reaches.
+Nothing is logged if the source moved during the run. On a skip because the code is what a green run
+judged, the mark counts as the drive but is no run of its own. With the globs declared, a `final`
+driver entry is skipped when no UI or API file changed, and `--force` runs it.
+
 A green `gate verify` closes the driver and schema steps by itself, as N/A, when this code cannot
 reach them: only tests or docs changed, or the repo lists its globs (`ui` and `api` for driver,
 `schema` for schema; an empty list counts) and no changed file matches. A later edit opens them

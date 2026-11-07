@@ -396,7 +396,8 @@ function gateNote(cmd) {
 // inline interpreter code that writes nothing still ran.
 export function ranEvents(state) {
   const since = state.ledger?.openedSeq ?? 0;
-  return (state.events ?? []).filter((e) => RUN_KINDS.has(e.kind) && e.seq > since && !e.background && (!e.readOnly || e.runs) && !e.failed && !gateNote(e.cmd) && (e.kind !== "skill" || e.skill === "verify") && !notesTool(e));
+  // verify's mark on a skip says the code is as it was at a green run; nothing ran
+  return (state.events ?? []).filter((e) => RUN_KINDS.has(e.kind) && !e.reused && e.seq > since && !e.background && (!e.readOnly || e.runs) && !e.failed && !gateNote(e.cmd) && (e.kind !== "skill" || e.skill === "verify") && !notesTool(e));
 }
 
 export function ranText(e) {
@@ -812,7 +813,8 @@ export function drivenAfter(state, after) {
 
 function driverRun(state, after) {
   const driverCmd = driverCommand(state.config);
-  return (e) => driverCmd !== null && e.kind === "command" && !e.background && String(e.cmd ?? "").includes(driverCmd) && e.seq >= after && (e.exit == null || e.exit === 0);
+  // a run of its own may be the edit's cause, at that seq; verify's event never is
+  return (e) => driverCmd !== null && e.kind === "command" && !e.background && String(e.cmd ?? "").includes(driverCmd) && (e.viaVerify ? e.seq > after : e.seq >= after) && (e.exit == null || e.exit === 0);
 }
 
 const CLICK_ACTIONS = new Set(["left_click", "double_click", "triple_click", "right_click", "form_input"]);
@@ -830,7 +832,8 @@ export function clickEvents(state, after) {
 // driver may write source itself, which dates that edit to the run, so its run counts at that seq.
 export function apiCalls(state, after) {
   const ranDriver = driverRun(state, after);
-  return ranEvents(state).filter((e) => !e.agent && (e.exit == null || e.exit === 0) && (e.seq > after || ranDriver(e)));
+  const reused = (state.events ?? []).filter((e) => e.reused && ranDriver(e));
+  return [...ranEvents(state).filter((e) => !e.agent && (e.exit == null || e.exit === 0) && (e.seq > after || ranDriver(e))), ...reused].sort((a, b) => a.seq - b.seq);
 }
 
 // A click case reopens when source changed after its event: the control may have moved.
@@ -974,13 +977,19 @@ export const stepSurfaceFiles = (key, ledger, config, changed) => STEP_SURFACE[k
 // On a green verify: driver and schema need no hand close when this code cannot reach them, because
 // only tests or docs changed, or the repo declared its globs and none matched. The mark holds the
 // hash judged, so an edit takes it back. Each repo of a multi-repo run has its own globs: left by hand.
+export function surfaceClear(key, ledger, config, touched) {
+  if (!newRules(ledger) || ledger.repos?.length) return false;
+  const surface = STEP_SURFACE[key];
+  const code = touched.filter((p) => config.isSource(p) && !config.isTest(p) && !config.isDoc(p));
+  return !surface.files(ledger, config, touched).length && (!code.length || surface.declared(config.declared));
+}
+
 export function workOutSteps(ledger, config, touched, hash) {
   if (!newRules(ledger) || ledger.repos?.length) return;
-  const code = touched.filter((p) => config.isSource(p) && !config.isTest(p) && !config.isDoc(p));
   for (const [key, surface] of Object.entries(STEP_SURFACE)) {
     const step = ledger.steps.find((s) => s.key === key);
     if (!step || !(step.state === null || step.auto)) continue;
-    const clear = !surface.files(ledger, config, touched).length && (!code.length || surface.declared(config.declared));
+    const clear = surfaceClear(key, ledger, config, touched);
     if (clear) Object.assign(step, { state: "N/A", note: `worked out: no ${surface.names} file changed`, evidence: null, auto: hash, seq: nextSeq() });
     else if (step.auto) blank(step);
   }
@@ -1157,8 +1166,9 @@ export function evaluate(state) {
       const skill = /^skill:\s*([\w-]+)$/.exec(String(config.driver ?? ""))?.[1] ?? null;
       const missing = skill !== null && Boolean(state.root) && !existsSync(path.join(state.root, ".claude", "skills", skill, "SKILL.md"));
       const scripted = 'If you drive it with a script (a Playwright run), set `"driver": "cmd:<the command>"` in gate.json (not a config change mid-task) and run it after the last edit.';
+      const inVerify = driverCmd !== null && (config.verify ?? []).some((v) => v.cmd.trim() === driverCmd);
       unmet.push({ rule: "R4", text: driverCmd !== null
-        ? `UI files changed but the real surface was not driven after the last edit. Run \`${driverCmd}\` (the driver in gate.json) yourself, or get the user's waiver (\`gate waive driver "<reason>" --user-ok "<their words>"\`).`
+        ? `UI files changed but the real surface was not driven after the last edit. Run ${inVerify ? `\`gate verify --final\`, whose green \`${driverCmd}\` counts as the drive,` : `\`${driverCmd}\` (the driver in gate.json) yourself,`} or get the user's waiver (\`gate waive driver "<reason>" --user-ok "<their words>"\`).`
         : missing
         ? `UI files changed and gate.json names the ${config.driver} driver, but this repo has no .claude/skills/${skill}/SKILL.md. Run \`/done-gate:verify-setup\` to create it, drive the surface, or get the user's waiver (\`gate waive driver "<reason>" --user-ok "<their words>"\`). ${scripted}`
         : config.driver
@@ -1258,7 +1268,7 @@ export function evaluate(state) {
   // R18: verify ran every closed case's test file through a test command
   const gaps = waived(ledger, "coverage") ? [] : coverageGaps(state);
   if (gaps.length) {
-    unmet.push({ rule: "R18", text: `verify ran no test command that covers ${gaps.map((g) => `${g.id} (${g.file})`).join(", ")}: lint and build commands do not count, and a test command that names paths covers only those. Add one that runs the file (\`gate verify --add "<test runner> ${gaps[0].file}"\`), then \`gate verify\`; when a "final" command runs it, \`gate verify --final\`.${orWaive("coverage")}` });
+    unmet.push({ rule: "R18", text: `verify ran no test command that covers ${gaps.map((g) => `${g.id} (${g.file})`).join(", ")}: lint and build commands do not count, and a test command that names paths covers only those. Add one that runs the file (\`gate verify --add "<test runner> ${gaps[0].file}"\`), then \`gate verify\`; when a "final" command runs it, \`gate verify --final\`, or \`gate verify --force\` if verify skipped that command.${orWaive("coverage")}` });
   }
 
   // R17: every helper that wrote or edited a file searched the code and the memory first

@@ -49,7 +49,7 @@ export function stampSourceChange(ledger, hash, events, tree = null) {
   const first = ledger.lastSourceHash === undefined; // the opening stamp is not an edit
   const prev = ledger.lastSourceChangeSeq ?? 0;
   const prevHash = ledger.lastSourceHash;
-  const cause = events.filter((e) => (e.kind === "edit" || e.kind === "command") && e.seq > prev).pop();
+  const cause = events.filter((e) => (e.kind === "edit" || e.kind === "command") && !e.viaVerify && e.seq > prev).pop();
   ledger.lastSourceHash = hash;
   ledger.lastSourceChangeSeq = first ? 0 : (cause?.seq ?? nextSeq());
   // a change no edit-tool event explains came through the shell, or from another session

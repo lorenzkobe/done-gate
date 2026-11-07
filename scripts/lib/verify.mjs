@@ -5,8 +5,8 @@ import { DEFAULTS, loadConfig, matchAny } from "./config.mjs";
 import { segments, withoutHeredocs } from "./guard.mjs";
 import { buildState } from "./assess.mjs";
 import { currentLedger, isDone, loadLedger, saveLedger } from "./ledger.mjs";
-import { nextSeq, readEvents } from "./events.mjs";
-import { diffTextOf, implementationHash, newRules, notRecommended, saidSince, sourceHash, verifyKey, verifyWhere, waiverWordsProblem, workOutSteps } from "./rules.mjs";
+import { appendEvents, nextSeq, readEvents } from "./events.mjs";
+import { diffTextOf, driverCommand, implementationHash, newRules, surfaceClear, notRecommended, saidSince, sourceHash, verifyKey, verifyWhere, waiverWordsProblem, workOutSteps } from "./rules.mjs";
 import { repoPath } from "./paths.mjs";
 import { loadSession } from "./session-state.mjs";
 import { diffSnapshots, gitIgnored, parseHunks, snapshot } from "./tree.mjs";
@@ -400,6 +400,7 @@ export function verifyEntries(config, ledger) {
 const VERIFY_STEPS = new Set(["verify", "verify-before"]);
 
 const HISTORY_KEPT = 20;
+const PORT_IN_USE = /EADDRINUSE|address already in use|port \d+ is (?:already )?(?:in use|used)/i;
 
 // The test totals a runner's own summary states. A count no pattern here reads is unknown, so it
 // is never a zero. Past the read cap (false) nothing is judged.
@@ -502,6 +503,7 @@ export async function runVerify(ctx, { stepKey = "verify", final = false, force 
   } catch (error) {
     throw error instanceof BusyError ? new UsageError(error.message) : error;
   }
+  const driverCmd = driverCommand(config);
   const startedAt = new Date().toISOString();
   // A run the shell dies under leaves this behind; R3 and the report then say so.
   const started = path.join(current.dir, "verify.started.json");
@@ -513,6 +515,11 @@ export async function runVerify(ctx, { stepKey = "verify", final = false, force 
     const name = `${entry.cmd}${verifyWhere(row)}`;
     const isFinal = entry.when === "final";
     if (isFinal) row.final = true;
+    if (isFinal && !force && !entry.repo && entry.cmd.trim() === driverCmd && surfaceClear("driver", current.ledger, config, touched)) {
+      ctx.err(`verify: ${name} skipped (no UI or API file changed)`);
+      commands.push({ ...row, skipped: "no UI or API file changed", ms: 0 });
+      continue;
+    }
     if (!entry.related && greenOnThisTree(entry, key, entry.cmd)) {
       commands.push(repeated(row, key));
       continue;
@@ -526,7 +533,7 @@ export async function runVerify(ctx, { stepKey = "verify", final = false, force 
     const sameCode = isFinal && greenSource[key] === sourceNow;
     if (scope && !force && greenAt[key] === scope.implementation && !(isFinal && final && !sameCode)) {
       ctx.err(`verify: ${name} skipped (green on this implementation already)`);
-      commands.push({ ...row, skipped: "already green on this code", ms: 0, ...(sameCode ? { covers: true } : {}) });
+      commands.push({ ...row, skipped: "already green on this code", ms: 0, greenCode: true, ...(sameCode ? { covers: true } : {}) });
       continue;
     }
     // the area suite runs once, when the edits are done; until then it is owed
@@ -600,6 +607,11 @@ export async function runVerify(ctx, { stepKey = "verify", final = false, force 
     ms: commands.reduce((sum, c) => sum + (c.ms ?? 0), 0),
   }].slice(-HISTORY_KEPT);
   const record = { startedAt, finishedAt: new Date().toISOString(), sourceHash: sourceNow, ...greens, commands, history };
+  // a green e2e entry is the drive, for this code only: nothing if it moved. On a skip the code is
+  // what a green run judged, as after an edit and an undo, so the mark says so and is no run itself.
+  const drove = stamped && !moved.length && driverCmd ? commands.find((c) => !c.repo && c.cmd.trim() === driverCmd && (c.skipped ? c.covers || c.greenCode : c.exit === 0 && !c.timedOut)) : null;
+  const driveEvent = drove ? { seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, agent: null, agentType: null, kind: "command", tool: "Bash", cmd: driverCmd, exit: 0, readOnly: true, runs: true, viaVerify: true, ...(drove.skipped ? { reused: true } : {}) } : null;
+  if (driveEvent) appendEvents(ctx.stateDir, ctx.session, [driveEvent]);
   // written whole: a Stop hook may read it while a background verify is still writing
   writeFileSync(`${file}.${process.pid}.tmp`, JSON.stringify(record, null, 2));
   renameSync(`${file}.${process.pid}.tmp`, file);
@@ -615,7 +627,7 @@ export async function runVerify(ctx, { stepKey = "verify", final = false, force 
     if (stepKey === "verify") workOutSteps(ledger, config, touched, implementationHash(snap, config));
   }
   saveLedger(current.dir, ledger);
-  return { record, red, moved, dir: current.dir };
+  return { record, red, moved, driveEvent, driverCmd, dir: current.dir };
 }
 
 export const verbs = {
@@ -629,7 +641,7 @@ export const verbs = {
     const stepIdx = ctx.args.indexOf("--step");
     const stepKey = stepIdx >= 0 ? ctx.args[stepIdx + 1] ?? null : "verify";
     const force = ctx.args.includes("--force");
-    const { record, red, moved, dir } = await runVerify(ctx, { stepKey, force, final: force || ctx.args.includes("--final") });
+    const { record, red, moved, driveEvent, driverCmd, dir } = await runVerify(ctx, { stepKey, force, final: force || ctx.args.includes("--final") });
     for (const c of record.commands) {
       if (c.skipped) {
         ctx.out(`– ${c.cmd}${verifyWhere(c)} — skipped: ${c.skipped}${c.oldFindings ? ` (${c.oldFindings} old finding${c.oldFindings === 1 ? "" : "s"} off this task's lines ignored)` : ""}`);
@@ -638,7 +650,9 @@ export const verbs = {
       const green = c.exit === 0 && !c.timedOut;
       ctx.out(`${green ? "✓" : "✗"} ${c.cmd}${verifyWhere(c)} — ${c.timedOut ? "timed out" : c.noTests ? `no tests ran: ${c.noTestsWhy}` : `exit ${c.exit}`}${c.oldFindings ? ` (exit ${c.rawExit}: ${c.oldFindings} old finding${c.oldFindings === 1 ? "" : "s"} off this task's lines ignored)` : ""}, ${(c.ms / 1000).toFixed(1)}s`);
       if (!green) ctx.out("```\n" + c.tail.split("\n").slice(-12).join("\n") + "\n```"); // the failing tail: the same 12 lines the report shows
+      if (!green && c.cmd.trim() === driverCmd && PORT_IN_USE.test(c.tail ?? "")) ctx.out(`hint: \`${c.cmd}\` says its port is in use: a dev server may still be running. Stop it, or have the run reuse it.`);
     }
+    if (driveEvent) ctx.out(`drive recorded${driveEvent.reused ? " (the code is as it was at that green run)" : ""}: close the step with \`gate step driver done "<what it showed>" --evidence events#${driveEvent.seq}\``);
     const ran = record.commands.filter((c) => !c.skipped).length;
     if (record.commands.some((c) => c.owed)) ctx.out("final check owed: run `gate verify --final` once your edits are done (it may run in the background while review runs)");
     if (moved.length) ctx.out(`source changed while verify ran (${moved.slice(0, 5).join(", ")}): nothing recorded green and step {${stepKey}} stays open; run \`gate verify\` again once nothing is writing`);

@@ -2,7 +2,7 @@ import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
 import { optionalSteps, tiered } from "./size.mjs";
 import { loadConfig } from "./config.mjs";
 import { readEvents } from "./events.mjs";
-import { clickStale, lastEditSeq } from "./rules.mjs";
+import { clickStale, driverCommand, lastEditSeq } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 
 // One line after every verb: what to do next and the exact verb. The skill no longer has
@@ -30,7 +30,7 @@ export function nextHint(ledger, after = 0) {
 }
 
 // step is set when the hint is a playbook step's own text, the part that repeats.
-function hintOf(ledger, after) {
+function hintOf(ledger, after, config = null) {
   const only = (text) => ({ text, step: null });
   if (!ledger || isDone(ledger)) return only("");
   if (!ledger.taskSeq) return only("next: `gate note task \"<the user's ask, quoted, then your own words>\"`");
@@ -50,7 +50,9 @@ function hintOf(ledger, after) {
   // open cases come before the close step: closing with a blank case would only bounce off R8
   if (open.length && (!step || step.key === "close")) return only(closeCases);
   if (step) {
-    const how = step.key ? VERB_FOR[step.key] : null;
+    const e2e = step.key === "driver" && config ? driverCommand(config) : null;
+    const inVerify = e2e && config.verify.some((v) => v.cmd.trim() === e2e);
+    const how = inVerify ? `\`gate verify --final\`: a green \`${e2e}\` counts as the drive, then \`gate step driver done "<what it showed>" --evidence events#<seq>\` with the pointer it prints` : step.key ? VERB_FOR[step.key] : null;
     return { text: `next: step ${step.n}: ${how ?? `${step.text} then \`gate step ${step.n} done|skipped|na "…"\``}`, step };
   }
   return only("next: `gate close`");
@@ -64,7 +66,7 @@ export function printNext(ctx, { full = false } = {}) {
     const after = ledger?.cases?.some((c) => c.event)
       ? lastEditSeq({ events: ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq) }, loadConfig(ctx.root, ledger.repos), ledger)
       : 0;
-    const { text, step } = hintOf(ledger, after);
+    const { text, step } = hintOf(ledger, after, ledger ? loadConfig(ctx.root, ledger.repos) : null);
     if (!text) return;
     const key = step ? step.key ?? String(step.n) : null;
     const shown = ledger.hinted?.[ctx.session] ?? [];

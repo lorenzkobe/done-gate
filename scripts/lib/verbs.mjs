@@ -345,7 +345,7 @@ export const verbs = {
           const state = { ledger, events, config };
           // one run closes one case: nothing else ties a run to what the case claims
           const taken = new Set(ledger.cases.filter((c) => c.id !== id && c.ran).map((c) => c.event));
-          run = apiCalls(state, lastEditSeq(state, config, ledger)).filter((e) => !taken.has(`events#${e.seq}`) && ranText(e).includes(ranPart)).pop();
+          run = apiCalls(state, lastEditSeq(state, config, ledger)).filter((e) => !e.reused && !taken.has(`events#${e.seq}`) && ranText(e).includes(ranPart)).pop();
           if (!run) throw new UsageError(`${id}: no recorded run of yours after the last edit that names "${ranPart}" and that no other case holds. Run it (a failed, background, read-only or helper's run does not count), then close on it.`);
         }
         let event = null;
@@ -353,12 +353,16 @@ export const verbs = {
           // one event closes one case: two controls need two clicks
           const held = new Set(ledger.cases.filter((c) => c.id !== id && c.event && c.kind === "click").map((c) => c.event));
           const after = lastEditSeq(state, state.config, state.ledger);
-          const free = clickEvents(state, after).filter((e) => !held.has(`events#${e.seq}`));
+          // a green e2e run clicks every control it reaches, so no case holds it for itself
+          const free = clickEvents(state, after).filter((e) => e.viaVerify || !held.has(`events#${e.seq}`));
+          const driven = free.filter((e) => e.viaVerify).pop();
           // one click case open: every click since the edit was on its way to that control
           const openClicks = ledger.cases.filter((c) => c.kind === "click" && caseOpen(c, after)).length;
           if (named) {
             event = free.find((e) => e.seq === Number(named[1]));
             if (!event) throw new UsageError(`${id}: events#${named[1]} is not a click of yours after the last edit that no other case holds.${free.length ? ` Unclaimed: ${free.map(clickLine).join("; ")}.` : ""}`);
+          } else if (driven) {
+            event = driven;
           } else if (free.length > 1 && openClicks > 1) {
             throw new UsageError(`${id}: ${free.length} clicks after the last edit are unclaimed, and the gate cannot tell which one was this case's control: ${free.map(clickLine).join("; ")}. Name it: \`gate case close ${id} --click events#<seq>\`.`);
           } else event = free.pop();
