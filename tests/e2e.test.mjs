@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, naArgs } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 
 const NODE = JSON.stringify(process.execPath);
@@ -121,7 +121,7 @@ test("C9 happy: one session end to end — session start, a blocked stop, open, 
   sh(repo, ["note", "context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   sh(repo, ["note", "plan", "One file, one constant.", "--files", "src/a.ts"]);
   sh(repo, ["case", "add", "a() returns 2", "--kind", "happy"]);
-  sh(repo, ["case", "close", "C1", "--na", "covered by the existing fixture"]);
+  sh(repo, ["case", ...naArgs(repo, "C1", "covered by the existing fixture", { session: SESSION })]);
 
   edit(repo, "Write", "tests/a.test.ts", "test('a', () => { /* returns 2 */ });\n");
   sh(repo, ["verify"]);

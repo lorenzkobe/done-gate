@@ -301,7 +301,7 @@ test("C11 boundary: an edit logged before `gate open` blocks R2 only while the P
 
   // with both written, the late order stops blocking
   sh(repo, ["case", "add", "a() returns 2", "--kind", "happy"]);
-  sh(repo, ["case", ...naArgs(repo, "C1", "covered by the existing fixture")]);
+  sh(repo, ["case", ...naArgs(repo, "C1", "covered by the existing fixture", { session: SESSION })]);
   const both = check(repo);
   assert.ok(!/R2\b/.test(both), `a late Plan and case table that exist must not block:\n${both}`);
 
