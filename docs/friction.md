@@ -7,6 +7,30 @@ evidence is (a run folder, a session, a command and its output).
 
 ## Open
 
+Sandbox trial, batch 3.11, 2026-11-08 (claude 2.1.319, macOS, a throwaway git repo, the plugin from
+this branch with `--plugin-dir`, `--model claude-haiku-5-5`, 5 turns). Can a sandbox keep evidence out
+of the shell's reach? It blocks the agent's writes and the gate's verbs alike; hooks still write.
+
+Settings: `{ "sandbox": { "enabled": true, "allowUnsandboxedCommands": false, "filesystem": { "denyWrite": ["<repo>/.claude/gate"] } } }`
+Command: `claude -p "<prompt>" --plugin-dir <plugin> --setting-sources project,local --model claude-haiku-5-5 --permission-mode dontAsk --allowedTools Bash`
+
+| Through the Bash tool | What happened |
+| --- | --- |
+| `node <plugin>/scripts/gate.mjs open trial investigation` | blocked by the sandbox: `EPERM: operation not permitted, mkdir '<repo>/.claude/gate/runs/2026-11-07-trial'`, exit 1, no run opened |
+| `touch .claude/gate/shell-forged.txt` | refused by the fence before it ran; no file |
+| `python3 -c` writing a base64-hidden path into the gate folder | passed the fence, blocked by the sandbox: `PermissionError: [Errno 1] Operation not permitted`, exit 1, no file |
+
+Hooks run outside the sandbox and wrote through it: `current-session`, `pids/*`, `sessions/<id>/state.json`
+and `sessions/<id>/events.jsonl`, whose events held the prompt, 2 command starts, 2 commands and 2 denies.
+That matches the docs: "command hooks ... run with your full access"
+([sandboxing](https://code.claude.com/docs/en/sandboxing.md)).
+
+So with this setting the gate cannot run at all: `gate` verbs go through the same shell the sandbox
+limits. It does stop what the fence misses, the base64 path. Not run: an `allowWrite` carve-out for
+verbs, which would hand the same folder back to the shell. Nothing changes in this release: the
+wording stays tamper-evident. A real fix gets its own design: since hooks can write where the shell
+cannot, verbs would have to reach the evidence through a hook rather than the shell.
+
 From reading the run records on two laptops, 2026-11-05 to 11-06: 243 runs in a work repo, and
 courtly's 115 runs closed since 10-20. The numbers come from each repo's `.claude/gate/runs/`,
 `.claude/gate/sessions/` and session transcripts, and `gate stats` will print them once it exists.
