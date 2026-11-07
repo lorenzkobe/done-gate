@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, write, gate, pluginRoot, here, CODE_LOOKUP, MEMORY_LOOKUP } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
@@ -160,7 +160,11 @@ test("C8 happy: gate check shows each open run's age and points a stale one at g
   ledger.openedAt = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
   ledger.sessions = ["S0"];
   saveLedger(runDir(repo), ledger);
-  const r = spawnSync(process.execPath, [gate, "check"], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S2" } });
+  const check = () => spawnSync(process.execPath, [gate, "check"], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S2" } });
+  assert.doesNotMatch(check().stdout, /gate abandon old/, "touched just now: another session may still be on it");
+  const longAgo = new Date(Date.now() - 5 * 24 * 3600 * 1000);
+  utimesSync(path.join(runDir(repo), "ledger.json"), longAgo, longAgo);
+  const r = check();
   assert.match(r.stdout, /old[^\n]*5 days/, r.stdout);
   assert.match(r.stdout, /gate abandon old/, r.stdout);
 });

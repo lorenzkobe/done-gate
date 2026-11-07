@@ -310,6 +310,14 @@ export function openLedger(ctx, slug, playbook, repoPaths = []) {
   return { dir, ledger };
 }
 
+// Another session's run, opened and last touched two days ago or more: nothing else prompts anyone
+// to close it, and it no longer holds up the repo's setup.
+const STALE_MS = 2 * 24 * 3600 * 1000;
+export function staleForeign({ dir, ledger }, session, now = Date.now()) {
+  if (ledger.sessions?.includes(session) || now - Date.parse(ledger.openedAt) < STALE_MS) return false;
+  return now - statSync(path.join(dir, "ledger.json")).mtimeMs >= STALE_MS;
+}
+
 // Every run whose ledger is not closed or abandoned, newest first.
 export function openRuns(stateDir) {
   const dir = runsDir(stateDir);

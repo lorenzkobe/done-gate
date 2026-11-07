@@ -3,7 +3,7 @@ import path from "node:path";
 import { assess, unmetLines } from "./assess.mjs";
 import { policyFor, splitAdvice } from "./size.mjs";
 import { loadConfig, configPath } from "./config.mjs";
-import { currentLedger, openRuns } from "./ledger.mjs";
+import { currentLedger, openRuns, staleForeign } from "./ledger.mjs";
 import { loadSession } from "./session-state.mjs";
 
 // Read-only verbs. `check` prints only what is still unmet; "clean" when nothing is.
@@ -35,10 +35,9 @@ const age = (iso) => {
   return days >= 1 ? `${days} day${days === 1 ? "" : "s"}` : "less than a day";
 };
 
-// Runs another session left open for two days or more: nothing else prompts anyone to close them.
 function staleRuns(ctx) {
   return openRuns(ctx.stateDir)
-    .filter(({ ledger }) => !ledger.sessions?.includes(ctx.session) && Date.now() - Date.parse(ledger.openedAt) >= 2 * DAY_MS)
+    .filter((run) => staleForeign(run, ctx.session))
     .map(({ ledger }) => `open run ${ledger.slug}, opened ${age(ledger.openedAt)} ago by another session: if that work is over, \`gate abandon ${ledger.slug} "<reason>"\``);
 }
 

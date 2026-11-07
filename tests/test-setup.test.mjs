@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, write, gate } from "./helpers.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
@@ -230,4 +230,76 @@ test("C16 edge: the pytest guess follows the repo's environment; bad apply files
   assert.equal(b.status, 1);
   assert.match(b.stderr, /gate\.json.*(JSON|fix)/i);
   assert.doesNotMatch(`${b.stdout}${b.stderr}`, /GATE ERROR/);
+});
+
+function agedRun(name, ageMs, session = "S9", touchedMs = ageMs) {
+  const repo = makeRepo(name, JEST);
+  startContext(repo);
+  said(repo, "set it up later please");
+  const opened = run(repo, "open", ["old-task", "feature", "--setup-later", "set it up later"]);
+  assert.equal(opened.status, 0, opened.stderr);
+  const ledger = path.join(repo, ".claude/gate/runs", readdirSync(path.join(repo, ".claude/gate/runs"))[0], "ledger.json");
+  const body = JSON.parse(readFileSync(ledger, "utf8"));
+  writeFileSync(ledger, JSON.stringify({ ...body, sessions: [session], openedAt: new Date(Date.now() - ageMs).toISOString() }));
+  const touched = new Date(Date.now() - touchedMs);
+  utimesSync(ledger, touched, touched);
+  rmSync(path.join(repo, ".claude/gate/sessions/S1"), { recursive: true, force: true });
+  return repo;
+}
+const DAY = 24 * 3600 * 1000;
+
+test("a repo with only another session's run, two days or older, gets the setup notice and apply works", () => {
+  const repo = agedRun("ts-stale", 3 * DAY);
+  assert.match(startContext(repo), SETUP);
+  said(repo, "yes add the keys please");
+  const applied = run(repo, "setup", ["--apply", "--user-ok", "yes add the keys"]);
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.match(readFileSync(path.join(repo, ".claude/gate.json"), "utf8"), /testFiles/);
+});
+
+test("an own run and a fresh foreign run still hide the notice and refuse apply", () => {
+  const fresh = agedRun("ts-fresh", 2 * DAY - 60_000);
+  assert.doesNotMatch(startContext(fresh), SETUP);
+  said(fresh, "yes add the keys please");
+  assert.notEqual(run(fresh, "setup", ["--apply", "--user-ok", "yes add the keys"]).status, 0);
+  const own = agedRun("ts-own", 3 * DAY, "S1");
+  const resumed = run(own, "session-start", [], JSON.stringify({ session_id: "S1", cwd: own, hook_event_name: "SessionStart", session_start_source: "resume" }));
+  assert.doesNotMatch(JSON.parse(resumed.stdout).hookSpecificOutput.additionalContext, SETUP);
+  said(own, "yes add the keys please");
+  assert.notEqual(run(own, "setup", ["--apply", "--user-ok", "yes add the keys"]).status, 0);
+});
+
+test("apply beside a stale run re-stamps it: no R13 on attach or a cleared session, and its report says so", () => {
+  for (const join of ["attach", "clear"]) {
+    const repo = agedRun(`ts-restamp-${join}`, 3 * DAY);
+    startContext(repo);
+    said(repo, "yes add the keys please");
+    assert.equal(run(repo, "setup", ["--apply", "--user-ok", "yes add the keys"]).status, 0);
+    rmSync(path.join(repo, ".claude/gate/sessions/S1"), { recursive: true, force: true });
+    const started = run(repo, "session-start", [], JSON.stringify({ session_id: "S1", cwd: repo, hook_event_name: "SessionStart", session_start_source: join === "clear" ? "clear" : "startup" }));
+    assert.equal(started.status, 0, started.stderr);
+    if (join === "attach") assert.equal(run(repo, "attach", ["old-task"]).status, 0);
+    assert.doesNotMatch(run(repo, "check").stdout, /R13/, join);
+    assert.match(run(repo, "report").stdout, /gate setup changed gate\.json on .* while this run sat idle/, join);
+  }
+});
+
+test("a run opened days ago but touched recently is not stale", () => {
+  const repo = agedRun("ts-active", 3 * DAY, "S9", 60_000);
+  assert.doesNotMatch(startContext(repo), SETUP);
+  said(repo, "yes add the keys please");
+  assert.notEqual(run(repo, "setup", ["--apply", "--user-ok", "yes add the keys"]).status, 0);
+});
+
+test("decline is allowed beside a stale run and refused beside a fresh or own one", () => {
+  const stale = agedRun("ts-decline-stale", 3 * DAY);
+  startContext(stale);
+  said(stale, "no thanks not now");
+  assert.equal(run(stale, "setup", ["--decline", "--user-ok", "no thanks not now"]).status, 0);
+  assert.match(readFileSync(path.join(stale, ".claude/gate.json"), "utf8"), /"testFiles": null/);
+  for (const repo of [agedRun("ts-decline-fresh", DAY), agedRun("ts-decline-own", 3 * DAY, "S1")]) {
+    startContext(repo);
+    said(repo, "no thanks not now");
+    assert.notEqual(run(repo, "setup", ["--decline", "--user-ok", "no thanks not now"]).status, 0);
+  }
 });

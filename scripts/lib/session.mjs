@@ -3,7 +3,7 @@ import path from "node:path";
 import { assess, unmetCount } from "./assess.mjs";
 import { ensureSession, loadSession, updateSession } from "./session-state.mjs";
 import { recordGateError, UsageError } from "./context.mjs";
-import { attachLedger, currentLedger, isDone, loadLedger, openRuns, runsDir, saveLedger } from "./ledger.mjs";
+import { attachLedger, currentLedger, isDone, loadLedger, openRuns, runsDir, saveLedger, staleForeign } from "./ledger.mjs";
 import { writeReport } from "./verbs.mjs";
 import { checkRelease, UPDATE_COMMANDS } from "./release.mjs";
 import { needsSetup } from "./setup.mjs";
@@ -124,7 +124,7 @@ export const verbs = {
     // a repo with tests but no testFiles is asked once, before a run opens: gate.json changed
     // mid-run trips R13
     try {
-      const running = Boolean(currentLedger(ctx.stateDir, ctx.session)) || foreign !== null || openRuns(ctx.stateDir).some((r) => r.ledger.status !== "closed");
+      const running = Boolean(currentLedger(ctx.stateDir, ctx.session)) || openRuns(ctx.stateDir).some((r) => r.ledger.status !== "closed" && !staleForeign(r, ctx.session));
       if (!running && needsSetup(ctx.root)) {
         // this session's gate open refuses until setup is applied, declined or put off in the user's words
         if (loadSession(ctx.stateDir, ctx.session)) updateSession(ctx.stateDir, ctx.session, { setupNoticed: true });

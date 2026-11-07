@@ -4,7 +4,7 @@ import { configPath, loadConfig, matchGlob } from "./config.mjs";
 import { segments, withoutHeredocs } from "./guard.mjs";
 import { UsageError } from "./context.mjs";
 import { readEvents } from "./events.mjs";
-import { currentLedger, isDone, openRuns } from "./ledger.mjs";
+import { currentLedger, isDone, openRuns, saveLedger, staleForeign } from "./ledger.mjs";
 import { saidSince } from "./rules.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { snapshot } from "./tree.mjs";
@@ -183,7 +183,7 @@ function validated(json, name) {
 
 function guardNoRun(ctx) {
   const current = currentLedger(ctx.stateDir, ctx.session);
-  if ((current && !isDone(current.ledger)) || openRuns(ctx.stateDir).some((r) => r.ledger.status !== "closed")) {
+  if ((current && !isDone(current.ledger)) || openRuns(ctx.stateDir).some((r) => r.ledger.status !== "closed" && !staleForeign(r, ctx.session))) {
     throw new UsageError("a run is open: changing gate.json now trips R13. Close or abandon the run first, then set up.");
   }
 }
@@ -204,6 +204,11 @@ function writeConfig(ctx, json) {
   const file = configPath(ctx.root);
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify(json, null, 2)}\n`);
+  // only stale runs can still be open here: the change is the user's, not a task's, so it is no R13 when one resumes
+  const hash = loadConfig(ctx.root).hash;
+  for (const { dir, ledger } of openRuns(ctx.stateDir).filter((r) => r.ledger.status !== "closed")) {
+    saveLedger(dir, { ...ledger, gateHash: hash, caveats: [...(ledger.caveats ?? []), `gate setup changed gate.json on ${new Date().toISOString().slice(0, 10)} while this run sat idle.`] });
+  }
   const session = loadSession(ctx.stateDir, ctx.session);
   if (!session) return;
   const entry = snapshot(ctx.root, session.lastTree ?? session.baseline).files[GATE_JSON];
