@@ -134,7 +134,7 @@ export function attentionLines(state, unmet) {
   const out = [];
   const advice = splitAdvice(policyFor(ledger), ledger.tier?.measured);
   if (advice) out.push(`- ${advice}`);
-  for (const w of ledger.waivers) out.push(`- waived ${w.key}: ${w.reason ?? w.quote}`);
+  for (const w of ledger.waivers) out.push(`- waived ${w.key}: ${w.reason ?? w.quote}${w.words ? ` (the user: "${w.words}")` : ""}`);
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) out.push(`- skipped: ${s.text} — ${s.note}`);
   for (const a of ledger.huddles.flatMap((h) => h.actOn).filter((x) => x.dispute)) out.push(`- disputed ${a.id}: ${a.dispute.why} [${a.dispute.evidence}] — ${a.dispute.verdict ?? "unanswered"}${a.dispute.reviewerReason ? `; reviewer: ${a.dispute.reviewerReason}` : ""}${a.dispute.arbiterReason ? `; arbiter: ${a.dispute.arbiterReason}` : ""}`);
   if (denies) out.push(`- ${denies} denied write(s) to gate evidence files (see events)`);
@@ -411,7 +411,7 @@ const FOR_YOU_MAX = 6;
 function forYouLine(state, unmet) {
   const { ledger } = state;
   const items = [];
-  for (const w of ledger.waivers) items.push(`skipped with your OK: ${plain(w.reason ?? w.quote)}`);
+  for (const w of ledger.waivers) items.push(`skipped with your OK: ${plain(w.reason ?? w.quote)}${w.words ? ` (you said: "${w.words}")` : ""}`);
   for (const a of ledger.huddles.flatMap((h) => h.actOn)) {
     if (!a.dispute) continue;
     const v = a.dispute.verdict;

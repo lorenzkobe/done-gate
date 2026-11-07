@@ -162,8 +162,12 @@ attempt to finish, and a plain question gets one line saying how to pause.
 | R17 | a skeptic, reviewer, reviewer-2, worker or arbiter that wrote its file or edited source made no code or no memory lookup since the run opened (QA: no memory lookup), less any kind the lead declared missing; waivable with `gate waive lookups` |
 | R18 | verify ran no test command covering a closed case's test file: lint and build never count, a test command that names paths covers only those (a `cd` is followed, `--ignore` and `--deselect file::name` take a file out); waivable with `gate waive coverage` |
 
-Waivers are the only way past a keyed step: the user OKs it, Claude records the reason
-with `gate waive <key> "…"`, and the report lists every waiver. The keys: `driver` (R4),
+Waivers are the only way past a keyed step: the user OKs it, Claude records the reason and
+their words with `gate waive <key> "…" --user-ok "<their words>"`, and the report lists every
+waiver with the words. In a new run the words are required: three or more, said by the user in
+this task, naming what is given up (the key or a word like it: drive, click, screen for
+`driver`), not saying the opposite, and for a check on code said after the last code edit. An
+old run waives on the reason alone. The keys: `driver` (R4),
 `review` (R5), `schema` (R6), `tests` (R7), `review-2` (R9), `slop` (R10), `gate-config`
 (R13), `lookups` (R17), or the key of a step whose waiving clears something. A rule number
 is taken for its key (`gate waive R4` records `driver`). Any other key is refused with the
@@ -364,7 +368,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `next` | the full `next:` hint; after a verb it is printed in full the first time a step is hinted and in a short form afterwards, and in full again once a session joins the run (clear, resume, compact, `gate attach`) |
 | `huddle add <role> --file review-1.md` · `acton` · `resolve` · `dispute` | reviewer rounds and Act-on items; `add` prints each recorded id with its finding and refuses a file whose writer made no lookups (R17) |
 | `huddle reply --file worker-<n>.md` | record a worker's answers: `fixed:` closes an item, `disagree:` disputes it; an unknown id fails and lists the open ones. Worker reply files are their own stream, numbered like their packet (`brief-worker-2.md` asks for `worker-2.md`); a worker with no lookups is refused (R17) |
-| `waive <key\|R<n>> "<reason>"` | record a waiver and print what it clears; it shows in the report |
+| `waive <key\|R<n>> "<reason>" --user-ok "<their words>"` | record a waiver on the user's words and print what it clears; it shows in the report |
 | `verify [--final] [--step verify-before]` | run the repo's verify commands, then each declared repo's in its own directory, write `verify.json`; a `"when": "final"` command runs only with `--final` and is owed until then |
 | `verify --add "<cmd>"` · `verify --drop "<cmd>"` | change what verify runs for this run only; nothing runs. `--add` adds a command (it runs after the config ones at every `gate verify`, with the default timeout, also when the config has none) or restores a dropped gate.json one; `--drop` removes an added one or drops a gate.json one for this run. They live on the ledger, not in gate.json (R13 stays quiet), and the worker and reviewer packets' Test command lists what verify will run with them, so there is no need to edit gate.json to steer helpers; `gate doctor` and the report list them, and For you names every dropped gate.json command. An added or restored command that has not run blocks the close (R3) |
 | `setup [--apply [file] \| --decline] --user-ok "<words>"` | propose the faster test loop's gate.json keys; `--apply` writes the proposal (or the edited file) and `--decline` records `"testFiles": null`, each only with the user's words and no run open |

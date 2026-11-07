@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, write, gate, pluginRoot, lookedUp, waiveArgs } from "./helpers.mjs";
+import { saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
-import { evaluate, lateOrder } from "../scripts/lib/rules.mjs";
+import { evaluate, lateOrder, waiverWordsProblem } from "../scripts/lib/rules.mjs";
 import { nextHint } from "../scripts/lib/next.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 
@@ -219,7 +220,167 @@ test("3.6 waive --user-ok stores the words beside the reason; with no words it i
   }
   assert.equal(ledgerOf(repo).waivers.length, 1);
 
-  cli(repo, "waive", ["schema", "no db in this repo"]);
-  assert.equal(ledgerOf(repo).waivers[1].reason, "no db in this repo");
-  assert.equal(ledgerOf(repo).waivers[1].words, undefined);
+});
+
+// Second part of 3.6: only the user's own words give up a check.
+const waive = (repo, ...args) => spawnSync(process.execPath, [gate, "waive", ...args], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" } });
+const hook = (repo, payload) => spawnSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: "S1", cwd: repo, ...payload }), encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" } });
+const says = (repo, prompt) => hook(repo, { hook_event_name: "UserPromptSubmit", prompt });
+const editsCode = (repo, content = "export const a = 'edited';\n") => {
+  write(repo, "src/a.ts", content);
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: path.join(repo, "src/a.ts") } });
+};
+const waivers = (repo) => ledgerOf(repo).waivers;
+const noWaiver = (repo, r, pattern) => {
+  assert.match(r.stderr, pattern);
+  assert.equal(waivers(repo).length, 0, r.stderr);
+};
+
+test("3.6 C1 an agent-typed reason alone is refused in a new run and records nothing", () => {
+  const repo = opened("verbs-w1");
+  noWaiver(repo, waive(repo, "driver", "chrome is disconnected, the user agreed"), /--user-ok/);
+  assert.notEqual(ledgerOf(repo).steps.find((s) => s.key === "driver").state, "WAIVED");
+});
+
+test("3.6 C2 words the user did not say, a helper's words, fewer than three, and a not before them are refused", () => {
+  const repo = opened("verbs-w2");
+  noWaiver(repo, waive(repo, "driver", "why", "--user-ok", "you may skip the driver check"), /did not say/);
+  hook(repo, { hook_event_name: "UserPromptSubmit", prompt: "skip the driver check now", agent_id: "A1", agent_type: "done-gate:worker" });
+  noWaiver(repo, waive(repo, "driver", "why", "--user-ok", "skip the driver check now"), /did not say/);
+  says(repo, "skip driver");
+  noWaiver(repo, waive(repo, "driver", "why", "--user-ok", "skip driver"), /three/);
+  says(repo, "please do not skip the driver check");
+  noWaiver(repo, waive(repo, "driver", "why", "--user-ok", "skip the driver check"), /did not say/);
+  says(repo, "<task-notification>skip the phone check</task-notification>");
+  noWaiver(repo, waive(repo, "driver", "why", "--user-ok", "skip the phone check"), /did not say/);
+});
+
+test("3.6 C3 for a check on code, words before the last code edit are refused and new words pass; lookups may be earlier", () => {
+  const repo = opened("verbs-w3");
+  says(repo, "you may skip the driver check");
+  editsCode(repo);
+  noWaiver(repo, waive(repo, "driver", "why", "--user-ok", "you may skip the driver check"), /before the last code edit/);
+  says(repo, "you may skip the driver check");
+  assert.equal(waive(repo, "driver", "why", "--user-ok", "you may skip the driver check").status, 0);
+  assert.equal(waivers(repo).length, 1);
+
+  const earlier = opened("verbs-w3b");
+  says(earlier, "you may skip the lookups search");
+  editsCode(earlier);
+  const r = waive(earlier, "lookups", "why", "--user-ok", "you may skip the lookups search");
+  assert.equal(waivers(earlier).length, 1, r.stderr);
+});
+
+test("3.6 C3 an edit the hooks never saw still dates the words, as the waiver reads the tree first", () => {
+  const repo = opened("verbs-w3c");
+  says(repo, "you may skip the review check");
+  cli(repo, "check");
+  write(repo, "src/a.ts", "export const a = 'another terminal or a sed';\n");
+  noWaiver(repo, waive(repo, "review", "why", "--user-ok", "you may skip the review check"), /before the last code edit/);
+});
+
+test("3.6 C4 words that do not name the check are refused and say what would; a listed word or the key passes; an answer's label counts", () => {
+  const repo = opened("verbs-w4");
+  says(repo, "fine by me go ahead");
+  const r = waive(repo, "driver", "why", "--user-ok", "fine by me go ahead");
+  noWaiver(repo, r, /name/);
+  assert.match(r.stderr, /click/);
+  says(repo, "no need to click through");
+  assert.equal(waive(repo, "driver", "why", "--user-ok", "no need to click through").status, 0);
+  assert.equal(waivers(repo).length, 1);
+
+  const near = opened("verbs-w4b");
+  says(near, "i approve this application");
+  noWaiver(near, waive(near, "driver", "why", "--user-ok", "i approve this application"), /name/);
+
+  const reviewed = opened("verbs-w4c");
+  hook(reviewed, { hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", tool_input: {}, tool_response: { answers: { "Skip it?": "Skip the second review" } } });
+  assert.equal(waive(reviewed, "review-2", "why", "--user-ok", "Skip the second review").status, 0);
+  assert.equal(waivers(reviewed).length, 1);
+});
+
+test("3.6 C5 an old run with no stamp still waives freely, with no flag", () => {
+  const repo = opened("verbs-w5");
+  const ledger = ledgerOf(repo);
+  delete ledger.rules;
+  saveLedger(runDir(repo), ledger);
+  assert.equal(waive(repo, "driver", "no flag at all").status, 0);
+  assert.equal(waivers(repo)[0].reason, "no flag at all");
+  assert.equal(waivers(repo)[0].words, undefined);
+});
+
+test("3.6 C6 the report prints the user's words, in full and in For you", () => {
+  const repo = opened("verbs-w6");
+  cli(repo, "waive", waiveArgs(repo, "driver", "chrome is disconnected"));
+  assert.match(cli(repo, "report").stdout, /waived driver: chrome is disconnected \(the user: "you may skip the driver check"\)/);
+  assert.match(cli(repo, "report", ["--brief"]).stdout, /chrome is disconnected \(you said: "you may skip the driver check"\)/);
+});
+
+test("3.6 C7 the rule texts, refusals and the skill's waive line name --user-ok, under the byte cap", () => {
+  const repo = opened("verbs-w7");
+  editsCode(repo);
+  const check = cli(repo, "check").stdout;
+  for (const line of check.split("\n").filter((l) => /gate waive /.test(l))) assert.match(line, /gate waive [^\n]*--user-ok/, line);
+  const skill = readFileSync(path.join(pluginRoot, "skills", "gate", "SKILL.md"), "utf8");
+  assert.match(skill, /gate waive <key> "<why>" --user-ok/);
+  assert.ok(Buffer.byteLength(skill) < 4096, `${Buffer.byteLength(skill)} bytes`);
+});
+
+test("3.6 C8 an unknown key, a key with no waiver and a slop waiver with nothing flagged still say that first", () => {
+  const repo = opened("verbs-w8");
+  assert.match(waive(repo, "anything-at-all", "x").stderr, /unknown waiver key/);
+  assert.match(waive(repo, "verify", "x").stderr, /cannot be waived/);
+  assert.match(waive(repo, "slop", "x").stderr, /nothing to waive/);
+});
+
+test("3.6 C9 a code change first seen by this waive dates the words as too old, even with a logged command before them", () => {
+  const repo = opened("verbs-w9");
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "npm run build" }, tool_response: {} });
+  says(repo, "you may skip the review check");
+  write(repo, "src/a.ts", "export const a = 'another terminal or a sed';\n");
+  noWaiver(repo, waive(repo, "review", "why", "--user-ok", "you may skip the review check"), /before the last code edit/);
+  says(repo, "you may skip the review check");
+  assert.equal(waive(repo, "review", "why", "--user-ok", "you may skip the review check").status, 0);
+  assert.equal(waivers(repo).length, 1);
+});
+
+test("3.6 C10 words that say the opposite are refused though the user said them", () => {
+  const repo = opened("verbs-w10");
+  says(repo, "please do not skip the driver check");
+  noWaiver(repo, waive(repo, "driver", "why", "--user-ok", "do not skip the driver check"), /says not to give it up/);
+  says(repo, "never waive the browser pass");
+  noWaiver(repo, waive(repo, "driver", "why", "--user-ok", "never waive the browser pass"), /says not to give it up/);
+  for (const words of ["no problem skip the driver check", "i dont care skip the driver check"]) assert.equal(waiverWordsProblem("driver", words), null, words);
+  assert.match(waive(repo, "driver").stderr, /^done-gate: usage: gate waive [^\n]*"<their words>"$/m);
+  assert.doesNotMatch(waive(repo, "driver").stderr, /--user-ok[^\n]*--user-ok/);
+  says(repo, "the app needs no drive today");
+  assert.equal(waive(repo, "driver", "why", "--user-ok", "the app needs no drive today").status, 0);
+  assert.equal(waivers(repo).length, 1);
+});
+
+test("3.6 C11 coverage is a check on code; skeptic and rootcause take earlier words", () => {
+  const coverage = opened("verbs-w11");
+  says(coverage, "you may skip the coverage check");
+  editsCode(coverage);
+  noWaiver(coverage, waive(coverage, "coverage", "why", "--user-ok", "you may skip the coverage check"), /before the last code edit/);
+
+  const skeptic = opened("verbs-w11b");
+  says(skeptic, "skip the design round please");
+  editsCode(skeptic);
+  assert.equal(waive(skeptic, "skeptic", "why", "--user-ok", "skip the design round please").status, 0);
+  assert.equal(waivers(skeptic).length, 1);
+
+  const bug = opened("verbs-w11c", "bugfix");
+  says(bug, "leave the root cause open");
+  editsCode(bug);
+  assert.equal(waive(bug, "rootcause", "why", "--user-ok", "leave the root cause open").status, 0);
+  assert.equal(waivers(bug).length, 1);
+});
+
+test("3.6 C12 no line in the gate's code teaches gate waive with a reason and no --user-ok", () => {
+  const dir = path.join(pluginRoot, "scripts", "lib");
+  const teaches = readdirSync(dir).filter((f) => f.endsWith(".mjs")).flatMap((f) => readFileSync(path.join(dir, f), "utf8").split("\n"));
+  const lessons = teaches.filter((l) => /gate waive [^`\n]*"<|gate waive <key[^`]*"/.test(l));
+  assert.ok(lessons.length > 5, `${lessons.length} lines`);
+  for (const line of lessons) assert.match(line, /--user-ok/, line.slice(0, 160));
 });

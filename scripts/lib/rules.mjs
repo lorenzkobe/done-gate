@@ -37,7 +37,7 @@ const CHECKS = {
     const hits = slopHits(state).map((h) => `${h.rel}:${h.line} ${h.pattern} ${JSON.stringify(h.text)}`);
     if (!hits.length) return null;
     const rest = hits.length - SLOP_SHOWN;
-    return `${hits.length} slop line${hits.length === 1 ? "" : "s"} in this task's diff: ${hits.slice(0, SLOP_SHOWN).join(", ")}${rest > 0 ? `, and ${rest} more` : ""}. Fix them (a comment says why, or it goes), or for a true false positive get the user's waiver (\`gate waive slop "<reason>"\`); it covers the lines flagged now.`;
+    return `${hits.length} slop line${hits.length === 1 ? "" : "s"} in this task's diff: ${hits.slice(0, SLOP_SHOWN).join(", ")}${rest > 0 ? `, and ${rest} more` : ""}. Fix them (a comment says why, or it goes), or for a true false positive get the user's waiver (\`gate waive slop "<reason>" --user-ok "<their words>"\`); it covers the lines flagged now.`;
   },
   "claude-md-budget": ({ root, changed }) => {
     const file = path.join(root, "CLAUDE.md");
@@ -909,6 +909,40 @@ export function unfinishedFile(full) {
 const REVIEW_WAIVER = { reviewer: "review", "reviewer-2": "review-2" };
 export const WAIVERS = { driver: "R4", review: "R5", "review-2": "R9", schema: "R6", tests: "R7", qa: "R7", slop: "R10", "gate-config": "R13", lookups: "R17", coverage: "R18", "qa-pass": "R7" };
 
+// A waiver's words have to name what is given up. Words the user says, not the gate's own terms;
+// the key itself always counts. A question's answer holds only the chosen label, so its options
+// must name the check too.
+const NAMES_THE_CHECK = {
+  driver: ["drive", "driving", "click", "browser", "app", "screen", "phone", "surface", "ui", "endpoint"],
+  review: ["review", "reviewer", "reviewing"],
+  "review-2": ["review", "reviewer", "reviewing"],
+  schema: ["probe", "database", "db", "migration"],
+  tests: ["test", "testing"],
+  qa: ["test", "testing"],
+  "qa-pass": ["qa", "test", "testing"],
+  slop: ["comment", "banner", "label", "emoji", "todo"],
+  coverage: ["cover", "covered", "test", "testing", "suite"],
+  "gate-config": ["config", "gate.json"],
+  lookups: ["search", "lookup", "memory", "mempalace", "socraticode"],
+  repro: ["reproduce", "reproducing", "reproduction"],
+  rootcause: ["root cause", "cause"],
+  skeptic: ["design", "huddle", "plan check"],
+};
+const SAYS_THE_OPPOSITE = /\b(?:not|don't|dont|never)\s+(?:to\s+|just\s+)?(?:skip|skipping|waive|waiving|drop|omit|bypass|ignore|give up)\b/i;
+
+// Checks on code: words said before the last code edit were about other code.
+export const ON_CODE = new Set(["driver", "review", "review-2", "schema", "qa-pass", "tests", "qa", "slop", "coverage"]);
+
+// What is wrong with these words as a waiver of this key, whoever said them; null when nothing is.
+export function waiverWordsProblem(key, words) {
+  const text = words.trim();
+  if (text.split(/\s+/).length < 3) return `"${text}" is too short: at least three of the user's words`;
+  if (SAYS_THE_OPPOSITE.test(text)) return `"${text}" says not to give it up`;
+  const names = [key, ...(NAMES_THE_CHECK[key] ?? [])];
+  const named = names.some((name) => new RegExp(`(?:^|[^\\w-])${name.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&")}s?(?![\\w-])`, "i").test(text));
+  return named ? null : `"${text}" does not name what is given up; the words have to name it (${names.join(", ")})`;
+}
+
 export const newRules = (ledger) => (ledger?.rules ?? 0) >= 1;
 
 // A test or doc file is no surface: nobody drives it or probes it, whatever a glob says. A run from
@@ -954,7 +988,7 @@ export function reopenWorkedOut(ledger, config, changed, hash) {
   return moved;
 }
 
-const orWaive = (key) => ` Or get the user's waiver (\`gate waive ${key} "<reason>"\`).`;
+const orWaive = (key) => ` Or get the user's waiver (\`gate waive ${key} "<reason>" --user-ok "<their words>"\`).`;
 
 function waived(ledger, key) {
   return (ledger.waivers ?? []).some((w) => w.key === key);
@@ -1069,7 +1103,7 @@ export function evaluate(state) {
     if (!changed.some((p) => config.isTest(p)) && !waived(ledger, "tests") && !waived(ledger, "qa")) {
       unmet.push({
         rule: "R7",
-        text: `source changed (${list(src)}) but no test file changed. Write the tests for the case table (QA writes them at size large), or get the user's waiver (\`gate waive tests "<reason>"\`).`,
+        text: `source changed (${list(src)}) but no test file changed. Write the tests for the case table (QA writes them at size large), or get the user's waiver (\`gate waive tests "<reason>" --user-ok "<their words>"\`).`,
       });
     }
   }
@@ -1085,12 +1119,12 @@ export function evaluate(state) {
       const missing = skill !== null && Boolean(state.root) && !existsSync(path.join(state.root, ".claude", "skills", skill, "SKILL.md"));
       const scripted = 'If you drive it with a script (a Playwright run), set `"driver": "cmd:<the command>"` in gate.json (not a config change mid-task) and run it after the last edit.';
       unmet.push({ rule: "R4", text: driverCmd !== null
-        ? `UI files changed but the real surface was not driven after the last edit. Run \`${driverCmd}\` (the driver in gate.json) yourself, or get the user's waiver (\`gate waive driver "<reason>"\`).`
+        ? `UI files changed but the real surface was not driven after the last edit. Run \`${driverCmd}\` (the driver in gate.json) yourself, or get the user's waiver (\`gate waive driver "<reason>" --user-ok "<their words>"\`).`
         : missing
-        ? `UI files changed and gate.json names the ${config.driver} driver, but this repo has no .claude/skills/${skill}/SKILL.md. Run \`/done-gate:verify-setup\` to create it, drive the surface, or get the user's waiver (\`gate waive driver "<reason>"\`). ${scripted}`
+        ? `UI files changed and gate.json names the ${config.driver} driver, but this repo has no .claude/skills/${skill}/SKILL.md. Run \`/done-gate:verify-setup\` to create it, drive the surface, or get the user's waiver (\`gate waive driver "<reason>" --user-ok "<their words>"\`). ${scripted}`
         : config.driver
-        ? "UI files changed but the real surface was not driven after the last edit. Run the project's /verify driver (phone viewport first), or get the user's waiver (`gate waive driver \"<reason>\"`)."
-        : `UI files changed and this repo has no /verify driver. Run \`/done-gate:verify-setup\` once to create it, drive the surface, or get the user's waiver (\`gate waive driver "<reason>"\`). ${scripted}` });
+        ? "UI files changed but the real surface was not driven after the last edit. Run the project's /verify driver (phone viewport first), or get the user's waiver (`gate waive driver \"<reason>\" --user-ok \"<their words>\"`)."
+        : `UI files changed and this repo has no /verify driver. Run \`/done-gate:verify-setup\` once to create it, drive the surface, or get the user's waiver (\`gate waive driver "<reason>" --user-ok "<their words>"\`). ${scripted}` });
     }
   }
 
@@ -1099,7 +1133,7 @@ export function evaluate(state) {
   if (api.length && !waived(ledger, "driver")) {
     const evidence = ledger.steps?.find((s) => s.key === "driver" && s.state === "DONE")?.evidence;
     if (!apiCalls(state, after).some((e) => `events#${e.seq}` === evidence)) {
-      unmet.push({ rule: "R4", text: `API files changed (${list(api)}) but no recorded call closes the driver step after the last edit. Call the endpoint, then \`gate step driver done "<what it returned>" --ran "<part of the command or url>"\`, or get the user's waiver (\`gate waive driver "<reason>"\`).` });
+      unmet.push({ rule: "R4", text: `API files changed (${list(api)}) but no recorded call closes the driver step after the last edit. Call the endpoint, then \`gate step driver done "<what it returned>" --ran "<part of the command or url>"\`, or get the user's waiver (\`gate waive driver "<reason>" --user-ok "<their words>"\`).` });
     }
   }
 
@@ -1143,18 +1177,18 @@ export function evaluate(state) {
 
   // R13: the gate's own config changed mid-task (a ledger from before hashed the file text)
   if (ledger.gateHash && ![config.hash, config.legacyHash].includes(ledger.gateHash) && !waived(ledger, "gate-config")) {
-    unmet.push({ rule: "R13", text: ".claude/gate.json changed since this ledger opened. Restore it and change what verify runs for this run only with `gate verify --add \"<cmd>\"` and `gate verify --drop \"<cmd>\"`, or get the user's waiver (`gate waive gate-config \"<reason>\"`)." });
+    unmet.push({ rule: "R13", text: ".claude/gate.json changed since this ledger opened. Restore it and change what verify runs for this run only with `gate verify --add \"<cmd>\"` and `gate verify --drop \"<cmd>\"`, or get the user's waiver (`gate waive gate-config \"<reason>\" --user-ok \"<their words>\"`)." });
   }
   for (const repo of config.repos ?? []) {
     if (repo.missing) {
       unmet.push({ rule: "R13", text: `the declared repo ${repo.prefix} is gone (${repo.root} is no directory): its files read as deleted. Restore the directory, or give the run up with \`gate abandon ${ledger.slug} "<reason>"\`; no waiver clears this.` });
     } else if (repo.config.hash !== repo.gateHash && !waived(ledger, "gate-config")) {
-      unmet.push({ rule: "R13", text: `.claude/gate.json or the verify commands of the declared repo ${repo.prefix} changed since it was declared. Restore them, or get the user's waiver (\`gate waive gate-config "<reason>"\`).` });
+      unmet.push({ rule: "R13", text: `.claude/gate.json or the verify commands of the declared repo ${repo.prefix} changed since it was declared. Restore them, or get the user's waiver (\`gate waive gate-config "<reason>" --user-ok "<their words>"\`).` });
     }
   }
   // a ledger with a pinned policy is judged by it; only one from before pinning can go stale
   if (!ledger.policy && ledger.policyHash && state.policy?.hash && state.policy.hash !== ledger.policyHash && !waived(ledger, "gate-config")) {
-    unmet.push({ rule: "R13", text: "the plugin's models.json (tier policy) changed since this ledger opened. Restore it, or get the user's waiver (`gate waive gate-config \"<reason>\"`)." });
+    unmet.push({ rule: "R13", text: "the plugin's models.json (tier policy) changed since this ledger opened. Restore it, or get the user's waiver (`gate waive gate-config \"<reason>\" --user-ok \"<their words>\"`)." });
   }
 
   // R2: Context, plan and case table must predate the first source edit this task. Blocks only

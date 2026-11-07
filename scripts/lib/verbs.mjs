@@ -8,7 +8,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
+import { ON_CODE, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
 import { assess, broughtSinceOpen, buildState, cleanAtHead, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
@@ -373,18 +373,18 @@ export const verbs = {
       if (!step) throw new UsageError(`no step "${ref}"`);
       if (step.key === "close") throw new UsageError("step {close} is closed by `gate close`, which closes the run once `gate check` is clean; run `gate close`");
       if (state === "SKIPPED" && step.key && EVIDENCED_KEYS.has(step.key)) {
-        throw new UsageError(`step {${step.key}} has script/agent evidence and cannot be SKIPPED — ${Object.hasOwn(NO_WAIVER, step.key) ? `it has no waiver either. ${NO_WAIVER[step.key]}.` : `do it,${step.key === "tests" ? ' close it `gate step tests na "<why>"` when this change touches no source file,' : ""} or get the user's waiver with \`gate waive ${step.key} "<reason>"\``}`);
+        throw new UsageError(`step {${step.key}} has script/agent evidence and cannot be SKIPPED — ${Object.hasOwn(NO_WAIVER, step.key) ? `it has no waiver either. ${NO_WAIVER[step.key]}.` : `do it,${step.key === "tests" ? ' close it `gate step tests na "<why>"` when this change touches no source file,' : ""} or get the user's waiver with \`gate waive ${step.key} "<reason>" --user-ok "<their words>"\``}`);
       }
       if (step.key === "context" && ledger.lookups) throw new UsageError('step {context} is closed by `gate note context "Traced: … · Related: … · Research: …"` after you search the code and memory yourself; run that instead.');
       if (state === "N/A" && (step.key === "repro" || step.key === "rootcause")) {
-        throw new UsageError(`step {${step.key}} cannot be N/A: a bug fix with no ${step.key === "repro" ? "reproduction" : "root cause"} is a guess. Do it, or get the user's waiver with \`gate waive ${step.key} "<reason>"\``);
+        throw new UsageError(`step {${step.key}} cannot be N/A: a bug fix with no ${step.key === "repro" ? "reproduction" : "root cause"} is a guess. Do it, or get the user's waiver with \`gate waive ${step.key} "<reason>" --user-ok "<their words>"\``);
       }
       if (state === "N/A" && newRules(ledger) && SURFACE_KEYS.has(step.key)) {
         // the tree alone: a full assess here would reopen the N/A steps it judges as a next check does
         const repos = ledger.repos ?? [];
         const tree = snapshot(ctx.root, loadSession(ctx.stateDir, ctx.session)?.lastTree ?? ledger.baseline, repos);
         const owed = stepSurfaceFiles(step.key, ledger, loadConfig(ctx.root, repos), diffSnapshots(ledger.baseline, tree).changed);
-        if (owed.length) throw new UsageError(`step {${step.key}} cannot be N/A: ${owed.slice(0, 5).join(", ")} changed. Do it, or get the user's waiver with \`gate waive ${step.key} "<reason>"\``);
+        if (owed.length) throw new UsageError(`step {${step.key}} cannot be N/A: ${owed.slice(0, 5).join(", ")} changed. Do it, or get the user's waiver with \`gate waive ${step.key} "<reason>" --user-ok "<their words>"\``);
       }
       const onCall = state === "DONE" && step.key === "driver" && apiFiles(ledger, gateState.config, gateState.changed).length > 0;
       if (state === "DONE" && (RUN_KEYS.has(step.key) || onCall)) {
@@ -636,7 +636,7 @@ export const verbs = {
   waive(ctx) {
     const [named, ...why] = positional(ctx.args);
     const reason = why.join(" ").trim();
-    const usage = 'usage: gate waive <key|stepKey|R#> "<why>" --user-ok "<the user\'s words>"';
+    const usage = 'usage: gate waive <key|stepKey|R#> "<why>" --user-ok "<their words>"';
     if (!named || !reason) throw new UsageError(usage);
     const words = flag(ctx.args, "--user-ok");
     if (ctx.args.includes("--user-ok") && (!words?.trim() || words.startsWith("--"))) throw new UsageError(usage);
@@ -647,6 +647,9 @@ export const verbs = {
     if (Object.hasOwn(NO_WAIVER, key)) throw new UsageError(`${key} cannot be waived: a rule with no waiver would still block behind the step. ${NO_WAIVER[key]}.`);
     const flagged = key === "slop" ? slopHits(buildState(ctx, {})).map((h) => h.key) : null;
     if (flagged && !flagged.length) throw new UsageError("gate waive slop: the slop check flags no line in this task's diff that a waiver does not already cover; there is nothing to waive");
+    // an edit no hook saw is dated to an older command on the assess that finds it: words cannot predate it
+    const hashBefore = ON_CODE.has(key) ? open(ctx).ledger.lastSourceHash : null;
+    if (ON_CODE.has(key)) buildState(ctx, {});
     const clears = withLedger(ctx, (ledger) => {
       const step = ledger.steps.find((s) => s.key === key);
       const rule = Object.hasOwn(WAIVERS, key) ? WAIVERS[key] : null;
@@ -656,6 +659,17 @@ export const verbs = {
       }
       // a step with no script or agent evidence is closed by hand; a waiver there would clear nothing a rule reads
       if (!rule && !EVIDENCED_KEYS.has(key)) throw new UsageError(`step {${key}} has no waiver: close it with \`gate step ${key} done|skipped|na "<note>"\`. ${valid}`);
+      if (newRules(ledger)) {
+        const tell = 'ask the user, naming what is given up, then pass --user-ok "<their words, at least three>"; a question\'s options must name it too, since an answer holds only the chosen label';
+        if (!words) throw new UsageError(`giving up ${key} is the user's call: ${tell}`);
+        const problem = waiverWordsProblem(key, words);
+        if (problem) throw new UsageError(`gate waive ${key}: ${problem}. ${tell}`);
+        const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
+        if (!userSaid(ledger, events, words)) throw new UsageError(`the user did not say "${words.trim()}" in this task: ${tell}`);
+        if (ON_CODE.has(key) && (ledger.lastSourceHash !== hashBefore || !saidSince(events, ledger.lastSourceChangeSeq ?? 0, words))) {
+          throw new UsageError(`the user said "${words.trim()}" before the last code edit, about other code: ${tell}`);
+        }
+      }
       ledger.waivers.push({ key, reason, ...(words ? { words: words.trim() } : {}), seq: nextSeq(), ...(flagged ? { lines: flagged } : {}) });
       if (step) {
         delete step.auto;

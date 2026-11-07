@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync, execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync, utimesSync, readdirSync, writeFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, gate, write, pluginRoot, doneArgs, lookedUp } from "./helpers.mjs";
+import { makeRepo, gate, write, pluginRoot, doneArgs, lookedUp, waiveArgs } from "./helpers.mjs";
 import { loadSession, ensureSession } from "../scripts/lib/session-state.mjs";
 import { openLedger, attachLedger, currentLedger, loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadConfig, matchGlob, matchAny, DEFAULTS } from "../scripts/lib/config.mjs";
@@ -1041,7 +1041,7 @@ test("C6 happy: every mutating verb's last line is the next: hint, and `gate che
     ["case", ["add", "renders the badge", "--kind", "happy"], {}],
     ["note", ["context", CONTEXT], {}],
     ["huddle", ["add", "reviewer", "--file", "review-1.md"], {}],
-    ["waive", ["driver", "chrome is disconnected, skip the phone pass"], {}],
+    ["waive", waiveArgs(repo, "driver", "chrome is disconnected, skip the phone pass"), {}],
     ["decide", ["plan", "kept the badge in the card", "one consumer", "events#3", "open"], {}],
     ["verify", [], {}],
     ["size", [], {}],
