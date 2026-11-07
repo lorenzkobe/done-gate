@@ -7,19 +7,80 @@ evidence is (a run folder, a session, a command and its output).
 
 ## Open
 
-From the 0.20.0 review (`docs/reviews/review-0.20.0.md`, 66 runs over rollcall, kwenta-web and
+From reading the run records on two laptops, 2026-11-05 to 11-06: 243 runs in a work repo, and
+courtly's 115 runs closed since 10-20. The numbers come from each repo's `.claude/gate/runs/`,
+`.claude/gate/sessions/` and session transcripts, and `gate stats` will print them once it exists.
+"Change n" is the number in the next version's plan.
+
+- Change 1, both repos: code did not wait for the plan check. Tests were written during it in 19
+  of 43 runs and code in 7 (work repo); tests in 34 of 111 and code in 13 (courtly), an undercount
+  because shell edits are not seen.
+- Change 2, both repos: runs ended with code outside the plan: 25 of 65 (work repo, may include
+  tests), 52 of 113 (courtly, code only). Only 10 to 27% of changed code files had an edit event, so
+  the check has to read the diff.
+- Change 3, courtly: 28 of 115 runs used workers, 24 of them among 42 large runs, and they overlapped
+  in only 6. Independent pieces wait for each other today, and only large tasks may split.
+- Change 4, both repos: 3 of 273 and 3 of 304 review findings were disputed, and the arbiter never
+  ran. The lead fixes what it is told, so a wrong finding goes unnoticed.
+- Change 5, both repos: the median run has 12 and 11 steps. Schema was not applicable in 84 of 115
+  courtly runs.
+- Change 6, work repo: 46 helpers stopped at their turn limit and were nudged by hand, one was left
+  dead, and 3 lost connections and 2 session limits were not told apart.
+- Change 7, work repo: 4 open runs were left behind, two of them from September, and none says why
+  it stopped. `gate abandon` takes any reason.
+- Change 8, work repo: tests are 34% of in-run time, and a timeout does not say whether the command
+  never printed, went silent or was still printing.
+- Change 9, both repos: the Sonnet reviewer finds 0.2 to 0.3 per round, and the session-model second
+  reviewer 0.8 to 1. In 53 courtly runs with both: 28 against 247 findings.
+- Change 10, both repos: waiting for the first reviewer to close is 54% and 59% of run minutes, yet
+  on courtly reviewers themselves ran for about 10%.
+- Change 11, work repo: lost hand-backs left runs waiting with nothing to wake the lead.
+- Change 12, work repo: git moves caused 80 of 223 waivers. Courtly had none, so this one is mostly
+  about shared repos.
+- Change 13, both repos: about 2 full verifies per run at about 5 minutes each, with re-runs worth up
+  to 10% of in-run time. Exit 0 with no tests run counts as green today.
+- Change 14, both repos: `gate waive` takes any typed reason, so the agent can approve itself. 223
+  waivers in the work repo; on courtly 27 of 38 were one decision carried from run to run.
+- Change 15, both repos: 26 of 32 recent refusals in the work repo and about 190 of 268 on courtly
+  were harmless (a text-match sort), and `gate setup` never reached the work repo.
+- Change 16, both repos: every number here had to be mined by hand with one-off scripts.
+- Change 17, courtly: review deadlock. A file's last round must take all its unreviewed lines, but
+  any round over the cap is refused. One run was abandoned with 489 lines left, and another needed a
+  waiver at 568. Read in the code at `scripts/lib/brief.mjs:388` and `:520`.
+- Change 18, courtly: a reviewer holding three packets had its shell loop refused and left no files,
+  yet those rounds were recorded as clean. A second reviewer's files were then refused after
+  `gate open` moved the session to a new run, and the run was abandoned.
+- Change 19, courtly: 3 of 30 sampled second-reviewer findings were follow-on lines of one finding,
+  recorded as separate findings (`parseFindings`). Read by hand, all from one run.
+- Change 20, courtly: "workers at large" caused 23 of 38 waivers, with no speed gain seen.
+- Change 21, courtly: the cheap path never applies in a UI repo. Ten UI-only runs had 1 review finding
+  and 20 plan-check findings.
+- Change 22, courtly: 181 of 304 review findings closed on a test, so tests were missing things that
+  could be caught before review.
+- Change 23, amigoes and kwenta-web: an e2e run inside `gate verify` does not count as driving the
+  app, so those runs needed a waiver, and slow e2e runs on every verify cost time.
+- Change 24, this repo: old docs and scripts stay after their release, and code that keeps old rules
+  for open runs has no end date. The owner asked for a cleanup on 2026-11-06.
+- Change 25, both laptops: run records stay on the laptop that made them, so each laptop had to be
+  asked by hand for these numbers. This is the "Feedback that travels" idea below, now with evidence.
+- The common sense rules, this repo's sessions: a run was split in two and 3 cases closed as moved
+  just to stay under a size limit; a plan check told to prototype took 26 minutes against 2 for the
+  next; the 6-minute suite ran after nearly every batch of fixes; and the Stop hook blocked a turn
+  that was only waiting for the owner's answer.
+
+From the 0.20.0 review (`docs/reviews/review-0.20.0.md`, 66 runs over a work repo, kwenta-web and
 courtly, 2026-10-21 to 10-29). Details and evidence are in that file's sections.
 
-- 2026-10-25, rollcall: 8 runs were only a rebase or a branch switch. Each was measured large
+- 2026-10-25, a work repo: 8 runs were only a rebase or a branch switch. Each was measured large
   from the commits it brought in, then waived step by step (about 65 waivers). R1 is still the
   most common block. (3.1)
 - 2026-10-22 to 10-29, sibling work repos: all 5 runs opened inside a sibling repo were
   abandoned, because the session's hook events are filed under the repo the session started in.
   (3.2)
-- 2026-10-21 to 10-29, rollcall: `gate setup` never ran, so 0.20's test loop never applied there.
-  The per-ticket verify list was dropped and re-added in 37 of 39 runs. `test_db.sh run <files>`
+- 2026-10-21 to 10-29, a work repo: `gate setup` never ran, so 0.20's test loop never applied there.
+  The per-ticket verify list was dropped and re-added in 37 of 39 runs. Its test wrapper with file names
   isn't counted as a test command (5 R18 waivers). (3.3)
-- 2026-10-25, rollcall: `gate open` crashed with EISDIR in `addFiles` (`tree.mjs:238`); a
+- 2026-10-25, a work repo: `gate open` crashed with EISDIR in `addFiles` (`tree.mjs:238`); a
   directory listed by git was read as a file. (3.4)
 - 2026-10-26, kwenta-web, run ios-input-zoom: a `node -e` repro was marked readOnly, so `--ran`
   couldn't close repro or rootcause and both were waived. (3.5)
@@ -70,28 +131,28 @@ files (project docs, not the gate's job), issue-tracker and teaching skills (out
 
 ## Done (moved here when a release fixes it, with the version)
 
-Fixed in 0.20.0, from a look at 134 RollCall runs (2026-10-21; ~38 active hours since 10-06,
+Fixed in 0.20.0, from a look at 134 runs in a work repo (2026-10-21; ~38 active hours since 10-06,
 the 12 large runs ~20 of them, median 107 active minutes and 8.5 review rounds each):
 
-- 2026-10-06 to 10-21, rollcall, most large runs: helpers queued on the one shared test
+- 2026-10-06 to 10-21, a work repo, most large runs: helpers queued on the one shared test
   database in `until ! pgrep pytest; do sleep 5` loops: 347 of 474 test-command minutes, 12 hit
   the 10-minute Bash timeout, and overlapping runs deadlocked on a TRUNCATE and turned flaky
   ("the packet's test command does not reproduce"). Fixed: `gate test <files>` with
   `testFiles` and `serialTests` (one run at a time, no polling); reviewers reuse a verify.json
   the gate ran on exactly their code and run only the case tests; workers and QA run their own.
-- rollcall, many runs: helper packets listed only gate.json's verify commands, not the run's
+- A work repo, many runs: helper packets listed only gate.json's verify commands, not the run's
   `--add`/`--drop`, so leads kept editing the shared gate.json per ticket and it went stale
-  (TICKET-3568's tests in later tickets' runs). Fixed: packets list what verify runs.
-- rollcall, the user: "it kept on running like a whole repo test". Fixed: `{"related": true}`
+  (one ticket's tests in later tickets' runs). Fixed: packets list what verify runs.
+- A work repo, the user: "it kept on running like a whole repo test". Fixed: `{"related": true}`
   runs the task's related tests while working, and a `"when": "final"` area suite runs once
   with `gate verify --final`; the full suite stays with CI.
-- rollcall, large runs: a fixed finding sent a fresh reviewer over the whole piece again (one run
+- A work repo, large runs: a fixed finding sent a fresh reviewer over the whole piece again (one run
   re-read ~2,000 lines). Fixed: after a fix only the changed lines need a fix-check round, whose
   packet lists the findings to re-check.
 - 2026-10-21, the owner: the faster loop needs gate.json keys each repo lacks ("if those keys
   doesn't exist ... add it before starting"). Fixed: session start asks once, before any run,
   and `gate setup` proposes the keys from the repo (its runner, or the wrapper its verify already
   uses) and writes them only on the user's words (`--apply` / `--decline`).
-- 2026-10-21, release trial on rollcall's tree: `{"related": true}` picked ~175 of 774 test files
+- 2026-10-21, release trial on a work repo's tree: `{"related": true}` picked ~175 of 774 test files
   when a module most tests import changed, plus helper files. Fixed: hub modules leave their
   tests to the final check (except the ones named after them); helpers and fixtures are skipped.
