@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { configPath, loadConfig, matchGlob } from "./config.mjs";
 import { segments, withoutHeredocs } from "./guard.mjs";
@@ -90,6 +90,82 @@ function wrapperOf(root, cmd, files, config) {
 }
 
 const API_LAYOUTS = ["app/api", "pages/api", "src/app/api", "src/pages/api"];
+const INTERACTIVE = /\s--(?:ui|headed|debug)\b|\bcypress open\b/;
+const E2E_SCRIPT = /\b(?:playwright test|cypress run)\b/;
+const E2E_IN_VERIFY = /\b(?:playwright|cypress)\b|e2e/i;
+
+function packageRun(root, script) {
+  if (has(root, "pnpm-lock.yaml")) return `pnpm run ${script}`;
+  return has(root, "yarn.lock") ? `yarn ${script}` : `npm run ${script}`;
+}
+
+// The repo's end-to-end command: one verify already runs, else a package script, else a config
+// file. A script that waits for a person, or runs something else first, is no run to wait on.
+function e2eCommand(root, config) {
+  const there = config.verify.find((v) => !v.related && E2E_IN_VERIFY.test(v.cmd));
+  if (there) return { cmd: there.cmd, inVerify: true };
+  let scripts = {};
+  try {
+    scripts = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")).scripts ?? {};
+  } catch {
+    // no package.json, or one that does not parse: the config files can still say
+  }
+  const named = typeof scripts["test:e2e"] === "string" && !INTERACTIVE.test(scripts["test:e2e"]) ? "test:e2e" : null;
+  const script = named ?? Object.keys(scripts).sort().find((s) => typeof scripts[s] === "string" && E2E_SCRIPT.test(scripts[s]) && !INTERACTIVE.test(scripts[s]) && !/&&|;/.test(scripts[s]));
+  if (script) return { cmd: packageRun(root, script) };
+  const configured = (tool) => ["ts", "js", "mjs", "cjs"].some((ext) => has(root, `${tool}.config.${ext}`));
+  if (configured("playwright")) return { cmd: "npx playwright test" };
+  return configured("cypress") ? { cmd: "npx cypress run" } : null;
+}
+
+const holdsFile = (dir) => {
+  try {
+    return readdirSync(dir).length > 0;
+  } catch {
+    return false;
+  }
+};
+
+// What later releases added that this repo has not been asked about. `set` is what an offer writes;
+// one with none is a note the user may act on. gate.json's offered list keeps each one to one ask.
+function offers(root, raw, config) {
+  const asked = new Set(Array.isArray(raw.offered) ? raw.offered : []);
+  const out = [];
+  if (!asked.has("api") && !Array.isArray(raw.api)) {
+    const api = API_LAYOUTS.filter((dir) => holdsFile(path.join(root, dir))).map((dir) => `${dir}/**`);
+    if (api.length) out.push({ key: "api", set: { api }, note: `api is read from the folders here (${api.join(", ")}): a change there closes on a recorded call to the endpoint. Add other server routes, or use [] if this repo serves none.` });
+  }
+  const e2e = asked.has("e2e") ? null : e2eCommand(root, config);
+  if (e2e) {
+    const skill = has(root, ".claude/skills/verify/SKILL.md");
+    if (raw.driver || skill) {
+      out.push({ key: "e2e", note: `\`${e2e.cmd}\` looks like this repo's end-to-end run, and ${raw.driver ? `gate.json's driver is ${raw.driver}` : "this repo has a verify skill as its driver"}. Kept as it is. For a green run in verify to count as the drive instead, set "driver": "cmd:${e2e.cmd}" and list it in verify.` });
+    } else {
+      const entry = e2e.inVerify ? null : { cmd: e2e.cmd, when: "final" };
+      out.push({ key: "e2e", entry, set: { driver: `cmd:${e2e.cmd}` }, note: `\`${e2e.cmd}\` becomes the driver${entry ? " and the final check" : ""}: a green run counts as driving the app. Tell the user what it costs: it runs at the close of a task that changed code, unless ui and api are both listed and no such file changed, and a red or flaky run blocks that close.` });
+    }
+  }
+  return out;
+}
+
+function withOffers(json, list, config) {
+  const out = { ...json };
+  for (const offer of list) Object.assign(out, offer.set ?? {});
+  const entries = list.map((o) => o.entry).filter(Boolean);
+  if (entries.length) out.verify = [...(Array.isArray(out.verify) ? out.verify : config.verify.map(written)), ...entries];
+  if (list.length) out.offered = [...new Set([...(Array.isArray(json.offered) ? json.offered : []), ...list.map((o) => o.key)])];
+  return out;
+}
+
+// First setup has been answered: a usable testFiles, or a recorded no.
+const answeredSetup = (raw) => Boolean(raw) && "testFiles" in raw && !(typeof raw.testFiles === "string" && !usable(raw.testFiles));
+
+// What the session-start notice names: a note changes nothing, so it is not worth a turn each session.
+export function pendingOffers(root) {
+  const raw = rawConfig(root);
+  if (!answeredSetup(raw)) return [];
+  return offers(root, raw, loadConfig(root)).filter((o) => o.set);
+}
 
 // A repo is asked once: when it has tests and its gate.json has no usable testFiles key. An
 // explicit null is a recorded no.
@@ -156,24 +232,23 @@ export function proposeSetup(root) {
     const at = entries.findIndex((e) => typeof e === "object" && e.when === "final");
     entries.splice(at < 0 ? entries.length : at, 0, { related: true });
   }
-  const api = Array.isArray(raw.api) ? [] : API_LAYOUTS.filter((dir) => files.some((f) => f.startsWith(`${dir}/`))).map((dir) => `${dir}/**`);
-  const proposal = { ...raw, ...(testFiles ? { testFiles } : {}), ...(api.length ? { api } : {}), verify: entries };
+  const list = offers(root, raw, config);
+  const proposal = withOffers({ ...raw, ...(testFiles ? { testFiles } : {}), verify: entries }, list, config);
   if (!testFiles) delete proposal.testFiles;
   if (!testFiles) notes.push('No test runner was detected: fill in testFiles by hand, the command that runs given test files with {files} where they go, then add { "related": true } to verify.');
-  else if (usable(raw.testFiles)) notes.push("testFiles is the one gate.json already has.");
   else if (wrapped) notes.push(`testFiles is taken from how verify already runs named test files: ${wrapped.cmd.length > 120 ? `${wrapped.cmd.slice(0, 117)}...` : wrapped.cmd}`);
   else notes.push(`testFiles is a guess from the repo (${testFiles}): if tests run through a wrapper (a test database script, a container), use that instead.`);
   for (const cmd of dropped) notes.push(`Left out of verify, since it names only single test files (a past task's list) and the related entry runs each task's own tests (if it is the suite, put it back with "when": "final"): ${cmd.length > 120 ? `${cmd.slice(0, 117)}...` : cmd}`);
   if (wrapped && /(?:^|[^a-z])(?:db|database|postgres|mysql|mongo|docker|compose)(?![a-z])/i.test(wrapped.template)) notes.push("That wrapper looks like a shared test database: test runs through it likely must not overlap, so \"serialTests\": true is probably right.");
   if (!entries.some((e) => typeof e === "object" && e.when === "final")) notes.push('No test command to run as the final check: add one with "when": "final" (the area suite, green at HEAD).');
   else notes.push("The final command must pass at HEAD: deselect failures that are already there, or every close blocks on them. Narrow it to the area you work in if the whole suite is slow; CI runs the full suite.");
-  if (api.length) notes.push(`api is read from the folders here (${api.join(", ")}): a change there closes on a recorded call to the endpoint. Add other server routes, or use [] if this repo serves none.`);
+  for (const offer of list) notes.push(offer.note);
   notes.push('Ask the user whether tests share one database or folder; if they do, add "serialTests": true so test runs never overlap.');
   return { proposal, notes };
 }
 
 function guardSetUp(ctx) {
-  if (!needsSetup(ctx.root)) throw new UsageError("this repo is already set up (gate.json has testFiles, or a recorded no): change gate.json in a task run instead");
+  if (!needsSetup(ctx.root) && !pendingOffers(ctx.root).length) throw new UsageError("this repo is already set up (gate.json has testFiles, or a recorded no): change gate.json in a task run instead");
 }
 
 // what --apply would write: a testFiles with {files}, and a related entry only beside it
@@ -227,8 +302,15 @@ export const verbs = {
       guardNoRun(ctx);
       guardSetUp(ctx);
       const words = userOk(ctx, args);
-      writeConfig(ctx, { ...(rawConfig(ctx.root) ?? {}), testFiles: null });
-      ctx.out(`gate.json: "testFiles": null recorded (the user: "${words}"); the faster test loop will not be proposed again`);
+      const raw = rawConfig(ctx.root) ?? {};
+      const asked = offers(ctx.root, raw, loadConfig(ctx.root)).map((o) => ({ key: o.key }));
+      if (needsSetup(ctx.root)) {
+        writeConfig(ctx, withOffers({ ...raw, testFiles: null }, asked));
+        ctx.out(`gate.json: "testFiles": null recorded (the user: "${words}"); the faster test loop will not be proposed again`);
+      } else {
+        writeConfig(ctx, withOffers(raw, asked));
+        ctx.out(`gate.json: offered ${asked.map((o) => o.key).join(", ")} recorded (the user: "${words}"); they will not be proposed again`);
+      }
       return;
     }
     if (args.includes("--apply")) {
@@ -236,7 +318,12 @@ export const verbs = {
       guardSetUp(ctx);
       const words = userOk(ctx, args);
       const named = args[args.indexOf("--apply") + 1];
-      let json = proposeSetup(ctx.root).proposal;
+      const first = needsSetup(ctx.root);
+      const raw = rawConfig(ctx.root) ?? {};
+      const config = loadConfig(ctx.root);
+      const list = offers(ctx.root, raw, config);
+      if (!first && named && !named.startsWith("--")) throw new UsageError("this repo is already set up: gate setup --apply writes only the new keys it proposed, not a whole file. Change anything else in a task run.");
+      let json = first ? proposeSetup(ctx.root).proposal : withOffers(raw, list, config);
       if (named && !named.startsWith("--")) {
         try {
           json = JSON.parse(readFileSync(path.resolve(ctx.root, named), "utf8"));
@@ -244,8 +331,24 @@ export const verbs = {
           throw new UsageError(`${named}: not a JSON file the gate can read (${error.message})`);
         }
       }
+      // a file the user edited still counts as the answer to what was asked
+      if (list.length) json = { ...json, offered: [...new Set([...(json.offered ?? []), ...(raw.offered ?? []), ...list.map((o) => o.key)])] };
       writeConfig(ctx, validated(json, named && !named.startsWith("--") ? named : "the proposal"));
       ctx.out(`gate.json written (the user: "${words}"); the next run uses it`);
+      return;
+    }
+    const raw = rawConfig(ctx.root);
+    if (answeredSetup(raw)) {
+      const config = loadConfig(ctx.root);
+      const list = offers(ctx.root, raw, config);
+      if (!list.some((o) => o.set)) {
+        ctx.out("this repo is already set up: nothing new to propose.");
+        for (const offer of list) ctx.out(`- ${offer.note}`);
+        return;
+      }
+      ctx.out(`Proposed ${GATE_JSON}, new keys only (nothing written):\n${JSON.stringify(withOffers(raw, list, config), null, 2)}`);
+      ctx.out(`\n${list.map((o) => `- ${o.note}`).join("\n")}`);
+      ctx.out('\nShow it to the user. On their yes: `gate setup --apply --user-ok "<their words>"`; on a no: `gate setup --decline --user-ok "<their words>"`. It is asked once.');
       return;
     }
     const { proposal, notes } = proposeSetup(ctx.root);

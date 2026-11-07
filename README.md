@@ -502,6 +502,12 @@ wait past five minutes exits 75 ("busy … run it again"), so it fits a 10-minut
 worker, QA and reviewer packets then say to run tests only through `gate test`. Changing either
 key mid-task is a config change (R13).
 
+A repo already set up is asked once about what later releases added: `gate setup` proposes only the
+new keys, and `--apply` or `--decline` records them in `offered`. It finds an end-to-end run (a
+`test:e2e` script, a script holding `playwright test` or `cypress run`, or a config file) and offers it
+as the final check and the driver, saying what that costs; an existing driver is kept, with a note. No
+task waits for this answer.
+
 A repo with tests and no `testFiles` key is asked once, at session start and before any run
 opens: `gate setup` prints a proposal built from the repo (the runner it can prove, the verify
 commands kept, `{"related": true}` added, the test command marked `final`, a verify command

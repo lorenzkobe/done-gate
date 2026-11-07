@@ -5,10 +5,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, write, gate } from "./helpers.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
+import { needsSetup, pendingOffers } from "../scripts/lib/setup.mjs";
 
 function envFor(repo) {
   const e = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
@@ -165,11 +166,11 @@ test("C11 edge: an existing related entry or final command is kept as is; a test
 });
 
 test("C12 edge: pnpm with no gate.json gets pnpm run commands, build source; a ruff-only pyproject is not pytest", () => {
-  const repo = makeRepo("ts-c12", { "package.json": JSON.stringify({ name: "p", scripts: { lint: "eslint .", test: "vitest run", build: "vite build" }, devDependencies: { vitest: "1" } }), "pnpm-lock.yaml": "" });
+  const repo = makeRepo("ts-c12", { ".claude/gate.json": null, "package.json": JSON.stringify({ name: "p", scripts: { lint: "eslint .", test: "vitest run", build: "vite build" }, devDependencies: { vitest: "1" } }), "pnpm-lock.yaml": "" });
   const { json } = proposal(repo);
   assert.equal(json.testFiles, "npx vitest run {files}");
   assert.deepEqual(json.verify, ["pnpm run lint", { related: true }, { cmd: "pnpm run test", when: "final" }, { cmd: "pnpm run build", when: "source" }]);
-  const ruff = makeRepo("ts-c12-ruff", { "pyproject.toml": "[tool.ruff]\nline-length = 100\n", "package.json": JSON.stringify({ name: "r", scripts: {} }) });
+  const ruff = makeRepo("ts-c12-ruff", { ".claude/gate.json": null, "pyproject.toml": "[tool.ruff]\nline-length = 100\n", "package.json": JSON.stringify({ name: "r", scripts: {} }) });
   assert.doesNotMatch(startContext(ruff), SETUP);
   assert.equal(proposal(ruff).json.testFiles, undefined);
 });
@@ -198,7 +199,8 @@ test("C14 refused: no detectable runner: no related entry is proposed, and the p
 
 test("C15 refused: an existing valid testFiles is kept; apply and decline on a set-up repo are refused", () => {
   const repo = makeRepo("ts-c15", { ...JEST, ".claude/gate.json": JSON.stringify({ testFiles: "scripts/run-tests {files}" }) });
-  assert.equal(proposal(repo).json.testFiles, "scripts/run-tests {files}");
+  assert.match(run(repo, "setup").stdout, /already set up/);
+  assert.equal(loadConfig(repo).testFiles, "scripts/run-tests {files}");
   startContext(repo);
   said(repo, "yes add the keys please");
   for (const flag of ["--apply", "--decline"]) {
@@ -209,7 +211,7 @@ test("C15 refused: an existing valid testFiles is kept; apply and decline on a s
 });
 
 test("C16 edge: the pytest guess follows the repo's environment; bad apply files and a malformed gate.json are refused clearly", () => {
-  const guess = (name, files) => proposal(makeRepo(name, { "pytest.ini": "[pytest]\n", "tests/test_a.py": "def test_a():\n    pass\n", ...files })).json.testFiles;
+  const guess = (name, files) => proposal(makeRepo(name, { ".claude/gate.json": null, "pytest.ini": "[pytest]\n", "tests/test_a.py": "def test_a():\n    pass\n", ...files })).json.testFiles;
   assert.equal(guess("ts-c16-venv", { ".venv/bin/python": "#!/bin/sh\n" }), "./.venv/bin/python -m pytest {files} -q");
   assert.equal(guess("ts-c16-poetry", { "poetry.lock": "" }), "poetry run pytest {files} -q");
   assert.equal(guess("ts-c16-uv", { "uv.lock": "" }), "uv run pytest {files} -q");
@@ -308,4 +310,179 @@ test("3.4: gate setup keeps a verify entry's external flag, on a final command a
   const repo = makeRepo("ts-external", { ...JEST, ".claude/gate.json": JSON.stringify({ verify: [{ cmd: "npm run test", external: true }, { cmd: "npm run db", external: true }] }) });
   const { json } = proposal(repo);
   assert.deepEqual(json.verify.filter((v) => v.external).map((v) => v.cmd), ["npm run test", "npm run db"]);
+});
+
+// Batch 3.13: a repo already set up is offered what later releases added, once.
+const SET_UP = { ".claude/gate.json": JSON.stringify({ testFiles: "npx vitest run {files}", verify: ["npm run lint", { related: true }, { cmd: "npm run test", when: "final" }] }) };
+const PLAYWRIGHT = { "package.json": JSON.stringify({ name: "p", scripts: { lint: "eslint .", test: "vitest", "test:e2e": "playwright test" }, devDependencies: { "@playwright/test": "1" } }) };
+const setUpRepo = (name, files = {}) => makeRepo(name, { ...SET_UP, ...PLAYWRIGHT, ...files });
+const gateJson = (repo) => JSON.parse(readFileSync(path.join(repo, ".claude", "gate.json"), "utf8"));
+const words = (repo, prompt) => run(repo, "log", [], JSON.stringify({ session_id: "S1", cwd: repo, hook_event_name: "UserPromptSubmit", prompt }));
+const applied = (repo, say = "yes add those settings") => {
+  words(repo, say);
+  const r = run(repo, "setup", ["--apply", "--user-ok", say]);
+  assert.equal(r.status, 0, r.stderr);
+};
+
+test("3.13 C1 a set-up repo with Playwright is offered the final entry and the driver once", () => {
+  const repo = setUpRepo("ts-o1");
+  assert.match(startContext(repo), /<done-gate-setup>[\s\S]*gate setup/);
+  const before = gateJson(repo);
+  const { json } = proposal(repo);
+  assert.equal(json.driver, "cmd:npm run test:e2e");
+  assert.deepEqual(json.verify, [...before.verify, { cmd: "npm run test:e2e", when: "final" }]);
+  assert.equal(json.testFiles, before.testFiles, "only new keys move");
+  assert.deepEqual(gateJson(repo), before, "gate setup wrote nothing");
+  applied(repo);
+  assert.equal(gateJson(repo).driver, "cmd:npm run test:e2e");
+  assert.deepEqual(gateJson(repo).offered, ["e2e"]);
+  assert.doesNotMatch(startContext(repo), /<done-gate-setup>/);
+  assert.match(run(repo, "setup").stdout, /already set up/);
+});
+
+test("3.13 C2 a decline stays: no notice and no proposal after it, and nothing else in gate.json changed", () => {
+  const repo = setUpRepo("ts-o2");
+  const before = gateJson(repo);
+  words(repo, "no thanks not those");
+  assert.equal(run(repo, "setup", ["--decline", "--user-ok", "no thanks not those"]).status, 0);
+  assert.deepEqual(gateJson(repo), { ...before, offered: ["e2e"] });
+  assert.doesNotMatch(startContext(repo), /<done-gate-setup>/);
+  assert.match(run(repo, "setup").stdout, /already set up/);
+});
+
+test("3.13 C3 an existing driver or a verify skill is kept with a note, and verify is unchanged", () => {
+  const driver = setUpRepo("ts-o3", { ".claude/gate.json": JSON.stringify({ ...JSON.parse(SET_UP[".claude/gate.json"]), driver: "skill:verify" }) });
+  const before = gateJson(driver);
+  const out = run(driver, "setup").stdout;
+  assert.deepEqual(gateJson(driver), before);
+  assert.match(out, /npm run test:e2e/);
+  assert.match(out, /skill:verify/);
+
+  const skill = setUpRepo("ts-o3b", { ".claude/skills/verify/SKILL.md": "# verify\n" });
+  const second = run(skill, "setup");
+  assert.match(second.stdout, /already set up/);
+  assert.match(second.stdout, /npm run test:e2e/);
+  assert.match(second.stdout, /verify skill/);
+  assert.equal(gateJson(skill).driver, undefined);
+});
+
+test("3.13 C4 a repo with no e2e gets nothing new, and gate setup still says it is set up", () => {
+  const repo = makeRepo("ts-o4", { ...SET_UP, "package.json": JSON.stringify({ name: "n", scripts: { test: "vitest" } }) });
+  assert.doesNotMatch(startContext(repo), /<done-gate-setup>/);
+  assert.match(run(repo, "setup").stdout, /already set up/);
+  assert.match(run(repo, "setup", ["--apply", "--user-ok", "x y z"]).stderr, /already set up/);
+});
+
+test("3.13 C5 each way to find it, with the repo's package manager", () => {
+  const scripted = (scripts, extra = {}) => ({ "package.json": JSON.stringify({ name: "x", scripts }), ...extra });
+  const driverOf = (name, files) => proposal(makeRepo(name, { ...SET_UP, ...files })).json.driver;
+  assert.equal(driverOf("ts-o5a", scripted({ e2e: "playwright test" })), "cmd:npm run e2e");
+  assert.equal(driverOf("ts-o5b", scripted({ cy: "cypress run --headless" })), "cmd:npm run cy");
+  assert.equal(driverOf("ts-o5c", scripted({ test: "vitest" }, { "playwright.config.ts": "export default {};\n" })), "cmd:npx playwright test");
+  assert.equal(driverOf("ts-o5d", scripted({ test: "vitest" }, { "cypress.config.js": "module.exports = {};\n" })), "cmd:npx cypress run");
+  assert.equal(driverOf("ts-o5e", scripted({ "test:e2e": "playwright test" }, { "pnpm-lock.yaml": "lockfileVersion: 9\n" })), "cmd:pnpm run test:e2e");
+  assert.equal(driverOf("ts-o5f", scripted({ "test:e2e": "playwright test" }, { "yarn.lock": "# yarn\n" })), "cmd:yarn test:e2e");
+});
+
+test("3.13 C6 an e2e command already in verify gets only the driver; a repo with default verify keeps its commands", () => {
+  const there = makeRepo("ts-o6", { ...PLAYWRIGHT, ".claude/gate.json": JSON.stringify({ testFiles: "npx vitest run {files}", verify: ["npm run lint", "npm run test:e2e"] }) });
+  const first = proposal(there).json;
+  assert.deepEqual(first.verify, ["npm run lint", "npm run test:e2e"]);
+  assert.equal(first.driver, "cmd:npm run test:e2e");
+
+  const defaults = makeRepo("ts-o6b", { ...PLAYWRIGHT, ".claude/gate.json": JSON.stringify({ testFiles: "npx vitest run {files}" }) });
+  const before = loadConfig(defaults).verify.map((v) => v.cmd);
+  const cmds = proposal(defaults).json.verify.map((v) => (typeof v === "string" ? v : v.cmd));
+  for (const cmd of before) assert.ok(cmds.includes(cmd), cmd);
+  assert.ok(cmds.includes("npm run test:e2e"));
+});
+
+test("3.13 C7 first setup carries the same offers and records them", () => {
+  const repo = makeRepo("ts-o7", { ".claude/gate.json": null, "package.json": JSON.stringify({ name: "p", scripts: { test: "jest", "test:e2e": "playwright test" }, devDependencies: { jest: "29" } }) });
+  assert.equal(needsSetup(repo), true);
+  const { json } = proposal(repo);
+  assert.equal(json.driver, "cmd:npm run test:e2e");
+  assert.deepEqual(json.offered, ["e2e"]);
+  applied(repo);
+  assert.match(run(repo, "setup").stdout, /already set up/);
+  assert.equal(pendingOffers(repo).length, 0);
+
+  const declined = makeRepo("ts-o7b", { ".claude/gate.json": null, ...PLAYWRIGHT });
+  words(declined, "no thanks not now");
+  assert.equal(run(declined, "setup", ["--decline", "--user-ok", "no thanks not now"]).status, 0);
+  assert.equal(gateJson(declined).testFiles, null);
+  assert.deepEqual(gateJson(declined).offered, ["e2e"]);
+  assert.doesNotMatch(startContext(declined), /<done-gate-setup>/);
+});
+
+test("3.13 C8 a set-up repo with app/api is offered api; a run open silences it, refuses apply, and gate open is not held", () => {
+  const repo = makeRepo("ts-o8", { ...SET_UP, "app/api/users/route.ts": "export const GET = 1;\n" });
+  assert.deepEqual(proposal(repo).json.api, ["app/api/**"]);
+  assert.match(startContext(repo), /<done-gate-setup>/);
+  const opened = run(repo, "open", ["t", "feature"]);
+  assert.equal(opened.status, 0, opened.stderr);
+  assert.doesNotMatch(startContext(repo), /<done-gate-setup>/);
+  words(repo, "yes add those settings");
+  assert.match(run(repo, "setup", ["--apply", "--user-ok", "yes add those settings"]).stderr, /a run is open/);
+});
+
+test("3.13 C9 gate.schema.json allows offered, and the keys it lists stay out of later proposals", () => {
+  const schema = JSON.parse(readFileSync(new URL("../gate.schema.json", import.meta.url), "utf8"));
+  assert.equal(schema.properties.offered.type, "array");
+  const repo = makeRepo("ts-o9", { ...PLAYWRIGHT, "app/api/users/route.ts": "export const GET = 1;\n", ".claude/gate.json": JSON.stringify({ ...JSON.parse(SET_UP[".claude/gate.json"]), offered: ["e2e"] }) });
+  const { json } = proposal(repo);
+  assert.equal(json.driver, undefined);
+  assert.deepEqual(json.api, ["app/api/**"]);
+  assert.deepEqual(json.offered, ["e2e", "api"]);
+});
+
+test("3.13 C10 a repo that declined the faster loop keeps testFiles null and is still offered the new keys", () => {
+  const repo = makeRepo("ts-o10", { ...PLAYWRIGHT, ".claude/gate.json": JSON.stringify({ testFiles: null }) });
+  assert.match(startContext(repo), /<done-gate-setup>[\s\S]*e2e/);
+  applied(repo);
+  assert.equal(gateJson(repo).testFiles, null);
+  assert.equal(gateJson(repo).driver, "cmd:npm run test:e2e");
+  assert.equal(needsSetup(repo), false);
+});
+
+test("3.13 C11 an empty app/api is no offer; a bare gate setup on a set-up repo says so with status 0; apply refuses an edited file there", () => {
+  const empty = makeRepo("ts-o11", { ...SET_UP, "package.json": JSON.stringify({ name: "n", scripts: { test: "vitest" } }) });
+  mkdirSync(path.join(empty, "app/api"), { recursive: true });
+  assert.doesNotMatch(startContext(empty), /<done-gate-setup>/);
+  const bare = run(empty, "setup");
+  assert.equal(bare.status, 0);
+  assert.match(bare.stdout, /already set up/);
+
+  const repo = setUpRepo("ts-o11b");
+  write(repo, "edited.json", JSON.stringify({ testFiles: "other {files}", driver: "cmd:other" }));
+  words(repo, "yes add those settings");
+  assert.match(run(repo, "setup", ["--apply", "edited.json", "--user-ok", "yes add those settings"]).stderr, /already set up/);
+  assert.equal(gateJson(repo).driver, undefined);
+});
+
+test("3.13 C12 a note-only offer brings no notice, and shows only in gate setup", () => {
+  const repo = setUpRepo("ts-o12", { ".claude/gate.json": JSON.stringify({ ...JSON.parse(SET_UP[".claude/gate.json"]), driver: "skill:verify" }) });
+  assert.doesNotMatch(startContext(repo), /<done-gate-setup>/);
+  assert.equal(pendingOffers(repo).length, 0);
+  assert.match(run(repo, "setup").stdout, /npm run test:e2e/);
+});
+
+test("3.13 C13 another spelling in verify becomes the driver with no second entry; interactive and joined scripts are not picked; the proposal states the cost", () => {
+  const spelled = makeRepo("ts-o13", { ...PLAYWRIGHT, ".claude/gate.json": JSON.stringify({ testFiles: "npx vitest run {files}", verify: ["npm run lint", "npx playwright test"] }) });
+  const first = proposal(spelled);
+  assert.equal(first.json.driver, "cmd:npx playwright test");
+  assert.deepEqual(first.json.verify, ["npm run lint", "npx playwright test"]);
+  assert.match(first.out, /red or flaky run blocks/);
+
+  const pick = (name, scripts) => proposal(makeRepo(name, { ...SET_UP, "package.json": JSON.stringify({ name: "x", scripts: { test: "vitest", ...scripts } }) })).json.driver;
+  assert.equal(pick("ts-o13b", { dev: "playwright test --ui", run: "playwright test" }), "cmd:npm run run");
+  assert.match(run(makeRepo("ts-o13c", { ...SET_UP, "package.json": JSON.stringify({ name: "x", scripts: { test: "vitest", dev: "playwright test --headed" } }) }), "setup").stdout, /already set up/);
+  assert.match(run(makeRepo("ts-o13d", { ...SET_UP, "package.json": JSON.stringify({ name: "x", scripts: { all: "vitest && playwright test" } }) }), "setup").stdout, /already set up/);
+  assert.equal(pick("ts-o13e", { "test:e2e": "./run-e2e.sh", other: "playwright test" }), "cmd:npm run test:e2e");
+});
+
+test("3.13 C14 a repo with no gate.json gets no offers", () => {
+  const repo = makeRepo("ts-o14", { ".claude/gate.json": null, "package.json": JSON.stringify({ name: "n" }), "playwright.config.ts": "export default {};\n", "tests/a.test.ts": null, "src/a.ts": null, "src/app/page.tsx": null });
+  assert.deepEqual(pendingOffers(repo), []);
+  assert.equal(existsSync(path.join(repo, ".claude", "gate.json")), false);
 });

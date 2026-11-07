@@ -46,6 +46,13 @@
       "type": "string",
       "description": "The command that runs the tests related to given files, with {files} where they go (`npx vitest related --run {files}`). The {\"related\": true} entry uses it in place of testFiles, on this task's changed source and related test files. It still needs testFiles. A zero from it is fine when it was handed only source: the final check runs later."
     },
+    "offered": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "What gate setup has already asked this repo about, answered yes or no (api, e2e). The gate keeps this list, so a key named here is not proposed again."
+    },
     "docs": {
       "type": "array",
       "items": {

@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, gate, write } from "./helpers.mjs";
+import { proposeSetup } from "../scripts/lib/setup.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { coverageGaps } from "../scripts/lib/verify.mjs";
 
@@ -176,7 +177,7 @@ test("C7 boundary: a one-word template run bare or with flags only still covers 
 });
 
 test("C8 edge: setup keeps a call of a one-word template's program that runs no tests as it is", () => {
-  const { json } = proposal(makeRepo("shm-ow8", { ...ONE_WORD, ".claude/gate.json": JSON.stringify({ tests: ["tests/**"], testFiles: "./run.sh {files}", verify: ["./run.sh lint"] }) }));
+  const json = proposeSetup(makeRepo("shm-ow8", { ...ONE_WORD, ".claude/gate.json": JSON.stringify({ tests: ["tests/**"], testFiles: "./run.sh {files}", verify: ["./run.sh lint"] }) })).proposal;
   assert.deepEqual(json.verify, ["./run.sh lint", { related: true }]);
 });
 

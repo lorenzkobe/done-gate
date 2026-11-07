@@ -6,7 +6,7 @@ import { recordGateError, UsageError } from "./context.mjs";
 import { attachLedger, currentLedger, isDone, loadLedger, openRuns, runsDir, saveLedger, staleForeign } from "./ledger.mjs";
 import { writeReport } from "./verbs.mjs";
 import { checkRelease, UPDATE_COMMANDS } from "./release.mjs";
-import { needsSetup } from "./setup.mjs";
+import { needsSetup, pendingOffers } from "./setup.mjs";
 
 const DAY_MS = 24 * 3600 * 1000;
 // How long the gate keeps its records: long enough to mine a year of runs for friction.
@@ -125,6 +125,8 @@ export const verbs = {
     // mid-run trips R13
     try {
       const running = Boolean(currentLedger(ctx.stateDir, ctx.session)) || openRuns(ctx.stateDir).some((r) => r.ledger.status !== "closed" && !staleForeign(r, ctx.session));
+      const offered = running ? [] : pendingOffers(ctx.root);
+      if (offered.length) parts.push(`\n<done-gate-setup>\nNew settings this repo has not been asked about: ${offered.map((o) => o.key).join(", ")}. Before the first task, run \`gate setup\`, show the user what it proposes and what it costs, then \`gate setup --apply --user-ok "<their words>"\` or \`gate setup --decline --user-ok "<their words>"\`. It is asked once. No task waits for it.\n</done-gate-setup>`);
       if (!running && needsSetup(ctx.root)) {
         // this session's gate open refuses until setup is applied, declined or put off in the user's words
         if (loadSession(ctx.stateDir, ctx.session)) updateSession(ctx.stateDir, ctx.session, { setupNoticed: true });
