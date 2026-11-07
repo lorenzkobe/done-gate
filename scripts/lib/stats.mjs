@@ -2,7 +2,10 @@ import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { UsageError } from "./context.mjs";
+import { HANDBACK, noticeCause, readEvents } from "./events.mjs";
 import { loadLedger, runsDir } from "./ledger.mjs";
+import { inRun, PLAIN_RULES } from "./report.mjs";
+import { NOT_THE_USER } from "./rules.mjs";
 import { outsidePlan, tierOf } from "./size.mjs";
 import { flag } from "./verbs.mjs";
 
@@ -19,9 +22,17 @@ const PLANNED_PLAYBOOKS = new Set(["feature", "bugfix", "refactor"]);
 // a worker writes its file only on a review round; its packet shows it was given the work
 const WORKER_FILE = /^(?:brief-)?worker-\d+\.md$/;
 const AFTER_CLOSE_MS = 30 * DAY_MS;
+const SESSION_ID = /^[\w-]+$/;
+const REVIEWER_TYPE = /^(?:done-gate:)?reviewer(?:-2)?$/;
+const NOT_A_FAILURE = new Set(["finished", "waiting"]);
+const REFUSAL_WORDS = 4;
+const GATE_FILE = /\.claude\/gate|(?:review2?|skeptic|arbiter|worker)-\d+\.md|ledger\.md/;
+const NAMES_A_FILE = /\/|\w\.\w/;
+const SEQ_PER_MINUTE = 6e7;
 const MISSING = "missing";
 
 const ofRuns = (n, m) => `${n} of ${m} runs`;
+const ofTurns = (n) => `${n} turn${n === 1 ? "" : "s"}`;
 const list = (value) => (Array.isArray(value) ? value : []);
 const oneDecimal = (n) => Math.round(n * 10) / 10;
 
@@ -48,7 +59,10 @@ function readFields(ledger, dir) {
     status: ledger.status,
     version: ledger.version,
     openedAt: ledger.openedAt,
+    openedSeq: ledger.openedSeq,
     closedAt: ledger.closedAt,
+    abandonedAt: ledger.abandonedAt,
+    sessions: list(ledger.sessions).filter((s) => typeof s === "string"),
     closedLate: ledger.closedLate,
     size,
     lines: tier.measured?.lines,
@@ -301,6 +315,170 @@ function afterCloseLines(closed, every, configOf) {
   return out;
 }
 
+const startsTurn = (e) => !e.agent && !e.handback && !HANDBACK.test(e.text ?? "") && !NOT_THE_USER.test(e.text ?? "");
+
+// One session's log in compact records, numbered by the user's turn: a session's log is far
+// larger than what stats reads, and a prompt's words are never kept.
+function sessionRecords(stateDir, session) {
+  if (!SESSION_ID.test(session)) return [];
+  let turn = 0;
+  try {
+    return readEvents(stateDir, session).map((e) => {
+      if (e.kind === "prompt" && startsTurn(e)) turn += 1;
+      return {
+        seq: e.seq,
+        kind: e.kind,
+        session,
+        turn,
+        agent: e.agent,
+        agentType: e.agentType,
+        ...(e.kind === "deny" ? { reason: e.reason, delegate: e.delegate } : {}),
+        ...(e.kind === "block" ? { rules: list(e.rules) } : {}),
+        ...(e.kind === "prompt" ? { cause: noticeCause(e.text)?.cause } : {}),
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+function refusalGroup(reason) {
+  const text = String(reason ?? "").replace(/^done-gate:\s*/, "");
+  const quoted = /`([^`]*)` is not a plain read/.exec(text)?.[1];
+  if (/^reading the gate folder beside/.test(text) || (quoted !== undefined && !GATE_FILE.test(quoted))) return "read beside another command";
+  return text.split(/\s+/).slice(0, REFUSAL_WORDS).map((word) => (NAMES_A_FILE.test(word) ? "<file>" : word)).join(" ").replace(/[:,.]+$/, "");
+}
+
+function refusalLines(counted) {
+  const denies = counted.filter((e) => e.kind === "deny" && !e.delegate);
+  if (!denies.length) return ["refusals: none, hand-offs left out"];
+  const groups = new Map();
+  for (const e of denies) {
+    const group = refusalGroup(e.reason);
+    if (!groups.has(group)) groups.set(group, { lead: 0, helper: 0 });
+    groups.get(group)[e.agent ? "helper" : "lead"] += 1;
+  }
+  const rows = [...groups].sort(([a, m], [b, n]) => n.lead + n.helper - m.lead - m.helper || a.localeCompare(b));
+  return [`refusals: ${denies.length}, hand-offs left out`, ...rows.map(([group, n]) => `  ${group}: lead ${n.lead}, helper ${n.helper}`)];
+}
+
+function turnsByRule(blocks) {
+  const byRule = new Map();
+  for (const e of blocks) {
+    for (const rule of e.rules) {
+      if (!byRule.has(rule)) byRule.set(rule, new Set());
+      byRule.get(rule).add(`${e.session}#${e.turn}`);
+    }
+  }
+  return [...byRule].sort(([a, m], [b, n]) => n.size - m.size || String(a).localeCompare(String(b)));
+}
+
+const turnKeys = (rows) => new Set(rows.flatMap(([, keys]) => [...keys]));
+
+function stoppedLines(counted, outside) {
+  const turns = new Set(counted.map((e) => `${e.session}#${e.turn}`));
+  const rows = turnsByRule(counted.filter((e) => e.kind === "block"));
+  const out = [`turns stopped: ${turnKeys(rows).size} of ${ofTurns(turns.size)}`];
+  for (const [rule, keys] of rows) out.push(`  ${rule}${PLAIN_RULES[rule] ? ` (${PLAIN_RULES[rule]})` : ""}: ${ofTurns(keys.size)}`);
+  const beyond = turnsByRule(outside);
+  if (beyond.length) out.push(`  outside any run: at least ${ofTurns(turnKeys(beyond).size)} (${beyond.map(([rule, keys]) => `${rule} ${keys.size}`).join(", ")})`);
+  return out;
+}
+
+// One run's reviewers: each start paired with the same agent's next stop, whose agent type may be
+// empty, so a resumed helper's gap is not reviewing. A start with no stop has no known end.
+function reviewerSpans(records) {
+  const reviewers = new Set(records.filter((e) => e.kind === "subagent-start" && REVIEWER_TYPE.test(e.agentType ?? "")).map((e) => e.agent));
+  const open = new Map();
+  const spans = [];
+  let noStop = 0;
+  for (const e of records) {
+    if (!reviewers.has(e.agent)) continue;
+    if (e.kind === "subagent-start") {
+      if (open.has(e.agent)) noStop += 1;
+      open.set(e.agent, e.seq);
+    } else if (e.kind === "subagent-stop" && open.has(e.agent)) {
+      spans.push([open.get(e.agent), e.seq]);
+      open.delete(e.agent);
+    }
+  }
+  return { reviewers, spans, noStop: noStop + open.size };
+}
+
+function unionMinutes(spans) {
+  let total = 0;
+  let end = -Infinity;
+  for (const [from, to] of [...spans].sort((a, b) => a[0] - b[0])) {
+    if (to > end) {
+      total += to - Math.max(from, end);
+      end = to;
+    }
+  }
+  return total / SEQ_PER_MINUTE;
+}
+
+function waitMinutes(ledger, records, reviewers) {
+  const theirs = records.filter((e) => reviewers.has(e.agent));
+  const start = theirs.find((e) => e.kind === "subagent-start")?.seq;
+  if (start === undefined) return null;
+  const closedSeqs = ledger.huddles.filter((h) => REVIEWERS.has(h.role)).flatMap((h) => h.actOn.map((a) => a.closedSeq)).filter((seq) => typeof seq === "number");
+  const stops = theirs.filter((e) => e.kind === "subagent-stop").map((e) => e.seq);
+  const end = Math.max(...stops, ...closedSeqs);
+  return end > start ? (end - start) / SEQ_PER_MINUTE : null;
+}
+
+function reviewTimeLines(runRecords) {
+  const timed = runRecords.filter(({ ledger, records }) => records.length && !ledger.closedLate && minutesOf(ledger) !== null);
+  if (!timed.length) return [`reviewer time: ${MISSING}`, `review wait: ${MISSING}`];
+  const total = timed.reduce((sum, { ledger }) => sum + minutesOf(ledger), 0);
+  const share = (minutes) => `${total ? Math.round((minutes / total) * 100) : 0}% of ${Math.round(total)} run minutes`;
+  let running = 0;
+  let noStop = 0;
+  let withReviewer = 0;
+  let waiting = 0;
+  let withWait = 0;
+  for (const { ledger, records } of timed) {
+    const found = reviewerSpans(records);
+    if (found.reviewers.size) withReviewer += 1;
+    running += unionMinutes(found.spans);
+    noStop += found.noStop;
+    const wait = waitMinutes(ledger, records, found.reviewers);
+    if (wait !== null) {
+      waiting += wait;
+      withWait += 1;
+    }
+  }
+  return [
+    `reviewer time: ${share(running)} (${ofRuns(withReviewer, timed.length)})${noStop ? `, no stop ${noStop}` : ""}`,
+    `review wait: ${withWait ? `${share(waiting)} (${ofRuns(withWait, timed.length)})` : `none in ${ofRuns(timed.length, timed.length)}`}`,
+  ];
+}
+
+function failureLines(counted) {
+  const causes = new Map();
+  for (const e of counted) {
+    if (e.cause && !NOT_A_FAILURE.has(e.cause)) causes.set(e.cause, (causes.get(e.cause) ?? 0) + 1);
+  }
+  if (!causes.size) return ["helper failures: none in the notices"];
+  return ["helper failures:", ...[...causes].sort(([a, m], [b, n]) => n - m || a.localeCompare(b)).map(([cause, n]) => `  ${cause}: at least ${n}`)];
+}
+
+// Each event counts once however many run stretches hold it: an event is judged against every run
+// naming its session, not run by run, and a turn crossing a close is still one turn.
+function eventLines(ctx, closed, every, { version, cutoff }) {
+  const records = new Map();
+  for (const session of new Set(closed.flatMap((l) => l.sessions))) records.set(session, sessionRecords(ctx.stateDir, session));
+  const runRecords = closed.map((ledger) => ({ ledger, records: ledger.sessions.flatMap((s) => records.get(s) ?? []).filter(inRun(ledger)).sort((a, b) => a.seq - b.seq) }));
+  const covered = runRecords.filter((r) => r.records.length).length;
+  const end = "lead-turn failures: not recorded";
+  if (!covered) return [`events: ${MISSING}`, `refusals: ${MISSING}`, `turns stopped: ${MISSING}`, `reviewer time: ${MISSING}`, `review wait: ${MISSING}`, `helper failures: ${MISSING}`, end];
+  const inSomeRun = (runs, e) => runs.some((l) => l.sessions.includes(e.session) && inRun(l)(e));
+  const all = [...records.values()].flat();
+  const counted = all.filter((e) => inSomeRun(closed, e));
+  const outside = version ? [] : all.filter((e) => e.kind === "block" && e.seq / 1000 >= cutoff && !inSomeRun(every, e));
+  return [`events: ${ofRuns(covered, closed.length)}`, ...refusalLines(counted), ...stoppedLines(counted, outside), ...reviewTimeLines(runRecords), ...failureLines(counted), end];
+}
+
 function report(ctx, { days, version }) {
   const heading = `done-gate stats: ${path.basename(ctx.root)}, last ${days} days, ${version ? `version ${version}` : "all versions"}`;
   const read = readRuns(ctx.stateDir);
@@ -323,6 +501,7 @@ function report(ctx, { days, version }) {
   out.push(...(closed.length ? waiverLines(closed) : [`waivers: ${MISSING}`]));
   out.push("could-not-run waivers: not recorded", "lapsed waivers: not recorded");
   out.push(...planLines(closed, configOf), ...largeLines(closed), ...afterCloseLines(closed, read?.ledgers ?? [], configOf));
+  out.push(...eventLines(ctx, closed, read?.ledgers ?? [], { version, cutoff }));
   return out;
 }
 

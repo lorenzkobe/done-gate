@@ -54,6 +54,8 @@ function ownEdits(input, cmd, root, b) {
 // The call's id, which pairs a command with the start the fence logged for it.
 export const toolUse = (input) => (typeof input.tool_use_id === "string" && input.tool_use_id ? { toolUseId: input.tool_use_id } : {});
 
+export const HANDBACK = /^\s*<(?:agent-message|task-notification|cross-session-message)\b/;
+
 // One hook payload → zero or more event records. Never throws on odd input.
 export function eventsFromHookInput(input, root, repos = []) {
   if (!input || typeof input !== "object" || input.__unparseable) return [];
@@ -69,7 +71,7 @@ export function eventsFromHookInput(input, root, repos = []) {
     // a helper's hand-back, the harness's task notification and a message from another session
     // arrive as prompts too; they are tagged so the Stop hook does not mistake them for a new
     // turn from the user
-    const handback = /^\s*<(?:agent-message|task-notification|cross-session-message)\b/.test(text);
+    const handback = HANDBACK.test(text);
     return [{ ...b(), kind: "prompt", text: text.slice(0, WORDS_LIMIT), ...(handback ? { handback: true } : {}) }];
   }
   if (event === "SessionStart") return [{ ...b(), kind: "session-start", source: input.session_start_source ?? null }];
@@ -165,6 +167,31 @@ export function readEvents(stateDir, session) {
     }
   }
   return out.sort((a, b) => a.seq - b.seq);
+}
+
+const NOTICE_START = /^\s*(?:\[SYSTEM NOTIFICATION[\s\S]*?)?<task-notification\b/;
+const NOTICE_CAUSES = [
+  [/stopped at its \d+-turn limit/, "turn-limit"],
+  [/Can't reach the API server/, "lost-connection"],
+  [/session limit/i, "session-limit"],
+  [/stalled: no progress/i, "stalled"],
+  [/overloaded|rate limit|server error/i, "api-problem"],
+  [/\b(?:login|log in|billing|credit|account|api key|model)\b/i, "only-you"],
+  [/was stopped by user/, "stopped-by-user"],
+  [/was stopped by Claude/, "stopped-by-lead"],
+  [/^finished\b/, "finished"],
+  [/^is waiting\b/, "waiting"],
+];
+
+// What a helper's notice says became of it, read from the summary's tail so that a task named
+// "fix billing" says nothing. A background command or another agent's words give null.
+export function noticeCause(text) {
+  if (typeof text !== "string" || !NOTICE_START.test(text)) return null;
+  const summary = /<summary>([\s\S]*?)<\/summary>/.exec(text)?.[1] ?? "";
+  const tail = /^Agent ".*?" ((?:stopped at|failed|finished|was stopped|is waiting).*)$/s.exec(summary)?.[1];
+  if (tail === undefined) return null;
+  const status = /<status>([^<]*)<\/status>/.exec(text)?.[1] ?? null;
+  return { status, cause: NOTICE_CAUSES.find(([pattern]) => pattern.test(tail))?.[1] ?? "unknown" };
 }
 
 export const SILENT = { continue: true, suppressOutput: true };

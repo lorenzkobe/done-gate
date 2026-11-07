@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import path from "node:path";
 import { makeRepo, gate, pluginRoot, here } from "./helpers.mjs";
 import { readsOnly } from "../scripts/lib/guard.mjs";
+import { noticeCause } from "../scripts/lib/events.mjs";
 
 const NOW = Date.now();
 const iso = (daysAgo, plusMinutes = 0) => new Date(NOW - daysAgo * 864e5 + plusMinutes * 6e4).toISOString();
@@ -535,6 +536,334 @@ test("C33 edge: a bugfix run with no changed list is not judged, never counted a
 test("C34 idempotent: the state folder stays unchanged with worker files present", () => {
   const repo = makeRepo("stats-p10");
   largeRun(repo, "w1", { minutes: 30, lines: 500, findings: 5, workers: true });
+  const state = path.join(repo, ".claude", "gate");
+  const before = snapshot(state);
+  ok(repo);
+  assert.deepEqual(snapshot(state), before);
+});
+
+// Events: a run opened a day ago, an hour long, and events placed by the minute within it.
+const OPEN_AT = NOW - 864e5;
+const seqAt = (minute) => Math.round((OPEN_AT + minute * 6e4) * 1000);
+
+function hourRun(sessions = ["S1"], over = {}) {
+  return closedRun({
+    openedAt: new Date(OPEN_AT).toISOString(),
+    closedAt: new Date(OPEN_AT + 60 * 6e4).toISOString(),
+    openedSeq: seqAt(0),
+    sessions,
+    ...over,
+  });
+}
+
+function writeEvents(repo, session, events) {
+  const dir = path.join(repo, ".claude", "gate", "sessions", session);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, "events.jsonl"), events.map((e) => (typeof e === "string" ? e : JSON.stringify({ session, agent: null, ...e }))).join("\n") + "\n");
+}
+
+const reviewerStart = (minute, agent = "r1", agentType = "done-gate:reviewer") => ({ seq: seqAt(minute), kind: "subagent-start", agent, agentType });
+const stopAt = (minute, agent = "r1", agentType = "") => ({ seq: seqAt(minute), kind: "subagent-stop", agent, agentType });
+const userPrompt = (minute, text = "do the thing") => ({ seq: seqAt(minute), kind: "prompt", text });
+const block = (minute, rules) => ({ seq: seqAt(minute), kind: "block", rules });
+const deny = (minute, reason, over = {}) => ({ seq: seqAt(minute), kind: "deny", delegate: false, reason, ...over });
+
+test("C40 happy: events coverage counts runs with events; a pruned session gives 1 of 2", () => {
+  const repo = makeRepo("stats-e1");
+  writeRun(repo, "kept", hourRun(["S1"]));
+  writeRun(repo, "pruned", hourRun(["S2"]));
+  writeEvents(repo, "S1", [userPrompt(1)]);
+  assert.match(line(ok(repo), "events:"), /1 of 2 runs/);
+});
+
+test("C41 edge: no sessions folder prints missing on every event line, and a torn event line is dropped", () => {
+  const repo = makeRepo("stats-e2");
+  writeRun(repo, "one", hourRun());
+  const out = ok(repo);
+  for (const start of ["events:", "refusals:", "turns stopped:", "reviewer time:", "review wait:", "helper failures:"]) {
+    assert.match(line(out, start), /missing/, start);
+  }
+  assert.match(line(out, "lead-turn failures:"), /not recorded/);
+
+  writeEvents(repo, "S1", [userPrompt(1), '{"seq":1,"kind":"blo', block(2, ["R5"])]);
+  const torn = ok(repo);
+  assert.match(line(torn, "events:"), /1 of 1 runs/);
+  assert.match(line(torn, "R5"), /1 turn/);
+});
+
+test("C42 edge: a session id with path characters is skipped", () => {
+  const repo = makeRepo("stats-e3");
+  writeRun(repo, "one", hourRun(["../../outside"]));
+  writeEvents(repo, "../../outside", [userPrompt(1)]);
+  assert.match(line(ok(repo), "events:"), /missing/);
+
+  const dots = makeRepo("stats-e3b");
+  writeRun(dots, "one", hourRun([".."]));
+  assert.match(line(ok(dots), "events:"), /missing/);
+
+  const real = makeRepo("stats-e3c");
+  const id = "f11efdf8-5224-47ea-acf5-f5a0a35768c3";
+  writeRun(real, "one", hourRun([id]));
+  writeEvents(real, id, [userPrompt(1)]);
+  assert.match(line(ok(real), "events:"), /1 of 1 runs/);
+});
+
+test("C43 happy: refusals leave hand-offs out, count read-beside apart, group the rest, and split lead from helper", () => {
+  const repo = makeRepo("stats-e4");
+  writeRun(repo, "one", hourRun());
+  writeEvents(repo, "S1", [
+    deny(1, "done-gate: size large: the lead does not edit source", { delegate: true }),
+    deny(2, "done-gate: reading the gate folder beside `npm test` is refused, because the fence cannot tell"),
+    deny(3, "done-gate: that command writes gate evidence files (.claude/gate/...): `x` is not a plain read. Evidence"),
+    deny(4, "done-gate: helpers write through the shell only under the tests", { agent: "h1", agentType: "done-gate:qa" }),
+    deny(5, "done-gate: helpers write through the shell only under a run"),
+    deny(6, "done-gate: helpers write through the other wording", { agent: "h1" }),
+    deny(7, "done-gate: that command writes gate evidence files (.claude/gate/...): `cat > .claude/gate/runs/a/worker-4.md <<EOF` is not a plain read. Evidence"),
+  ]);
+  const out = ok(repo);
+  assert.match(line(out, "refusals:"), /6, hand-offs left out/);
+  assert.match(line(out, "read beside another command:"), /lead 2, helper 0/);
+  assert.match(line(out, "helpers write through the:"), /lead 1, helper 2/);
+  assert.match(line(out, "that command writes gate:"), /lead 1, helper 0/);
+
+  const named = makeRepo("stats-e4b");
+  writeRun(named, "one", hourRun());
+  writeEvents(named, "S1", [
+    deny(1, "done-gate: that command writes tests/a.test.ts, which is a file"),
+    deny(2, "done-gate: that command writes shot.mjs (in a folder)"),
+    deny(3, "done-gate: .claude/gate/runs/x/review2-8.md is a helper's own file"),
+    deny(4, "done-gate: write your draft first: .claude/gate/runs/x/review-2.md (every section"),
+  ]);
+  const grouped = ok(named);
+  assert.match(line(grouped, "that command writes <file>:"), /lead 2, helper 0/);
+  assert.match(line(grouped, "<file> is a helper's:"), /lead 1/);
+  assert.match(line(grouped, "write your draft first:"), /^ *write your draft first: lead 1/);
+});
+
+test("C44 happy: turns stopped per rule count each rule once a turn and print its meaning", () => {
+  const repo = makeRepo("stats-e5");
+  writeRun(repo, "one", hourRun());
+  writeEvents(repo, "S1", [
+    userPrompt(1),
+    block(2, ["R5", "R5", "R8"]),
+    block(3, ["R5"]),
+    userPrompt(4),
+    block(5, ["R5"]),
+  ]);
+  const out = ok(repo);
+  assert.match(line(out, "turns stopped:"), /2 of 2 turns/);
+  assert.match(line(out, "R5"), /no review after the last change[^:]*: 2 turns/);
+  assert.match(line(out, "R8"), /1 turn$/);
+});
+
+test("C45 edge: a hand-back, a task notification and a system notification start no turn", () => {
+  const repo = makeRepo("stats-e6");
+  writeRun(repo, "one", hourRun());
+  writeEvents(repo, "S1", [
+    userPrompt(1),
+    block(2, ["R5"]),
+    { ...userPrompt(3, "<agent-message from=\"x\">done</agent-message>"), handback: true },
+    block(4, ["R5"]),
+    userPrompt(5, "<agent-message from=\"y\">no tag, an older record</agent-message>"),
+    block(6, ["R5"]),
+    userPrompt(7, "[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is automated.\n\n<task-notification><status>completed</status><summary>Agent \"a\" finished</summary></task-notification>"),
+    block(8, ["R5"]),
+    { ...userPrompt(9, "a helper's own prompt"), agent: "h1" },
+    block(10, ["R5"]),
+  ]);
+  assert.match(line(ok(repo), "R5"), /: 1 turn$/);
+
+  const next = makeRepo("stats-e6b");
+  writeRun(next, "one", hourRun());
+  writeEvents(next, "S1", [userPrompt(1), block(2, ["R5"]), userPrompt(3), block(4, ["R5"])]);
+  assert.match(line(ok(next), "R5"), /: 2 turns$/);
+});
+
+test("C46 edge: events outside the run's stretch are not counted", () => {
+  const repo = makeRepo("stats-e7");
+  writeRun(repo, "one", hourRun());
+  writeEvents(repo, "S1", [
+    deny(-5, "done-gate: helpers write through the before"),
+    block(-4, ["R5"]),
+    userPrompt(1),
+    block(70, ["R8"]),
+    deny(70, "done-gate: helpers write through the after"),
+  ]);
+  const out = ok(repo);
+  assert.equal(line(out, "R5"), undefined);
+  assert.equal(line(out, "R8"), undefined);
+  assert.match(line(out, "refusals:"), /none/);
+});
+
+test("C54 edge: an event in two overlapping run stretches counts once, and a turn crossing a close counts once", () => {
+  const repo = makeRepo("stats-e13");
+  writeRun(repo, "one", hourRun());
+  writeRun(repo, "overlap", hourRun());
+  writeEvents(repo, "S1", [userPrompt(1), block(2, ["R5"]), deny(3, "done-gate: helpers write through the x")]);
+  const out = ok(repo);
+  assert.match(line(out, "refusals:"), /^refusals: 1,/);
+  assert.match(line(out, "R5"), /: 1 turn$/);
+
+  const crossing = makeRepo("stats-e13b");
+  writeRun(crossing, "first", hourRun(["S1"], { closedAt: new Date(OPEN_AT + 20 * 6e4).toISOString() }));
+  writeRun(crossing, "second", hourRun(["S1"], { openedAt: new Date(OPEN_AT + 21 * 6e4).toISOString(), openedSeq: seqAt(21) }));
+  writeEvents(crossing, "S1", [userPrompt(1), block(10, ["R5"]), block(30, ["R5"])]);
+  assert.match(line(ok(crossing), "R5"), /: 1 turn$/);
+});
+
+test("C55 edge: a closed-late run is left out of reviewer time and review wait", () => {
+  const repo = makeRepo("stats-e14");
+  writeRun(repo, "late", hourRun(["S1"], { closedLate: true }));
+  writeEvents(repo, "S1", [reviewerStart(1), stopAt(30)]);
+  const out = ok(repo);
+  assert.match(line(out, "events:"), /1 of 1 runs/);
+  assert.match(line(out, "reviewer time:"), /missing/);
+  assert.match(line(out, "review wait:"), /missing/);
+});
+
+test("C56 edge: a block outside every run prints as outside any run, at least n, and not with --version", () => {
+  const repo = makeRepo("stats-e15");
+  writeRun(repo, "one", hourRun());
+  writeEvents(repo, "S1", [block(-10, ["R1"]), userPrompt(1), block(2, ["R5"]), userPrompt(70), block(71, ["R1"]), block(72, ["R1"])]);
+  const out = ok(repo);
+  assert.equal(line(out, "R1"), undefined);
+  assert.match(line(out, "outside any run:"), /at least 2 turns \(R1 2\)/);
+  assert.equal(line(ok(repo, ["--version", "0.21.0"]), "outside any run:"), undefined);
+
+  const another = makeRepo("stats-e15b");
+  writeRun(another, "one", hourRun());
+  writeRun(another, "older", hourRun(["S1"], { daysAgo: 40, openedAt: iso(40), closedAt: iso(40, 60), openedSeq: Math.round((NOW - 40 * 864e5) * 1000) }));
+  writeEvents(another, "S1", [{ ...block(0, ["R8"]), seq: Math.round((NOW - 40 * 864e5 + 6e4) * 1000) }, userPrompt(1)]);
+  assert.equal(line(ok(another), "outside any run:"), undefined);
+});
+
+test("C57 edge: a rule with no plain meaning prints its name alone", () => {
+  const repo = makeRepo("stats-e16");
+  writeRun(repo, "one", hourRun());
+  writeEvents(repo, "S1", [userPrompt(1), block(2, ["R99"])]);
+  const out = ok(repo);
+  assert.equal(line(out, "R99"), "  R99: 1 turn");
+  assert.doesNotMatch(out, /undefined/);
+});
+
+test("C47 happy: reviewer time pairs by agent id, excludes a resumed helper's gap, and counts overlap once", () => {
+  const repo = makeRepo("stats-e8");
+  writeRun(repo, "one", hourRun());
+  writeEvents(repo, "S1", [
+    reviewerStart(1, "r1"),
+    stopAt(7, "r1"),
+    reviewerStart(30, "r1"),
+    stopAt(36, "r1", "done-gate:reviewer"),
+    reviewerStart(33, "r2", "done-gate:reviewer-2"),
+    stopAt(39, "r2"),
+  ]);
+  assert.match(line(ok(repo), "reviewer time:"), /25% of 60 run minutes \(1 of 1 runs\)/);
+});
+
+test("C48 edge: a start with no stop is left out and counted; a skeptic's time is not reviewer time", () => {
+  const repo = makeRepo("stats-e9");
+  writeRun(repo, "one", hourRun());
+  writeEvents(repo, "S1", [
+    reviewerStart(1, "r1"),
+    reviewerStart(10, "r1"),
+    stopAt(16, "r1"),
+    reviewerStart(20, "r2"),
+    reviewerStart(1, "s1", "done-gate:skeptic"),
+    stopAt(50, "s1"),
+  ]);
+  const out = line(ok(repo), "reviewer time:");
+  assert.match(out, /10% of 60 run minutes/);
+  assert.match(out, /no stop 2/);
+});
+
+test("C49 happy: review wait runs from the first reviewer start to the later of the last stop and the last finding closed", () => {
+  const byStop = makeRepo("stats-e10");
+  writeRun(byStop, "one", hourRun(["S1"], { huddles: [{ role: "reviewer", file: "review-1.md", actOn: [finding({ closedSeq: seqAt(20) })] }] }));
+  writeEvents(byStop, "S1", [reviewerStart(10), stopAt(40)]);
+  assert.match(line(ok(byStop), "review wait:"), /50% of 60 run minutes \(1 of 1 runs\)/);
+
+  const byClose = makeRepo("stats-e10b");
+  writeRun(byClose, "one", hourRun(["S1"], { huddles: [
+    { role: "reviewer", file: "review-1.md", actOn: [finding({ closedSeq: seqAt(55) })] },
+    { role: "skeptic", file: "skeptic-1.md", actOn: [finding({ closedSeq: seqAt(59) })] },
+  ] }));
+  writeEvents(byClose, "S1", [reviewerStart(10), stopAt(20)]);
+  assert.match(line(ok(byClose), "review wait:"), /75% of 60 run minutes/);
+
+  const none = makeRepo("stats-e10c");
+  writeRun(none, "one", hourRun());
+  writeEvents(none, "S1", [userPrompt(1)]);
+  const out = ok(none);
+  assert.match(line(out, "review wait:"), /none/);
+  assert.match(line(out, "reviewer time:"), /0% of 60 run minutes/);
+});
+
+const notice = (status, summary) => `<task-notification>\n<task-id>a1</task-id>\n<status>${status}</status>\n<summary>${summary}</summary>\n</task-notification>`;
+
+test("C50 happy: noticeCause names each cause", () => {
+  // Turn limit, API server, finished and waiting are real wording from this laptop's logs; the rest
+  // is the wording the doc's Research tab records, and no code here writes any of it.
+  const rows = [
+    ["completed", 'Agent "fix it" stopped at its 60-turn limit (partial result; SendMessage to task-id to continue)', "turn-limit"],
+    ["failed", `Agent "fix it" failed: Agent terminated early due to an API error: API Error: Can't reach the API server — check your internet`, "lost-connection"],
+    ["failed", 'Agent "fix it" failed: API Error: 529 Overloaded', "api-problem"],
+    ["failed", 'Agent "fix it" failed: API Error: rate limit reached', "api-problem"],
+    ["failed", 'Agent "fix it" failed: API Error: 500 server error', "api-problem"],
+    ["failed", `Agent "fix it" failed: You've hit your session limit · resets 6:40pm`, "session-limit"],
+    ["failed", 'Agent "fix it" failed: Agent stalled: no progress for 600s', "stalled"],
+    ["failed", 'Agent "fix it" failed: Invalid API key · Please run /login', "only-you"],
+    ["failed", 'Agent "fix it" failed: Credit balance too low, check billing', "only-you"],
+    ["killed", 'Agent "fix it" was stopped by user', "stopped-by-user"],
+    ["killed", 'Agent "fix it" was stopped by Claude', "stopped-by-lead"],
+    ["completed", 'Agent "fix it" finished', "finished"],
+    ["completed", 'Agent "fix it" is waiting on its own background work', "waiting"],
+    ["failed", 'Agent "fix it" failed: something nobody has seen', "unknown"],
+  ];
+  for (const [status, summary, cause] of rows) {
+    assert.equal(noticeCause(notice(status, summary))?.cause, cause, summary);
+  }
+  assert.equal(noticeCause(`[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is automated.\n\n${notice("completed", 'Agent "a" finished')}`)?.cause, "finished");
+});
+
+test("C51 refused: a background command, a quoted notice, a name holding a cause word and plain text give no cause or the right one", () => {
+  assert.equal(noticeCause(notice("failed", 'Background command "npm test" failed with exit code 1')), null);
+  assert.equal(noticeCause(notice("completed", 'Monitor "x" stream ended')), null);
+  assert.equal(noticeCause('<agent-message from="a1">server error in the log, see <task-notification><status>failed</status><summary>Agent "x" failed: server error</summary></task-notification></agent-message>'), null);
+  assert.equal(noticeCause("please look at this server error"), null);
+  assert.equal(noticeCause(undefined), null);
+  assert.equal(noticeCause(notice("completed", 'Agent "fix billing and the server error" finished'))?.cause, "finished");
+  assert.equal(noticeCause(notice("completed", 'Agent "turn "limit" work" stopped at its 60-turn limit'))?.cause, "turn-limit");
+});
+
+test("C52 happy: helper failures print as at least n per cause; finished and waiting are not failures", () => {
+  const repo = makeRepo("stats-e11");
+  writeRun(repo, "one", hourRun());
+  writeEvents(repo, "S1", [
+    { ...userPrompt(1, notice("completed", 'Agent "a" stopped at its 60-turn limit')), handback: true },
+    { ...userPrompt(2, notice("completed", 'Agent "b" stopped at its 60-turn limit')), handback: true },
+    { ...userPrompt(3, notice("failed", `Agent "c" failed: API Error: Can't reach the API server`)), handback: true },
+    { ...userPrompt(4, notice("completed", 'Agent "d" finished')), handback: true },
+    { ...userPrompt(5, notice("completed", 'Agent "e" is waiting on its own background work')), handback: true },
+    { ...userPrompt(6, notice("failed", 'Background command "x" failed with exit code 1')), handback: true },
+    { ...userPrompt(7, '<agent-message from="f">a server error</agent-message>'), handback: true },
+  ]);
+  const out = ok(repo);
+  assert.match(line(out, "turn-limit:"), /at least 2/);
+  assert.match(line(out, "lost-connection:"), /at least 1/);
+  assert.equal(line(out, "finished:"), undefined);
+  assert.equal(line(out, "waiting:"), undefined);
+  assert.equal(line(out, "api-problem:"), undefined);
+
+  const clean = makeRepo("stats-e11b");
+  writeRun(clean, "one", hourRun());
+  writeEvents(clean, "S1", [userPrompt(1)]);
+  assert.match(line(ok(clean), "helper failures:"), /none in the notices/);
+});
+
+test("C53 idempotent: the state folder stays unchanged with sessions present", () => {
+  const repo = makeRepo("stats-e12");
+  writeRun(repo, "one", hourRun());
+  writeEvents(repo, "S1", [userPrompt(1), block(2, ["R5"]), deny(3, "done-gate: helpers write through the x"), reviewerStart(4), stopAt(5)]);
   const state = path.join(repo, ".claude", "gate");
   const before = snapshot(state);
   ok(repo);

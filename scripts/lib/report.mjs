@@ -29,7 +29,7 @@ function endOf(ledger) {
   const end = ledger.abandonedAt ?? ledger.closedAt;
   return end ? Date.parse(end) * 1000 + 999 : Infinity;
 }
-const inRun = (ledger) => (e) => e.seq > (ledger.openedSeq ?? 0) && e.seq <= endOf(ledger);
+export const inRun = (ledger) => (e) => e.seq > (ledger.openedSeq ?? 0) && e.seq <= endOf(ledger);
 const deniesIn = (ledger, events) => events.filter((e) => e.kind === "deny" && !e.delegate && inRun(ledger)(e));
 
 // A command written over several lines, on one, for the one-line For you summary.
@@ -308,7 +308,7 @@ function reviewLine(ledger) {
 }
 
 // The five lines of the brief. Plain words only: the user reads this as the final message.
-const PLAIN_RULES = {
+export const PLAIN_RULES = {
   R1: "no task was opened for this change",
   R2: "the plan or the case list came after the first edit",
   R3: "the checks are stale or red",
