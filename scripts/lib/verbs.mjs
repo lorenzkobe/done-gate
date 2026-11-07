@@ -432,6 +432,7 @@ export const verbs = {
         const other = ledger.huddles.find((h) => h.file === file && h.role !== role);
         if (other) throw new UsageError(`gate huddle add ${role}: ${file} is already recorded as ${other.id} (${other.role})`);
         const full = path.join(dir, file);
+        if (!existsSync(full)) throw new UsageError(`${file} is not there: the helper left no file. Nothing recorded. Run \`gate brief ${role}\` again and spawn a fresh helper.`);
         // a draft left by a helper cut off mid-write: every bullet reads "unverified". The
         // round is unfinished, not done — record nothing and send the lead back to re-brief it.
         if (unfinishedFile(full)) {
@@ -448,13 +449,21 @@ export const verbs = {
       const { id, answered, added } = withLedger(ctx, (ledger, dir) => {
         // adding the same file again re-reads it into the same huddle instead of a new round
         let huddle = file ? ledger.huddles.find((h) => h.role === role && h.file === file) : null;
+        const seen = file ? ledger.seen?.[file] : null;
+        const seenFacts = () => Array.isArray(seen?.files)
+          ? { files: seen.files, briefSeq: seen.seq, ...(seen.units ? { units: seen.units } : {}), ...(seen.at ? { at: seen.at } : {}), ...(seen.edges ? { edges: seen.edges } : {}), ...(seen.fixCheck ? { fixCheck: true } : {}), ...(seen.part ? { part: true } : {}) }
+          : {};
+        // a round whose file was lost and briefed again takes what the newer brief showed
+        if (huddle && seen?.seq > (huddle.briefSeq ?? Infinity)) {
+          for (const key of ["files", "briefSeq", "units", "at", "edges", "fixCheck", "part"]) delete huddle[key];
+          Object.assign(huddle, seenFacts());
+        }
         if (!huddle) {
           const id = `H${ledger.huddles.length + 1}`;
           const round = ledger.huddles.filter((h) => h.role === role).length + 1;
           huddle = { id, role, round, file, summary: flag(rest, "--summary") ?? null, actOn: [], seq: nextSeq() };
-          // set once, from the brief that named this file: a re-add never widens it
-          const seen = ledger.seen?.[file];
-          if (Array.isArray(seen?.files)) Object.assign(huddle, { files: seen.files, briefSeq: seen.seq, ...(seen.units ? { units: seen.units } : {}), ...(seen.at ? { at: seen.at } : {}), ...(seen.edges ? { edges: seen.edges } : {}), ...(seen.fixCheck ? { fixCheck: true } : {}), ...(seen.part ? { part: true } : {}) });
+          // from the brief that named this file: a re-add of the same brief never widens it
+          Object.assign(huddle, seenFacts());
           ledger.huddles.push(huddle);
         }
         const id = huddle.id;

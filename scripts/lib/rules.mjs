@@ -622,8 +622,9 @@ function spans(rel, open, all) {
 // Returns the entries still uncovered ("path" or "path:from-to"), or null for a ledger from
 // before seen sets, which keeps the old rule.
 export function uncovered(state, role, after = lastEditSeq(state, state.config, state.ledger)) {
-  const rounds = (state.ledger.huddles ?? []).filter((h) => h.role === role && h.file && Array.isArray(h.files));
-  if (!rounds.length) return null;
+  const recorded = (state.ledger.huddles ?? []).filter((h) => h.role === role && h.file && Array.isArray(h.files));
+  if (!recorded.length) return null;
+  const rounds = recorded.filter((h) => roundOnDisk(state, h));
   const stops = (state.events ?? []).filter((e) => e.kind === "subagent-stop" && isRole(e.agentType, role));
   const stopOf = (round) => stops.find((e) => e.seq > (round.briefSeq ?? Infinity));
   let counts = new Map();
@@ -876,6 +877,14 @@ export function verifyProblem(state, { source = true, final = true } = {}) {
   const pending = [...new Set([...(ledger.verifyAdded ?? []), ...(ledger.verifyRestored ?? [])])].filter((cmd) => !ran.has(cmd));
   if (pending.length) return { reason: "an added command has not run", text: `verify command ${pending.map((c) => `\`${c}\``).join(", ")} has not run: \`gate verify\`` };
   return null;
+}
+
+// A recorded round counts only while its file stands finished: one a helper never wrote, or that
+// a later draft overwrote, read nothing. A state with no run folder is a rule test's fixture.
+export function roundOnDisk(state, round) {
+  if (!state.dir || !round.file) return true;
+  const full = path.join(state.dir, round.file);
+  return existsSync(full) && !unfinishedFile(full);
 }
 
 export function unfinishedFile(full) {

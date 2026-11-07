@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, write, gate, pluginRoot, lookedUp } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
@@ -79,6 +79,7 @@ test("step marks a step DONE/SKIPPED/N-A with a note; evidenced steps refuse SKI
 
 test("huddle add / acton / resolve track a review round and its Act-on items", () => {
   const repo = opened("verbs-huddle");
+  writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n- none\n");
   const r = cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
   assert.match(r.stdout, /H1/);
   cli(repo, "huddle", ["acton", "H1", "null venue crashes the badge"]);

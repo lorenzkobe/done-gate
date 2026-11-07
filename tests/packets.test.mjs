@@ -157,7 +157,8 @@ test("C1 happy: `gate brief <role>` writes brief-<role>-1.md in the run dir and 
     const abs = briefFile(repo, role);
 
     assert.ok(existsSync(abs), `${role}: ${abs} was not written`);
-    assert.equal(out.length, 2, `${role}: expected exactly two printed lines, got:\n${r.stdout}`);
+    assert.equal(out.length, 3, `${role}: expected the packet, the prompt and the one-helper line, got:\n${r.stdout}`);
+    assert.match(out[2], /^one helper per packet/);
     assert.equal(out[0], `packet: ${abs}`);
     assert.ok(out[1].startsWith(`prompt: Read ${abs} and follow your role brief.`), `${role}: ${out[1]}`);
     assert.ok(path.isAbsolute(abs), `${role}: the packet path is not absolute`);
@@ -1126,7 +1127,9 @@ test("C5 refused: gate brief reviewer is refused while a recorded reviewer huddl
   const own = path.join(dir, "review-1.md");
 
   // a reviewer round was recorded against review-1.md, which is not on disk
+  writeFileSync(own, "# Review 1\n\n## Act on\n- none\n\n## Evidence verdict\n- fine\n");
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md", "--summary", "round one"]);
+  rmSync(own);
   assert.equal(existsSync(own), false, "the recorded file must be missing for this case");
   assert.equal(
     loadLedger(dir).huddles.filter((h) => h.role === "reviewer" && h.file === "review-1.md").length,

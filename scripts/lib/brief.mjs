@@ -8,7 +8,7 @@ import { baseCopy, fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs"
 import { ROLES, flag, outsideRepos, positional } from "./verbs.mjs";
 import { repoPath, toPosixRel } from "./paths.mjs";
 import { OWN_FILE } from "./guard.mjs";
-import { LOOKUP_EXAMPLE, REVIEW_CAP, fixCheckDone, capUnitsOf, nextPiece, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify, verifyProblem } from "./rules.mjs";
+import { LOOKUP_EXAMPLE, REVIEW_CAP, fixCheckDone, capUnitsOf, nextPiece, roundOnDisk, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify, verifyProblem } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { nextSeq } from "./events.mjs";
@@ -436,7 +436,7 @@ export const verbs = {
         ? `size ${eff}: implement it yourself; the worker is for ${at}`
         : `size ${eff}: write the tests yourself from the case table, red first; blind QA is for ${at}`);
     }
-    const rounds = state.ledger.huddles.filter((h) => h.role === role).length;
+    const rounds = state.ledger.huddles.filter((h) => h.role === role && roundOnDisk(state, h)).length;
     const records = { ...(state.ledger.briefed ?? {}), ...(state.ledger.seen ?? {}) };
     // a recorded round whose file never appeared: one a brief named is briefed again under
     // the same number; one no brief named has no packet to hand on, so its file comes back first
@@ -510,7 +510,7 @@ export const verbs = {
     // a ledger from before seen sets keeps its old, uncapped second reviewer
     const legacy = !state.ledger.seen;
     // past the cap a round is briefed only for a piece holding a file no round of this role saw
-    const seenByRole = new Set(state.ledger.huddles.filter((h) => h.role === role && Array.isArray(h.files)).flatMap((h) => h.files.map(pathOf)));
+    const seenByRole = new Set(state.ledger.huddles.filter((h) => h.role === role && Array.isArray(h.files) && roundOnDisk(state, h)).flatMap((h) => h.files.map(pathOf)));
     const neverSeen = unseen === null ? [] : reviewScope(state).filter((f) => !seenByRole.has(f));
     const stillOpen = piece ? piece.files.map(pathOf).some((f) => neverSeen.includes(f)) : neverSeen.length > 0;
     // past the cap, the fixes made after the last round get one fix-check round over the lines
@@ -518,7 +518,7 @@ export const verbs = {
     const pieceFiles = piece ? piece.files.map(pathOf) : reviewScope(state);
     const roleRounds = state.ledger.huddles.filter((h) => h.role === role);
     // a fix-check is used once its own helper stopped or while it runs; one cut off is briefed again
-    const fixChecks = roleRounds.filter((h) => h.fixCheck && (h.files ?? []).some((e) => pieceFiles.includes(pathOf(e))))
+    const fixChecks = roleRounds.filter((h) => h.fixCheck && roundOnDisk(state, h) && (h.files ?? []).some((e) => pieceFiles.includes(pathOf(e))))
       .map((h) => ({ h, run: helperRun(state, role, h.file, h.briefSeq ?? 0) }));
     const live = fixChecks.find((f) => f.run.running);
     if (reviewing && live) throw new UsageError(`${role}: the fix-check round ${live.h.file} is still running; wait for its helper to stop, then \`gate huddle add ${role} --file ${live.h.file}\``);
@@ -567,6 +567,7 @@ export const verbs = {
       ? ` Your file is ${full} and it already exists: keep its finished sections, never reset it to the all-unverified draft, and rewrite it after each finding.`
       : ` Your file is ${full}: write it first, then investigate and rewrite it after each finding.`;
     ctx.out(`prompt: Read ${file} and follow your role brief.${yours}`);
+    ctx.out("one helper per packet: a helper handed several writes one file, and the others read as unreviewed.");
     printNext(ctx);
   },
 };

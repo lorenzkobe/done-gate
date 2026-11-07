@@ -163,6 +163,7 @@ test("C2 happy: at size large `gate brief worker` writes brief-worker-1.md, ever
   }
 
   // the worker's evidence is its own worker-<n>.md
+  writeFileSync(path.join(runDir(repo), "worker-1.md"), "# Worker 1\n");
   const ok = run(repo, "huddle", ["add", "worker", "--file", "worker-1.md"]);
   assert.equal(ok.stderr, "", `\`gate huddle add worker --file worker-1.md\` was refused:\n${ok.stderr}`);
   assert.match(withoutHint(ok.stdout)[0] ?? "", /^H\d+ added \(worker\)/, ok.stdout);

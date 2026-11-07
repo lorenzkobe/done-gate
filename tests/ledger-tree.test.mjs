@@ -1049,6 +1049,7 @@ test("C6 happy: every mutating verb's last line is the next: hint, and `gate che
   ];
 
   for (const [verb, args, opts] of drive) {
+    if (verb === "huddle") writeFileSync(path.join(repo, ".claude", "gate", "runs", readdirSync(path.join(repo, ".claude", "gate", "runs"))[0], "review-1.md"), "# Review 1\n\n## Act on\n- none\n");
     const h = hint(repo, verb, args, opts);
     // the lead searches code and memory before its Context note
     if (verb === "open") lookedUp(repo);

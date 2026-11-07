@@ -21,9 +21,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { reviewFiles } from "../scripts/lib/assess.mjs";
 
@@ -473,4 +473,100 @@ test("C7 edge: an unrecorded arbiter-1.md whose only section is '## Ruling' read
     !skepticLine || !skepticLine.includes("skeptic-1.md"),
     `an unrecorded skeptic draft is reported as written but never recorded: ${skepticLine}`,
   );
+});
+
+const r5 = (repo) => ruleLine(check(repo), "R5") ?? "";
+
+test("gate huddle add with a file not on disk is refused and records nothing", () => {
+  const repo = opened("rdr-missing");
+  const r = refused(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
+  assert.match(r.stderr, /review-1\.md is not there/);
+  assert.equal(reviewerHuddles(ledgerOf(repo)).length, 0);
+});
+
+const helperEvent = (repo, name, agent) => run(repo, "log", [], { input: JSON.stringify({ hook_event_name: name, session_id: "S1", cwd: repo, ...agent }) });
+function briefedRound(repo, n) {
+  const brief = run(repo, "brief", ["reviewer"]);
+  assert.equal(brief.status, 0, brief.stderr);
+  const file = /Your file is .*\/(review-\d+\.md)/.exec(brief.stdout)[1];
+  const agent = { agent_id: `R${n}`, agent_type: "done-gate:reviewer" };
+  helperEvent(repo, "SubagentStart", agent);
+  lookedUp(repo, { agent: agent.agent_id, role: "reviewer" });
+  helperFile(repo, file, reviewFile(n, "x", []));
+  helperEvent(repo, "SubagentStop", agent);
+  return file;
+}
+const standardRun = (name) => {
+  const repo = opened(name);
+  lookedUp(repo);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1 · Related: none: `grep -rn a src` · Research: none needed: a fixture"]);
+  cli(repo, "note", ["plan", "Two files.", "--files", "src/a.ts,src/b.ts"]);
+  return repo;
+};
+
+test("a recorded round whose file is now a draft, partial or missing counts as unread, and a finished one covers", () => {
+  const repo = standardRun("rdr-lost");
+  const file = briefedRound(repo, 1);
+  cli(repo, "huddle", ["add", "reviewer", "--file", file]);
+  assert.ok(!r5(repo), `a clean round covers: ${r5(repo)}`);
+  for (const [what, body] of [["draft", draftFile(1, "x")], ["partial", `# Review 1\n\n## Act on\n- ${FIND_1}\n## Consider\n- unverified\n## Noted\n- none\n## Dismissed\n- none\n## Evidence verdict\n- unverified\n`]]) {
+    helperFile(repo, file, body);
+    assert.ok(r5(repo), `${what}: the round no longer counts`);
+  }
+  rmSync(path.join(runDir(repo), file));
+  assert.ok(r5(repo), "missing: the round no longer counts");
+  helperFile(repo, file, reviewFile(1, "x", []));
+  assert.ok(!r5(repo), "finished again: it covers");
+});
+
+test("a lost round is briefed again under its number, uses up no round, and the new brief's facts are what count", () => {
+  const repo = standardRun("rdr-again");
+  const file = briefedRound(repo, 1);
+  cli(repo, "huddle", ["add", "reviewer", "--file", file]);
+  const before = ledgerOf(repo).huddles.find((h) => h.file === file).briefSeq;
+  rmSync(path.join(runDir(repo), file));
+  shellWrite(repo, "src/a.ts", "export const a = 3;\nexport const venue = null;\n");
+  const again = briefedRound(repo, 1);
+  assert.equal(again, file, "the same round number");
+  cli(repo, "huddle", ["add", "reviewer", "--file", again]);
+  const round = ledgerOf(repo).huddles.filter((h) => h.role === "reviewer");
+  assert.equal(round.length, 1, "no second round");
+  assert.ok(round[0].briefSeq > before, "the newer brief's facts");
+  assert.ok(!r5(repo), `it covers the lines as they stand: ${r5(repo)}`);
+});
+
+test("rounds whose files were lost do not reach the cap", () => {
+  const repo = standardRun("rdr-cap");
+  for (const n of [1, 2, 3]) {
+    const file = briefedRound(repo, n);
+    cli(repo, "huddle", ["add", "reviewer", "--file", file]);
+    shellWrite(repo, "src/a.ts", `export const a = ${n + 10};\nexport const venue = null;\n`);
+  }
+  rmSync(path.join(runDir(repo), "review-3.md"));
+  const again = run(repo, "brief", ["reviewer"]);
+  assert.equal(again.status, 0, again.stderr);
+  assert.doesNotMatch(again.stdout, /Findings to re-check/, "an ordinary round, not the fix-check");
+});
+
+test("gate brief says one helper per packet", () => {
+  const repo = standardRun("rdr-one-helper");
+  const out = run(repo, "brief", ["reviewer"]).stdout;
+  assert.match(out, /one helper per packet/);
+  assert.match(out.trim().split("\n").at(-1), /^next:/);
+});
+
+test("a round briefed again takes only the newer brief's facts", () => {
+  const repo = standardRun("rdr-stale-facts");
+  const file = briefedRound(repo, 1);
+  cli(repo, "huddle", ["add", "reviewer", "--file", file]);
+  const ledgerFile = path.join(runDir(repo), "ledger.json");
+  const stale = JSON.parse(readFileSync(ledgerFile, "utf8"));
+  Object.assign(stale.huddles.find((h) => h.file === file), { fixCheck: true, part: true });
+  writeFileSync(ledgerFile, JSON.stringify(stale));
+  rmSync(path.join(runDir(repo), file));
+  assert.equal(briefedRound(repo, 1), file);
+  cli(repo, "huddle", ["add", "reviewer", "--file", file]);
+  const round = ledgerOf(repo).huddles.find((h) => h.file === file);
+  assert.equal(round.fixCheck, undefined);
+  assert.equal(round.part, undefined);
 });

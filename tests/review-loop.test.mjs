@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, write, gate, pluginRoot, doneArgs, lookedUp } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
@@ -1566,7 +1566,9 @@ test("C3 happy: the full report embeds the skeptic huddle's file; a missing file
 
   // Same ledger, file gone: the report still renders and names the file.
   const gone = opened("skeptic-report-missing");
+  writeFileSync(path.join(runDir(gone), "skeptic-9.md"), "# Skeptic 9\n\n## Act on\n- none\n");
   cli(gone, "huddle", ["add", "skeptic", "--file", "skeptic-9.md"]);
+  rmSync(path.join(runDir(gone), "skeptic-9.md"));
   const r = run(gone, "report");
   assert.equal(r.status, 0, `report crashed on a missing skeptic file:\n${r.stderr}`);
   assert.ok(!existsSync(path.join(runDir(gone), "skeptic-9.md")), "premise: the file really is absent");
