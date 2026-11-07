@@ -285,7 +285,7 @@ export function lookupWindowFrom(ledger, events) {
 // Whether the user said these words in this task's window: a message, or an answer to a question.
 // At least three words, so "ok" or "no" never stands for consent; system notices and hand-backs
 // that arrive as prompts are not the user.
-const NOT_THE_USER = /^\s*(?:<task-notification|<cross-session-message|\[SYSTEM NOTIFICATION|<system-reminder)/;
+export const NOT_THE_USER = /^\s*(?:<task-notification|<cross-session-message|\[SYSTEM NOTIFICATION|<system-reminder)/;
 export function userSaid(ledger, events, words) {
   return saidSince(events, lookupWindowFrom(ledger, events), words);
 }

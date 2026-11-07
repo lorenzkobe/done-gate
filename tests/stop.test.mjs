@@ -694,3 +694,95 @@ test("C8 edge: a PAUSED line ends the turn at any count, with a run open or none
   assert.match(stopS1(bare).json.reason, /stuck/, "no run open: still told to ask");
   assert.equal(stopS1(bare, "Which run should this go in?\nPAUSED: which run").json, null, "and the pause ends the turn");
 });
+
+const say = (repo, text) => hookRun(repo, "log", { hook_event_name: "UserPromptSubmit", user_message: text });
+const blockedRun = (name) => {
+  const repo = makeRepo(name);
+  startS1(repo);
+  hookRun(repo, "open", {}, ["task", "feature"]);
+  write(repo, "src/a.ts", "changed\n");
+  return repo;
+};
+const pausesOf = (repo) => {
+  const current = loadSession(path.join(repo, ".claude", "gate"), "S1").current;
+  return loadLedger(path.join(repo, ".claude", "gate", "runs", current)).pauses;
+};
+
+test("a last line ending in ? gets one line and no unmet list", () => {
+  const repo = blockedRun("stop-question");
+  const out = stopS1(repo, "All done.\n\nWant me to push?").json;
+  assert.equal(out.decision, "block", "a question does not end the turn");
+  assert.equal(out.reason.split("\n").length, 1, out.reason);
+  assert.doesNotMatch(out.reason, /\bR\d+\b/);
+  assert.match(out.reason, /PAUSED:/);
+  assert.match(out.reason, /gate check/);
+  assert.match(stopS1(repo, "Want me to push?**\n").json.reason, /^done-gate: [^\n]*PAUSED:[^\n]*$/, "trailing markdown is still a question");
+});
+
+test("a ? mid-message still lists, and the third identical block says stuck", () => {
+  const repo = blockedRun("stop-question-mid");
+  assert.match(stopS1(repo, "Why did it fail? Fixed now.").json.reason, /R3/);
+  const again = makeRepo("stop-question-stuck");
+  startS1(again);
+  hookRun(again, "open", {}, ["task", "feature"]);
+  write(again, "src/a.ts", "changed\n");
+  stopS1(again, "Push it?");
+  stopS1(again, "Push it?");
+  const third = stopS1(again, "Push it?").json;
+  assert.match(third.reason, /^done-gate: stuck/);
+  const fullList = stopS1(blockedRun("stop-question-list")).json.reason.split("\n").find((l) => /R3/.test(l));
+  assert.ok(third.reason.includes(fullList), "the list never went out, so the stuck reason carries it uncut");
+  const told = blockedRun("stop-question-then-done");
+  stopS1(told, "Done?");
+  assert.doesNotMatch(stopS1(told, "Done.").json.reason, /same .* as the last stop/, "the last stop listed nothing");
+  for (let i = 0; i < 17; i++) stopS1(told, i % 2 ? "Done." : "Done?");
+  assert.equal(stopS1(told, "Done?").json, null, "questions do not dodge the brake");
+});
+
+test("a message that is only a stop word ends the turn with items unmet and records a pause", () => {
+  for (const word of ["stop", "Stop.", "STOP!", "pause", "wait", "hold on", "cancel", "  stop  "]) {
+    const repo = blockedRun("stop-word");
+    say(repo, word);
+    assert.equal(stopS1(repo, "Stopping here.").json, null, word);
+    assert.match(pausesOf(repo).at(-1).text, /the user said/, word);
+  }
+  const bare = makeRepo("stop-word-bare");
+  startS1(bare);
+  write(bare, "src/a.ts", "changed\n");
+  say(bare, "stop");
+  assert.equal(stopS1(bare).json, null, "no run open: the turn ends too");
+});
+
+test("a sentence holding a stop word, a hand-back and a system notice do not end the turn", () => {
+  for (const text of ["stop using X", "don't stop", "wait for the build", "please stop the server",
+    "<agent-message from=\"a\">stop</agent-message>", "<task-notification>stop</task-notification>", "[SYSTEM NOTIFICATION] stop", "<system-reminder>stop</system-reminder>"]) {
+    const repo = blockedRun("stop-word-no");
+    say(repo, text);
+    assert.equal(stopS1(repo).json?.decision, "block", text);
+  }
+});
+
+test("a stop word followed by a hand-back or a notice still ends the turn, and a later real message takes over", () => {
+  const repo = blockedRun("stop-word-handback");
+  say(repo, "stop");
+  say(repo, "<task-notification>helper finished</task-notification>");
+  say(repo, "[SYSTEM NOTIFICATION] event");
+  assert.equal(stopS1(repo).json, null);
+  say(repo, "keep going");
+  assert.equal(stopS1(repo).json?.decision, "block");
+});
+
+test("a question's answer after a stop word takes the stop back", () => {
+  const repo = blockedRun("stop-word-answer");
+  say(repo, "stop");
+  hookRun(repo, "log", { hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", tool_input: {}, tool_response: { answers: { q: "keep going" } } });
+  assert.equal(stopS1(repo).json?.decision, "block");
+});
+
+test("a stop word records its pause even while a helper or a verify runs", () => {
+  const repo = blockedRun("stop-word-helper");
+  say(repo, "stop");
+  hookRun(repo, "log", { hook_event_name: "SubagentStart", agent_id: "A1", agent_type: "done-gate:reviewer" });
+  assert.equal(stopS1(repo).json, null);
+  assert.match(pausesOf(repo).at(-1).text, /the user said "stop"/);
+});

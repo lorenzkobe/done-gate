@@ -139,8 +139,9 @@ test, each step with its evidence, the reviewer's own file, the check output, th
 when you want the detail.
 
 Mid-task, Claude can only pause two ways: a question through the question prompt, or a
-final line `PAUSED: <what it needs>`. Anything else with an open ledger is judged as an
-attempt to finish.
+final line `PAUSED: <what it needs>`. A message of yours that is only a stop word (stop, pause,
+wait, hold on, cancel) ends the turn too. Anything else with an open ledger is judged as an
+attempt to finish, and a plain question gets one line saying how to pause.
 
 ## The rules
 
@@ -195,7 +196,8 @@ checked.
 - **Can't end a turn with a gap, and can't give up.** From the third *identical* block in a
   row the reason says stop and ask the user (`PAUSED: <what you need>`), and the block holds.
   Only a gate bug could outlast that, so an emergency brake lets go at the twentieth and
-  stamps `EMERGENCY BRAKE` on the report. Progress resets the counter.
+  stamps `EMERGENCY BRAKE` on the report. Progress resets the counter. Only your own stop word
+  ends the turn with a gap, and the report lists it as a pause.
 - **Can't code before the plan.** An edit to a source or test file, by the edit tools or a
   shell write, is refused until a run is open with the Task, Context, Plan and a case its
   playbook asks for.

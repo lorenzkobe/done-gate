@@ -3,12 +3,22 @@ import { recordGateError } from "./context.mjs";
 import { appendEvents, nextSeq } from "./events.mjs";
 import { loadLedger, saveLedger } from "./ledger.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
-import { HELPER_MAX_MS, unfinishedVerify } from "./rules.mjs";
+import { HELPER_MAX_MS, NOT_THE_USER, unfinishedVerify } from "./rules.mjs";
 
 // Stuck: from ASK_AFTER identical blocks the lead must ask the user; BRAKE_AFTER stops a gate-bug loop.
 export const ASK_AFTER = 3;
 export const BRAKE_AFTER = 20;
 const PAUSE_RE = /(?:^|\n)\s*PAUSED:\s*(.+?)\s*$/;
+const STOP_WORD_RE = /^\s*(?:stop|pause|wait|hold on|cancel)[\s.!]*$/i;
+// A question does not end the turn: "All done, want me to push?" would then skip every check.
+const QUESTION_RE = /\?[*_`"')\]]*\s*$/;
+const QUESTION_REASON = "done-gate: waiting for the user's answer? End your message with a final line `PAUSED: <your question>` and the turn ends; otherwise `gate check` lists what is left.";
+
+// The user's newest words, a message or a question's answer, when they are nothing but a stop word.
+function typedStop(events, session) {
+  const last = events.filter((e) => e.session === session && (e.kind === "prompt" || e.kind === "answer") && !e.agent && !e.handback && !NOT_THE_USER.test(e.text ?? "")).pop();
+  return STOP_WORD_RE.test(last?.text ?? "") ? last.text.trim() : null;
+}
 
 // Every block is logged, so a turn that could not end can be diagnosed from the session's events.
 function block(ctx, reason, rules = []) {
@@ -16,11 +26,14 @@ function block(ctx, reason, rules = []) {
   ctx.out({ decision: "block", reason, systemMessage: "done-gate blocked the stop; see reason." });
 }
 
-function bumpBlocks(ctx, key) {
+function bumpBlocks(ctx, key, opts = {}) {
   const session = loadSession(ctx.stateDir, ctx.session);
-  const count = session.blocks?.key === key ? session.blocks.count + 1 : 1;
-  saveSession(ctx.stateDir, { ...session, blocks: { key, count } });
-  return count;
+  const same = session.blocks?.key === key;
+  const count = same ? session.blocks.count + 1 : 1;
+  // listed: the full list went out for this key; a question's one-line block does not send it
+  const listed = same && Boolean(session.blocks.listed);
+  saveSession(ctx.stateDir, { ...session, blocks: { key, count, listed: listed || (opts.listing?.(count) ?? false) } });
+  return { count, listed };
 }
 
 function clearBlocks(ctx) {
@@ -69,7 +82,7 @@ export const verbs = {
     } catch (error) {
       if (!(error instanceof LedgerParseError)) throw error;
       const key = `parse:${error.message}`;
-      const count = bumpBlocks(ctx, key);
+      const { count } = bumpBlocks(ctx, key);
       if (count >= 2) {
         recordGateError(error, "stop");
         return; // GATE ERROR stamped via the log; fail open rather than wedge
@@ -80,6 +93,20 @@ export const verbs = {
 
     const { state, unmet } = result;
     const ledgerOpen = Boolean(state.ledger);
+
+    // a pause hands the turn to the user, run or no run: the stuck reason asks for exactly this
+    const stopWord = unmet.length ? typedStop(state.events ?? [], ctx.session) : null;
+    const pauseText = PAUSE_RE.exec(lastMessage)?.[1] ?? (stopWord && `the user said "${stopWord}"`);
+    if (pauseText) {
+      const entry = { seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, text: pauseText };
+      if (ledgerOpen) {
+        const ledger = loadLedger(state.dir);
+        ledger.pauses.push(entry);
+        saveLedger(state.dir, ledger);
+      } else appendEvents(ctx.stateDir, ctx.session, [{ ...entry, agent: null, agentType: null, kind: "pause" }]);
+      clearBlocks(ctx);
+      return;
+    }
 
     // a helper this session spawned is still running: the turn ends so the helper's
     // hand-back can wake the lead; nothing is finalised
@@ -95,26 +122,14 @@ export const verbs = {
       return;
     }
 
-    // a pause hands the turn to the user, run or no run: the stuck reason asks for exactly this
-    const pause = PAUSE_RE.exec(lastMessage);
-    if (pause) {
-      const entry = { seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, text: pause[1] };
-      if (ledgerOpen) {
-        const ledger = loadLedger(state.dir);
-        ledger.pauses.push(entry);
-        saveLedger(state.dir, ledger);
-      } else appendEvents(ctx.stateDir, ctx.session, [{ ...entry, agent: null, agentType: null, kind: "pause" }]);
-      clearBlocks(ctx);
-      return;
-    }
-
     if (unmet.length === 0) {
       clearBlocks(ctx);
       return;
     }
 
     const key = unmet.map((u) => `${u.rule}:${u.text}`).join("\n");
-    const count = bumpBlocks(ctx, key);
+    const asks = QUESTION_RE.test(lastMessage);
+    const { count, listed } = bumpBlocks(ctx, key, { listing: (n) => !asks || n >= ASK_AFTER });
     if (count >= BRAKE_AFTER) {
       if (state.dir) {
         const ledger = loadLedger(state.dir);
@@ -126,6 +141,7 @@ export const verbs = {
       clearBlocks(ctx);
       return;
     }
-    block(ctx, renderReason(unmet, { ledgerOpen, repeat: count > 1, stuck: count >= ASK_AFTER ? count : 0 }), unmet.map((u) => u.rule));
+    const reason = asks && count < ASK_AFTER ? QUESTION_REASON : renderReason(unmet, { ledgerOpen, repeat: listed, stuck: count >= ASK_AFTER ? count : 0 });
+    block(ctx, reason, unmet.map((u) => u.rule));
   },
 };
