@@ -822,6 +822,13 @@ export function clickEvents(state, after) {
   return (state.events ?? []).filter((e) => !e.agent && (ranDriver(e) || clicked(e)));
 }
 
+// What can close driver for an api change: the lead's own successful run after the last edit. A cmd:
+// driver may write source itself, which dates that edit to the run, so its run counts at that seq.
+export function apiCalls(state, after) {
+  const ranDriver = driverRun(state, after);
+  return ranEvents(state).filter((e) => !e.agent && (e.exit == null || e.exit === 0) && (e.seq > after || ranDriver(e)));
+}
+
 // A click case reopens when source changed after its event: the control may have moved.
 export function clickStale(c, after) {
   return c.kind === "click" && c.status === "closed" && Boolean(c.event) && Number(c.event.slice("events#".length)) < after;
@@ -909,6 +916,8 @@ export const newRules = (ledger) => (ledger?.rules ?? 0) >= 1;
 const surfaceOf = (ledger, config, changed, matches) => changed.filter((p) => matches(p) && (!newRules(ledger) || (!config.isTest(p) && !config.isDoc(p))));
 export const uiFiles = (ledger, config, changed) => surfaceOf(ledger, config, changed, config.isUi);
 export const schemaFiles = (ledger, config, changed) => surfaceOf(ledger, config, changed, config.isSchema);
+// A run from before the stamp closes driver on a note, whatever changed.
+export const apiFiles = (ledger, config, changed) => (newRules(ledger) ? surfaceOf(ledger, config, changed, config.isApi) : []);
 
 // The changed files that keep a step open: what driving reaches, what a probe reaches.
 const STEP_SURFACE = {
@@ -1082,6 +1091,15 @@ export function evaluate(state) {
         : config.driver
         ? "UI files changed but the real surface was not driven after the last edit. Run the project's /verify driver (phone viewport first), or get the user's waiver (`gate waive driver \"<reason>\"`)."
         : `UI files changed and this repo has no /verify driver. Run \`/done-gate:verify-setup\` once to create it, drive the surface, or get the user's waiver (\`gate waive driver "<reason>"\`). ${scripted}` });
+    }
+  }
+
+  // R4: an api file changed → the driver step closed on a recorded call after the last edit
+  const api = apiFiles(ledger, config, changed);
+  if (api.length && !waived(ledger, "driver")) {
+    const evidence = ledger.steps?.find((s) => s.key === "driver" && s.state === "DONE")?.evidence;
+    if (!apiCalls(state, after).some((e) => `events#${e.seq}` === evidence)) {
+      unmet.push({ rule: "R4", text: `API files changed (${list(api)}) but no recorded call closes the driver step after the last edit. Call the endpoint, then \`gate step driver done "<what it returned>" --ran "<part of the command or url>"\`, or get the user's waiver (\`gate waive driver "<reason>"\`).` });
     }
   }
 

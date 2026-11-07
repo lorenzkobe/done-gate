@@ -437,6 +437,11 @@ main root, whatever the shell's directory. `gate open`, `gate attach` and
 }
 ```
 
+A changed `api` file is driven by calling the endpoint: in a new run the driver step closes only on
+a recorded, successful run of the lead's after the last edit (`gate step driver done "<what it
+returned>" --ran "<part of the command or url>"`), and R4 holds it until then. The gate proves the
+call ran, not that it reached the endpoint.
+
 A green `gate verify` closes the driver and schema steps by itself, as N/A, when this code cannot
 reach them: only tests or docs changed, or the repo lists its globs (`ui` and `api` for driver,
 `schema` for schema; an empty list counts) and no changed file matches. A later edit opens them

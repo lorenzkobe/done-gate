@@ -8,6 +8,7 @@ import path from "node:path";
 import { gate, lookedUp, makeRepo, write } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
+import { readEvents } from "../scripts/lib/events.mjs";
 import { newRules } from "../scripts/lib/rules.mjs";
 
 function envFor(repo) {
@@ -402,4 +403,178 @@ test("C18 an edit made while verify runs is judged from the tree at its start", 
   cli(repo, "check");
   stillOpen(repo, "driver");
   assert.match(cli(repo, "check"), /\bR4\b/);
+});
+
+// Batch 3.3: an api change is driven by calling the endpoint, and only a recorded call closes it.
+const call = (repo, command = "curl -s localhost:3000/api/users") => hook(repo, { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command }, tool_response: {} });
+const r4 = (repo) => cli(repo, "check").split("\n").filter((l) => /\bR4\b/.test(l)).join("\n");
+const apiChanged = (name) => {
+  const repo = opened(name);
+  edit(repo, "app/api/users/route.ts", "export const GET = 2;\n");
+  return repo;
+};
+
+test("3.3 C1 an api file changed: a recorded call closes driver and R4 is clean", () => {
+  const repo = apiChanged("wo-33c1");
+  assert.match(r4(repo), /app\/api\/users\/route\.ts/);
+  call(repo);
+  cli(repo, "step", ["driver", "done", "returned 200 with the new field", "--ran", "curl -s localhost:3000"]);
+  const step = stepOf(repo, "driver");
+  assert.equal(step.state, "DONE");
+  assert.match(step.evidence, /^events#\d+$/);
+  assert.equal(r4(repo), "");
+});
+
+test("3.3 C2 an api file changed: a note is refused, the step stays blank and R4 names the call", () => {
+  const repo = apiChanged("wo-33c2");
+  write(repo, "notes.txt", "looks fine\n");
+  for (const args of [["driver", "done", "looks fine", "--evidence", "notes.txt"], ["driver", "done", "looks fine"], ["driver", "done", "looks fine", "--ran", "curl -s localhost:3000"]]) {
+    const r = run(repo, "step", args);
+    assert.match(r.stderr, /recorded/, args.join(" "));
+    assert.equal(stepOf(repo, "driver").state, null);
+  }
+  assert.match(r4(repo), /--ran/);
+});
+
+test("3.3 C3 a call from before the last edit cannot close it; an edit after the call brings R4 back until a new call", () => {
+  const before = opened("wo-33c3");
+  edit(before, "app/api/users/route.ts", "export const GET = 2;\n");
+  call(before);
+  edit(before, "app/api/users/route.ts", "export const GET = 3;\n");
+  assert.match(run(before, "step", ["driver", "done", "old call", "--ran", "curl -s localhost:3000"]).stderr, /after the last edit/);
+  assert.equal(stepOf(before, "driver").state, null);
+
+  const repo = apiChanged("wo-33c3b");
+  call(repo);
+  cli(repo, "step", ["driver", "done", "returned 200", "--ran", "curl -s localhost:3000"]);
+  assert.equal(r4(repo), "");
+  edit(repo, "app/api/users/route.ts", "export const GET = 3;\n");
+  assert.match(r4(repo), /app\/api\/users\/route\.ts/);
+  call(repo, "curl -s localhost:3000/api/users?again=1");
+  cli(repo, "step", ["driver", "done", "returned 200 again", "--ran", "again=1"]);
+  assert.equal(r4(repo), "");
+});
+
+test("3.3 C4 an old run is unchanged: an api file closes driver on a note and owes no R4 for it", () => {
+  const repo = opened("wo-33c4");
+  aged(repo);
+  edit(repo, "app/api/users/route.ts", "export const GET = 2;\n");
+  assert.equal(r4(repo), "");
+  write(repo, "notes.txt", "looks fine\n");
+  cli(repo, "step", ["driver", "done", "looks fine", "--evidence", "notes.txt"]);
+  assert.equal(stepOf(repo, "driver").state, "DONE");
+});
+
+test("3.3 C5 a UI-only change in a new run closes driver on evidence, and R4 reads the drive", () => {
+  const repo = opened("wo-33c5");
+  edit(repo, "src/app/page.tsx", "export default () => 1;\n");
+  write(repo, "notes.txt", "drove it\n");
+  cli(repo, "step", ["driver", "done", "drove it", "--evidence", "notes.txt"]);
+  assert.equal(stepOf(repo, "driver").evidence, "notes.txt");
+  assert.match(r4(repo), /UI files changed/);
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "mcp__claude-in-chrome__navigate", tool_input: { url: "http://localhost:3000" }, tool_response: {} });
+  assert.equal(r4(repo), "");
+});
+
+test("3.3 C6 a waiver clears the api line of R4", () => {
+  const repo = apiChanged("wo-33c6");
+  cli(repo, "waive", ["driver", "fixture"]);
+  assert.equal(r4(repo), "");
+});
+
+test("3.3 C7 a test file an api glob matches, or a change no api glob matches, owes no call", () => {
+  const config = { ...DECLARED, api: ["app/api/**"], tests: ["**/*.test.ts"] };
+  const repo = opened("wo-33c7", config);
+  edit(repo, "app/api/users/route.test.ts", "test('r', () => {});\n");
+  edit(repo, "src/server.ts", "export const s = 2;\n");
+  assert.equal(r4(repo), "");
+  write(repo, "notes.txt", "n/a\n");
+  cli(repo, "step", ["driver", "done", "server only", "--evidence", "notes.txt"]);
+  assert.equal(stepOf(repo, "driver").evidence, "notes.txt");
+});
+
+test("3.3 C8 a failed call, a helper's call and a background call cannot close it", () => {
+  const repo = apiChanged("wo-33c8");
+  hook(repo, { hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command: "curl -s localhost:3000/api/users" }, tool_error: "Exit code 7" });
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "curl -s localhost:3000/api/users" }, tool_response: {}, agent_id: "A1", agent_type: "done-gate:reviewer" });
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "curl -s localhost:3000/api/users", run_in_background: true }, tool_response: {} });
+  assert.match(run(repo, "step", ["driver", "done", "no", "--ran", "curl -s localhost:3000"]).stderr, /recorded/);
+  assert.equal(stepOf(repo, "driver").state, null);
+});
+
+test("3.3 C9 a cmd driver whose own write set the stamp still closes it; a sed that wrote the file is no call", () => {
+  const config = { ...DECLARED, driver: "cmd:npm run e2e" };
+  const driven = opened("wo-33c9", config);
+  edit(driven, "app/api/users/route.ts", "export const GET = 2;\n");
+  write(driven, "app/api/users/route.ts", "export const GET = 'written by the driver';\n");
+  call(driven, "npm run e2e");
+  cli(driven, "check");
+  cli(driven, "step", ["driver", "done", "e2e green", "--ran", "npm run e2e"]);
+  assert.equal(r4(driven), "");
+
+  const sed = opened("wo-33c9b");
+  edit(sed, "app/api/users/route.ts", "export const GET = 2;\n");
+  write(sed, "app/api/users/route.ts", "export const GET = 3;\n");
+  call(sed, "sed -i '' s/2/3/ app/api/users/route.ts");
+  cli(sed, "check");
+  assert.match(run(sed, "step", ["driver", "done", "no", "--ran", "sed -i"]).stderr, /recorded|after the last edit/);
+});
+
+test("3.3 C10 a change matching ui and api owes both, each until its own proof is there", () => {
+  const repo = opened("wo-33c10");
+  edit(repo, "src/app/page.tsx", "export default () => 1;\n");
+  edit(repo, "app/api/users/route.ts", "export const GET = 2;\n");
+  const navigate = (r) => hook(r, { hook_event_name: "PostToolUse", tool_name: "mcp__claude-in-chrome__navigate", tool_input: { url: "http://localhost:3000" }, tool_response: {} });
+  assert.match(r4(repo), /UI files changed/, "the check prints one line per rule: the drive first");
+  navigate(repo);
+  assert.match(r4(repo), /route\.ts/, "a drive does not stand in for the call");
+  call(repo);
+  cli(repo, "step", ["driver", "done", "returned 200", "--ran", "curl -s localhost:3000"]);
+  assert.equal(r4(repo), "");
+
+  const callFirst = opened("wo-33c10b");
+  edit(callFirst, "src/app/page.tsx", "export default () => 1;\n");
+  edit(callFirst, "app/api/users/route.ts", "export const GET = 2;\n");
+  call(callFirst);
+  cli(callFirst, "step", ["driver", "done", "returned 200", "--ran", "curl -s localhost:3000"]);
+  assert.match(r4(callFirst), /UI files changed/, "a call does not stand in for the drive");
+  navigate(callFirst);
+  assert.equal(r4(callFirst), "");
+});
+
+test("3.3 C11 --evidence events# closes on a real call, and is refused on an edit or a read-only event", () => {
+  const repo = apiChanged("wo-33c11");
+  call(repo, "cat README.md");
+  const events = () => readEvents(path.join(repo, ".claude", "gate"), "S1");
+  const edited = events().filter((e) => e.kind === "edit").pop();
+  const read = events().filter((e) => e.kind === "command").pop();
+  for (const e of [edited, read]) assert.match(run(repo, "step", ["driver", "done", "no", "--evidence", `events#${e.seq}`]).stderr, /recorded/);
+  call(repo);
+  const real = events().filter((e) => e.kind === "command").pop();
+  cli(repo, "step", ["driver", "done", "returned 200", "--evidence", `events#${real.seq}`]);
+  assert.equal(r4(repo), "");
+});
+
+test("3.3 C12 a driver step closed by hand before the api file changed owes the call", () => {
+  for (const [name, args] of [["wo-33c12a", ["driver", "na", "no surface yet"]], ["wo-33c12b", ["driver", "done", "looked fine", "--evidence", "src/a.ts"]]]) {
+    const repo = opened(name);
+    cli(repo, "step", args);
+    edit(repo, "app/api/users/route.ts", "export const GET = 2;\n");
+    assert.match(r4(repo), /route\.ts/, name);
+    call(repo);
+    cli(repo, "step", ["driver", "done", "returned 200", "--ran", "curl -s localhost:3000"]);
+    assert.equal(r4(repo), "");
+  }
+});
+
+test("3.3 C13 the driver hint names both ways to close", () => {
+  const repo = opened("wo-33c13");
+  lookedUp(repo);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: local"]);
+  cli(repo, "note", ["plan", "the plan", "--files", "src/server.ts"]);
+  cli(repo, "case", ["add", "c", "--kind", "happy"]);
+  for (const key of ["skeptic", "tests", "implement", "verify"]) cli(repo, "step", [key, "na", "fixture"]);
+  const hint = cli(repo, "next");
+  assert.match(hint, /decisions#/);
+  assert.match(hint, /--ran/);
 });
