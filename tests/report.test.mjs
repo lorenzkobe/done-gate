@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync, execSync, execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, here, pluginRoot, doneArgs, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, here, pluginRoot, doneArgs, lookedUp, waiveArgs } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { actOnRows, pauseLines } from "../scripts/lib/report.mjs";
 import { unmetLines } from "../scripts/lib/assess.mjs";
@@ -31,7 +31,7 @@ test("report renders every section, the summary counts, and embeds the reviewer'
   cli(repo, "case", ["add", "renders badge", "--kind", "happy"]);
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:renders"]);
   cli(repo, "step", ["schema", "skipped", "no schema files"]);
-  cli(repo, "waive", ["driver", "skip the phone pass"]);
+  cli(repo, "waive", waiveArgs(repo, "driver", "skip the phone pass"));
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n- null venue crashes\n");
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
   cli(repo, "huddle", ["acton", "H1", "null venue crashes"]);
@@ -167,7 +167,7 @@ function standardFixture(name, { gateJson = null } = {}) {
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:renders the badge"]);
   cli(repo, "case", ["close", "C2", "--na", "covered by C1's fixture"]);
   cli(repo, "step", ["schema", "skipped", "no schema files"]);
-  cli(repo, "waive", ["driver", "skip the phone pass this time, chrome is disconnected"]);
+  cli(repo, "waive", waiveArgs(repo, "driver", "skip the phone pass this time, chrome is disconnected"));
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n- null venue crashes\n");
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
   cli(repo, "huddle", ["acton", "H1", "null venue crashes"]);
@@ -366,7 +366,7 @@ test("C7 boundary: the \"For you:\" line says nothing when nothing needs looking
     `nothing is waived, skipped, denied or overridden, yet:\n${quietOut}`,
   );
 
-  const flagged = cleanClosingFixture("brief-c7-waived", "flagged", (repo) => cli(repo, "waive", ["driver", "skip the phone pass this time, chrome is disconnected"]));
+  const flagged = cleanClosingFixture("brief-c7-waived", "flagged", (repo) => cli(repo, "waive", waiveArgs(repo, "driver", "skip the phone pass this time, chrome is disconnected")));
   const flaggedOut = brief(flagged);
   assert.ok(flaggedOut.includes("For you: skipped with your OK"), `a waiver did not reach the For you line:\n${flaggedOut}`);
   assert.ok(
@@ -451,7 +451,7 @@ function c11Fixture(name, bin) {
   go("case", ["close", "C2", "--na", "covered by C1"]);
   go("note", ["context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   go("step", ["schema", "skipped", "no schema files"]);
-  go("waive", ["driver", "skip the phone pass"]);
+  go("waive", waiveArgs(repo, "driver", "skip the phone pass"));
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n- null venue crashes\n");
   go("huddle", ["add", "reviewer", "--file", "review-1.md"]);
   go("huddle", ["acton", "H1", "null venue crashes"]);
@@ -934,7 +934,7 @@ const PAUSE_TEXT = "need the production API key from you";
 // has answered) and a pause, which only the full report lists.
 function attentionRun(name, slug = name) {
   const repo = opened(name, slug);
-  cli(repo, "waive", ["driver", WAIVER_REASON]);
+  cli(repo, "waive", waiveArgs(repo, "driver", WAIVER_REASON));
   helperFile(repo, "review-1.md", reviewFile(1, slug, [FIND_1, FIND_2]));
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts:renders the badge"]);

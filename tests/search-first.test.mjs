@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, here, lookedUp, CODE_LOOKUP, MEMORY_LOOKUP } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, lookedUp, CODE_LOOKUP, MEMORY_LOOKUP, waiveArgs } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { eventsFromHookInput, appendEvents, readEvents } from "../scripts/lib/events.mjs";
 
@@ -542,7 +542,7 @@ test("C21 edge: a helper that neither wrote a file nor edited source is not chec
   helperEdits(repo, "W1", "worker", "src/f1.ts", "export const x = 3;\n");
   stop(repo, "W1", "worker");
   assert.notDeepEqual(r17(repo), [], "premise: the worker that edited is flagged");
-  cli(repo, "waive", ["lookups", "user OK: MemPalace was down for the session"]);
+  cli(repo, "waive", waiveArgs(repo, "lookups", "user OK: MemPalace was down for the session"));
   assert.deepEqual(r17(repo), [], "the waiver did not clear R17");
 });
 

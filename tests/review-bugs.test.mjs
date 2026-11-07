@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, lookedUp, waiveArgs } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
@@ -248,7 +248,7 @@ test("C13b reported-surface: an open reviewer item blocks even where R5 does not
   const out = cli(repo, "check").stdout;
   assert.doesNotMatch(out, /^\d+\. R5 — /m, `premise: R5 does not run with no source change:\n${out}`);
   assert.match(r15(repo), /H1\.1/, out);
-  cli(repo, "waive", ["review", "user: the doc item is out of scope"]);
+  cli(repo, "waive", waiveArgs(repo, "review", "user: the doc item is out of scope"));
   assert.equal(r15(repo), "");
 });
 

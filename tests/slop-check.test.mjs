@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, waiveArgs } from "./helpers.mjs";
 import { scanDiff } from "../scripts/lib/slop.mjs";
 import { changedUnitsOf, evaluate } from "../scripts/lib/rules.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
@@ -162,7 +162,7 @@ test("C7 refused: \"slop\": false turns the scan off, a waiver clears it, and th
   const waived = repoWithTask("slop-waived");
   write(waived, "src/b.ts", "// ===== ROUTES =====\n");
   assert.equal(r10(cli(waived, "check")).length, 1);
-  cli(waived, "waive", ["slop", "the banner is this repo's section style, user agreed"]);
+  cli(waived, "waive", waiveArgs(waived, "slop", "the banner is this repo's section style, user agreed"));
   assert.deepEqual(r10(cli(waived, "check")), []);
 
   const schema = JSON.parse(readFileSync(path.join(pluginRoot, "gate.schema.json"), "utf8"));

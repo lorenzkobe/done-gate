@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { makeRepo, gate, pluginRoot, lookedUp } from "./helpers.mjs";
+import { makeRepo, gate, pluginRoot, lookedUp, waiveArgs } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
@@ -211,7 +211,7 @@ test("C12 refused: repro and rootcause cannot be closed skipped or na; the user'
   for (const key of ["repro", "rootcause"]) {
     for (const how of ["skipped", "na"]) assert.match(refused(repo, "step", [key, how, "could not"]), /waive/);
   }
-  cli(repo, "waive", ["repro", "intermittent in production only, the user agreed"]);
+  cli(repo, "waive", waiveArgs(repo, "repro", "intermittent in production only, the user agreed"));
   assert.equal(stepOf(repo, "repro").state, "WAIVED");
 });
 

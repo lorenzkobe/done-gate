@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, here, pluginRoot, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, here, pluginRoot, lookedUp, waiveArgs } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
@@ -110,11 +110,11 @@ test("C1 reported-surface: gate waive worker is refused and lists the valid keys
   refused(repo, "waive", ["anything-at-all", "x"]);
   assert.deepEqual(ledgerOf(repo).waivers, []);
 
-  cli(repo, "waive", ["driver", "user said there is nothing to drive"]);
+  cli(repo, "waive", waiveArgs(repo, "driver", "user said there is nothing to drive"));
   assert.deepEqual(ledgerOf(repo).waivers.map((w) => w.key), ["driver"]);
 
   // skeptic is a step key of the feature playbook (skills/gate/playbooks.md, step 4) and not a rule key
-  cli(repo, "waive", ["skeptic", "user said skip the design round"]);
+  cli(repo, "waive", waiveArgs(repo, "skeptic", "user said skip the design round"));
   assert.deepEqual(ledgerOf(repo).waivers.map((w) => w.key), ["driver", "skeptic"]);
   assert.equal(ledgerOf(repo).steps.find((s) => s.key === "skeptic").state, "WAIVED");
 });
@@ -279,7 +279,7 @@ test("C8 reported-surface: the brief For-you line drops pauses and blocked write
   assert.equal(ledgerOf(repo).pauses.length, 1, "premise: the pause was recorded");
   const denied = hook(repo, "fence", { hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: path.join(runDir(repo), "verify.json"), content: "{}" } });
   assert.equal(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecision, "deny", "premise: the write to an evidence file was blocked");
-  cli(repo, "waive", ["driver", "chrome is disconnected, the phone pass waits"]);
+  cli(repo, "waive", waiveArgs(repo, "driver", "chrome is disconnected, the phone pass waits"));
   writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- the plan misses the empty venue list\n");
   cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
   cli(repo, "huddle", ["dispute", "H1.1", "the list is never empty here", "--evidence", "ledger.md#Plan"]);
@@ -681,12 +681,12 @@ test("C21 refused: gate waive verify is refused and says to run gate verify; gat
   assert.match(refused(repo, "step", ["verify", "skipped", "x"]), /Run `gate verify`/);
   assert.match(refused(repo, "step", ["review", "skipped", "x"]), /gate waive review/);
 
-  const byRule = cli(repo, "waive", ["R4", "user said there is nothing to drive"]).stdout;
+  const byRule = cli(repo, "waive", waiveArgs(repo, "R4", "user said there is nothing to drive")).stdout;
   assert.deepEqual(ledgerOf(repo).waivers.map((w) => [w.key, w.reason]), [["driver", "user said there is nothing to drive"]]);
   assert.match(byRule, /driver/, byRule);
   assert.match(byRule, /R4/, `waive does not print what the key clears:\n${byRule}`);
 
-  const byKey = cli(repo, "waive", ["schema", "no database in this repo"]).stdout;
+  const byKey = cli(repo, "waive", waiveArgs(repo, "schema", "no database in this repo")).stdout;
   assert.match(byKey, /R6/, `waive does not print what the key clears:\n${byKey}`);
 });
 

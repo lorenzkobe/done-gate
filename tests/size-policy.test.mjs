@@ -4,7 +4,7 @@ import { execFileSync, spawnSync, execSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, here, doneArgs, lookedUp, readyToEdit } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, doneArgs, lookedUp, readyToEdit, waiveArgs } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
@@ -632,7 +632,7 @@ test("C19 edge: a waived {skeptic} stays WAIVED when the diff grows; nothing goe
   cli(repo, "open", ["waived", "feature"]);
   cli(repo, "note", ["task", "Small change. [inferred]"]);
   cli(repo, "note", ["plan", "One file.", "--files", "src/a.ts"]);
-  cli(repo, "waive", ["skeptic", "skip it"]);
+  cli(repo, "waive", waiveArgs(repo, "skeptic", "skip it"));
   assert.equal(stepOf(ledgerOf(repo), "skeptic").state, "WAIVED");
 
   write(repo, "src/a.ts", "export const a = 2;\n");

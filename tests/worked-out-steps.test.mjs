@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { gate, lookedUp, makeRepo, write } from "./helpers.mjs";
+import { gate, lookedUp, makeRepo, write, waiveArgs } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
@@ -363,7 +363,7 @@ test("C16 a hand close or waiver over a worked-out step drops its mark, and a bl
   const waived = opened("wo-c16-waive");
   edit(waived, "src/server.ts", "export const s = 2;\n");
   cli(waived, "verify");
-  cli(waived, "waive", ["driver", "fixture"]);
+  cli(waived, "waive", waiveArgs(waived, "driver", "fixture"));
   assert.equal(stepOf(waived, "driver").auto, undefined);
   edit(waived, "src/server.ts", "export const s = 3;\n");
   cli(waived, "check");
@@ -478,7 +478,7 @@ test("3.3 C5 a UI-only change in a new run closes driver on evidence, and R4 rea
 
 test("3.3 C6 a waiver clears the api line of R4", () => {
   const repo = apiChanged("wo-33c6");
-  cli(repo, "waive", ["driver", "fixture"]);
+  cli(repo, "waive", waiveArgs(repo, "driver", "fixture"));
   assert.equal(r4(repo), "");
 });
 

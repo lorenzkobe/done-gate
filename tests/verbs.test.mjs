@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, lookedUp, waiveArgs } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { evaluate, lateOrder } from "../scripts/lib/rules.mjs";
@@ -96,7 +96,7 @@ test("huddle add / acton / resolve track a review round and its Act-on items", (
 
 test("waive records a reason against a step key or rule", () => {
   const repo = opened("verbs-waive");
-  cli(repo, "waive", ["driver", "skip the phone pass this time, chrome is disconnected"]);
+  cli(repo, "waive", waiveArgs(repo, "driver", "skip the phone pass this time, chrome is disconnected"));
   const [w] = ledgerOf(repo).waivers;
   assert.equal(w.key, "driver");
   assert.match(w.reason, /chrome is disconnected/);
@@ -204,4 +204,22 @@ test("close refuses an unclean run: exit 1, the unmet list on stdout, the run st
   const l = ledgerOf(repo);
   assert.equal(l.status, "open");
   assert.equal(l.steps.find((s) => s.key === "close").state, null);
+});
+
+test("3.6 waive --user-ok stores the words beside the reason; with no words it is refused; with no flag it still records", () => {
+  const repo = opened("verbs-waive-words");
+  cli(repo, "waive", waiveArgs(repo, "driver", "chrome is disconnected"));
+  const [waiver] = ledgerOf(repo).waivers;
+  assert.equal(waiver.reason, "chrome is disconnected");
+  assert.equal(waiver.words, "you may skip the driver check");
+
+  for (const args of [["schema", "no db", "--user-ok"], ["schema", "no db", "--user-ok", "   "], ["schema", "no db", "--user-ok", "--other"]]) {
+    const r = spawnSync(process.execPath, [gate, "waive", ...args], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" } });
+    assert.match(r.stderr, /--user-ok/, args.join(" "));
+  }
+  assert.equal(ledgerOf(repo).waivers.length, 1);
+
+  cli(repo, "waive", ["schema", "no db in this repo"]);
+  assert.equal(ledgerOf(repo).waivers[1].reason, "no db in this repo");
+  assert.equal(ledgerOf(repo).waivers[1].words, undefined);
 });

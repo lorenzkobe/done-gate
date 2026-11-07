@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, waiveArgs } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { DEFAULT_POLICY, loadPolicy } from "../scripts/lib/size.mjs";
@@ -166,7 +166,7 @@ test("C5 edge: R7 names writing the tests and gate waive tests; a tests waiver s
   assert.match(r7, /gate waive tests/, r7);
   assert.doesNotMatch(r7, /Have QA write/, r7);
 
-  cli(repo, "waive", ["tests", "user said so"]);
+  cli(repo, "waive", waiveArgs(repo, "tests", "user said so"));
   assert.doesNotMatch(cli(repo, "check").stdout, /\bR7\b/, "a tests waiver did not satisfy R7");
 
   // the pure rule, with a ledger from before this task

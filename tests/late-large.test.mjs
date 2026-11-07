@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, waiveArgs } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 
@@ -173,12 +173,12 @@ test("C9 refused: a run planned large also needs the QA pass and a clean reviewe
   hook(repo, { hook_event_name: "PostToolUse", tool_name: "Edit", agent_id: "A-worker", agent_type: "done-gate:worker", tool_input: { file_path: path.join(repo, "src/a.ts") }, tool_output: "ok" });
   write(repo, "src/a.ts", lines(30, "a"));
   write(repo, "tests/a.test.ts", "test('a', () => { expect(1).toBe(1); });\n");
-  cli(repo, "waive", ["qa", "an old ledger's tests waiver"]);
+  cli(repo, "waive", waiveArgs(repo, "qa", "an old ledger's tests waiver"));
   let out = cli(repo, "check");
   assert.match(ruleLines(out, "R7"), /gate brief qa/, out);
   assert.match(ruleLines(out, "R9"), /reviewer-2/, out);
-  cli(repo, "waive", ["qa-pass", "user: the tests came from the spec"]);
-  cli(repo, "waive", ["review-2", "user: one reviewer is enough here"]);
+  cli(repo, "waive", waiveArgs(repo, "qa-pass", "user: the tests came from the spec"));
+  cli(repo, "waive", waiveArgs(repo, "review-2", "user: one reviewer is enough here"));
   out = cli(repo, "check");
   assert.doesNotMatch(ruleLines(out, "R7"), /gate brief qa/, out);
   assert.equal(ruleLines(out, "R9"), "", out);

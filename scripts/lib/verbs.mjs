@@ -634,9 +634,12 @@ export const verbs = {
   },
 
   waive(ctx) {
-    const [named, ...words] = ctx.args;
-    const reason = words.join(" ").trim();
-    if (!named || !reason) throw new UsageError('usage: gate waive <key|stepKey|R#> "<why, with the user\'s OK>"');
+    const [named, ...why] = positional(ctx.args);
+    const reason = why.join(" ").trim();
+    const usage = 'usage: gate waive <key|stepKey|R#> "<why>" --user-ok "<the user\'s words>"';
+    if (!named || !reason) throw new UsageError(usage);
+    const words = flag(ctx.args, "--user-ok");
+    if (ctx.args.includes("--user-ok") && (!words?.trim() || words.startsWith("--"))) throw new UsageError(usage);
     const byRule = /^R\d+$/.test(named);
     const key = byRule ? Object.keys(WAIVERS).find((k) => WAIVERS[k] === named) : named;
     const valid = `valid keys: ${Object.keys(WAIVERS).filter((k) => k !== "qa").map((k) => `${k} (${WAIVERS[k]})`).join(", ")}`;
@@ -653,7 +656,7 @@ export const verbs = {
       }
       // a step with no script or agent evidence is closed by hand; a waiver there would clear nothing a rule reads
       if (!rule && !EVIDENCED_KEYS.has(key)) throw new UsageError(`step {${key}} has no waiver: close it with \`gate step ${key} done|skipped|na "<note>"\`. ${valid}`);
-      ledger.waivers.push({ key, reason, seq: nextSeq(), ...(flagged ? { lines: flagged } : {}) });
+      ledger.waivers.push({ key, reason, ...(words ? { words: words.trim() } : {}), seq: nextSeq(), ...(flagged ? { lines: flagged } : {}) });
       if (step) {
         delete step.auto;
         Object.assign(step, { state: "WAIVED", note: reason, evidence: null, seq: nextSeq() });

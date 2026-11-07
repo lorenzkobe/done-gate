@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, here } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, waiveArgs } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
@@ -54,7 +54,7 @@ function slopRun(name) {
 
 test("C1 reported-surface: after `gate waive slop`, a slop line added later is flagged again and the waived one is not", () => {
   const repo = slopRun("rb2-c1");
-  const waive = cli(repo, "waive", ["slop", "user: the label names a real module"]).stdout;
+  const waive = cli(repo, "waive", waiveArgs(repo, "slop", "user: the label names a real module")).stdout;
   assert.match(waive, /1 slop line/, waive);
   assert.equal(r10(repo), "", "the waived line is still flagged");
   write(repo, "src/a.ts", "// helpers\nexport const a = 1;\n// constants\nexport const b = 2;\n");
@@ -83,7 +83,7 @@ test("C3 idempotent: a slop waiver from before this change (no list) still cover
 
 test("C4 edge: a waived slop line that moves to another line number stays waived", () => {
   const repo = slopRun("rb2-c4");
-  cli(repo, "waive", ["slop", "user: the label names a real module"]);
+  cli(repo, "waive", waiveArgs(repo, "slop", "user: the label names a real module"));
   write(repo, "src/a.ts", "export const z = 0;\nexport const y = 0;\n// helpers\nexport const a = 1;\n");
   assert.equal(r10(repo), "");
 });
@@ -231,7 +231,7 @@ test("C14 edge: the two git-dependent tests skip outside a git checkout's top an
 
 test("C15 edge: a second identical slop line added after the waiver is flagged; the waiver counts each line once", () => {
   const repo = slopRun("rb2-c15");
-  cli(repo, "waive", ["slop", "user: the label names a real module"]);
+  cli(repo, "waive", waiveArgs(repo, "slop", "user: the label names a real module"));
   write(repo, "src/a.ts", "// helpers\nexport const a = 1;\n// helpers\nexport const b = 2;\n");
   assert.match(r10(repo), /slop: 1 slop line/, r10(repo));
 });
@@ -240,7 +240,7 @@ test("C16 edge: a slop waiver in a run with a sibling repo covers the sibling's 
   const { repo, other, p } = siblingRun("rb2-c16");
   write(other, "src/b.ts", "// helpers\nexport const b = 1;\n");
   assert.match(r10(repo), new RegExp(`${p.replace(/[.]/g, "\\.")}/src/b\\.ts`), "premise: the sibling's slop line is flagged");
-  cli(repo, "waive", ["slop", "user: the label names a real module"]);
+  cli(repo, "waive", waiveArgs(repo, "slop", "user: the label names a real module"));
   assert.equal(r10(repo), "");
   write(other, "src/b.ts", "// helpers\nexport const b = 1;\n// constants\nexport const c = 2;\n");
   assert.match(r10(repo), /constants/);
@@ -257,9 +257,9 @@ test("C17 happy: the packet's Lookups section tells a reading helper to search a
 
 test("C18 edge: a second slop waiver stores only the newly flagged line, and one with nothing new is refused", () => {
   const repo = slopRun("rb2-c18");
-  cli(repo, "waive", ["slop", "user: the label names a real module"]);
+  cli(repo, "waive", waiveArgs(repo, "slop", "user: the label names a real module"));
   write(repo, "src/a.ts", "// helpers\nexport const a = 1;\n// constants\nexport const b = 2;\n");
-  assert.match(cli(repo, "waive", ["slop", "user: same for constants"]).stdout, /the 1 slop line flagged now/);
+  assert.match(cli(repo, "waive", waiveArgs(repo, "slop", "user: same for constants")).stdout, /the 1 slop line flagged now/);
   assert.deepEqual(ledgerOf(repo).waivers.map((w) => w.lines.length), [1, 1]);
   refused(repo, "waive", ["slop", "again"]);
   write(repo, "src/a.ts", "// helpers\nexport const a = 1;\n// constants\nexport const b = 2;\n// helpers\nexport const c = 3;\n");

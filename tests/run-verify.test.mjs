@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, here } from "./helpers.mjs";
+import { makeRepo, write, gate, here, waiveArgs } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 
@@ -272,7 +272,7 @@ test("C18 happy: gate waive coverage clears R18; a case pointer whose file is go
   cli(repo, "verify");
   assert.match(ruleLines(cli(repo, "check"), "R18"), /test_new/);
   assert.match(ruleLines(cli(repo, "check"), "R18"), /gate waive coverage/);
-  cli(repo, "waive", ["coverage", "user: the suite runs in CI only"]);
+  cli(repo, "waive", waiveArgs(repo, "coverage", "user: the suite runs in CI only"));
   assert.equal(ruleLines(cli(repo, "check"), "R18"), "");
 
   const src = opened("rv-c18-src", [ok("lint")]);

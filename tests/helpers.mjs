@@ -98,3 +98,14 @@ export function readyToEdit(repo, { session = "S1", plan = [] } = {}) {
     if (r.status !== 0) throw new Error(`readyToEdit: gate ${args.slice(0, 2).join(" ")}: ${r.stderr}`);
   }
 }
+
+// The user's words for a waiver, logged as their message, and the args that waive on them. A rule
+// number's key is spelled out, since the words have to name the check given up.
+const RULE_WORD = { R4: "driver", R5: "review", R6: "schema", R7: "tests" };
+export function waiveArgs(repo, key, reason, { session = "S1" } = {}) {
+  const words = `you may skip the ${RULE_WORD[key] ?? key} check`;
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: session };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  execFileSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: session, cwd: repo, hook_event_name: "UserPromptSubmit", prompt: words }), env });
+  return [key, reason, "--user-ok", words];
+}

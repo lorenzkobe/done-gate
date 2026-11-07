@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { evaluate, sourceHash, lateOrder } from "../scripts/lib/rules.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
-import { makeRepo, write, gate, pluginRoot, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, lookedUp, waiveArgs } from "./helpers.mjs";
 import { spawnSync, execFileSync } from "node:child_process";
 import path from "node:path";
 import { readFileSync, appendFileSync, existsSync, writeFileSync } from "node:fs";
@@ -676,7 +676,7 @@ test("C1: waive qa records the reason with no transcript lookup, satisfies R7, a
   // R7 is unmet before the waiver: source changed, no test file changed.
   assert.ok(ruleLine(check(repo), "R7"), `R7 did not fire on a source-only change:\n${check(repo)}`);
 
-  const waived = cli(repo, "waive", ["qa", QA_REASON]);
+  const waived = cli(repo, "waive", waiveArgs(repo, "qa", QA_REASON));
   assert.doesNotMatch(
     waived.stdout,
     /transcript/i,
@@ -777,7 +777,7 @@ test("C3: an unlabelled claim in ledger.md or in the final message never produce
 
 test("C4: a waiver carried over with found:false still counts as waived, and never raises R12", () => {
   const repo = openedWithSourceEdit("waivers-c4");
-  cli(repo, "waive", ["qa", QA_REASON]);
+  cli(repo, "waive", waiveArgs(repo, "qa", QA_REASON));
 
   // Rewrite the waiver in the shape the previous version stored: a quote plus a transcript
   // verdict of false. A ledger opened before this task can hold exactly this.
@@ -803,8 +803,8 @@ test("C4: a waiver carried over with found:false still counts as waived, and nev
 
 test("C5: the stop hook with no transcript_path in the payload does not throw", () => {
   const repo = openedWithSourceEdit("waivers-c5");
-  cli(repo, "waive", ["qa", QA_REASON]);
-  cli(repo, "waive", ["driver", "no UI here, skip the phone pass"]);
+  cli(repo, "waive", waiveArgs(repo, "qa", QA_REASON));
+  cli(repo, "waive", waiveArgs(repo, "driver", "no UI here, skip the phone pass"));
 
   assert.ok(!existsSync(errorLog(repo)), "the repo already had a gate-error.log before the stop hook ran");
 
