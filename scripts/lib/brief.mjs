@@ -8,7 +8,7 @@ import { baseCopy, fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs"
 import { ROLES, flag, outsideRepos, positional } from "./verbs.mjs";
 import { repoPath, toPosixRel } from "./paths.mjs";
 import { OWN_FILE } from "./guard.mjs";
-import { LOOKUP_EXAMPLE, REVIEW_CAP, fixCheckDone, capUnitsOf, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify, verifyProblem } from "./rules.mjs";
+import { LOOKUP_EXAMPLE, REVIEW_CAP, fixCheckDone, capUnitsOf, nextPiece, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify, verifyProblem } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { nextSeq } from "./events.mjs";
@@ -351,6 +351,15 @@ export function renderPacket(state, role, { round, n, item = null, piece = null,
   return `${out.join("\n").replace(/\n{3,}/g, "\n\n")}\n`;
 }
 
+const linesIn = (state, entry) => {
+  const e = parseEntry(entry);
+  return capUnitsOf(state, e.path).filter((u) => !e.from || (u.pos >= e.from && u.pos <= e.to)).length;
+};
+function overlaps(a, b) {
+  const [x, y] = [parseEntry(a), parseEntry(b)];
+  return x.path === y.path && (!x.from || !y.from || (x.from <= y.to && y.from <= x.to));
+}
+
 export const verbs = {
   brief(ctx) {
     const [role] = positional(ctx.args);
@@ -388,6 +397,8 @@ export const verbs = {
       if (lines > cap && !floor) {
         // the first slice of a file that fits the cap, from its first changed line
         const firstSlice = (r) => `${r.e.path}:${r.units[0].pos}-${sliceEnd(r.counted, cap)}`;
+        const pending = uncovered(state, role);
+        if (pending?.length) throw new UsageError(`${lines} changed lines is more than one review round can read well (cap ${cap}). The next piece no round has read: \`gate brief ${role} --files ${nextPiece(state, pending).join(",")}\`.`);
         if (rows.length === 1) {
           const r = rows[0];
           throw new UsageError(`${r.entry} holds ${r.lines} changed lines, more than one review round can read well (cap ${cap}). ${r.e.from ? "Narrow the range" : "Slice it by line"}: \`gate brief ${role} --files ${firstSlice(r)}\`; a line counts as reviewed once a clean round saw it.`);
@@ -513,11 +524,17 @@ export const verbs = {
     if (reviewing && live) throw new UsageError(`${role}: the fix-check round ${live.h.file} is still running; wait for its helper to stop, then \`gate huddle add ${role} --file ${live.h.file}\``);
     const fixCheck = reviewing && done >= REVIEW_CAP && (unseen ?? []).some((u) => pieceFiles.includes(pathOf(u)))
       && roleRounds.every((h) => h.actOn.every((a) => a.closed))
-      && !fixChecks.some((f) => fixCheckDone(state, f.h));
-    // the fix-check is a file's last round, so it takes every unreviewed part of each file at once
-    const split = fixCheck && piece ? (unseen ?? []).filter((u) => pieceFiles.includes(pathOf(u)) && !piece.files.includes(u) && !piece.files.includes(pathOf(u))) : [];
-    if (split.length && !stillOpen) {
-      throw new UsageError(`${role} fix-check: it is the last round for ${[...new Set(split.map(pathOf))].join(", ")}, so it takes all of its unreviewed lines at once: \`gate brief ${role} --files ${(unseen ?? []).filter((u) => pieceFiles.includes(pathOf(u))).join(",")}\``);
+      && !fixChecks.some((f) => !f.h.part && fixCheckDone(state, f.h));
+    // the fix-check is a file's last round, so it takes every unreviewed part of each file at
+    // once; when those lines pass the cap it cannot, and it runs in parts, the last taking the rest
+    const owed = (unseen ?? []).filter((u) => pieceFiles.includes(pathOf(u)));
+    const split = fixCheck && piece ? owed.filter((u) => !piece.files.includes(u) && !piece.files.includes(pathOf(u))) : [];
+    const inParts = split.length > 0 && owed.reduce((n, u) => n + linesIn(state, u), 0) > state.policy.reviewMaxLines;
+    if (split.length && !stillOpen && !inParts) {
+      throw new UsageError(`${role} fix-check: it is the last round for ${[...new Set(split.map(pathOf))].join(", ")}, so it takes all of its unreviewed lines at once: \`gate brief ${role} --files ${owed.join(",")}\``);
+    }
+    if (inParts && !stillOpen && !piece.files.some((entry) => owed.some((u) => overlaps(entry, u)))) {
+      throw new UsageError(`${role} fix-check: ${piece.files.join(",")} holds no unreviewed line. The next piece: \`gate brief ${role} --files ${nextPiece(state, owed).join(",")}\``);
     }
     if (done >= REVIEW_CAP && !(legacy && role === "reviewer-2") && !stillOpen && !fixCheck) {
       throw new UsageError(`${role} round ${done + 1}: three rounds is the cap. What is still disputed goes to the arbiter (\`gate brief arbiter --item H<k>.<i>\`, spawn done-gate:arbiter); what is still open is fixed and closed with \`gate huddle resolve\`.`);
@@ -534,7 +551,7 @@ export const verbs = {
     // seen is what this round's reviewer is shown (its huddle inherits it); the other roles'
     // briefs are dated under briefed, so a ledger with no seen map stays a legacy one
     if (piece) {
-      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...(Object.keys(piece.units).length ? { units: piece.units } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true } : {}) } };
+      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...(Object.keys(piece.units).length ? { units: piece.units } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true, ...(inParts ? { part: true } : {}) } : {}) } };
       saveLedger(state.dir, state.ledger);
     } else if (own) {
       state.ledger.briefed = { ...(state.ledger.briefed ?? {}), [own]: { seq: nextSeq(), ...(owned ? { files: owned } : {}), ...(item ? { item: item.id } : {}) } };

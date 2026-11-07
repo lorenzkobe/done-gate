@@ -207,3 +207,133 @@ test("C5 refused: a fix-check whose own helper has not stopped is not ended by a
   hook(repo, { hook_event_name: "SubagentStop", ...mine });
   assert.equal(ruleLine(repo, "R5"), "", "its own stop ends the file");
 });
+
+function appended(repo, count) {
+  const abs = path.join(repo, FILE);
+  const added = Array.from({ length: count }, (_, i) => `export const late${i} = ${i};`).join("\n") + "\n";
+  write(repo, FILE, readFileSync(abs, "utf8") + added);
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: abs }, tool_response: {} });
+}
+const printedPiece = (repo) => /--files (\S+?)`/.exec(ruleLine(repo, "R9"))?.[1] ?? null;
+function piece(repo, n, files, { finding = false } = {}) {
+  const brief = run(repo, "brief", "reviewer-2", "--files", files);
+  assert.equal(brief.status, 0, brief.stderr);
+  const file = /Your file is .*\/(review2-\d+\.md)/.exec(brief.stdout)[1];
+  const agent = { agent_id: `reviewer-2-${n}`, agent_type: "done-gate:reviewer-2" };
+  hook(repo, { hook_event_name: "SubagentStart", ...agent });
+  lookedUp(repo, { agent: agent.agent_id, role: "reviewer-2" });
+  const body = `# Review ${n}\n\n## Act on\n${finding ? `- off by one at src/pay.ts:${n} — the total skips the last row` : "- none"}\n## Consider\n- none\n## Noted\n- none\n## Dismissed\n- none\n## Evidence verdict\n- tests: x exit 0, 1 passed (unverified)\n- cases: 1/1 tests match their case\n`;
+  writeFileSync(path.join(runDir(repo), file), body);
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: path.join(runDir(repo), file) }, tool_response: {}, ...agent });
+  hook(repo, { hook_event_name: "SubagentStop", ...agent });
+  assert.equal(run(repo, "huddle", "add", "reviewer-2", "--file", file).status, 0);
+}
+function atCapWith(name, late) {
+  const repo = opened(name);
+  for (const n of [1, 2, 3]) round(repo, "reviewer-2", n);
+  appended(repo, late);
+  return repo;
+}
+
+test("489 unreviewed lines past the cap close through the printed commands, read in order", () => {
+  const repo = atCapWith("rcf-489", 489);
+  const whole = run(repo, "brief", "reviewer-2");
+  assert.notEqual(whole.status, 0, "a whole round over the cap stays refused");
+  const seen = [];
+  for (let n = 4; n < 12 && printedPiece(repo); n++) {
+    const files = printedPiece(repo);
+    seen.push(files);
+    piece(repo, n, files);
+  }
+  assert.equal(ruleLine(repo, "R9"), "", `the file closes: ${seen.join(" then ")}`);
+  assert.ok(seen.length >= 2, seen.join(" then "));
+  const rounds = ledgerOf(repo).huddles.filter((h) => h.fixCheck);
+  assert.deepEqual(rounds.map((h) => Boolean(h.part)), rounds.map((_, i) => i < rounds.length - 1), "every round but the last is a part");
+  assert.ok(capped(run(repo, "brief", "reviewer-2", "--files", `${FILE}:1-2`)), "the last round ended the file");
+});
+
+test("a fix inside a part reopens only the lines it changed, and the last round ends the file", () => {
+  const repo = atCapWith("rcf-part-fix", 489);
+  const first = printedPiece(repo);
+  piece(repo, 4, first, { finding: true });
+  assert.match(ruleLine(repo, "R9"), /still open/);
+  assert.equal(printedPiece(repo), null, "a part's open finding is closed before the next part");
+  const abs = path.join(repo, FILE);
+  write(repo, FILE, readFileSync(abs, "utf8").replace("late3 = 3;", "late3 = 300;"));
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: abs }, tool_response: {} });
+  assert.equal(run(repo, "huddle", "resolve", ledgerOf(repo).huddles.at(-1).actOn[0].id, "--evidence", "src/pay.ts:1", "fixed").status, 0);
+  const left = /--files (\S+?)`/.exec(ruleLine(repo, "R9"))[1].split(",");
+  const fixedLine = readFileSync(abs, "utf8").split("\n").findIndex((l) => l.includes("late3 = 300")) + 1;
+  const reviewed = readFileSync(abs, "utf8").split("\n").findIndex((l) => l.includes("late10 = 10")) + 1;
+  const covers = (entry, line) => { const m = /:(\d+)-(\d+)$/.exec(entry); return m ? +m[1] <= line && line <= +m[2] : true; };
+  assert.ok(ruleLine(repo, "R9").includes(`:${fixedLine}`) || left.some((e) => covers(e, fixedLine)), `the fixed line is asked for: ${left}`);
+  assert.ok(!left.some((e) => covers(e, reviewed)), `a line the part read stays read: ${left}`);
+  for (let n = 5; n < 12 && printedPiece(repo); n++) piece(repo, n, printedPiece(repo));
+  assert.equal(ruleLine(repo, "R9"), "");
+  assert.ok(capped(run(repo, "brief", "reviewer-2", "--files", `${FILE}:1-2`)));
+});
+
+test("under the cap a piece of the fix-check stays refused, and a part holding no unreviewed line is refused", () => {
+  const small = atCapWith("rcf-small", 300);
+  const whole = /--files (\S+?)`/.exec(ruleLine(small, "R9"))[1];
+  const line = Number(/:(\d+)-/.exec(whole)?.[1] ?? 40);
+  assert.notEqual(run(small, "brief", "reviewer-2", "--files", `${FILE}:${line}-${line + 5}`).status, 0, "it fits, so it takes them all");
+  const big = atCapWith("rcf-big", 489);
+  const stale = run(big, "brief", "reviewer-2", "--files", `${FILE}:2-3`);
+  assert.notEqual(stale.status, 0, "those lines were all read");
+  assert.match(stale.stderr, /no unreviewed line/);
+});
+
+test("two files whose unreviewed lines together pass the cap close through the printed commands, spans and all", () => {
+  const OTHER = "src/tax.ts";
+  const lines = (name, n) => Array.from({ length: n }, (_, i) => `export const ${name}${i} = ${i};`).join("\n") + "\n";
+  const repo = makeRepo("rcf-two", {
+    [FILE]: lines("p", 30),
+    [OTHER]: lines("t", 40),
+    ".claude/gate.json": JSON.stringify({ testFiles: null, highRisk: ["src/pay.ts", "src/tax.ts"] }),
+  });
+  execFileSync("git", ["add", "-A"], { cwd: repo });
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
+  assert.equal(run(repo, "open", "t", "feature").status, 0);
+  lookedUp(repo);
+  run(repo, "note", "task", "Pay totals.");
+  run(repo, "note", "context", "Traced: src/pay.ts:1 · Related: none: `grep -rn p src` · Research: none needed: a test fixture");
+  run(repo, "note", "plan", "Two files.", "--files", `${FILE},${OTHER}`);
+  run(repo, "case", "add", "totals add up", "--kind", "happy");
+  edit(repo, 0);
+  const editOther = (body) => {
+    write(repo, OTHER, body);
+    hook(repo, { hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: path.join(repo, OTHER) }, tool_response: {} });
+  };
+  editOther(readFileSync(path.join(repo, OTHER), "utf8").replace("t0 = 0;", "t0 = 100;"));
+  for (const n of [1, 2, 3]) round(repo, "reviewer-2", n);
+  appended(repo, 300);
+  editOther(lines("top", 50) + readFileSync(path.join(repo, OTHER), "utf8") + lines("end", 100));
+  const seen = [];
+  for (let n = 4; n < 12 && printedPiece(repo); n++) {
+    seen.push(printedPiece(repo));
+    piece(repo, n, printedPiece(repo));
+  }
+  assert.equal(ruleLine(repo, "R9"), "", `closes: ${seen.join(" then ")}`);
+});
+
+test("a bare brief over the cap prints the next uncovered piece, not the file's start", () => {
+  const repo = atCapWith("rcf-bare", 489);
+  piece(repo, 4, printedPiece(repo));
+  const next = printedPiece(repo);
+  assert.ok(next);
+  const bare = run(repo, "brief", "reviewer-2");
+  assert.notEqual(bare.status, 0);
+  assert.ok(bare.stderr.includes(`--files ${next}`), `${next}\n${bare.stderr}`);
+});
+
+test("a fix inside a part that deletes a line does not reopen lines earlier rounds read", () => {
+  const repo = atCapWith("rcf-part-delete", 489);
+  piece(repo, 4, printedPiece(repo), { finding: true });
+  const abs = path.join(repo, FILE);
+  write(repo, FILE, readFileSync(abs, "utf8").replace("export const late3 = 3;\n", ""));
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: abs }, tool_response: {} });
+  assert.equal(run(repo, "huddle", "resolve", ledgerOf(repo).huddles.at(-1).actOn[0].id, "--evidence", "src/pay.ts:1", "fixed").status, 0);
+  const pending = ruleLine(repo, "R9");
+  assert.doesNotMatch(pending, /src\/pay\.ts:2-|src\/pay\.ts:1-\d{2,}/, pending);
+});
