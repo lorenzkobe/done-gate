@@ -195,6 +195,11 @@ export function tierOf(ledger) {
   };
 }
 
+// The code a run changed that its plan did not name: tests and docs are free to grow.
+export function outsidePlan(named, changed, config) {
+  return changed.filter((p) => config.isSource(p) && !config.isTest(p) && !named.includes(p));
+}
+
 const CATEGORY_PRED = { ui: "isUi", schema: "isSchema", highRisk: "isHighRisk" };
 
 export function forcedFor(config, policy, paths) {

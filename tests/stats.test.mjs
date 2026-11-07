@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, gate, pluginRoot, here } from "./helpers.mjs";
 import { readsOnly } from "../scripts/lib/guard.mjs";
@@ -43,6 +43,7 @@ function closedRun({ daysAgo = 1, minutes = 10, size = "standard", ...rest } = {
   };
 }
 
+const planned = (files, over = {}) => ({ playbook: "feature", tier: { predictedFiles: files, measured: { tier: "standard" } }, ...over });
 const line = (out, start) => out.split("\n").find((l) => l.trimStart().startsWith(start));
 
 function snapshot(dir, out = {}) {
@@ -143,7 +144,7 @@ test("C17 edge: no run in the window prints missing, never 0", () => {
 test("C7 refused: a bad number, a missing value, an unknown flag and a stray word, with no gate error logged", () => {
   const repo = makeRepo("stats-c7");
   writeRun(repo, "fine", closedRun());
-  for (const args of [["--days", "abc"], ["--days", "0"], ["--days", "-3"], ["--days", "1.5"], ["--days"], ["--version"], ["--version", "--days", "5"], ["--dayz", "5"], ["extra"], ["--days", "5", "extra"]]) {
+  for (const args of [["--days", "abc"], ["--days", "0"], ["--days", "-3"], ["--days", "1.5"], ["--days"], ["--version"], ["--version", "--days", "5"], ["--dayz", "5"], ["extra"], ["--days", "5", "extra"], ["--days", "5", "--days", "7"]]) {
     const r = stats(repo, args);
     assert.equal(r.status, 1, `${args.join(" ")} was not refused: ${r.stdout}`);
     assert.match(r.stderr, /usage: gate stats/, args.join(" "));
@@ -319,4 +320,223 @@ test("C16 reported surface: help and README name the verb, and the fence reads i
   assert.match(spawnSync(process.execPath, [gate, "help"], { encoding: "utf8", env }).stdout, /^ {2}stats /m);
   assert.match(readFileSync(path.join(pluginRoot, "README.md"), "utf8"), /`stats \[--days n\] \[--version x\]`/);
   assert.equal(readsOnly(`node ${gate} stats --days 7`), true);
+});
+
+test("C21 happy: code outside the plan counts runs, the median extra and one-file-only", () => {
+  const repo = makeRepo("stats-p1");
+  writeRun(repo, "inside", closedRun({ ...planned(["src/a.ts"]), changedAtClose: ["src/a.ts"] }));
+  writeRun(repo, "one-extra", closedRun({ ...planned(["src/a.ts"], { playbook: "bugfix" }), changedAtClose: ["src/a.ts", "src/b.ts"] }));
+  writeRun(repo, "three-extra", closedRun({ ...planned(["src/a.ts"], { playbook: "refactor" }), changedAtClose: ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"] }));
+  const out = ok(repo);
+  assert.match(line(out, "code outside the plan:"), /2 of 3 runs/);
+  assert.match(line(out, "median extra files:"), /2/);
+  assert.match(line(out, "one file only:"), /1 of 2 runs/);
+});
+
+test("C22 edge: a test or docs extra is not code outside the plan", () => {
+  const repo = makeRepo("stats-p2");
+  writeRun(repo, "one", closedRun({ ...planned(["src/a.ts"]), changedAtClose: ["src/a.ts", "tests/a.test.ts", "docs/notes.md"] }));
+  assert.match(line(ok(repo), "code outside the plan:"), /0 of 1 runs/);
+});
+
+test("C23 edge: a declared repo's paths are read with its prefix", () => {
+  const repo = makeRepo("stats-p3");
+  const repos = [{ prefix: "../other", root: path.join(here, ".tmp", "stats-p3-other") }];
+  writeRun(repo, "one", closedRun({ ...planned(["../other/src/a.ts"]), repos, changedAtClose: ["../other/src/a.ts", "../other/src/b.ts", "../other/tests/b.test.ts"] }));
+  const out = ok(repo);
+  assert.match(line(out, "code outside the plan:"), /1 of 1 runs/);
+  assert.match(line(out, "median extra files:"), /1/);
+});
+
+test("C24 edge: a plan with no file list prints no list", () => {
+  const repo = makeRepo("stats-p4");
+  writeRun(repo, "listed", closedRun({ ...planned(["src/a.ts"]), changedAtClose: ["src/a.ts"] }));
+  writeRun(repo, "empty", closedRun({ ...planned([]), changedAtClose: ["src/a.ts"] }));
+  writeRun(repo, "absent", closedRun({ playbook: "feature", changedAtClose: ["src/a.ts"] }));
+  const out = ok(repo);
+  assert.match(line(out, "code outside the plan:"), /0 of 1 runs/);
+  assert.match(line(out, "no list:"), /2 of 3 runs/);
+});
+
+test("C25 edge: an abandoned run or a closed run with no changed list is not judged; nothing judged prints missing", () => {
+  const repo = makeRepo("stats-p5");
+  writeRun(repo, "abandoned", { status: "abandoned", openedAt: iso(1), ...planned(["src/a.ts"]) });
+  const noList = closedRun(planned(["src/a.ts"]));
+  delete noList.changedAtClose;
+  writeRun(repo, "no-changed", noList);
+  writeRun(repo, "late", closedRun({ ...planned(["src/a.ts"]), closedLate: true, changedAtClose: [] }));
+  const out = ok(repo);
+  assert.match(line(out, "code outside the plan:"), /missing/);
+  assert.match(line(out, "no changed list:"), /2 of 2 runs/);
+});
+
+test("C26 edge: a bad gate.json prints code outside the plan and bugs after close as missing", () => {
+  const repo = makeRepo("stats-p6", { ".claude/gate.json": "{ not json" });
+  writeRun(repo, "one", closedRun({ ...planned(["src/a.ts"]), changedAtClose: ["src/a.ts", "src/b.ts"] }));
+  writeRun(repo, "bug", closedRun({ ...planned(["src/a.ts"], { playbook: "bugfix" }), changedAtClose: ["src/a.ts"] }));
+  const out = ok(repo);
+  assert.match(line(out, "code outside the plan:"), /missing/);
+  assert.match(line(out, "bugs after close (estimate):"), /missing/);
+  assert.ok(!existsSync(path.join(repo, ".claude", "gate", "gate-error.log")));
+});
+
+test("C27 edge: plan and investigation runs are left out of code outside the plan", () => {
+  const repo = makeRepo("stats-p7");
+  writeRun(repo, "plan", closedRun({ ...planned(["docs/a.md"], { playbook: "plan" }), changedAtClose: ["src/a.ts"] }));
+  writeRun(repo, "look", closedRun({ ...planned(["docs/a.md"], { playbook: "investigation" }), changedAtClose: ["src/a.ts"] }));
+  writeRun(repo, "feature", closedRun({ ...planned(["src/a.ts"]), changedAtClose: ["src/a.ts"] }));
+  assert.match(line(ok(repo), "code outside the plan:"), /0 of 1 runs/);
+});
+
+function largeRun(repo, name, { minutes, lines, findings = 0, workers = false, role = "reviewer" }) {
+  writeRun(repo, name, closedRun({
+    minutes,
+    size: null,
+    tier: { measured: { tier: "large", lines } },
+    huddles: [{ role, file: "review-1.md", actOn: Array.from({ length: findings }, () => finding()) }],
+  }));
+  if (workers) writeFileSync(path.join(runsOf(repo), name, "worker-1.md"), "answers\n");
+}
+
+test("C28 happy: large runs split by worker files, with median minutes and findings per 100 lines", () => {
+  const repo = makeRepo("stats-p8");
+  largeRun(repo, "w1", { minutes: 30, lines: 500, findings: 5, workers: true });
+  largeRun(repo, "w2", { minutes: 50, lines: 500, findings: 1, workers: true, role: "reviewer-2" });
+  largeRun(repo, "lead", { minutes: 20, lines: 1000, findings: 1 });
+  const out = ok(repo);
+  assert.match(line(out, "with workers:"), /2 of 3 runs, median 40 min, 0\.6 findings per 100 lines/);
+  assert.match(line(out, "without workers:"), /1 of 3 runs, median 20 min, 0\.1 findings per 100 lines/);
+
+  const briefed = makeRepo("stats-p8d");
+  largeRun(briefed, "brief-only", { minutes: 15, lines: 100 });
+  writeFileSync(path.join(runsOf(briefed), "brief-only", "brief-worker-1.md"), "packet\n");
+  assert.match(line(ok(briefed), "with workers:"), /1 of 1 runs, median 15 min/);
+
+  const none = makeRepo("stats-p8b");
+  largeRun(none, "lead", { minutes: 20, lines: 1000 });
+  assert.match(line(ok(none), "with workers:"), /missing/);
+
+  const small = makeRepo("stats-p8c");
+  writeRun(small, "one", closedRun());
+  assert.match(line(ok(small), "large runs:"), /missing/);
+});
+
+test("C29 edge: a large run with no measured lines is left out of findings per 100 lines", () => {
+  const repo = makeRepo("stats-p9");
+  largeRun(repo, "known", { minutes: 10, lines: 100, findings: 2 });
+  largeRun(repo, "unknown", { minutes: 30, lines: undefined, findings: 50 });
+  assert.match(line(ok(repo), "without workers:"), /2 of 2 runs, median 20 min, 2 findings per 100 lines/);
+
+  const onlyUnknown = makeRepo("stats-p9b");
+  largeRun(onlyUnknown, "unknown", { minutes: 30, lines: undefined, findings: 50 });
+  assert.match(line(ok(onlyUnknown), "without workers:"), /1 of 1 runs, median 30 min, findings per 100 lines missing/);
+});
+
+const bugfixRun = (daysAgo, changedAtClose, over = {}) => closedRun({ daysAgo, playbook: "bugfix", changedAtClose, ...over });
+
+test("C30 happy: a bugfix overlapping a run closed in the 30 days before it counts, labelled an estimate, with names", () => {
+  const repo = makeRepo("stats-b1");
+  writeRun(repo, "2026-01-02-first", closedRun({ daysAgo: 5, changedAtClose: ["src/a.ts"] }));
+  writeRun(repo, "2026-01-03-fix-a", bugfixRun(1, ["src/a.ts"]));
+  writeRun(repo, "2026-01-04-fix-b", bugfixRun(1, ["src/z.ts"]));
+  const out = ok(repo);
+  assert.match(line(out, "bugs after close (estimate):"), /1 of 3 runs/);
+  assert.match(line(out, "runs:"), /3 of 3/);
+  assert.match(line(out, "named:"), /2026-01-03-fix-a/);
+  assert.doesNotMatch(line(out, "named:"), /fix-b|first/);
+});
+
+test("C31 boundary: an earlier run outside --days or of another version counts; one closed 31 days before does not", () => {
+  const repo = makeRepo("stats-b2");
+  writeRun(repo, "older", closedRun({ daysAgo: 20, version: "0.20.0", changedAtClose: ["src/a.ts"] }));
+  writeRun(repo, "fix", bugfixRun(1, ["src/a.ts"]));
+  assert.match(line(ok(repo, ["--days", "2", "--version", "0.21.0"]), "bugs after close (estimate):"), /1 of 1 runs/);
+
+  const far = makeRepo("stats-b2b");
+  writeRun(far, "older", closedRun({ daysAgo: 33, minutes: 0, changedAtClose: ["src/a.ts"] }));
+  writeRun(far, "fix", bugfixRun(1, ["src/a.ts"]));
+  assert.match(line(ok(far, ["--days", "2"]), "bugs after close (estimate):"), /0 of 1 runs/);
+});
+
+test("C32 edge: an abandoned earlier run and overlap only in tests do not count; a later feature run is not a bug; a run does not match itself", () => {
+  const repo = makeRepo("stats-b3");
+  writeRun(repo, "abandoned", { status: "abandoned", openedAt: iso(10), closedAt: iso(9), changedAtClose: ["src/a.ts"] });
+  writeRun(repo, "tests-only", closedRun({ daysAgo: 8, changedAtClose: ["tests/a.test.ts"] }));
+  writeRun(repo, "fix-tests", bugfixRun(3, ["tests/a.test.ts"]));
+  writeRun(repo, "fix-self", bugfixRun(2, ["src/a.ts"]));
+  writeRun(repo, "feature-after", closedRun({ daysAgo: 1, changedAtClose: ["src/a.ts"] }));
+  assert.match(line(ok(repo), "bugs after close (estimate):"), /0 of 4 runs/);
+});
+
+test("C32b edge: an earlier feature run counts as the earlier run", () => {
+  const repo = makeRepo("stats-b5");
+  writeRun(repo, "first", closedRun({ daysAgo: 5, playbook: "feature", changedAtClose: ["src/a.ts"] }));
+  writeRun(repo, "fix", bugfixRun(1, ["src/a.ts"]));
+  assert.match(line(ok(repo), "bugs after close (estimate):"), /1 of 2 runs/);
+});
+
+test("C35 edge: a closed-late run is left out of all three blocks", () => {
+  const repo = makeRepo("stats-b6");
+  writeRun(repo, "late-feature", closedRun({ ...planned(["src/a.ts"]), closedLate: true, minutes: 2000, changedAtClose: ["src/a.ts", "src/b.ts"] }));
+  writeRun(repo, "late-large", closedRun({ size: null, tier: { measured: { tier: "large", lines: 10 } }, closedLate: true, minutes: 9000 }));
+  writeRun(repo, "late-fix", bugfixRun(1, ["src/a.ts"], { closedLate: true }));
+  const out = ok(repo);
+  assert.match(line(out, "code outside the plan:"), /missing/);
+  assert.match(line(out, "large runs:"), /missing/);
+  assert.match(line(out, "bugs after close (estimate):"), /missing/);
+
+  writeRun(repo, "fix", bugfixRun(0.5, ["src/a.ts"]));
+  assert.match(line(ok(repo), "bugs after close (estimate):"), /0 of 1 runs/, "a closed-late earlier run must not count");
+});
+
+test("C36 edge: a declared repo's bad gate.json leaves that run not judged and the others still count", () => {
+  const repo = makeRepo("stats-b7");
+  const other = path.join(here, ".tmp", "stats-b7-other");
+  rmSync(other, { recursive: true, force: true });
+  mkdirSync(path.join(other, ".claude"), { recursive: true });
+  writeFileSync(path.join(other, ".claude", "gate.json"), "{ not json");
+  writeRun(repo, "bad", closedRun({ ...planned(["src/a.ts"]), repos: [{ prefix: "../stats-b7-other", root: other }], changedAtClose: ["src/a.ts", "src/b.ts"] }));
+  writeRun(repo, "good", closedRun({ ...planned(["src/a.ts"]), changedAtClose: ["src/a.ts", "src/b.ts"] }));
+  const out = ok(repo);
+  assert.match(line(out, "code outside the plan:"), /1 of 1 runs/);
+  assert.match(line(out, "no usable gate.json:"), /1 of 2 runs/);
+  assert.ok(!existsSync(path.join(repo, ".claude", "gate", "gate-error.log")));
+});
+
+test("C37 boundary: closed after the bugfix opened does not count, exactly 30 days before does, an unparseable closedAt does not", () => {
+  const after = makeRepo("stats-b8");
+  writeRun(after, "overlapping", closedRun({ daysAgo: 3, minutes: 4 * 24 * 60 - 60, changedAtClose: ["src/a.ts"] }));
+  writeRun(after, "fix", bugfixRun(1, ["src/a.ts"]));
+  assert.match(line(ok(after), "bugs after close (estimate):"), /0 of 2 runs/);
+
+  const exactly = makeRepo("stats-b8b");
+  writeRun(exactly, "older", closedRun({ daysAgo: 31, minutes: 0, changedAtClose: ["src/a.ts"] }));
+  writeRun(exactly, "fix", bugfixRun(1, ["src/a.ts"]));
+  assert.match(line(ok(exactly, ["--days", "2"]), "bugs after close (estimate):"), /1 of 1 runs/);
+
+  const garbled = makeRepo("stats-b8c");
+  writeRun(garbled, "older", closedRun({ daysAgo: 5, closedAt: "soon", changedAtClose: ["src/a.ts"] }));
+  writeRun(garbled, "fix", bugfixRun(1, ["src/a.ts"]));
+  assert.match(line(ok(garbled), "bugs after close (estimate):"), /0 of 2 runs/);
+});
+
+test("C33 edge: a bugfix run with no changed list is not judged, never counted as no bug", () => {
+  const repo = makeRepo("stats-b4");
+  writeRun(repo, "earlier", closedRun({ daysAgo: 5, changedAtClose: ["src/a.ts"] }));
+  const fix = bugfixRun(1, []);
+  delete fix.changedAtClose;
+  writeRun(repo, "fix", fix);
+  assert.match(line(ok(repo), "bugs after close (estimate):"), /missing/);
+
+  writeRun(repo, "fix-known", bugfixRun(1, ["src/a.ts"]));
+  assert.match(line(ok(repo), "bugs after close (estimate):"), /1 of 3 runs, not judged 1 of 2 bugfix runs/);
+});
+
+test("C34 idempotent: the state folder stays unchanged with worker files present", () => {
+  const repo = makeRepo("stats-p10");
+  largeRun(repo, "w1", { minutes: 30, lines: 500, findings: 5, workers: true });
+  const state = path.join(repo, ".claude", "gate");
+  const before = snapshot(state);
+  ok(repo);
+  assert.deepEqual(snapshot(state), before);
 });

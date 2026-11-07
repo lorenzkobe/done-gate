@@ -3,7 +3,7 @@ import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { UsageError } from "./context.mjs";
 import { loadLedger, runsDir } from "./ledger.mjs";
-import { tierOf } from "./size.mjs";
+import { outsidePlan, tierOf } from "./size.mjs";
 import { flag } from "./verbs.mjs";
 
 // `gate stats` reads past run records and writes nothing: no buildState, no report path, no
@@ -15,6 +15,10 @@ const SIZES = ["tiny", "small", "standard", "large"];
 const REVIEWERS = new Set(["reviewer", "reviewer-2"]);
 // these rounds answer a finding or a packet: having no findings of their own says nothing
 const NO_CLEAN = new Set(["arbiter", "worker"]);
+const PLANNED_PLAYBOOKS = new Set(["feature", "bugfix", "refactor"]);
+// a worker writes its file only on a review round; its packet shows it was given the work
+const WORKER_FILE = /^(?:brief-)?worker-\d+\.md$/;
+const AFTER_CLOSE_MS = 30 * DAY_MS;
 const MISSING = "missing";
 
 const ofRuns = (n, m) => `${n} of ${m} runs`;
@@ -22,8 +26,10 @@ const list = (value) => (Array.isArray(value) ? value : []);
 const oneDecimal = (n) => Math.round(n * 10) / 10;
 
 function parseArgs(args) {
+  const seen = new Set();
   for (let i = 0; i < args.length; i += 2) {
-    if (!FLAGS.has(args[i])) throw new UsageError(USAGE);
+    if (!FLAGS.has(args[i]) || seen.has(args[i])) throw new UsageError(USAGE);
+    seen.add(args[i]);
   }
   const days = flag(args, "--days");
   if (args.includes("--days") && !/^[1-9]\d*$/.test(days ?? "")) throw new UsageError(USAGE);
@@ -33,14 +39,21 @@ function parseArgs(args) {
 }
 
 // Only what stats reads: one repo's ledgers came to 189 MB, mostly baselines and review units.
-function readFields(ledger) {
+function readFields(ledger, dir) {
+  const tier = tierOf(ledger);
+  const size = tier.measured?.tier;
   return {
+    name: path.basename(dir),
+    playbook: ledger.playbook,
     status: ledger.status,
     version: ledger.version,
     openedAt: ledger.openedAt,
     closedAt: ledger.closedAt,
     closedLate: ledger.closedLate,
-    size: tierOf(ledger).measured?.tier,
+    size,
+    lines: tier.measured?.lines,
+    named: tier.predictedFiles,
+    hadWorkers: size === "large" && readdirSync(dir).some((f) => WORKER_FILE.test(f)),
     repos: list(ledger.repos),
     changedAtClose: ledger.changedAtClose,
     waivers: list(ledger.waivers).filter(Boolean),
@@ -61,7 +74,7 @@ function readRuns(stateDir) {
     try {
       const ledger = loadLedger(dir);
       if (!Number.isFinite(Date.parse(ledger.openedAt))) throw new Error("no open time");
-      ledgers.push(readFields(ledger));
+      ledgers.push(readFields(ledger, dir));
     } catch {
       unreadable += 1;
     }
@@ -111,23 +124,33 @@ const onNote = (closed) => /^(?:decisions#|ledger\.md#)/.test(closed);
 // a pointer is `file:line`, `file:test name` or a run record (events#<seq>, withdrawn (file))
 const pointerPath = (closed) => /^[^\s:]+/.exec(closed)?.[0] ?? "";
 
-// Whether a run's closed findings can be judged at all: a closed-late run has an empty list that
-// means "not recorded", and a bad gate.json leaves no way to know what a test is.
-function testJudge(ledger, root, plain) {
-  const repos = list(ledger.repos);
-  let isTest = plain;
-  if (repos.length && plain) {
-    try {
-      isTest = loadConfig(root, repos).isTest;
-    } catch {
-      isTest = null;
+// A closed-late run's empty list means "not recorded", so it says nothing about what changed.
+const changedOf = (ledger) => (ledger.closedLate || !Array.isArray(ledger.changedAtClose) ? null : ledger.changedAtClose);
+
+// One config per set of declared repos. A bad gate.json, the main one or a declared repo's, leaves
+// null: what a test or a source file is cannot be known for the runs that use it.
+function configReader(root) {
+  const known = new Map();
+  return (ledger) => {
+    const key = JSON.stringify(ledger.repos);
+    if (!known.has(key)) {
+      try {
+        known.set(key, loadConfig(root, ledger.repos));
+      } catch {
+        known.set(key, null);
+      }
     }
-  }
-  if (!isTest || ledger.closedLate || !Array.isArray(ledger.changedAtClose)) return null;
-  const changed = new Set(ledger.changedAtClose);
+    return known.get(key);
+  };
+}
+
+function testJudge(ledger, configOf) {
+  const config = configOf(ledger);
+  const changed = changedOf(ledger);
+  if (!config || !changed) return null;
   return (closed) => {
     const file = pointerPath(closed);
-    return isTest(file) && changed.has(file);
+    return config.isTest(file) && changed.includes(file);
   };
 }
 
@@ -159,19 +182,13 @@ function rowText(row, role) {
   return `${rounds}, findings ${row.findings}, closed as wrong at least ${row.wrong}, closed on a note ${row.onNote}, closed on a test ${onTest}`;
 }
 
-function findingLines(closed, root) {
-  let plain = null;
-  try {
-    plain = loadConfig(root).isTest;
-  } catch {
-    // a bad gate.json: rounds and findings still read, only "on a test" cannot be judged
-  }
+function findingLines(closed, configOf) {
   const roles = new Map();
   const reviewers = emptyRow();
   let quiet = 0;
   let unseen = 0;
   for (const ledger of closed) {
-    const onTest = testJudge(ledger, root, plain);
+    const onTest = testJudge(ledger, configOf);
     if (!ledger.huddles.some((h) => h.actOn.length)) {
       if (ledger.huddles.some((h) => h.file)) quiet += 1;
       else unseen += 1;
@@ -206,6 +223,84 @@ function waiverLines(closed) {
   return [`waivers: ${total} in ${runs}, ${oneDecimal(total / closed.length)} per run`, `  by key: ${keys.join(", ")}`];
 }
 
+function planLines(closed, configOf) {
+  const scope = closed.filter((l) => PLANNED_PLAYBOOKS.has(l.playbook));
+  const extras = [];
+  let noChanged = 0;
+  let noConfig = 0;
+  let noList = 0;
+  for (const ledger of scope) {
+    const changed = changedOf(ledger);
+    const config = configOf(ledger);
+    if (!changed) noChanged += 1;
+    else if (!config) noConfig += 1;
+    else if (!ledger.named.length) noList += 1;
+    else extras.push(outsidePlan(ledger.named, changed, config).length);
+  }
+  const affected = extras.filter(Boolean);
+  const out = [`code outside the plan: ${extras.length ? ofRuns(affected.length, extras.length) : MISSING}`];
+  if (affected.length) {
+    out.push(`  median extra files: ${oneDecimal(median(affected))}`);
+    out.push(`  one file only: ${ofRuns(affected.filter((n) => n === 1).length, affected.length)}`);
+  }
+  if (noList) out.push(`  no list: ${ofRuns(noList, scope.length)}`);
+  if (noChanged) out.push(`  no changed list: ${ofRuns(noChanged, scope.length)}`);
+  if (noConfig) out.push(`  no usable gate.json: ${ofRuns(noConfig, scope.length)}`);
+  return out;
+}
+
+function largeGroupText(group, total) {
+  if (!group.length) return MISSING;
+  const minutes = group.map(minutesOf).filter((m) => m !== null);
+  const counted = group.filter((l) => l.lines > 0);
+  const findings = counted.flatMap((l) => l.huddles).filter((h) => REVIEWERS.has(h.role)).reduce((sum, h) => sum + h.actOn.length, 0);
+  const lines = counted.reduce((sum, l) => sum + l.lines, 0);
+  const time = minutes.length ? `median ${oneDecimal(median(minutes))} min` : `median minutes ${MISSING}`;
+  const rate = lines ? `${oneDecimal((findings / lines) * 100)} findings per 100 lines` : `findings per 100 lines ${MISSING}`;
+  return `${ofRuns(group.length, total)}, ${time}, ${rate}`;
+}
+
+function largeLines(closed) {
+  const onTime = closed.filter((l) => !l.closedLate);
+  const large = onTime.filter((l) => l.size === "large");
+  if (!large.length) return [`large runs: ${MISSING}`];
+  return [
+    `large runs: ${ofRuns(large.length, onTime.length)}`,
+    `  with workers: ${largeGroupText(large.filter((l) => l.hadWorkers), large.length)}`,
+    `  without workers: ${largeGroupText(large.filter((l) => !l.hadWorkers), large.length)}`,
+  ];
+}
+
+// An estimate: a bugfix touching code a run closed in the month before it. It misses a feature run
+// that fixes a bug and counts a fix of an older bug, so the names are printed for a person to read.
+function afterCloseLines(closed, every, configOf) {
+  const label = "bugs after close (estimate):";
+  const onTime = closed.filter((l) => !l.closedLate);
+  const fixes = onTime.filter((l) => l.playbook === "bugfix");
+  const earlier = every.filter((l) => l.status === "closed" && changedOf(l));
+  const found = [];
+  let notJudged = 0;
+  for (const fix of fixes) {
+    const changed = changedOf(fix);
+    const config = configOf(fix);
+    if (!changed || !config) {
+      notJudged += 1;
+      continue;
+    }
+    const code = new Set(outsidePlan([], changed, config));
+    const opened = Date.parse(fix.openedAt);
+    const overlaps = (l) => {
+      const closedAt = Date.parse(l.closedAt);
+      return closedAt < opened && closedAt >= opened - AFTER_CLOSE_MS && l.changedAtClose.some((p) => code.has(p));
+    };
+    if (earlier.some(overlaps)) found.push(fix.name);
+  }
+  if (!onTime.length || (fixes.length && notJudged === fixes.length)) return [`${label} ${MISSING}`];
+  const out = [`${label} ${ofRuns(found.length, onTime.length)}${notJudged ? `, not judged ${notJudged} of ${fixes.length} bugfix runs` : ""}`];
+  if (found.length) out.push(`  named: ${found.sort().join(", ")}`);
+  return out;
+}
+
 function report(ctx, { days, version }) {
   const heading = `done-gate stats: ${path.basename(ctx.root)}, last ${days} days, ${version ? `version ${version}` : "all versions"}`;
   const read = readRuns(ctx.stateDir);
@@ -223,9 +318,11 @@ function report(ctx, { days, version }) {
   const outcomes = ["closed", "abandoned", "open"].map((o) => [o, runs.filter((l) => outcomeOf(l) === o).length]).filter(([, n]) => n);
   out.push(`outcome: ${outcomes.length ? outcomes.map(([o, n]) => `${n} ${o}`).join(", ") : MISSING}`);
   out.push("median minutes, closed runs:", ...minuteLines(closed));
-  out.push(...(closed.length ? findingLines(closed, ctx.root) : [`findings: ${MISSING}`]));
+  const configOf = configReader(ctx.root);
+  out.push(...(closed.length ? findingLines(closed, configOf) : [`findings: ${MISSING}`]));
   out.push(...(closed.length ? waiverLines(closed) : [`waivers: ${MISSING}`]));
   out.push("could-not-run waivers: not recorded", "lapsed waivers: not recorded");
+  out.push(...planLines(closed, configOf), ...largeLines(closed), ...afterCloseLines(closed, read?.ledgers ?? [], configOf));
   return out;
 }
 
