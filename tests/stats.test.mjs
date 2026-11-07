@@ -934,7 +934,7 @@ test("C62 happy: a verdict the user said binds the newest stopped turn, is appen
   assert.match(rate("R5"), /0 of 20 turns wrong/);
   const r = wrong(repo, ["R5", WORDS]);
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /R5/);
+  assert.match(r.stdout, /R5: 1 of 20 turns wrong, 5%/);
   const recorded = readFileSync(eventsFile(repo), "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.kind === "rule-wrong");
   assert.equal(recorded.length, 1);
   assert.equal(recorded[0].rule, "R5");
@@ -1061,4 +1061,269 @@ test("C69 reported surface: a verdict leaves gate check and the ledger alone in 
   assert.match(run("help").stdout, /stats wrong <R#>/);
   assert.match(readFileSync(path.join(pluginRoot, "README.md"), "utf8"), /`stats wrong <R#> "<words>"`/);
   assert.match(readFileSync(path.join(pluginRoot, "hooks", "session-start.md"), "utf8"), /`gate stats wrong <R#> "<their words>"`/);
+});
+
+// Tokens: a throwaway home holding transcripts the way Claude Code lays them out.
+function homeFor(name) {
+  const home = path.join(here, ".tmp", `${name}-home`);
+  rmSync(home, { recursive: true, force: true });
+  mkdirSync(home, { recursive: true });
+  return home;
+}
+
+const atMinute = (minute) => new Date(OPEN_AT + minute * 6e4).toISOString();
+const usageLine = (minute, id, output, text = "words the transcript holds") => JSON.stringify({
+  timestamp: atMinute(minute),
+  type: "assistant",
+  message: { id, role: "assistant", content: [{ type: "text", text }], usage: { input_tokens: 5, output_tokens: output } },
+});
+
+function writeTranscript(home, session, lines, folder = "-some-project") {
+  const dir = path.join(home, ".claude", "projects", folder);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, `${session}.jsonl`), `${lines.join("\n")}\n`);
+}
+
+function writeHelper(home, session, id, lines, meta = { agentType: "done-gate:reviewer" }, folder = "-some-project") {
+  const dir = path.join(home, ".claude", "projects", folder, session, "subagents");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, `agent-${id}.jsonl`), `${lines.join("\n")}\n`);
+  if (meta !== null) writeFileSync(path.join(dir, `agent-${id}.meta.json`), typeof meta === "string" ? meta : JSON.stringify(meta));
+}
+
+function okIn(repo, home, args = []) {
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1", DONE_GATE_HOME: home };
+  const r = spawnSync(process.execPath, [gate, "stats", ...args], { encoding: "utf8", env });
+  assert.equal(r.status, 0, r.stderr);
+  return r.stdout;
+}
+
+// only the tokens block: "standard:" and role names also head rows earlier in the report
+const tokensOf = (out) => out.slice(out.lastIndexOf("tokens:"));
+
+test("C70 edge: no projects folder or no transcript prints tokens missing", () => {
+  const repo = makeRepo("stats-t1");
+  writeRun(repo, "one", hourRun());
+  const home = homeFor("stats-t1");
+  assert.match(line(okIn(repo, home), "tokens:"), /missing/);
+  mkdirSync(path.join(home, ".claude", "projects", "-other"), { recursive: true });
+  assert.match(line(okIn(repo, home), "tokens:"), /missing/);
+  assert.match(line(ok(makeRepo("stats-t1b")), "tokens:"), /missing/);
+});
+
+test("C71 edge: one run with transcripts and one without gives 1 of 2 runs", () => {
+  const repo = makeRepo("stats-t2");
+  writeRun(repo, "kept", hourRun(["S1"]));
+  writeRun(repo, "gone", hourRun(["S2"]));
+  const home = homeFor("stats-t2");
+  writeTranscript(home, "S1", [usageLine(1, "m1", 100)]);
+  assert.match(line(okIn(repo, home), "tokens:"), /1 of 2 runs/);
+});
+
+test("C72 happy: median output per size, helper share per size, per role output and share", () => {
+  const repo = makeRepo("stats-t3");
+  const home = homeFor("stats-t3");
+  writeRun(repo, "a", hourRun(["S1"]));
+  writeRun(repo, "b", hourRun(["S2"]));
+  writeRun(repo, "c", hourRun(["S3"], { size: null, tier: { measured: { tier: "large" } } }));
+  writeTranscript(home, "S1", [usageLine(1, "a1", 100), usageLine(2, "a2", 100)]);
+  writeTranscript(home, "S2", [usageLine(1, "b1", 300)]);
+  writeHelper(home, "S2", "r1", [usageLine(3, "b2", 200)]);
+  writeHelper(home, "S2", "r2", [usageLine(4, "b3", 100)], { agentType: "done-gate:skeptic" });
+  writeTranscript(home, "S3", [usageLine(1, "c1", 2000)]);
+  writeHelper(home, "S3", "r3", [usageLine(2, "c2", 6000)], { agentType: "done-gate:reviewer-2" });
+  const block = tokensOf(okIn(repo, home));
+  assert.match(line(block, "tokens:"), /3 of 3 runs/);
+  assert.match(line(block, "tiny:"), /missing/);
+  assert.match(line(block, "standard:"), /median 400 output \(2 of 3 runs\), helpers 38%/);
+  assert.match(line(block, "large:"), /median 8\.0k output \(1 of 3 runs\), helpers 75%/);
+  assert.match(line(block, "reviewer-2:"), /6\.0k output, 95% of helper output/);
+  assert.match(line(block, "reviewer:"), /200 output, 3% of helper output/);
+  assert.match(line(block, "skeptic:"), /100 output, 2% of helper output/);
+});
+
+test("C73 edge: a duplicate id counts once at its largest count; a bad line and a line with no usage are skipped", () => {
+  const repo = makeRepo("stats-t4");
+  const home = homeFor("stats-t4");
+  writeRun(repo, "a", hourRun());
+  writeTranscript(home, "S1", [
+    usageLine(1, "m1", 10),
+    usageLine(1, "m1", 90),
+    '{"timestamp":"not json with "usage" in it',
+    JSON.stringify({ timestamp: atMinute(2), type: "user", message: { role: "user", content: "no counts here" } }),
+    JSON.stringify({ timestamp: atMinute(2), message: { id: "m2", usage: { input_tokens: 3 } } }),
+    JSON.stringify({ timestamp: "yesterday", message: { id: "m3", usage: { output_tokens: 500 } } }),
+    usageLine(3, "m4", 10),
+  ]);
+  assert.match(line(tokensOf(okIn(repo, home)), "standard:"), /median 100 output/);
+});
+
+test("C74 edge: a helper with no meta or a bad meta counts as other", () => {
+  const repo = makeRepo("stats-t5");
+  const home = homeFor("stats-t5");
+  writeRun(repo, "a", hourRun());
+  writeTranscript(home, "S1", [usageLine(1, "m1", 10)]);
+  writeHelper(home, "S1", "x1", [usageLine(2, "m2", 20)], null);
+  writeHelper(home, "S1", "x2", [usageLine(3, "m3", 30)], "{ not json");
+  writeHelper(home, "S1", "x3", [usageLine(4, "m4", 40)], { agentType: 7 });
+  assert.match(line(tokensOf(okIn(repo, home)), "other:"), /90 output, 100% of helper output/);
+});
+
+test("C75 edge: a session id with path characters is skipped and nothing outside is read", () => {
+  const repo = makeRepo("stats-t6");
+  const home = homeFor("stats-t6");
+  writeRun(repo, "a", hourRun(["../../outside"]));
+  writeRun(repo, "b", hourRun([".."]));
+  writeTranscript(home, "../../outside", [usageLine(1, "m1", 999)]);
+  assert.match(line(okIn(repo, home), "tokens:"), /missing/);
+});
+
+test("C76 refused: no message text, prompt or tool output is ever printed", () => {
+  const repo = makeRepo("stats-t7");
+  const home = homeFor("stats-t7");
+  writeRun(repo, "a", hourRun());
+  writeTranscript(home, "S1", [usageLine(1, "m1", 10, "SECRET-LEAD-TEXT"), JSON.stringify({ timestamp: atMinute(1), message: { role: "user", content: "SECRET-PROMPT usage" } })]);
+  writeHelper(home, "S1", "r1", [usageLine(2, "m2", 20, "SECRET-HELPER-TEXT")], { agentType: "done-gate:reviewer", description: "SECRET-DESCRIPTION" });
+  const out = okIn(repo, home);
+  assert.doesNotMatch(out, /SECRET/);
+  assert.doesNotMatch(out, /m1|m2/);
+});
+
+test("C77 boundary: a helper joins the run its first dated line falls in, keeps its later lines, and counts once", () => {
+  const repo = makeRepo("stats-t8");
+  const home = homeFor("stats-t8");
+  writeRun(repo, "first", hourRun(["S1"], { closedAt: atMinute(20) }));
+  writeRun(repo, "second", hourRun(["S1"], { openedAt: atMinute(30), openedSeq: seqAt(30) }));
+  writeTranscript(home, "S1", [usageLine(1, "m1", 1), usageLine(31, "m2", 2)]);
+  writeHelper(home, "S1", "spans", [JSON.stringify({ timestamp: atMinute(5), type: "user", message: { role: "user", content: "brief" } }), usageLine(6, "h1", 100), usageLine(40, "h2", 100)]);
+  writeHelper(home, "S1", "outside", [usageLine(25, "h3", 5000)]);
+  const block = tokensOf(okIn(repo, home));
+  assert.match(line(block, "reviewer:"), /^ *reviewer: 200 output/);
+  assert.equal(line(block, "other:"), undefined);
+  assert.match(line(block, "standard:"), /median 101\.5 output \(2 of 2 runs\)/);
+});
+
+test("C78 boundary: a lead line outside the run's time is not counted", () => {
+  const repo = makeRepo("stats-t9");
+  const home = homeFor("stats-t9");
+  writeRun(repo, "a", hourRun());
+  writeTranscript(home, "S1", [usageLine(-5, "m0", 900), usageLine(1, "m1", 10), usageLine(70, "m2", 900)]);
+  assert.match(line(tokensOf(okIn(repo, home)), "standard:"), /median 10 output/);
+});
+
+test("C79 edge: a closed-late run is left out; a run with no measured size counts in the total but in no size", () => {
+  const repo = makeRepo("stats-t10");
+  const home = homeFor("stats-t10");
+  writeRun(repo, "late", hourRun(["S1"], { closedLate: true }));
+  writeTranscript(home, "S1", [usageLine(1, "m1", 900)]);
+  assert.match(line(okIn(repo, home), "tokens:"), /missing/);
+
+  const unsized = makeRepo("stats-t10b");
+  const home2 = homeFor("stats-t10b");
+  writeRun(unsized, "a", hourRun(["S1"], { size: null }));
+  writeRun(unsized, "b", hourRun(["S2"]));
+  writeTranscript(home2, "S1", [usageLine(1, "m1", 900)]);
+  writeTranscript(home2, "S2", [usageLine(1, "m2", 10)]);
+  const block = tokensOf(okIn(unsized, home2));
+  assert.match(line(block, "tokens:"), /2 of 2 runs/);
+  assert.match(line(block, "standard:"), /median 10 output \(1 of 2 runs\)/);
+});
+
+test("C80 edge: the same session in two project folders counts a message once", () => {
+  const repo = makeRepo("stats-t11");
+  const home = homeFor("stats-t11");
+  writeRun(repo, "a", hourRun());
+  writeTranscript(home, "S1", [usageLine(1, "m1", 50)], "-one");
+  writeTranscript(home, "S1", [usageLine(1, "m1", 50), usageLine(2, "m2", 25)], "-two");
+  assert.match(line(tokensOf(okIn(repo, home)), "standard:"), /median 75 output/);
+});
+
+test("C81 idempotent: the state folder and the transcripts are unchanged after a run", () => {
+  const repo = makeRepo("stats-t12");
+  const home = homeFor("stats-t12");
+  writeRun(repo, "a", hourRun());
+  writeTranscript(home, "S1", [usageLine(1, "m1", 50)]);
+  writeHelper(home, "S1", "r1", [usageLine(2, "m2", 50)]);
+  const state = path.join(repo, ".claude", "gate");
+  const before = [snapshot(state), snapshot(home)];
+  okIn(repo, home);
+  assert.deepEqual([snapshot(state), snapshot(home)], before);
+});
+
+test("C82 edge: a helper nested under subagents/workflows counts, and the folder is not opened as a file", () => {
+  const repo = makeRepo("stats-t13");
+  const home = homeFor("stats-t13");
+  writeRun(repo, "a", hourRun());
+  writeTranscript(home, "S1", [usageLine(1, "m1", 10)]);
+  const nested = path.join(home, ".claude", "projects", "-some-project", "S1", "subagents", "workflows", "wf_1");
+  mkdirSync(nested, { recursive: true });
+  writeFileSync(path.join(nested, "agent-w1.jsonl"), `${usageLine(2, "w1", 30)}\n`);
+  writeFileSync(path.join(nested, "agent-w1.meta.json"), JSON.stringify({ agentType: "workflow-subagent" }));
+  const block = tokensOf(okIn(repo, home));
+  assert.match(line(block, "workflow-subagent:"), /30 output/);
+  assert.match(line(block, "standard:"), /median 40 output/);
+});
+
+test("C83 edge: two closed runs overlapping in one session: a line and a helper count once, in the run opened first", () => {
+  const repo = makeRepo("stats-t14");
+  const home = homeFor("stats-t14");
+  writeRun(repo, "first", hourRun());
+  writeRun(repo, "second", hourRun(["S1"], { openedAt: atMinute(10), openedSeq: seqAt(10) }));
+  writeTranscript(home, "S1", [usageLine(20, "m1", 10)]);
+  writeHelper(home, "S1", "r1", [usageLine(30, "h1", 30)]);
+  const block = tokensOf(okIn(repo, home));
+  assert.match(line(block, "tokens:"), /1 of 2 runs/);
+  assert.match(line(block, "standard:"), /median 40 output \(1 of 2 runs\)/);
+  assert.match(line(block, "reviewer:"), /^ *reviewer: 30 output/);
+});
+
+test("C84 edge: a transcript with no usage inside the run, or only synthetic rows at 0, does not count as a run with tokens", () => {
+  const repo = makeRepo("stats-t15");
+  const home = homeFor("stats-t15");
+  writeRun(repo, "outside", hourRun(["S1"]));
+  writeRun(repo, "synthetic", hourRun(["S2"]));
+  writeRun(repo, "real", hourRun(["S3"]));
+  writeTranscript(home, "S1", [usageLine(-10, "m1", 10)]);
+  writeTranscript(home, "S2", [JSON.stringify({ timestamp: atMinute(1), message: { id: "s1", model: "<synthetic>", usage: { output_tokens: 0 } } })]);
+  writeTranscript(home, "S3", [usageLine(1, "m3", 10)]);
+  const block = tokensOf(okIn(repo, home));
+  assert.match(line(block, "tokens:"), /1 of 3 runs/);
+  assert.match(line(block, "standard:"), /median 10 output \(1 of 3 runs\)/);
+});
+
+test("C85 boundary: a fork's copied parent line counts once for the parent and does not set when the fork joined", () => {
+  const repo = makeRepo("stats-t16");
+  const home = homeFor("stats-t16");
+  writeRun(repo, "earlier", hourRun(["S1"], { openedAt: atMinute(-30), openedSeq: seqAt(-30), closedAt: atMinute(-1) }));
+  writeRun(repo, "this", hourRun(["S1"]));
+  writeTranscript(home, "S1", [usageLine(-2, "parent", 1000), usageLine(5, "lead", 10)]);
+  writeHelper(home, "S1", "fork", [
+    JSON.stringify({ type: "fork-context-ref" }),
+    usageLine(-2, "parent", 1000),
+    usageLine(1, "own", 30),
+  ], { agentType: "done-gate:worker" });
+  const block = tokensOf(okIn(repo, home));
+  assert.match(line(block, "worker:"), /^ *worker: 30 output/);
+  assert.match(line(block, "standard:"), /median 520 output \(2 of 2 runs\)/);
+});
+
+test("C86 edge: an unreadable file loses that file only: a folder named like a transcript or an entry that is no folder", () => {
+  const repo = makeRepo("stats-t17");
+  const home = homeFor("stats-t17");
+  writeRun(repo, "a", hourRun(["S1"]));
+  writeRun(repo, "b", hourRun(["S2"]));
+  const projects = path.join(home, ".claude", "projects");
+  mkdirSync(path.join(projects, "-broken", "S1.jsonl"), { recursive: true });
+  mkdirSync(projects, { recursive: true });
+  writeFileSync(path.join(projects, "a-stray-file"), "not a folder");
+  writeTranscript(home, "S1", [usageLine(1, "m1", 10)]);
+  const helpers = path.join(projects, "-some-project", "S1", "subagents", "agent-dir.jsonl");
+  mkdirSync(helpers, { recursive: true });
+  mkdirSync(path.join(projects, "-broken", "S2.jsonl"), { recursive: true });
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1", DONE_GATE_HOME: home };
+  const r = spawnSync(process.execPath, [gate, "stats"], { encoding: "utf8", env });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stderr, "");
+  assert.match(line(tokensOf(r.stdout), "tokens:"), /1 of 2 runs/);
+  assert.ok(!existsSync(path.join(repo, ".claude", "gate", "gate-error.log")));
 });

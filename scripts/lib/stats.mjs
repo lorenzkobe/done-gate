@@ -1,4 +1,5 @@
-import { existsSync, readdirSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { UsageError } from "./context.mjs";
@@ -556,11 +557,127 @@ function recordVerdict(ctx, [rule, words, ...rest]) {
   const at = new Date().toISOString();
   appendEvents(ctx.stateDir, ctx.session, [{ seq: nextSeq(), ts: at, session: ctx.session, agent: null, agentType: null, kind: "rule-wrong", rule, words: words.trim(), saidSeq: said.seq, blockSeq: block.seq, blockSession: block.session }]);
   ctx.out(`${rule} marked wrong on the turn it stopped at ${new Date(block.seq / 1000).toISOString()}`);
-  const after = ruleRecords(ctx.stateDir, sessionReader(ctx.stateDir));
-  ctx.out(rateText(rule, after.turns.get(rule).size, after.judged.get(rule)?.size ?? 0));
+  ctx.out(rateText(rule, turns.get(rule).size, (judged.get(rule)?.size ?? 0) + 1));
 }
 
-function report(ctx, { days, version }) {
+async function* fileLines(file) {
+  let rest = "";
+  for await (const chunk of createReadStream(file, { encoding: "utf8" })) {
+    const lines = (rest + chunk).split("\n");
+    rest = lines.pop();
+    yield* lines;
+  }
+  if (rest) yield rest;
+}
+
+// Numbers only, each message at its largest count. A fork opens with a line copied from its parent,
+// whose id `taken` holds; a file that cannot be read loses only itself.
+async function usageOf(file, taken = new Map()) {
+  const rows = new Map();
+  let first = null;
+  try {
+    for await (const line of fileLines(file)) {
+      if (first !== null && !line.includes('"usage"')) continue;
+      let entry;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const id = entry?.message?.id;
+      const at = Date.parse(entry?.timestamp);
+      if (!Number.isFinite(at) || taken.has(id)) continue;
+      first ??= at;
+      const output = entry.message?.usage?.output_tokens;
+      if (typeof id !== "string" || typeof output !== "number" || entry.message.model === "<synthetic>") continue;
+      if (output >= (rows.get(id)?.output ?? 0)) rows.set(id, { at, output });
+    }
+  } catch {
+    // unreadable, or a folder named like a transcript
+  }
+  return { rows, first };
+}
+
+function helperFiles(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) return helperFiles(full);
+      return /^agent-.*\.jsonl$/.test(entry.name) ? [full] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function roleOf(helperFile) {
+  try {
+    const type = JSON.parse(readFileSync(helperFile.replace(/\.jsonl$/, ".meta.json"), "utf8")).agentType;
+    return typeof type === "string" && type ? type.replace(/^done-gate:/, "") : "other";
+  } catch {
+    return "other";
+  }
+}
+
+function projectFolders() {
+  const root = path.join(process.env.DONE_GATE_HOME || homedir(), ".claude", "projects");
+  try {
+    return readdirSync(root).map((name) => path.join(root, name));
+  } catch {
+    return [];
+  }
+}
+
+const compact = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${oneDecimal(n)}`);
+
+// Each line or helper counts once, in the run opened first of those holding its time.
+async function tokenLines(closed) {
+  const runs = closed.filter((l) => !l.closedLate && minutesOf(l) !== null).sort((a, b) => Date.parse(a.openedAt) - Date.parse(b.openedAt));
+  const folders = projectFolders();
+  const tally = new Map(runs.map((l) => [l, { lead: 0, helpers: 0 }]));
+  const roles = new Map();
+  for (const session of new Set(runs.flatMap((l) => l.sessions).filter((s) => SESSION_ID.test(s)))) {
+    const own = runs.filter((l) => l.sessions.includes(session));
+    const runAt = (at) => own.find((l) => at >= Date.parse(l.openedAt) && at <= Date.parse(l.closedAt));
+    const lead = new Map();
+    for (const folder of folders) {
+      for (const [id, row] of (await usageOf(path.join(folder, `${session}.jsonl`))).rows) {
+        if (row.output >= (lead.get(id)?.output ?? 0)) lead.set(id, row);
+      }
+    }
+    for (const { at, output } of lead.values()) {
+      const run = runAt(at);
+      if (run) tally.get(run).lead += output;
+    }
+    const taken = new Map(lead);
+    for (const folder of folders) {
+      for (const file of helperFiles(path.join(folder, session, "subagents"))) {
+        const { rows, first } = await usageOf(file, taken);
+        const run = first === null ? null : runAt(first);
+        for (const [id, row] of rows) taken.set(id, row);
+        if (!run) continue;
+        const output = [...rows.values()].reduce((sum, row) => sum + row.output, 0);
+        tally.get(run).helpers += output;
+        const role = roleOf(file);
+        roles.set(role, (roles.get(role) ?? 0) + output);
+      }
+    }
+  }
+  const counted = runs.filter((l) => tally.get(l).lead + tally.get(l).helpers > 0);
+  if (!counted.length) return [`tokens: ${MISSING}`];
+  const sizeLine = (size) => {
+    const group = counted.filter((l) => l.size === size);
+    if (!group.length) return `  ${size}: ${MISSING}`;
+    const totals = group.map((l) => tally.get(l).lead + tally.get(l).helpers);
+    const helpers = group.reduce((sum, l) => sum + tally.get(l).helpers, 0);
+    return `  ${size}: median ${compact(median(totals))} output (${ofRuns(group.length, runs.length)}), helpers ${Math.round((helpers / totals.reduce((a, b) => a + b, 0)) * 100)}%`;
+  };
+  const helperTotal = [...roles.values()].reduce((sum, n) => sum + n, 0);
+  const roleRows = [...roles].filter(([, n]) => n > 0).sort(([a, m], [b, n]) => n - m || a.localeCompare(b));
+  return [`tokens: ${ofRuns(counted.length, runs.length)}`, ...SIZES.map(sizeLine), ...roleRows.map(([role, n]) => `  ${role}: ${compact(n)} output, ${Math.round((n / helperTotal) * 100)}% of helper output`)];
+}
+
+async function report(ctx, { days, version }) {
   const heading = `done-gate stats: ${path.basename(ctx.root)}, last ${days} days, ${version ? `version ${version}` : "all versions"}`;
   const read = readRuns(ctx.stateDir);
   const cutoff = Date.now() - days * DAY_MS;
@@ -583,16 +700,16 @@ function report(ctx, { days, version }) {
   out.push("could-not-run waivers: not recorded", "lapsed waivers: not recorded");
   out.push(...planLines(closed, configOf), ...largeLines(closed), ...afterCloseLines(closed, read?.ledgers ?? [], configOf));
   const recordsOf = sessionReader(ctx.stateDir);
-  out.push(...eventLines(recordsOf, closed, read?.ledgers ?? [], { version, cutoff }), ...rateLines(ctx.stateDir, recordsOf));
+  out.push(...eventLines(recordsOf, closed, read?.ledgers ?? [], { version, cutoff }), ...rateLines(ctx.stateDir, recordsOf), ...(await tokenLines(closed)));
   return out;
 }
 
 export const verbs = {
-  stats(ctx) {
+  async stats(ctx) {
     if (ctx.args[0] === "wrong") {
       recordVerdict(ctx, ctx.args.slice(1));
       return;
     }
-    for (const line of report(ctx, parseArgs(ctx.args))) ctx.out(line);
+    for (const line of await report(ctx, parseArgs(ctx.args))) ctx.out(line);
   },
 };
