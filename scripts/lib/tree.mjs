@@ -137,6 +137,16 @@ export function headReflog(root, n = 30) {
   }
 }
 
+// Whether git ignores a path; a path git cannot judge counts as not ignored.
+export function gitIgnored(root, rel) {
+  try {
+    git(root, ["check-ignore", "-q", "--", rel]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const REFLOG_READ = 200;
 const REFLOG_KEPT = 30;
 const REFLOG_RECENT_MS = 60 * 60 * 1000;

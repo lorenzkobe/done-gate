@@ -875,7 +875,7 @@ export function verifyProblem(state, { source = true, final = true } = {}) {
     if (!verify) return { reason: "no verify.json yet", text: "no verify.json for this run. Run `gate verify` after your last source edit." };
     const red = (verify.commands ?? []).filter((c) => !c.skipped && (c.exit !== 0 || c.timedOut));
     if (red.length) {
-      return { reason: "red", text: `verify is red: ${red.map((c) => `\`${c.cmd}\`${verifyWhere(c)} ${c.timedOut ? "timed out" : `exit ${c.exit}`}`).join("; ")}. Fix, then run \`gate verify\` again.` };
+      return { reason: "red", text: `verify is red: ${red.map((c) => `\`${c.cmd}\`${verifyWhere(c)} ${c.timedOut ? "timed out" : c.noTests ? `ran no tests (${c.noTestsWhy})` : `exit ${c.exit}`}`).join("; ")}. Fix, then run \`gate verify\` again.` };
     }
     if (verify.sourceHash !== sourceHash(now, config)) return { reason: "stale: source changed after it", text: "verify.json is stale: source changed after the last `gate verify`. Run it again." };
     const owed = (verify.commands ?? []).filter((c) => c.owed);

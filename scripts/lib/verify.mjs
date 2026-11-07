@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DEFAULTS, loadConfig, matchAny } from "./config.mjs";
 import { segments, withoutHeredocs } from "./guard.mjs";
@@ -9,7 +9,7 @@ import { nextSeq } from "./events.mjs";
 import { diffTextOf, implementationHash, newRules, sourceHash, verifyKey, verifyWhere, workOutSteps } from "./rules.mjs";
 import { repoPath } from "./paths.mjs";
 import { loadSession } from "./session-state.mjs";
-import { diffSnapshots, parseHunks, snapshot } from "./tree.mjs";
+import { diffSnapshots, gitIgnored, parseHunks, snapshot } from "./tree.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { BusyError, HELD_ENV, acquireTestLock, describeHolder, quote } from "./testlock.mjs";
@@ -43,11 +43,11 @@ function tail(text) {
 
 // Runs one command in its own process group. Resolves on the command's own exit, not
 // on stream close, so a background child that inherited stdout cannot hold us hostage.
-export function runCommand({ cmd, timeout, onlyNew = false }, cwd, { onSpawn = () => {}, env = {} } = {}) {
+export function runCommand({ cmd, timeout, onlyNew = false, whole = false }, cwd, { onSpawn = () => {}, env = {} } = {}) {
   return new Promise((resolve) => {
     const started = Date.now();
     let output = "";
-    let full = onlyNew ? "" : null;
+    let full = onlyNew || whole ? "" : null;
     let timedOut = false;
     let settled = false;
     const child = spawn(cmd, { cwd, shell: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CI: "1", FORCE_COLOR: "0", ...env } });
@@ -76,7 +76,7 @@ export function runCommand({ cmd, timeout, onlyNew = false }, cwd, { onSpawn = (
         if (onlyNew && open > 0) full = false;
         child.stdout.destroy();
         child.stderr.destroy();
-        resolve({ cmd, exit, ms: Date.now() - started, timedOut, tail: tail(output), ...(onlyNew ? { output: full } : {}) });
+        resolve({ cmd, exit, ms: Date.now() - started, timedOut, tail: tail(output), ...(onlyNew || whole ? { output: full } : {}) });
       };
       setTimeout(done, 50);
     };
@@ -382,6 +382,51 @@ const VERIFY_STEPS = new Set(["verify", "verify-before"]);
 
 const HISTORY_KEPT = 20;
 
+// The test totals a runner's own summary states. A count no pattern here reads is unknown, so it
+// is never a zero. Past the read cap (false) nothing is judged.
+const ANSI = /\x1b\[[0-9;]*m/g;
+const ZERO_LINES = [/No tests found, exiting with code 0/, /No test files found, exiting with code 0/, /^\s*(?:Test Files|Tests)\s+no tests\s*$/m, /\bno tests ran\b/, /\[no test files\]/, /\[no tests to run\]/];
+const TOTALS = [/^\s*Tests:\s+.*?(\d+) total\s*$/gm, /^\s*Tests\s+.*\((\d+)\)\s*$/gm, /^(?:ℹ|#) tests (\d+)\s*$/gm, /^collected (\d+) items?/gm, /^running (\d+) tests?\s*$/gm];
+const SOME_RAN = /\b[1-9]\d* (?:passed|passing|tests?\b)|^ok\s+\S+\s+(?:\(cached\)|[\d.]+s)\s*$/m;
+export function ranNoTests(output) {
+  if (typeof output !== "string") return false;
+  const text = output.replace(ANSI, "");
+  const totals = TOTALS.flatMap((pattern) => [...text.matchAll(pattern)].map((m) => Number(m[1])));
+  if (totals.some((n) => n > 0) || SOME_RAN.test(text)) return false;
+  return totals.length > 0 || ZERO_LINES.some((pattern) => pattern.test(text));
+}
+
+const REPORT_READ = 1024 * 1024;
+const WRITE_SLACK_MS = 1000;
+
+// Why a declared report does not show a test ran, or null when it does: it must be written by this
+// command, and name at least one test (junit's suite tests=, jest's numTotalTests) near its start.
+function reportProblem(file, startedMs) {
+  let head;
+  try {
+    if (statSync(file).mtimeMs < startedMs - WRITE_SLACK_MS) return `its report ${path.basename(file)} was not written by this run`;
+    const fd = openSync(file, "r");
+    const buffer = Buffer.alloc(REPORT_READ);
+    head = buffer.toString("utf8", 0, readSync(fd, buffer, 0, REPORT_READ, 0));
+    closeSync(fd);
+  } catch {
+    return `its report ${path.basename(file)} could not be read`;
+  }
+  const counts = [...head.matchAll(/<testsuites?\b[^>]*\btests="(\d+)"/g), ...head.matchAll(/"numTotalTests"\s*:\s*(\d+)/g)].map((m) => Number(m[1]));
+  return counts.some((n) => n > 0) ? null : `its report ${path.basename(file)} shows no test`;
+}
+
+// A report the tree holds as source would move the source hash on every run, so verify could never
+// settle: it has to be git-ignored, or outside the source globs.
+function refuseSourceReport(entries, config, root) {
+  for (const entry of entries.filter((e) => e.report)) {
+    const rel = entry.repo ? `${entry.repo}/${entry.report}` : entry.report;
+    if (config.isSource(rel) && !gitIgnored(entry.cwd ?? root, entry.report)) {
+      throw new UsageError(`verify entry \`${entry.cmd}\`: its report ${entry.report} counts as source and is not git-ignored, so each run would change the code verify judged. Add it to .gitignore, or write it outside the source globs.`);
+    }
+  }
+}
+
 export async function runVerify(ctx, { stepKey = "verify", final = false, force = false } = {}) {
   const current = currentLedger(ctx.stateDir, ctx.session);
   if (!current || isDone(current.ledger)) {
@@ -395,6 +440,7 @@ export async function runVerify(ctx, { stepKey = "verify", final = false, force 
   const repos = current.ledger.repos ?? [];
   const config = loadConfig(ctx.root, repos);
   const entries = verifyEntries(config, current.ledger);
+  if (newRules(current.ledger)) refuseSourceReport(entries, config, ctx.root);
   if (entries.length === 0) throw new UsageError("nothing to verify: no verify commands in .claude/gate.json, no lint/test/build scripts in package.json and none added with `gate verify --add`");
   if (entries.some((e) => e.related && !e.repo) && !config.testFiles) throw new UsageError(`a {"related": true} verify entry needs testFiles in .claude/gate.json: the command that runs given test files, with {files} where they go`);
 
@@ -477,25 +523,34 @@ export async function runVerify(ctx, { stepKey = "verify", final = false, force 
         continue;
       }
       const files = relatedTests(ctx.root, config, current.ledger, snap, touched);
-      if (!files.length) {
+      // a deleted file or another repo's path would break a runner handed it
+      const sources = config.testRelated ? changed.filter((p) => !p.startsWith("../") && p in snap.files) : [];
+      if (!files.length && !sources.length) {
         ctx.err(`verify: ${name} skipped (no related test files)`);
         commands.push({ ...row, skipped: "no related test files", ms: 0 });
         continue;
       }
       row.files = files;
-      run = { ...entry, cmd: config.testFiles.split("{files}").join(files.map(quote).join(" ")) };
+      run = { ...entry, cmd: (config.testRelated ?? config.testFiles).split("{files}").join([...sources, ...files].map(quote).join(" ")) };
       if (greenOnThisTree(entry, key, run.cmd)) {
         commands.push(repeated(row, key));
         continue;
       }
     }
     ctx.err(`verify: ${name} (timeout ${entry.timeout}s)`);
-    const { output, ...result } = { ...row, ...(await runCommand(run, entry.cwd ?? ctx.root, { onSpawn: (pgid) => lock?.setGroup(pgid), env: lock ? { [HELD_ENV]: String(process.pid) } : {} })) };
+    // a related template handed only source may find no test for it: the final suite runs later
+    const readsTotals = stamped && runsTests(run.cmd, config.testFiles) && !(config.testRelated && entry.related && !row.files.length);
+    const ranAt = Date.now();
+    const { output, ...result } = { ...row, ...(await runCommand({ ...run, whole: readsTotals }, entry.cwd ?? ctx.root, { onSpawn: (pgid) => lock?.setGroup(pgid), env: lock ? { [HELD_ENV]: String(process.pid) } : {} })) };
     if (entry.related) Object.assign(result, { cmd: entry.cmd, ran: run.cmd });
     // a test run's failures print file:line too: onlyNew never reads one
     if (entry.onlyNew && !runsTests(entry.cmd) && result.exit === 1 && !result.timedOut && output) {
       const old = oldFindingsOnly(output, entry, ctx, config);
       if (old) Object.assign(result, { exit: 0, rawExit: 1, oldFindings: old.length, oldList: old.slice(0, 20) });
+    }
+    if (stamped && result.exit === 0 && !result.timedOut) {
+      const why = entry.report ? reportProblem(path.resolve(entry.cwd ?? ctx.root, entry.report), ranAt) : readsTotals && ranNoTests(output) ? "its summary shows no test" : null;
+      if (why) Object.assign(result, { exit: 1, rawExit: 0, noTests: true, noTestsWhy: why });
     }
     commands.push(result);
     if (result.exit === 0 && !result.timedOut) {
@@ -562,7 +617,7 @@ export const verbs = {
         continue;
       }
       const green = c.exit === 0 && !c.timedOut;
-      ctx.out(`${green ? "✓" : "✗"} ${c.cmd}${verifyWhere(c)} — ${c.timedOut ? "timed out" : `exit ${c.exit}`}${c.oldFindings ? ` (exit ${c.rawExit}: ${c.oldFindings} old finding${c.oldFindings === 1 ? "" : "s"} off this task's lines ignored)` : ""}, ${(c.ms / 1000).toFixed(1)}s`);
+      ctx.out(`${green ? "✓" : "✗"} ${c.cmd}${verifyWhere(c)} — ${c.timedOut ? "timed out" : c.noTests ? `no tests ran: ${c.noTestsWhy}` : `exit ${c.exit}`}${c.oldFindings ? ` (exit ${c.rawExit}: ${c.oldFindings} old finding${c.oldFindings === 1 ? "" : "s"} off this task's lines ignored)` : ""}, ${(c.ms / 1000).toFixed(1)}s`);
       if (!green) ctx.out("```\n" + c.tail.split("\n").slice(-12).join("\n") + "\n```"); // the failing tail: the same 12 lines the report shows
     }
     const ran = record.commands.filter((c) => !c.skipped).length;

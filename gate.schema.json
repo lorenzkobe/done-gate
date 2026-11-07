@@ -42,6 +42,10 @@
       },
       "description": "Globs whose change is driven by calling the endpoint. Default: none. With ui and api both listed (an empty list counts), a green verify closes the driver step itself when no such file changed; with schema listed, the same for the schema step."
     },
+    "testRelated": {
+      "type": "string",
+      "description": "The command that runs the tests related to given files, with {files} where they go (`npx vitest related --run {files}`). The {\"related\": true} entry uses it in place of testFiles, on this task's changed source and related test files. It still needs testFiles. A zero from it is fine when it was handed only source: the final check runs later."
+    },
     "docs": {
       "type": "array",
       "items": {
@@ -86,6 +90,10 @@
                   "final"
                 ],
                 "description": "When the command runs: always; only when a non-test, non-doc source file changed (source); or as the final check, run once with `gate verify --final` and owed until it is green on the current implementation (final). Default: source for a single npm/pnpm/yarn/bun build script call, always otherwise."
+              },
+              "report": {
+                "type": "string",
+                "description": "A test results file the command writes, as a path from the repo root: the run is red unless this command wrote it and it shows at least one test (junit's testsuite tests=, jest's numTotalTests). For a wrapper whose output names no count. Git-ignore it, or keep it outside the source globs. Default: none."
               },
               "external": {
                 "type": "boolean",

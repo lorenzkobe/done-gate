@@ -80,7 +80,7 @@ export function verifyLines(verify, { tails = true, unfinished = null } = {}) {
       out.push(`- – \`${c.cmd}\`${verifyWhere(c)} — skipped: ${c.skipped}${c.oldFindings ? ` (${plural(c.oldFindings, "old lint finding")} ignored)` : ""}`);
       continue;
     }
-    out.push(`- ${c.exit === 0 && !c.timedOut ? "✓" : "✗"} \`${c.cmd}\`${verifyWhere(c)} — ${c.timedOut ? "timed out" : `exit ${c.exit}`}${c.oldFindings ? ` (exit ${c.rawExit}: ${plural(c.oldFindings, "old finding")} off this task's lines ignored: ${c.oldList.join(", ")}${c.oldFindings > c.oldList.length ? ", …" : ""})` : ""}, ${(c.ms / 1000).toFixed(1)}s`);
+    out.push(`- ${c.exit === 0 && !c.timedOut ? "✓" : "✗"} \`${c.cmd}\`${verifyWhere(c)} — ${c.timedOut ? "timed out" : c.noTests ? `no tests ran: ${c.noTestsWhy}` : `exit ${c.exit}`}${c.oldFindings ? ` (exit ${c.rawExit}: ${plural(c.oldFindings, "old finding")} off this task's lines ignored: ${c.oldList.join(", ")}${c.oldFindings > c.oldList.length ? ", …" : ""})` : ""}, ${(c.ms / 1000).toFixed(1)}s`);
     if (tails && (c.exit !== 0 || c.timedOut)) out.push(`\n\`\`\`\n${c.tail.split("\n").slice(-12).join("\n")}\n\`\`\``);
   }
   return out;

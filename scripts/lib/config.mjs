@@ -138,7 +138,7 @@ function normaliseVerify(entries, fallbackTimeout) {
     if (e.related === true) return { cmd: RELATED, related: true, timeout: Number(e.timeout ?? fallbackTimeout), when: "always" };
     const cmd = String(e.cmd);
     const when = WHEN.has(e.when) ? e.when : BUILD_ONLY.test(cmd) ? "source" : "always";
-    return { cmd, timeout: Number(e.timeout ?? fallbackTimeout), when, ...(e.onlyNew === true ? { onlyNew: true } : {}), ...(e.external === true ? { external: true } : {}) };
+    return { cmd, timeout: Number(e.timeout ?? fallbackTimeout), when, ...(e.onlyNew === true ? { onlyNew: true } : {}), ...(e.external === true ? { external: true } : {}), ...(typeof e.report === "string" && e.report ? { report: e.report } : {}) };
   });
 }
 
@@ -187,6 +187,7 @@ export function loadConfig(root, repos = []) {
     driver: typeof r.driver === "string" ? r.driver : DEFAULTS.driver,
     helperNote: typeof r.helperNote === "string" && r.helperNote.trim() ? r.helperNote.trim() : null,
     testFiles: typeof r.testFiles === "string" && r.testFiles.includes("{files}") ? r.testFiles : null,
+    testRelated: typeof r.testRelated === "string" && r.testRelated.includes("{files}") ? r.testRelated : null,
     serialTests: r.serialTests === true,
     verify: normaliseVerify(r.verify ?? defaultVerify(root), DEFAULTS.verifyTimeout),
     verifySource: Array.isArray(r.verify) ? ".claude/gate.json" : "package.json scripts",

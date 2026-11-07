@@ -221,7 +221,7 @@ function arbiterBody(state, item) {
 
 // The verify commands a helper may run itself; "when: source" entries are listed too.
 function testCommands(state) {
-  const cmds = verifyEntries(state.config, state.ledger).map((v) => `- \`${v.cmd}\`${v.cwd ? ` (run in ${v.cwd})` : ""}${v.related ? ": gate.json's testFiles on this task's related test files" : v.when === "final" ? " (the final check, run once with `gate verify --final`)" : ""}`);
+  const cmds = verifyEntries(state.config, state.ledger).map((v) => `- \`${v.cmd}\`${v.cwd ? ` (run in ${v.cwd})` : ""}${v.related ? `: gate.json's ${state.config.testRelated ? "testRelated on this task's changed source and related test files" : "testFiles on this task's related test files"}` : v.when === "final" ? " (the final check, run once with `gate verify --final`)" : ""}`);
   if (cmds.length) return cmds;
   return [state.config.verify.length ? "_no verify command for this run: gate.json's are all dropped_" : "_no verify command in gate.json_"];
 }

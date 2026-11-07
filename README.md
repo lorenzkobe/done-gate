@@ -449,6 +449,13 @@ tree does not hold (an ignored `.env`, a service). Source that moves while verif
 nothing green and leaves the step open, naming the files. `verify.json` keeps the last 20 runs,
 and `gate stats` counts the verifies that ran a command again on the same source hash.
 
+In a new run a test command that exits 0 is red when its own summary shows no test ran (jest,
+vitest, pytest, `node --test`, go and cargo are read; output the gate cannot read stays green, as
+does a zero beside any line counting a test that ran). A wrapper that prints no count declares
+`"report": "<file>"`: this command must write that file and it must show a test. With a
+`testRelated` template, the related entry runs it on the task's changed source and related test
+files, and it may find nothing when handed only source; `{ "related": true }` still needs `testFiles`.
+
 A green `gate verify` closes the driver and schema steps by itself, as N/A, when this code cannot
 reach them: only tests or docs changed, or the repo lists its globs (`ui` and `api` for driver,
 `schema` for schema; an empty list counts) and no changed file matches. A later edit opens them

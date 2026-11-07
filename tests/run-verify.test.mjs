@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, write, gate, here } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
@@ -581,4 +581,239 @@ test("3.4 C13 verify then verify --final on one source hash is no re-run", () =>
   const history = verifyJson(repo).history;
   assert.equal(history[0].sourceHash, history[1].sourceHash);
   assert.equal(history[0].ran.some((c) => history[1].ran.includes(c)), false);
+});
+
+// Batch 3.5: exit 0 is not green when the runner's own summary says no test ran.
+const runner = (name, ...lines) => ({ [`bin/${name}`]: lines.map((l) => `printf '%b\\n' ${JSON.stringify(l)}`).join("\n") + "\n" });
+const row = (repo) => verifyJson(repo).commands[0];
+const judged = (name, tool, words, ...lines) => {
+  const repo = opened(name, [`sh bin/${[tool, ...words].join(" ")}`], runner(tool, ...lines));
+  const out = cli(repo, "verify");
+  return { repo, out, row: row(repo) };
+};
+const isNoTests = ({ row: r, out }, label) => {
+  assert.equal(r.exit, 1, label);
+  assert.equal(r.rawExit, 0, label);
+  assert.equal(r.noTests, true, label);
+  assert.match(out, /no tests ran/, label);
+  assert.doesNotMatch(out, /all 1 green/, label);
+};
+const isGreen = ({ row: r }, label) => {
+  assert.equal(r.exit, 0, label);
+  assert.equal(r.noTests, undefined, label);
+};
+
+test("3.5 C1 a zero summary from each runner with exit 0 is red, and stays out of the step", () => {
+  isNoTests(judged("rv-35j1", "jest", [], "No tests found, exiting with code 0"), "jest none");
+  isNoTests(judged("rv-35j2", "jest", [], "Tests:       0 total"), "jest zero");
+  isNoTests(judged("rv-35v", "vitest", [], "No test files found, exiting with code 0"), "vitest");
+  isNoTests(judged("rv-35p1", "pytest", [], "collected 0 items", "", "==== no tests ran in 0.01s ===="), "pytest");
+  isNoTests(judged("rv-35n", "node", ["--test"], "ℹ tests 0", "ℹ pass 0"), "node");
+  isNoTests(judged("rv-35g1", "go", ["test", "./..."], "?   \texample.com/a\t[no test files]"), "go none");
+  isNoTests(judged("rv-35g2", "go", ["test", "./..."], "testing: warning: no tests to run", "PASS", "ok  \texample.com/b\t0.1s [no tests to run]"), "go no tests to run");
+  const cargo = judged("rv-35c", "cargo", ["test"], "running 0 tests", "", "test result: ok. 0 passed; 0 failed");
+  isNoTests(cargo, "cargo");
+  assert.equal(ledgerOf(cargo.repo).steps.find((s) => s.key === "verify").state, null);
+  assert.deepEqual(verifyJson(cargo.repo).greenAt, {});
+  assert.match(cli(cargo.repo, "report"), /no tests ran/);
+});
+
+test("3.5 C2 cargo's 0 beside real tests stays green, even far above the tail; go's no test files beside an ok line too", () => {
+  isGreen(judged("rv-35c2", "cargo", ["test"], "running 3 tests", "test result: ok. 3 passed; 0 failed", "running 0 tests", "test result: ok. 0 passed; 0 failed"), "cargo beside");
+  const far = Array.from({ length: 2000 }, (_, i) => `   Compiling crate${i} with a long enough line to fill the tail buffer quickly`);
+  isGreen(judged("rv-35c3", "cargo", ["test"], "running 3 tests", "test result: ok. 3 passed; 0 failed", ...far, "running 0 tests", "test result: ok. 0 passed; 0 failed"), "cargo far above");
+  isGreen(judged("rv-35g3", "go", ["test", "./..."], "?   \texample.com/a\t[no test files]", "ok  \texample.com/b\t0.1s"), "go beside");
+});
+
+test("3.5 C3 a real summary stays green, unknown output stays green, and past 2 MB nothing is judged", () => {
+  isGreen(judged("rv-35r1", "jest", [], "Tests:       3 passed, 3 total"), "jest");
+  isGreen(judged("rv-35r2", "vitest", [], " Test Files  1 passed (1)", "      Tests  3 passed (3)"), "vitest");
+  isGreen(judged("rv-35r3", "pytest", [], "collected 3 items", "==== 3 passed in 0.02s ===="), "pytest");
+  isGreen(judged("rv-35r4", "node", ["--test"], "ℹ tests 3", "ℹ pass 3"), "node");
+  isGreen(judged("rv-35r5", "jest", [], "all good, nothing to report"), "unknown");
+  const big = opened("rv-35r6", ["sh bin/jest"], { "bin/jest": `yes 0123456789012345678901234567890123456789 | head -c 2400000\nprintf 'Tests:       0 total\\n'\n` });
+  cli(big, "verify");
+  assert.equal(row(big).exit, 0);
+});
+
+test("3.5 C4 lint is untouched: no test runner printing a zero stays green", () => {
+  isGreen(judged("rv-35l", "eslint", [], "Tests:       0 total", "running 0 tests"), "lint");
+});
+
+test("3.5 C5 an old run with no stamp stays green on a zero summary", () => {
+  const repo = opened("rv-35o", ["sh bin/jest"], runner("jest", "No tests found, exiting with code 0"));
+  aged(repo);
+  cli(repo, "verify");
+  isGreen({ row: row(repo) }, "old run");
+});
+
+test("3.5 C6 a report key: a fresh file with tests is green; stale, empty, missing or zero-test is red", () => {
+  const entry = (report) => [{ cmd: "sh bin/wrapper", report }];
+  const writes = (content) => ({ ".gitignore": "node_modules/\nignored.txt\nout.xml\n", "bin/wrapper": `printf '%s' '${content}' > out.xml\n` });
+  const green = opened("rv-35f1", entry("out.xml"), writes('<testsuites tests="3"></testsuites>'));
+  cli(green, "verify");
+  isGreen({ row: row(green) }, "junit");
+  const json = opened("rv-35f2", entry("out.xml"), writes('{"numTotalTests": 4}'));
+  cli(json, "verify");
+  isGreen({ row: row(json) }, "jest json");
+
+  for (const [name, bin] of [["rv-35f3", writes('<testsuites tests="0"></testsuites>')], ["rv-35f4", writes("")], ["rv-35f5", { ...writes(""), "bin/wrapper": "true\n" }]]) {
+    const repo = opened(name, entry("out.xml"), bin);
+    assert.match(cli(repo, "verify"), /no tests ran/, name);
+    assert.equal(row(repo).noTests, true, name);
+  }
+  const stale = opened("rv-35f6", entry("out.xml"), { ...writes(""), "bin/wrapper": "true\n", "out.xml": '<testsuites tests="3"></testsuites>' });
+  const old = new Date(Date.now() - 3600000);
+  utimesSync(path.join(stale, "out.xml"), old, old);
+  assert.match(cli(stale, "verify"), /no tests ran/);
+  const schema = JSON.parse(readFileSync(new URL("../gate.schema.json", import.meta.url), "utf8"));
+  assert.ok(JSON.stringify(schema.properties.verify).includes('"report"'));
+});
+
+const relatedRepo = (name, extra = {}) => opened(name, [{ related: true }], {
+  "tests/a.test.ts": "test('a', () => {});\n",
+  "src/b.ts": "export const b = 1;\n",
+  "bin/related": 'echo "$@" > ../related.seen\n',
+  ".claude/gate.json": JSON.stringify({ testFiles: "sh bin/related tests-only {files}", testRelated: "sh bin/related {files}", verify: [{ related: true }], ...extra }),
+});
+const seen = (repo) => readFileSync(path.join(path.dirname(repo), "related.seen"), "utf8").trim();
+
+test("3.5 C7 testRelated runs in place of the guess with changed source plus related test files; files stay the test files and R18 is clean", () => {
+  const repo = relatedRepo("rv-35t1");
+  cli(repo, "note", ["task", "t"]);
+  cli(repo, "case", ["add", "a case", "--kind", "happy"]);
+  cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:a"]);
+  write(repo, "src/b.ts", "export const b = 2;\n");
+  write(repo, "tests/a.test.ts", "test('a2', () => {});\n");
+  cli(repo, "verify");
+  assert.equal(seen(repo), "src/b.ts tests/a.test.ts");
+  assert.deepEqual(row(repo).files, ["tests/a.test.ts"]);
+  assert.equal(ruleLines(cli(repo, "check"), "R18"), "");
+});
+
+test("3.5 C8 testRelated with no related test files still runs on changed source; its zero stays green; nothing changed skips", () => {
+  const quiet = opened("rv-35t2", [{ related: true }], {
+    "src/b.ts": "export const b = 1;\n",
+    "bin/related": "printf 'No test files found, exiting with code 0\\n'\n",
+    ".claude/gate.json": JSON.stringify({ testFiles: "sh bin/related {files}", testRelated: "sh bin/related {files}", verify: [{ related: true }] }),
+  });
+  write(quiet, "src/b.ts", "export const b = 2;\n");
+  cli(quiet, "verify");
+  assert.equal(row(quiet).skipped, undefined);
+  assert.deepEqual(row(quiet).files, []);
+  isGreen({ row: row(quiet) }, "exempt");
+
+  const nothing = relatedRepo("rv-35t3");
+  cli(nothing, "verify");
+  assert.equal(row(nothing).skipped, "no related test files");
+});
+
+test("3.5 C9 with no testRelated the related entry uses testFiles, and a zero summary there is red", () => {
+  const repo = opened("rv-35t4", [{ related: true }], {
+    "tests/a.test.ts": "test('a', () => {});\n",
+    "bin/jest": "printf 'No tests found, exiting with code 0\\n'\n",
+    ".claude/gate.json": JSON.stringify({ testFiles: "sh bin/jest {files}", verify: [{ related: true }] }),
+  });
+  write(repo, "tests/a.test.ts", "test('a2', () => {});\n");
+  cli(repo, "verify");
+  assert.equal(row(repo).noTests, true);
+});
+
+test("3.5 C10 testRelated given test files that prints a zero is red; only an empty list of test files is exempt", () => {
+  const repo = opened("rv-35t5", [{ related: true }], {
+    "tests/a.test.ts": "test('a', () => {});\n",
+    "bin/jest": "printf 'No tests found, exiting with code 0\\n'\n",
+    ".claude/gate.json": JSON.stringify({ testFiles: "sh bin/jest {files}", testRelated: "sh bin/jest {files}", verify: [{ related: true }] }),
+  });
+  write(repo, "tests/a.test.ts", "test('a2', () => {});\n");
+  cli(repo, "verify");
+  assert.equal(row(repo).noTests, true);
+});
+
+test("3.5 C11 a report that would count as source is refused before anything runs; an ignored one closes the step on two runs", () => {
+  const name = "rv-35f7";
+  rmSync(path.join(here, ".tmp", `${name}.count`), { force: true });
+  const unignored = opened(name, [{ cmd: COUNT(name), report: "out.xml" }]);
+  assert.match(refused(unignored, "verify"), /out\.xml[^\n]*git-ignored/);
+  assert.equal(runsOf(unignored, name), 0);
+
+  const ignored = opened("rv-35f8", [{ cmd: "sh bin/wrapper", report: "out.xml" }], { ".gitignore": "node_modules/\nignored.txt\nout.xml\n", "bin/wrapper": "date +%N | xargs -I{} printf '<testsuites tests=\"3\" id=\"{}\"></testsuites>' > out.xml\n" });
+  cli(ignored, "verify");
+  cli(ignored, "verify", ["--force"]);
+  assert.equal(ledgerOf(ignored).steps.find((s) => s.key === "verify").state, "DONE");
+  assert.equal(ruleLines(cli(ignored, "check"), "R3"), "");
+});
+
+test("3.5 C12 a zero beside a line counting tests that ran stays green", () => {
+  isGreen(judged("rv-35m", "vitest", [], "No test files found, exiting with code 0", "", "  5 passing (12ms)"), "mocha beside vitest");
+  isGreen(judged("rv-35w", "jest", [], "Tests:       0 total", "12 passed"), "a package with tests");
+});
+
+test("3.5 C13 testRelated gets no deleted file and no other repo's path; a change that only deleted source skips", () => {
+  const repo = relatedRepo("rv-35t6");
+  rmSync(path.join(repo, "src/b.ts"));
+  cli(repo, "verify");
+  assert.equal(row(repo).skipped, "no related test files");
+
+  const both = relatedRepo("rv-35t7");
+  rmSync(path.join(both, "src/b.ts"));
+  write(both, "src/c.ts", "export const c = 1;\n");
+  cli(both, "verify");
+  assert.equal(seen(both), "src/c.ts");
+});
+
+test("3.5 C14 a wrapper testFiles template is judged by the resolved command", () => {
+  const repo = opened("rv-35t8", [{ related: true }], {
+    "tests/a.test.ts": "test('a', () => {});\n",
+    "scripts/run.sh": "printf 'ℹ tests 0\\n'\n",
+    ".claude/gate.json": JSON.stringify({ testFiles: "sh scripts/run.sh --db test {files}", verify: [{ related: true }] }),
+  });
+  write(repo, "tests/a.test.ts", "test('a2', () => {});\n");
+  cli(repo, "verify");
+  assert.equal(row(repo).noTests, true);
+});
+
+test("3.5 C15 vitest's own Tests no tests summary counts as zero", () => {
+  isNoTests(judged("rv-35v2", "vitest", [], " Test Files  no tests", "      Tests  no tests"), "vitest no tests");
+});
+
+test("3.5 C16 a report from the previous verify is stale; a directory and tests= only in a testcase are red; several suites read", () => {
+  const ignore = ".gitignore";
+  const base = { [ignore]: "node_modules/\nignored.txt\nout.xml\n" };
+  const previous = opened("rv-35f9", [{ cmd: "sh bin/wrapper", report: "out.xml" }], { ...base, "bin/wrapper": `test -e ../rv-35f9.flag || { touch ../rv-35f9.flag; printf '<testsuites tests="3"></testsuites>' > out.xml; }\n` });
+  rmSync(path.join(path.dirname(previous), "rv-35f9.flag"), { force: true });
+  cli(previous, "verify");
+  assert.equal(row(previous).exit, 0);
+  const old = new Date(Date.now() - 5000);
+  utimesSync(path.join(previous, "out.xml"), old, old);
+  cli(previous, "verify", ["--force"]);
+  assert.match(row(previous).noTestsWhy, /not written by this run/);
+
+  const dir = opened("rv-35f10", [{ cmd: "mkdir -p out.xml", report: "out.xml" }], base);
+  cli(dir, "verify");
+  assert.equal(row(dir).noTests, true);
+
+  const inCase = opened("rv-35f11", [{ cmd: "sh bin/wrapper", report: "out.xml" }], { ...base, "bin/wrapper": `printf '<testsuites><testcase tests="3"/></testsuites>' > out.xml\n` });
+  cli(inCase, "verify");
+  assert.equal(row(inCase).noTests, true);
+
+  const suites = opened("rv-35f12", [{ cmd: "sh bin/wrapper", report: "out.xml" }], { ...base, "bin/wrapper": `printf '<testsuite tests="0"/><testsuite tests="2"/>' > out.xml\n` });
+  cli(suites, "verify");
+  assert.equal(row(suites).exit, 0);
+});
+
+test("3.5 C17 testRelated with no testFiles stays refused, and the packet names what the related entry runs", () => {
+  const none = opened("rv-35t9", [{ related: true }], { ".claude/gate.json": JSON.stringify({ testRelated: "sh bin/related {files}", verify: [{ related: true }] }) });
+  assert.match(refused(none, "verify"), /needs testFiles/);
+  const repo = relatedRepo("rv-35t10");
+  const packet = /^packet: (.+)$/m.exec(cli(repo, "brief", ["reviewer"]))[1];
+  assert.match(readFileSync(packet, "utf8"), /testRelated on this task's changed source/);
+});
+
+test("3.5 C18 R3, the verify output and the report name why a command with exit 0 went red", () => {
+  const repo = opened("rv-35why", ["sh bin/jest"], runner("jest", "No tests found, exiting with code 0"));
+  write(repo, "src/a.ts", "export const a = 'changed';\n");
+  assert.match(cli(repo, "verify"), /no tests ran: its summary shows no test/);
+  assert.match(ruleLines(cli(repo, "check"), "R3"), /ran no tests \(its summary shows no test\)/);
+  assert.match(cli(repo, "report"), /no tests ran: its summary shows no test/);
 });
