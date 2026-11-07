@@ -118,7 +118,7 @@ function standardTier(name) {
   return repo;
 }
 
-// A large task (eleven files, past tiers.standard.maxFiles): the only size the worker is for.
+// A large task (eleven files, past tiers.standard.maxFiles).
 function largeTier(name) {
   const repo = committed(name);
   const files = Array.from({ length: 11 }, (_, i) => `src/f${i + 1}.ts`);
@@ -444,27 +444,21 @@ test("C3 happy: SKILL.md says a small edit is the lead's own and that standard o
   // small: the lead edits it itself
   matches(md, /small[^.]{0,120}\b(yourself|your own)\b/i, file, "at size small the lead edits");
 
-  // standard and large: the lead never edits source; each piece goes to a worker
-  matches(
-    md,
-    /(standard|large)[^.]{0,160}worker|worker[^.]{0,160}(standard|large)/i,
-    file,
-    "at standard and large the piece belongs to a worker",
-  );
-  matches(md, /never edit[^.]{0,40}source|never[^.]{0,40}edit source/i, file, "the lead never edits source at a delegated size");
+  // any size: the lead may edit; independent pieces may go to workers
+  matches(md, /independent[^.]{0,160}worker|worker[^.]{0,160}independent/i, file, "independent pieces may go to a worker");
+  assert.ok(!/never edit[^.]{0,40}source/i.test(flat(md)), `${file} still says the lead never edits source`);
 });
 
 // ---------------------------------------------------------------------------
 // C4 — the session-start block carries the same two facts before the skill loads
 // ---------------------------------------------------------------------------
 
-test("C4 happy: hooks/session-start.md says the lead never edits source at standard or large and that a helper writes its file first", () => {
+test("C4 happy: hooks/session-start.md says the lead edits at any size and that a helper writes its file first", () => {
   const md = read(SESSION_START);
   const file = "hooks/session-start.md";
 
-  matches(md, /never edit[^.]{0,60}source|never[^.]{0,60}edit source/i, file, "the lead-delegates line");
-  matches(md, /standard/i, file, "the sizes the delegation applies at");
-  matches(md, /large/i, file, "the sizes the delegation applies at");
+  matches(md, /lead edits[^.]{0,40}at any size/i, file, "the lead edits at any size");
+  matches(md, /large/i, file, "what size large still brings");
 
   // a helper's reply is not the deliverable: its file is, and it comes first
   matches(

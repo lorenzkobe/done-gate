@@ -161,11 +161,8 @@ export function delegatedTier(policy, tier) {
   return at >= 0 && i >= at;
 }
 
-// At policy.delegatesAt (large by default) the lead plans and delegates; workers edit the
-// source. Below it the lead implements itself: it holds the context. The larger of the
-// prediction and the last measurement decides, so a task that outgrows its prediction hands
-// its remaining edits to a worker; with neither known yet, the lead may edit (R2 already
-// demands a plan first). Returns that size, or null when the lead may edit.
+// Whether the task has reached policy.delegatesAt (large by default), the size that brings blind
+// QA: the larger of the prediction and the last measurement decides. Returns that size, or null.
 export function leadDelegates(ledger, policy = policyFor(ledger)) {
   if (!tiered(ledger)) return null;
   const t = tierOf(ledger);
@@ -319,8 +316,7 @@ export function applyPrediction(ledger, policy, config, paths, declared = null) 
   tier.predicted = pred.tier;
   tier.predictedFiles = paths;
   tier.predictedSized = pred.files;
-  // R16 counts the lead's source edits from the moment the task became a delegated size;
-  // a later re-prediction never moves that mark forward and erases a standing finding
+  // when the task became large; a later re-prediction never moves that mark forward
   if (delegated && tier.predictedSeq === null) tier.predictedSeq = nextSeq();
   if (!delegated && !delegatedTier(policy, tier.measured?.tier)) Object.assign(tier, { predictedSeq: null, grewAt: null });
   const required = requiredSteps(policy, pred.tier, ledger);

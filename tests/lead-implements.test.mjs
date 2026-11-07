@@ -134,15 +134,34 @@ test("C7 happy: at size large a general-purpose implementer and the lead edit so
   assert.ok(fence(repo, "Edit", "src/f0.ts", { agent_id: "R1", agent_type: "done-gate:reviewer" }), "a reviewer is fenced");
 });
 
-test("C4 refused: gate brief worker below tier large is refused and says to implement yourself; at large it writes the packet", () => {
-  const standard = opened("li-c4-standard", STANDARD_FILES);
-  const err = refused(standard, "brief", ["worker"]);
-  assert.match(err, /implement (it )?yourself/i);
+test("C4 happy: gate brief worker writes a packet at any size; gate brief qa stays refused below large", () => {
+  for (const [name, files, tier] of [["li-c4-tiny", ["src/a.ts"], "tiny"], ["li-c4-standard", STANDARD_FILES, "standard"], ["li-c4-large", LARGE_FILES, "large"]]) {
+    const repo = opened(name, files);
+    assert.equal(ledgerOf(repo).tier.predicted, tier, name);
+    assert.match(cli(repo, "brief", ["worker"]).stdout, /packet: .*brief-worker-1\.md/, name);
+  }
+  const standard = opened("li-c4-qa", STANDARD_FILES);
+  const err = refused(standard, "brief", ["qa"]);
+  assert.match(err, /write the tests yourself/i);
   assert.match(err, /\blarge\b/);
+  assert.match(cli(opened("li-c4-qa-large", LARGE_FILES), "brief", ["qa"]).stdout, /packet: .*brief-qa-1\.md/);
+});
 
-  const large = opened("li-c4-large", LARGE_FILES);
-  const r = cli(large, "brief", ["worker"]);
-  assert.match(r.stdout, /packet: .*brief-worker-1\.md/);
+test("below large a worker takes a piece, answers a finding, and a path outside the repo stays refused", () => {
+  const repo = opened("li-worker-flow", STANDARD_FILES);
+  assert.equal(ledgerOf(repo).tier.predicted, "standard");
+  assert.ok(refused(repo, "brief", ["worker", "--files", "../elsewhere.ts"]).includes("--files"));
+  const review = `# Review 1\n\n## Act on\n- f0 drops the null case — ${STANDARD_FILES[0]}:1\n## Consider\n- none\n## Noted\n- none\n## Dismissed\n- none\n## Evidence verdict\n- tests: x exit 0, 1 passed (unverified)\n- cases: 1/1 tests match their case\n`;
+  writeFileSync(path.join(runDir(repo), "review-1.md"), review);
+  cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
+  const packet = cli(repo, "brief", ["worker", "--files", STANDARD_FILES[0]]).stdout;
+  const text = readFileSync(/packet: (\S+)/.exec(packet)[1], "utf8");
+  assert.match(text, /## Tests already written/);
+  assert.doesNotMatch(text, /QA wrote/);
+  assert.match(text, /H1\.1/);
+  writeFileSync(path.join(runDir(repo), "worker-1.md"), `# Worker 1\n\n## Replies\n- H1.1 — fixed: ${STANDARD_FILES[0]}:1\n`);
+  cli(repo, "huddle", ["reply", "--file", "worker-1.md"]);
+  assert.ok(ledgerOf(repo).huddles[0].actOn[0].closed, "the worker's answer closes the finding");
 });
 
 // ---------------------------------------------------------------------------
@@ -174,36 +193,39 @@ test("C6 idempotent: at large a worker edits source and tests, and another role 
 // C7 happy — the review hint
 // ---------------------------------------------------------------------------
 
-test("C7 happy: the review hint tells the lead to fix and resolve items itself below large and to brief the worker at large", () => {
+test("C7 happy: the review hint tells the lead to fix and resolve what it edited and to brief the worker for a worker's piece", () => {
   const steps = [{ n: 1, key: "review", text: "review", state: null, note: null, evidence: null, seq: 1 }];
   const h = nextHint({ status: "open", playbook: "feature", taskSeq: 1, planSeq: 2, cases: [{ id: "C1", status: "closed" }], steps, huddles: [], waivers: [] });
-  assert.match(h, /below large|small and standard|small or standard/i, h);
-  assert.match(h, /gate huddle resolve/, h);
-  assert.match(h, /at (size )?large[^;]*gate brief worker/i, h);
+  assert.match(h, /fix the items yourself[^;]*gate huddle resolve/i, h);
+  assert.match(h, /a worker's piece[^;]*gate brief worker/i, h);
   assert.match(h, /gate huddle reply/, h);
-  assert.doesNotMatch(h, /at standard and up/, h);
+  assert.doesNotMatch(h, /at size large `gate brief worker`|below large/, h);
 });
 
 // ---------------------------------------------------------------------------
 // C8 happy — the prose
 // ---------------------------------------------------------------------------
 
-test("C8 happy: SKILL.md, hooks/session-start.md, README and agents/worker.md say the lead implements below large and the worker is for size large; SKILL.md stays under 4096 bytes", () => {
+test("C8 happy: SKILL.md, hooks/session-start.md, README and agents/worker.md say the lead edits at any size and workers are for independent pieces; SKILL.md stays under 4096 bytes and lists no R16", () => {
   const read = (rel) => readFileSync(path.join(pluginRoot, rel), "utf8");
+  const flat = (rel) => read(rel).replace(/\s+/g, " ");
   const skill = read("skills/gate/SKILL.md");
   assert.ok(Buffer.byteLength(skill) < 4096, `SKILL.md is ${Buffer.byteLength(skill)} bytes`);
-  assert.match(skill, /(small|standard)[^.]{0,80}(yourself|your own)/i, "SKILL: the lead implements below large");
-  assert.match(skill, /large[^.]{0,120}worker/i, "SKILL: the worker is for large");
-  assert.doesNotMatch(skill, /standard or large: never edit/i, "SKILL: old wording");
-  const start = read("hooks/session-start.md");
-  assert.match(start, /large[^.]{0,120}never edits? source|never edits? source[^.]{0,120}large/i, "session-start: fenced at large");
-  assert.match(start, /standard[^.]{0,80}(edits? (it )?(itself|yourself)|lead edits)/i, "session-start: the lead edits at standard");
+  assert.doesNotMatch(skill, /\bR16\b/, "SKILL: the rule is gone");
+  for (const [rel, text] of [["skills/gate/SKILL.md", flat("skills/gate/SKILL.md")], ["hooks/session-start.md", flat("hooks/session-start.md")], ["README.md", flat("README.md")]]) {
+    assert.match(text, /independent/i, `${rel}: workers are for independent pieces`);
+    assert.match(text, /worker/i, rel);
+    assert.doesNotMatch(text, /never edits? source|lead does not edit|a worker per piece/i, `${rel}: old wording`);
+  }
+  assert.match(flat("hooks/session-start.md"), /lead edits (source )?(itself )?at any size/i);
+  assert.match(flat("README.md"), /The lead may edit at any size/);
   const readme = read("README.md");
   assert.doesNotMatch(readme, /\bR16\b/, "README: the rule is gone");
   assert.doesNotMatch(readme, /delegates at size standard and up/i, "README: old wording");
+  assert.doesNotMatch(readme, /Outgrowing the size is said at the edit/, "README: the crossing note is gone");
   const worker = read("agents/worker.md");
-  assert.match(worker, /size large/i, "worker.md description");
-  assert.doesNotMatch(worker, /standard and above/i, "worker.md old wording");
+  assert.match(worker, /independent/i, "worker.md description");
+  assert.doesNotMatch(worker, /size large|standard and above/i, "worker.md old wording");
 });
 
 test("gate waive delegate and gate waive R16 are refused, and worker gets no pointer", () => {

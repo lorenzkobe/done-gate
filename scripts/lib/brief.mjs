@@ -300,8 +300,8 @@ export function renderPacket(state, role, { round, n, item = null, piece = null,
   } else if (role === "worker") {
     out.push("## Files you own", "", ...fileList(state, files), "");
     const qaTests = (state.changed ?? []).filter((p) => state.config.isTest(p));
-    out.push("## Tests QA wrote", "", ...(qaTests.length ? qaTests.map((t) => `- ${t}`) : ["_none yet_"]), "");
-    out.push("## Test command", "", "The lead's `gate verify` runs these. Before you finish, run the tests QA wrote and the tests of the files you own, not the whole command.", "", ...testCommands(state), "");
+    out.push("## Tests already written", "", ...(qaTests.length ? qaTests.map((t) => `- ${t}`) : ["_none yet_"]), "");
+    out.push("## Test command", "", "The lead's `gate verify` runs these. Before you finish, run the tests already written and the tests of the files you own, not the whole command.", "", ...testCommands(state), "");
     // a piece's worker answers the findings that cite its files; the rest go to the packet
     // briefed without --files
     const cites = (text) => owned.some((f) => new RegExp(`(?<![\\w/.-])${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`).test(text));
@@ -425,16 +425,10 @@ export const verbs = {
       }
       piece = { files: entries, lines, units, at, ...(Object.keys(edges).length ? { edges } : {}) };
     }
-    // below the delegated size the lead implements with its own context; a worker packet
-    // would hand that context away for nothing
-    // a predicted size below policy.delegatesAt: no worker, no blind QA (a plan that named no
-    // files predicted nothing, and is not refused)
-    if ((role === "worker" || role === "qa") && tierOf(state.ledger).predicted !== null && !leadDelegates(state.ledger, state.policy)) {
+    // blind QA is for size large (a plan that named no files predicted nothing, and is not refused)
+    if (role === "qa" && tierOf(state.ledger).predicted !== null && !leadDelegates(state.ledger, state.policy)) {
       const eff = tierMax(state.policy, tierOf(state.ledger).predicted, state.tier?.measured?.tier ?? null);
-      const at = `size ${state.policy.delegatesAt} (a plan naming more than ${state.policy.tiers.standard?.maxFiles ?? 10} files)`;
-      throw new UsageError(role === "worker"
-        ? `size ${eff}: implement it yourself; the worker is for ${at}`
-        : `size ${eff}: write the tests yourself from the case table, red first; blind QA is for ${at}`);
+      throw new UsageError(`size ${eff}: write the tests yourself from the case table, red first; blind QA is for size ${state.policy.delegatesAt} (a plan naming more than ${state.policy.tiers.standard?.maxFiles ?? 10} files)`);
     }
     const rounds = state.ledger.huddles.filter((h) => h.role === role && roundOnDisk(state, h)).length;
     const records = { ...(state.ledger.briefed ?? {}), ...(state.ledger.seen ?? {}) };

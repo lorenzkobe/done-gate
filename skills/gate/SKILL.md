@@ -6,7 +6,7 @@ description: The done-gate workflow. Use before any task that changes source fil
 # done-gate
 
 Start each Bash command with `gate() { node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs" "$@"; };`
-Every verb prints a `next:` line: follow it. `gate check` lists what is unmet (R1-R10, R13, R15, R16, R17, R18).
+Every verb prints a `next:` line: follow it. `gate check` lists what is unmet (R1-R10, R13, R15, R17, R18).
 
 ## The loop
 
@@ -22,15 +22,15 @@ Every verb prints a `next:` line: follow it. `gate check` lists what is unmet (R
    in the same turn; fold its findings into the cases. `gate brief <role>` prints the prompt of
    each `done-gate:<role>` helper: skeptic (`skeptic-<n>.md`), qa (blind tests, large), worker,
    reviewer, reviewer-2 (high-risk/large), arbiter.
-4. Tiny, small, standard: implement yourself. No slop: no comment that restates code,
+4. Tiny, small, standard, large: implement yourself; independent pieces may go to workers
+   (`gate brief worker`, spawn `done-gate:worker`). No slop: no comment that restates code,
    narrates, numbers steps, labels a block, echoes a signature or marks an end; no banner;
    no hedging name (helper); no guard with no case behind it; no docstring on a
    trivial function; no TODO without a task, console.log or commented-out code; no emoji.
-   Why, in one line, two at most; keep workaround notes. Large: never edit source; `gate brief
-   worker` per piece, spawn `done-gate:worker`.
+   Why, in one line, two at most; keep workaround notes.
 5. Review: `gate brief reviewer` (`--files a,b` past the 400-line cap), spawn,
    `gate huddle add reviewer --file review-<n>.md`; high-risk/large: reviewer-2 too, both
-   at once. Below large: fix and `gate huddle resolve H<k>.<i> --evidence <ptr>`. Large: `gate brief
+   at once. Fix and `gate huddle resolve H<k>.<i> --evidence <ptr>`. A worker's: `gate brief
    worker`, SendMessage the worker its packet, then `gate huddle reply --file worker-<n>.md`.
    Until a round is clean, three rounds + a fix-check; still disputed: `gate brief arbiter --item
    H<k>.<i>`. Disagree: `gate huddle dispute`, one round.

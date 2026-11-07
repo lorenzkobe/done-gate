@@ -44,8 +44,8 @@ judgment out of the model and into hooks that can't be talked out of it.
    ├─ case table             ├─ must exist BEFORE the first source edit (R2)
    ├─ skeptic huddle        ─┘
    │
-   ├─ QA writes tests (blind to src)  ║  tiny, small, standard: you implement
-   │                                   ║  large: a worker per piece
+   ├─ QA writes tests (blind to src)  ║  you implement
+   │                                   ║  independent pieces: a worker each
    ├─ gate verify        ──► verify.json  (exit codes, tails, source hash)
    ├─ drive the real app ──► browser events logged by hooks
    ├─ reviewer ⇄ worker  ──► review-<n>.md / worker-<n>.md, up to 3 rounds
@@ -295,10 +295,6 @@ checked.
   releases it; rebaseline never releases a file this task edited, nor one only another
   session's background command could account for. A change no session's events explain stays
   this session's.
-- **Outgrowing the size is said at the edit.** The first lead edit that takes a run
-  predicted below large into it gets a note from the log hook with the measured size and
-  `gate brief worker`; the fence refuses the lead's edits from the next gate verb on. Once
-  per run.
 - **A verb finds its own session.** Where the shell has no `CLAUDE_CODE_SESSION_ID`, the
   fence, which always has the real id, writes it to `.claude/gate/pids/<pid>` for its own
   ancestor processes (up to four levels, never pid 1) when the lead's Bash command runs
@@ -336,7 +332,7 @@ before the code.
 | tiny | one source file, ≤ 15 lines, no UI, schema or high-risk path | none |
 | small | one source file, ≤ 40 lines, no UI, schema or high-risk path | reviewer |
 | standard | ≤ 10 files, ≤ 400 lines, or any UI, schema or high-risk file | skeptic, reviewer |
-| large | more than that | skeptic, QA (blind tests), a worker per piece, reviewer, a second reviewer; a task that grows here mid-task gets the same from that point (the lead's earlier edits stand, QA writes the missing tests blind) and the report says it grew |
+| large | more than that | skeptic, QA (blind tests), reviewer, a second reviewer; a task that grows here mid-task gets the same from that point (the lead's earlier edits stand, QA writes the missing tests blind) and the report says it grew |
 | any | a round with Act-on items | another round, same reviewer, fresh context, until one comes back clean (three at most) |
 | any | a review finding the model disputes with evidence and the reviewer upholds | arbiter, rules once in writing |
 

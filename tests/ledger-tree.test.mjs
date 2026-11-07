@@ -1162,7 +1162,7 @@ test("C10 boundary: SKILL.md is under 4096 bytes and still carries the live rule
 
   const text = readFileSync(SKILL_MD, "utf8");
   // the rule table lives in the README now; the skill names the live set in one line
-  assert.match(text, /R1[–-]R10, R13, R15, R16/, "SKILL.md no longer names the live rule set");
+  assert.match(text, /R1[–-]R10, R13, R15, R17/, "SKILL.md no longer names the live rule set");
   for (const i of [2, 4, 6]) {
     assert.match(text, new RegExp(`\\bR${i}\\b`), `SKILL.md no longer names rule R${i} where the loop needs it`);
   }

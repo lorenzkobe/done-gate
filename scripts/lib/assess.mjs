@@ -95,7 +95,7 @@ export function ownWrites(holder, events, now, paths, others = [], { timed = fal
   return new Set(paths.filter((p) => edited.has(p) || ((shell.has(p) || writersOf(events, since, now.files[p]?.m).some((e) => !gitMove(e))) && !theirs(p))));
 }
 
-// Takes files into the baseline as they are now, out of the task's changes; R16 and the freshness
+// Takes files into the baseline as they are now, out of the task's changes; the freshness
 // clock stop counting an unexplained change that was only these files.
 export function foldIntoBaseline(holder, paths, now, config) {
   const base = holder.baseline;
