@@ -5,8 +5,8 @@ import { DEFAULTS, loadConfig, matchAny } from "./config.mjs";
 import { segments, withoutHeredocs } from "./guard.mjs";
 import { buildState } from "./assess.mjs";
 import { currentLedger, isDone, loadLedger, saveLedger } from "./ledger.mjs";
-import { nextSeq } from "./events.mjs";
-import { diffTextOf, implementationHash, newRules, sourceHash, verifyKey, verifyWhere, workOutSteps } from "./rules.mjs";
+import { nextSeq, readEvents } from "./events.mjs";
+import { diffTextOf, implementationHash, newRules, notRecommended, saidSince, sourceHash, verifyKey, verifyWhere, waiverWordsProblem, workOutSteps } from "./rules.mjs";
 import { repoPath } from "./paths.mjs";
 import { loadSession } from "./session-state.mjs";
 import { diffSnapshots, gitIgnored, parseHunks, snapshot } from "./tree.mjs";
@@ -121,6 +121,22 @@ function changeAdded(ctx, flag, cmd) {
       ? `verify command restored for this run: ${cmd} — the run cannot close until \`gate verify\` has run it`
       : `verify command added for this run: ${cmd} — it runs after the config commands, and the run cannot close until \`gate verify\` has run it`);
   } else {
+    const words = ctx.args.includes("--user-ok") ? ctx.args[ctx.args.indexOf("--user-ok") + 1]?.trim() : null;
+    if (newRules(ledger)) {
+      // the last test command is what R18 cannot catch once no case points at a test file; a repo
+      // that configured none gives nothing up
+      const config = loadConfig(ctx.root, ledger.repos);
+      const testEntry = (v) => v.related || runsTests(v.cmd, config.testFiles);
+      if (config.verify.some(testEntry) && verifyEntries(config, ledger).filter((v) => v.cmd !== cmd && testEntry(v)).length === 0 && verifyEntries(config, ledger).some((v) => v.cmd === cmd && testEntry(v))) {
+        const tell = 'dropping the last test command is the user\'s call: ask them, then pass --user-ok "<their words, at least three, naming the tests>"';
+        if (!words || words.startsWith("--")) throw new UsageError(tell);
+        const problem = waiverWordsProblem("tests", words);
+        if (problem) throw new UsageError(`gate verify --drop: ${problem}. ${tell}`);
+        const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
+        if (!saidSince(notRecommended(events), ledger.openedSeq ?? 0, words)) throw new UsageError(`the user did not say "${words}" in this task: ${tell}`);
+        ledger.verifyDropWords = { ...ledger.verifyDropWords, [cmd]: words };
+      }
+    }
     if (!inConfig && !added.includes(cmd)) throw new UsageError(`\`${cmd}\` is neither a verify command of the repo config nor one this run added${added.length ? `; added: ${added.join(" · ")}` : ""}`);
     ledger.verifyAdded = added.filter((c) => c !== cmd);
     ledger.verifyRestored = (ledger.verifyRestored ?? []).filter((c) => c !== cmd);
@@ -319,11 +335,14 @@ export function relatedTests(root, config, ledger, snap, touched) {
   return [...out].sort();
 }
 
+// The file a test pointer names: file:line, file:name, file::name.
+export const pointerFile = (pointer) => /^(.+?\.\w+)(?::|$)/.exec(pointer)?.[1] ?? null;
+
 // A closed case's test file from its pointer (file:line, file::name), when it exists and is a
 // test file; a click or n/a case has none.
 export function caseTestFile(c, root, config) {
   if (c.status !== "closed" || !c.test) return null;
-  const rel = /^(.+?\.\w+)(?::|$)/.exec(c.test)?.[1];
+  const rel = pointerFile(c.test);
   return rel && existsSync(path.resolve(root, rel)) && config.isTest(rel) ? rel : null;
 }
 

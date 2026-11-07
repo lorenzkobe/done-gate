@@ -108,15 +108,27 @@ export function asOldRun(repo, session = "S1") {
   writeFileSync(ledgerFile, JSON.stringify(ledger, null, 2));
 }
 
+// The user's message, as the hook logs it. A fixture writes files with no hook: the gate has to see
+// them before the words, as it would a real edit.
+export function userSays(repo, words, session = "S1") {
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: session };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  spawnSync(process.execPath, [gate, "check"], { env });
+  execFileSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: session, cwd: repo, hook_event_name: "UserPromptSubmit", prompt: words }), env });
+}
+
 // The user's words for a waiver, logged as their message, and the args that waive on them. A rule
 // number's key is spelled out, since the words have to name the check given up.
 const RULE_WORD = { R4: "driver", R5: "review", R6: "schema", R7: "tests" };
 export function waiveArgs(repo, key, reason, { session = "S1" } = {}) {
   const words = `you may skip the ${RULE_WORD[key] ?? key} check`;
-  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: session };
-  delete env.CLAUDE_CODE_SESSION_ID;
-  // a fixture writes files with no hook: the gate has to see them before the words, as it would a real edit
-  spawnSync(process.execPath, [gate, "check"], { env });
-  execFileSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: session, cwd: repo, hook_event_name: "UserPromptSubmit", prompt: words }), env });
+  userSays(repo, words, session);
   return [key, reason, "--user-ok", words];
+}
+
+// The args that close a planned case N/A, on words the user just said.
+export function naArgs(repo, id, reason, { session = "S1" } = {}) {
+  const words = "no test for this case";
+  userSays(repo, words, session);
+  return ["close", id, "--na", reason, "--user-ok", words];
 }

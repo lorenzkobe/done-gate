@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp, pluginRoot } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, pluginRoot, naArgs } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 
 function envFor(repo) {
@@ -150,7 +150,7 @@ test("C9 boundary: case test files come from closed pointers that exist and chan
   const repo = planned("fv-c9");
   write(repo, "tests/b.test.ts", "test('b', () => {});\n");
   cli(repo, "case", ["close", "C1", "--test", "tests/b.test.ts::b"]);
-  cli(repo, "case", ["close", "C2", "--na", "covered by C1's test"]);
+  cli(repo, "case", naArgs(repo, "C2", "covered by C1's test"));
   execFileSync("git", ["rm", "-q", "tests/a.test.ts"], { cwd: repo });
   cli(repo, "verify");
   const verify = sectionOf(packetOf(repo, "reviewer"), "Verify");

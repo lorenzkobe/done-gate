@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync, execSync, execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, here, pluginRoot, doneArgs, lookedUp, waiveArgs, asOldRun } from "./helpers.mjs";
+import { makeRepo, write, gate, here, pluginRoot, doneArgs, lookedUp, waiveArgs, asOldRun, naArgs } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { actOnRows, pauseLines } from "../scripts/lib/report.mjs";
 import { unmetLines } from "../scripts/lib/assess.mjs";
@@ -166,7 +166,7 @@ function standardFixture(name, { gateJson = null } = {}) {
   cli(repo, "case", ["add", "renders badge", "--kind", "happy"]);
   cli(repo, "case", ["add", "hidden when the venue has no rating", "--kind", "edge"]);
   cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:renders the badge"]);
-  cli(repo, "case", ["close", "C2", "--na", "covered by C1's fixture"]);
+  cli(repo, "case", naArgs(repo, "C2", "covered by C1's fixture"));
   cli(repo, "step", ["schema", "skipped", "no schema files"]);
   cli(repo, "waive", waiveArgs(repo, "driver", "skip the phone pass this time, chrome is disconnected"));
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n- null venue crashes\n");
@@ -449,7 +449,7 @@ function c11Fixture(name, bin) {
   go("case", ["add", "renders badge", "--kind", "happy"]);
   go("case", ["add", "hidden with no rating", "--kind", "edge"]);
   go("case", ["close", "C1", "--test", "tests/a.test.ts:renders"]);
-  go("case", ["close", "C2", "--na", "covered by C1"]);
+  go("case", naArgs(repo, "C2", "covered by C1"));
   go("note", ["context", "Traced: src/a.ts:1 is the entry, read by src/app/page.tsx:1.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
   go("step", ["schema", "skipped", "no schema files"]);
   asOldRun(repo);

@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, here, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, lookedUp, naArgs } from "./helpers.mjs";
 import { ensureSession, loadSession } from "../scripts/lib/session-state.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { appendEvents, eventsFromHookInput, nextSeq, readEvents } from "../scripts/lib/events.mjs";
@@ -266,7 +266,7 @@ test("C19 reported-surface: a run closes leaving 300 uncommitted lines in a trac
   // run 1: a one-line change elsewhere, closed clean, the 300 lines still uncommitted
   openRun(repo, "first", { files: "src/b.ts" });
   cli(repo, "case", ["add", "b changes", "--kind", "happy"]);
-  cli(repo, "case", ["close", "C1", "--na", "covered by the existing fixture"]);
+  cli(repo, "case", naArgs(repo, "C1", "covered by the existing fixture"));
   edit(repo, "src/b.ts", lines(10, "b").replace("b0 = 0", "b0 = 100"));
   edit(repo, "tests/a.test.ts", "test('a', () => { /* b0 */ });\n");
   cli(repo, "verify");
@@ -905,7 +905,7 @@ test("C15 edge: a click case can be closed by a green run of the cmd: driver aft
   assert.equal(caseOf(repo, "C1").event, `events#${green.seq}`);
 
   cli(repo, "case", ["add", "the footer link", "--kind", "click"]);
-  cli(repo, "case", ["close", "C2", "--na", "the link is unchanged, only its colour moved"]);
+  cli(repo, "case", naArgs(repo, "C2", "the link is unchanged, only its colour moved"));
   assert.equal(caseOf(repo, "C2").status, "closed");
   assert.equal(caseOf(repo, "C2").na, "the link is unchanged, only its colour moved");
   assert.doesNotMatch(openCasesLine(check(repo)), /\bC[12]\b/);

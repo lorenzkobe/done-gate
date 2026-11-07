@@ -280,7 +280,11 @@ checked.
   a `left_click`, `double_click`, `triple_click`, `right_click` or `form_input` in Chrome,
   alone or inside a `browser_batch`, or a green run of the `cmd:` driver. Loading the page,
   a screenshot, `javascript_tool` and a helper's click do not count. One click closes one
-  case, and a source edit after it opens the case again (R8). `--na "<reason>"` still works.
+  case, and a source edit after it opens the case again (R8). `--na "<reason>"` still works, with
+  `--user-ok "<their words>"` on a case written before the code. `gate case close C<n> --ran "<part
+  of the command>"` closes a case on your own successful run after the last edit, one run per case,
+  and an edit opens it again. It proves a command ran, not that it checked the case; the report
+  shows the command. `--test` refuses a pointer to a file that does not exist.
 - **Size is counted from open.** A file that already had uncommitted work when the task
   opened (left by an earlier run of the session, or from before it) is copied to
   `<run>/base/<path>.base` at `gate open` and diffed against that copy, so the size, the review cap,
@@ -376,7 +380,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `huddle reply --file worker-<n>.md` | record a worker's answers: `fixed:` closes an item, `disagree:` disputes it; an unknown id fails and lists the open ones. Worker reply files are their own stream, numbered like their packet (`brief-worker-2.md` asks for `worker-2.md`); a worker with no lookups is refused (R17) |
 | `waive <key\|R<n>> "<reason>" --user-ok "<their words>"` | record a waiver on the user's words and print what it clears; it shows in the report |
 | `verify [--final] [--step verify-before]` | run the repo's verify commands, then each declared repo's in its own directory, write `verify.json`; a `"when": "final"` command runs only with `--final` and is owed until then |
-| `verify --add "<cmd>"` · `verify --drop "<cmd>"` | change what verify runs for this run only; nothing runs. `--add` adds a command (it runs after the config ones at every `gate verify`, with the default timeout, also when the config has none) or restores a dropped gate.json one; `--drop` removes an added one or drops a gate.json one for this run. They live on the ledger, not in gate.json (R13 stays quiet), and the worker and reviewer packets' Test command lists what verify will run with them, so there is no need to edit gate.json to steer helpers; `gate doctor` and the report list them, and For you names every dropped gate.json command. An added or restored command that has not run blocks the close (R3) |
+| `verify --add "<cmd>"` · `verify --drop "<cmd>" [--user-ok "<their words>"]` | change what verify runs for this run only; nothing runs. In a new run, dropping the last test command needs the user's words naming the tests. `--add` adds a command (it runs after the config ones at every `gate verify`, with the default timeout, also when the config has none) or restores a dropped gate.json one; `--drop` removes an added one or drops a gate.json one for this run. They live on the ledger, not in gate.json (R13 stays quiet), and the worker and reviewer packets' Test command lists what verify will run with them, so there is no need to edit gate.json to steer helpers; `gate doctor` and the report list them, and For you names every dropped gate.json command. An added or restored command that has not run blocks the close (R3) |
 | `setup [--apply [file] \| --decline] --user-ok "<words>"` | propose the faster test loop's gate.json keys; `--apply` writes the proposal (or the edited file) and `--decline` records `"testFiles": null`, each only with the user's words and no run open |
 | `test <test file>...` | run gate.json's `testFiles` on these test files of this repo, output streamed, exit code passed through; with `serialTests` it waits for the repo-wide test lock (exit 75 when busy past five minutes) |
 | `decide <phase> <decision> <why> <evidence> <result>` | append a decision-log row |

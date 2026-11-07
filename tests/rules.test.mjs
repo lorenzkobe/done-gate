@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { evaluate, sourceHash, lateOrder } from "../scripts/lib/rules.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
-import { makeRepo, write, gate, pluginRoot, lookedUp, waiveArgs, asOldRun } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, lookedUp, waiveArgs, asOldRun, naArgs } from "./helpers.mjs";
 import { spawnSync, execFileSync } from "node:child_process";
 import path from "node:path";
 import { readFileSync, appendFileSync, existsSync, writeFileSync } from "node:fs";
@@ -301,7 +301,7 @@ test("C11 boundary: an edit logged before `gate open` blocks R2 only while the P
 
   // with both written, the late order stops blocking
   sh(repo, ["case", "add", "a() returns 2", "--kind", "happy"]);
-  sh(repo, ["case", "close", "C1", "--na", "covered by the existing fixture"]);
+  sh(repo, ["case", ...naArgs(repo, "C1", "covered by the existing fixture")]);
   const both = check(repo);
   assert.ok(!/R2\b/.test(both), `a late Plan and case table that exist must not block:\n${both}`);
 

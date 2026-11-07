@@ -67,7 +67,7 @@ export function summaryLine(ledger, events, unmet, after = 0) {
 export function caseTable(ledger, after = 0) {
   if (!ledger.cases.length) return ["_none_"];
   const out = ["| id | case | kind | test | status |\n| --- | --- | --- | --- | --- |"];
-  for (const c of ledger.cases) out.push(`| ${c.id} | ${cell(c.case)} | ${c.kind} | ${cell(c.test ?? c.event ?? (c.na ? `n/a: ${c.na}` : ""))} | ${clickStale(c, after) ? "open: edited after the click" : c.status} |`);
+  for (const c of ledger.cases) out.push(`| ${c.id} | ${cell(c.case)} | ${c.kind} | ${cell(c.test ?? (c.ran ? `ran: ${c.ran}` : c.event) ?? (c.na ? `n/a: ${c.na}${c.words ? ` (the user: "${c.words}")` : ""}` : ""))} | ${clickStale(c, after) ? `open: edited after the ${c.ran ? "run" : "click"}` : c.status} |`);
   return out;
 }
 
@@ -205,7 +205,7 @@ export function renderReport(state, unmet) {
   out.push("\n## Verify\n");
   out.push(...verifyLines(verify, { unfinished: unfinishedVerify(state) }));
   if (ledger.verifyAdded?.length) out.push(`\nadded by this run: ${ledger.verifyAdded.map((c) => `\`${c}\``).join(" · ")}`);
-  if (ledger.verifyDropped?.length) out.push(`\ndropped by this run: ${ledger.verifyDropped.map((c) => `\`${c}\``).join(" · ")}`);
+  if (ledger.verifyDropped?.length) out.push(`\ndropped by this run: ${ledger.verifyDropped.map((c) => `\`${c}\`${ledger.verifyDropWords?.[c] ? ` (the user: "${ledger.verifyDropWords[c]}")` : ""}`).join(" · ")}`);
   const excluded = verifyExclusions(state);
   if (excluded.length) out.push("\nexcluded from verify:", ...excluded.map((x) => `- \`${x.text}\` in \`${x.cmd}\`${x.flag ? ` — ${x.flag}` : ""}`));
   if (verify) out.push(`\nsource hash at verify: \`${verify.sourceHash.slice(0, 12)}\` · now: \`${state.now.hash.slice(0, 12)}\``);

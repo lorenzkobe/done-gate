@@ -8,10 +8,11 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { LAPSING, ON_CODE, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
+import { LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
 import { assess, broughtSinceOpen, buildState, cleanAtHead, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
+import { pointerFile } from "./verify.mjs";
 import { appendEvents, readEvents } from "./events.mjs";
 
 // The report of a run that is no longer current: the same renderer `gate report` uses.
@@ -163,7 +164,7 @@ function checkLookups(ctx, ledger, rest) {
     const ok = flag(rest, "--user-ok");
     const tell = `tell the user which search is missing or failing${untried.length ? `, and that ${untried.join(", ")} looks set up: try it first, or say why it cannot run` : ""}, and ask whether to continue without it; then pass --user-ok "<their words, at least three>"`;
     if (!ok?.trim() || ok.startsWith("--")) throw new UsageError(`skipping ${Object.keys(declared).join(" and ")} search is the user's call: ${tell}`);
-    if (!userSaid(ledger, events, ok)) throw new UsageError(`the user did not say "${ok}" in this task (at least three of their words, from a message or a question answer): ${tell}`);
+    if (!userSaid(ledger, notRecommended(events), ok)) throw new UsageError(`the user did not say "${ok}" in this task (at least three of their words, from a message or a question answer): ${tell}`);
     for (const kind of Object.keys(declared)) declared[kind] = `${declared[kind]} (the user: "${ok.trim()}")`;
   }
   const missing = LOOKUP_KINDS.filter((k) => !found[k].size && !declared[k] && !ledger.lookupGap?.[k]);
@@ -300,13 +301,14 @@ export const verbs = {
       const [id] = pos;
       const testPtr = flag(rest, "--test");
       const na = flag(rest, "--na");
+      const ranPart = flag(rest, "--ran");
       const byClick = rest.includes("--click");
       const afterClick = flag(rest, "--click");
       const named = byClick ? /^events#(\d+)$/.exec(afterClick ?? "") : null;
       if (byClick && !named && /^(?:events#|\d)/.test(afterClick ?? "")) throw new UsageError(`--click names a click as events#<seq>, not "${afterClick}"`);
-      if (!id || (!testPtr && !na && !byClick)) throw new UsageError("usage: gate case close <id> --test <file:testname> | --click [events#<seq>] | --na <reason>");
+      if (!id || (!testPtr && !na && !byClick && !ranPart)) throw new UsageError('usage: gate case close <id> --test <file:testname> | --ran "<part of the command>" | --click [events#<seq>] | --na "<reason>" [--user-ok "<their words>"]');
       const kind = open(ctx).ledger.cases.find((c) => c.id === id)?.kind;
-      if (kind === "click" && testPtr) throw new UsageError(`${id} is a click case: a test does not close it. Click the control in the real app after the last edit, then \`gate case close ${id} --click\` (or \`--na "<reason>"\`).`);
+      if (kind === "click" && (testPtr || ranPart)) throw new UsageError(`${id} is a click case: a test or a run does not close it. Click the control in the real app after the last edit, then \`gate case close ${id} --click\` (or \`--na "<reason>"\`).`);
       if (byClick && kind && kind !== "click") throw new UsageError(`${id} is a ${kind} case: --click closes a click case only`);
       const state = byClick && !na ? buildState(ctx, {}) : null;
       let shared = [];
@@ -314,10 +316,39 @@ export const verbs = {
         const row = ledger.cases.find((c) => c.id === id);
         if (!row) throw new UsageError(`no case ${id}`);
         if (testPtr) shared = ledger.cases.filter((c) => c.id !== id && c.status === "closed" && c.test === testPtr).map((c) => c.id);
+        const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
+        const config = loadConfig(ctx.root, ledger.repos ?? []);
+        if (testPtr && newRules(ledger)) {
+          const file = pointerFile(testPtr);
+          if (!file) throw new UsageError(`${id}: "${testPtr}" names no test file. Close on the test as <file:name> or <file:line>.`);
+          if (!existsSync(path.resolve(ctx.root, file))) throw new UsageError(`${id}: ${file} does not exist. Write the test first, then close the case on it.`);
+        }
+        let saidWords = null;
+        if (na && newRules(ledger)) {
+          // an edit from before this run opened, kept by an abandoned run, is not this run's code
+          const first = firstCodeEdit({ events, config, ledger }, ledger.openedSeq ?? 0);
+          if (!first || row.seq < first.seq) {
+            const tell = 'a case written before the code goes N/A only on the user\'s word: ask them, then pass --user-ok "<their words, at least three>", or close it on a test or a run (--ran)';
+            saidWords = flag(rest, "--user-ok")?.trim() ?? null;
+            if (!saidWords || saidWords.startsWith("--")) throw new UsageError(`${id}: ${tell}`);
+            const problem = wordsShapeProblem(saidWords);
+            if (problem) throw new UsageError(`${id}: ${problem}. ${tell}`);
+            if (!saidSince(notRecommended(events), row.seq, saidWords)) throw new UsageError(`${id}: the user did not say "${saidWords}" after this case was written: ${tell}`);
+          }
+        }
+        let run = null;
+        if (ranPart) {
+          if (ranPart.trim().length < 4) throw new UsageError("--ran needs at least four characters of the command or url, enough to name one run");
+          const state = { ledger, events, config };
+          // one run closes one case: nothing else ties a run to what the case claims
+          const taken = new Set(ledger.cases.filter((c) => c.id !== id && c.ran).map((c) => c.event));
+          run = apiCalls(state, lastEditSeq(state, config, ledger)).filter((e) => !taken.has(`events#${e.seq}`) && ranText(e).includes(ranPart)).pop();
+          if (!run) throw new UsageError(`${id}: no recorded run of yours after the last edit that names "${ranPart}" and that no other case holds. Run it (a failed, background, read-only or helper's run does not count), then close on it.`);
+        }
         let event = null;
         if (state) {
           // one event closes one case: two controls need two clicks
-          const held = new Set(ledger.cases.filter((c) => c.id !== id && c.event).map((c) => c.event));
+          const held = new Set(ledger.cases.filter((c) => c.id !== id && c.event && c.kind === "click").map((c) => c.event));
           const after = lastEditSeq(state, state.config, state.ledger);
           const free = clickEvents(state, after).filter((e) => !held.has(`events#${e.seq}`));
           // one click case open: every click since the edit was on its way to that control
@@ -330,7 +361,9 @@ export const verbs = {
           } else event = free.pop();
           if (!event) throw new UsageError(`${id}: no click of yours after the last edit that another case does not already hold. Click the link, button or tab in the real app (left_click or form_input; navigate, screenshot, javascript_tool and a helper's click do not count)${driverCommand(state.config) !== null ? `, or run \`${driverCommand(state.config)}\` green` : ""}, then run this again.`);
         }
-        Object.assign(row, { test: testPtr ?? null, na: na ?? null, ...(row.kind === "click" ? { event: event ? `events#${event.seq}` : null } : {}), status: "closed", closedSeq: nextSeq() });
+        delete row.ran;
+        delete row.words;
+        Object.assign(row, { test: testPtr ?? null, na: na ?? null, ...(saidWords ? { words: saidWords } : {}), ...(row.kind === "click" ? { event: event ? `events#${event.seq}` : null } : {}), ...(run ? { event: `events#${run.seq}`, ran: ranText(run).slice(0, 120) } : {}), status: "closed", closedSeq: nextSeq() });
         return event;
       });
       ctx.out(taken ? `${id} closed by ${clickLine(taken)}` : `${id} closed`);
@@ -349,6 +382,8 @@ export const verbs = {
         row.history = [...(row.history ?? []), { text: row.case, seq: nextSeq() }];
         Object.assign(row, { case: text, test: null, na: null, status: "open" });
         delete row.event;
+        delete row.ran;
+        delete row.words;
         delete row.closedSeq;
       });
       ctx.out(`${id} amended and open again; the report keeps the earlier text`);
@@ -670,7 +705,7 @@ export const verbs = {
         if (!words) throw new UsageError(`giving up ${key} is the user's call: ${tell}`);
         const problem = waiverWordsProblem(key, words);
         if (problem) throw new UsageError(`gate waive ${key}: ${problem}. ${tell}`);
-        const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
+        const events = notRecommended(ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq));
         if (!userSaid(ledger, events, words)) throw new UsageError(`the user did not say "${words.trim()}" in this task: ${tell}`);
         if (ON_CODE.has(key) && (ledger.lastSourceHash !== hashBefore || !saidSince(events, ledger.lastSourceChangeSeq ?? 0, words))) {
           throw new UsageError(`the user said "${words.trim()}" before the last code edit, about other code: ${tell}`);

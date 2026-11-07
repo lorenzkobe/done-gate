@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, lookedUp, waiveArgs } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, lookedUp, waiveArgs, naArgs } from "./helpers.mjs";
+import { decide } from "../scripts/lib/guard.mjs";
 import { saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
@@ -46,8 +47,9 @@ test("case add/close builds the case table; close needs a test pointer or --na",
   const r = cli(repo, "case", ["add", "happy path renders the badge", "--kind", "happy"]);
   assert.match(r.stdout, /C1/);
   cli(repo, "case", ["add", "hidden when venue has no rating", "--kind", "edge"]);
+  write(repo, "tests/CourtCard.test.tsx", "test('renders the badge', () => {});\n");
   cli(repo, "case", ["close", "C1", "--test", "tests/CourtCard.test.tsx:renders the badge"]);
-  cli(repo, "case", ["close", "C2", "--na", "covered by C1's fixture"]);
+  cli(repo, "case", naArgs(repo, "C2", "covered by C1's fixture"));
   const cases = ledgerOf(repo).cases;
   assert.equal(cases.length, 2);
   assert.equal(cases[0].test, "tests/CourtCard.test.tsx:renders the badge");
@@ -598,7 +600,7 @@ test("3.7 C13 a change with no code runs through to gate close; the hints name h
   write(repo, "package.json", JSON.stringify({ name: "verbs-t6", version: "2.0.0", scripts: { lint: "true", test: "true", build: "true" } }));
   cli(repo, "step", ["tests", "na", "a version bump holds no code"]);
   cli(repo, "step", ["implement", "done", "bumped", "--evidence", "package.json"]);
-  cli(repo, "case", ["close", "C1", "--na", "read the file"]);
+  cli(repo, "case", naArgs(repo, "C1", "read the file"));
   cli(repo, "verify");
   for (const key of ["skeptic", "driver", "schema", "review"]) spawnSync(process.execPath, [gate, "step", key, "na", "a version bump"], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" } });
   cli(repo, "close");
@@ -608,4 +610,274 @@ test("3.7 C13 a change with no code runs through to gate close; the hints name h
   write(big, "package-lock.json", JSON.stringify(Array.from({ length: 2000 }, (_, i) => `line ${i}`), null, 1));
   const out = check(big);
   assert.equal(ruleIn(out, "R7"), false, out);
+});
+
+// Batch 3.8: a recommended answer is not consent, and a planned case, the last test command and a
+// test pointer each need something real behind them.
+const answers = (repo, label) => hook(repo, { hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", tool_input: {}, tool_response: { answers: { "Which way?": label } } });
+const question = (question, label, description = "") => ({ tool_name: "AskUserQuestion", tool_input: { questions: [{ question, options: [{ label, description }, { label: "Other way", description: "" }] }] } });
+const NEW = { rules: 1 };
+const closeCase = (repo, ...args) => spawnSync(process.execPath, [gate, "case", "close", ...args], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" } });
+const caseOf = (repo, id = "C1") => ledgerOf(repo).cases.find((c) => c.id === id);
+const planned = (name) => {
+  const repo = opened(name);
+  cli(repo, "case", ["add", "the badge renders", "--kind", "happy"]);
+  return repo;
+};
+
+test("3.8 C1 an answer holding (Recommended) is not a waiver's words; a plain answer is", () => {
+  const repo = opened("verbs-r1");
+  answers(repo, "Skip the driver check (Recommended)");
+  noWaiver(repo, waive(repo, "driver", "why", "--user-ok", "Skip the driver check"), /did not say/);
+  answers(repo, "Skip the driver check");
+  assert.equal(waive(repo, "driver", "why", "--user-ok", "Skip the driver check").status, 0);
+  assert.equal(waivers(repo).length, 1);
+});
+
+test("3.8 C2 the fence refuses a (Recommended) option that skips a check, waives one or abandons a run", () => {
+  const root = makeRepo("verbs-r2");
+  for (const q of [
+    question("How do we handle the rebase?", "Skip the review for rebases (Recommended)"),
+    question("How do we go on?", "Waive the driver step (Recommended)"),
+    question("Ship it?", "Ship without tests (Recommended)"),
+    question("Next?", "Go on (Recommended)", "gives up the schema probe"),
+    question("Next?", "Abandon this run (Recommended)"),
+  ]) {
+    const verdict = decide(q, root, null, null, NEW);
+    assert.equal(verdict.deny, true, JSON.stringify(q));
+    assert.match(verdict.reason, /\(Recommended\)/);
+  }
+  const hooks = JSON.parse(readFileSync(path.join(pluginRoot, "hooks", "hooks.json"), "utf8"));
+  assert.ok(hooks.hooks.PreToolUse.some((h) => /AskUserQuestion/.test(h.matcher)));
+});
+
+test("3.8 C3 a recommendation that gives up no check passes; a bare yes on a question skipping one is refused; an old run or no run passes", () => {
+  const root = makeRepo("verbs-r3");
+  for (const q of [
+    question("Which migration?", "Drop the users column (Recommended)"),
+    question("Should I skip the review?", "No, keep the review (Recommended)"),
+    question("Which test runner?", "Vitest (Recommended)"),
+  ]) assert.equal(decide(q, root, null, null, NEW).deny, false, JSON.stringify(q));
+  const bare = question("Should I skip the review?", "Yes (Recommended)");
+  assert.equal(decide(bare, root, null, null, NEW).deny, true);
+  const giving = question("How do we handle the rebase?", "Skip the review for rebases (Recommended)");
+  assert.equal(decide(giving, root, null, null, {}).deny, false, "old run");
+  assert.equal(decide(giving, root, null, null, null).deny, false, "no run");
+});
+
+test("3.8 C4 --na on a planned case needs the user's words; with them it closes and the report shows them", () => {
+  const repo = planned("verbs-n1");
+  assert.match(closeCase(repo, "C1", "--na", "covered elsewhere").stderr, /--user-ok/);
+  assert.equal(caseOf(repo).status, "open");
+  assert.match(closeCase(repo, "C1", "--na", "covered elsewhere", "--user-ok", "no case for this one").stderr, /did not say/);
+  answers(repo, "No case for this one (Recommended)");
+  assert.match(closeCase(repo, "C1", "--na", "covered elsewhere", "--user-ok", "No case for this one").stderr, /did not say/);
+  says(repo, "no case for this one");
+  assert.equal(closeCase(repo, "C1", "--na", "covered elsewhere", "--user-ok", "no case for this one").status, 0);
+  assert.equal(caseOf(repo).status, "closed");
+  assert.equal(caseOf(repo).words, "no case for this one");
+  assert.match(cli(repo, "report").stdout, /n\/a: covered elsewhere \(the user: "no case for this one"\)/);
+});
+
+test("3.8 C5 a case written after the first code edit stays free with --na, and an old run is unchanged", () => {
+  const later = opened("verbs-n2");
+  editsCode(later);
+  cli(later, "case", ["add", "found while building", "--kind", "edge"]);
+  assert.equal(closeCase(later, "C1", "--na", "covered by the fix").status, 0);
+
+  const old = planned("verbs-n3");
+  age(old);
+  assert.equal(closeCase(old, "C1", "--na", "covered elsewhere").status, 0);
+});
+
+test("3.8 C6 --ran closes a case on the lead's successful recorded run, with no words, and shows in the table", () => {
+  const repo = planned("verbs-a1");
+  const runs = (extra = {}, event = "PostToolUse", command = "node probe.mjs measured") => hook(repo, { hook_event_name: event, tool_name: "Bash", tool_input: { command }, ...(event === "PostToolUse" ? { tool_response: {} } : { tool_error: "Exit code 1" }), ...extra });
+  runs({}, "PostToolUseFailure");
+  assert.match(closeCase(repo, "C1", "--ran", "probe.mjs measured").stderr, /recorded/);
+  runs({ agent_id: "A1", agent_type: "done-gate:reviewer" });
+  assert.match(closeCase(repo, "C1", "--ran", "probe.mjs measured").stderr, /recorded/);
+  assert.match(closeCase(repo, "C1", "--ran", "abc").stderr, /four characters/);
+  runs();
+  assert.equal(closeCase(repo, "C1", "--ran", "probe.mjs measured").status, 0);
+  assert.equal(caseOf(repo).status, "closed");
+  assert.match(caseOf(repo).event, /^events#\d+$/);
+  assert.match(cli(repo, "report").stdout, /probe\.mjs measured/);
+
+  cli(repo, "case", ["add", "the tab opens", "--kind", "click"]);
+  assert.match(closeCase(repo, "C2", "--ran", "probe.mjs measured").stderr, /click/);
+});
+
+test("3.8 C7 --drop of the last configured test command needs words; add then drop, a lint drop and one of two stay free; an old run is unchanged", () => {
+  const verifyWith = (name, verify) => {
+    const repo = makeRepo(name, { ".claude/gate.json": JSON.stringify({ testFiles: null, verify }) });
+    gitIn(repo, "add", "-A");
+    gitIn(repo, "commit", "-qm", "base");
+    cli(repo, "open", ["t", "feature"]);
+    return repo;
+  };
+  const drop = (repo, ...args) => spawnSync(process.execPath, [gate, "verify", "--drop", ...args], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" } });
+  const last = verifyWith("verbs-d1", ["npx eslint .", "npx vitest run"]);
+  assert.match(drop(last, "npx vitest run").stderr, /--user-ok/);
+  assert.equal(ledgerOf(last).verifyDropped, undefined);
+  assert.match(drop(last, "npx vitest run", "--user-ok", "drop the test suite").stderr, /did not say/);
+  says(last, "drop the test suite");
+  assert.equal(drop(last, "npx vitest run", "--user-ok", "drop the test suite").status, 0);
+  assert.deepEqual(ledgerOf(last).verifyDropped, ["npx vitest run"]);
+  assert.match(cli(last, "report").stdout, /npx vitest run[^\n]*the user: "drop the test suite"/);
+
+  const lint = verifyWith("verbs-d2", ["npx eslint .", "npx vitest run"]);
+  assert.equal(drop(lint, "npx eslint .").status, 0);
+
+  const two = verifyWith("verbs-d3", ["npx vitest run a", "npx jest b"]);
+  assert.equal(drop(two, "npx jest b").status, 0);
+
+  const added = verifyWith("verbs-d4", ["npx eslint ."]);
+  cli(added, "verify", ["--add", "npx vitest run"]);
+  assert.equal(drop(added, "npx vitest run").status, 0);
+
+  const old = verifyWith("verbs-d5", ["npx vitest run"]);
+  age(old);
+  assert.equal(drop(old, "npx vitest run").status, 0);
+});
+
+test("3.8 C8 --test refuses a pointer whose file does not exist or names no file; file:line and file:name pass; an old run is unchanged", () => {
+  const repo = planned("verbs-p1");
+  for (const pointer of ["tests/nothing-here.test.mjs:no such test", "tests/nothing-here.test.mjs", "the tests pass"]) {
+    assert.match(closeCase(repo, "C1", "--test", pointer).stderr, /does not exist|no test file/, pointer);
+    assert.equal(caseOf(repo).status, "open", pointer);
+  }
+  assert.equal(closeCase(repo, "C1", "--test", "tests/a.test.ts:12").status, 0);
+  cli(repo, "case", ["add", "another", "--kind", "edge"]);
+  assert.equal(closeCase(repo, "C2", "--test", "tests/a.test.ts:the named test").status, 0);
+  cli(repo, "case", ["add", "a third", "--kind", "edge"]);
+  assert.equal(closeCase(repo, "C3", "--test", "tests/a.test.ts::named").status, 0);
+
+  const old = planned("verbs-p2");
+  age(old);
+  assert.equal(closeCase(old, "C1", "--test", "tests/nothing-here.test.mjs:no such test").status, 0);
+});
+
+test("3.8 C9 a run from before the last edit cannot close a case, one run closes one case, and an edit opens it again", () => {
+  const repo = planned("verbs-a2");
+  cli(repo, "case", ["add", "another", "--kind", "edge"]);
+  const runs = (command) => hook(repo, { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command }, tool_response: {} });
+  runs("node probe.mjs before");
+  editsCode(repo);
+  assert.match(closeCase(repo, "C1", "--ran", "probe.mjs before").stderr, /after the last edit/);
+  runs("node probe.mjs after");
+  assert.equal(closeCase(repo, "C1", "--ran", "probe.mjs after").status, 0);
+  assert.match(closeCase(repo, "C2", "--ran", "probe.mjs after").stderr, /no other case holds/);
+  editsCode(repo, "export const a = 'again';\n");
+  assert.match(check(repo), /C1/);
+  assert.match(cli(repo, "report").stdout, /open: edited after the run/);
+  runs("node probe.mjs third");
+  assert.equal(closeCase(repo, "C1", "--ran", "probe.mjs third").status, 0);
+  assert.doesNotMatch(check(repo).split("\n").find((l) => /not closed/.test(l)) ?? "", /C1\b/);
+});
+
+test("3.8 C10 a run another case closed on stays free for a click case, and amending clears a case's run and words", () => {
+  const config = { testFiles: null, driver: "cmd:npm run e2e" };
+  const repo = makeRepo("verbs-a3", { ".claude/gate.json": JSON.stringify(config) });
+  cli(repo, "open", ["t", "feature"]);
+  cli(repo, "case", ["add", "a measured thing", "--kind", "performance"]);
+  cli(repo, "case", ["add", "the tab opens", "--kind", "click"]);
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "npm run e2e" }, tool_response: {} });
+  assert.equal(closeCase(repo, "C1", "--ran", "npm run e2e").status, 0);
+  assert.equal(closeCase(repo, "C2", "--click").status, 0, "the driver run stays free for the click case");
+  cli(repo, "case", ["amend", "C1", "a better wording"]);
+  assert.equal(caseOf(repo).ran, undefined);
+  assert.equal(caseOf(repo).event, undefined);
+
+  const na = planned("verbs-a4");
+  says(na, "no case for this one");
+  closeCase(na, "C1", "--na", "covered", "--user-ok", "no case for this one");
+  cli(na, "case", ["amend", "C1", "a better wording"]);
+  assert.equal(caseOf(na).words, undefined);
+});
+
+test("3.8 C11 a Recommended answer is no words for skipping a search either", () => {
+  const repo = opened("verbs-s1");
+  answers(repo, "Carry on without socraticode (Recommended)");
+  const refused = spawnSync(process.execPath, [gate, "note", "context", CONTEXT, "--no-code", "socraticode: not indexed", "--user-ok", "Carry on without socraticode"], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" } });
+  assert.match(refused.stderr, /did not say/);
+});
+
+test("3.8 C12 the words for --na come after the case and do not say the opposite; the words for --drop name the tests", () => {
+  const repo = opened("verbs-n4");
+  says(repo, "no case for this one");
+  cli(repo, "case", ["add", "written later", "--kind", "happy"]);
+  assert.match(closeCase(repo, "C1", "--na", "covered", "--user-ok", "no case for this one").stderr, /after this case was written/);
+  says(repo, "do not skip this case");
+  assert.match(closeCase(repo, "C1", "--na", "covered", "--user-ok", "do not skip this case").stderr, /says not to give it up/);
+
+  const drop = makeRepo("verbs-d6", { ".claude/gate.json": JSON.stringify({ testFiles: null, verify: ["npx vitest run"] }) });
+  cli(drop, "open", ["t", "feature"]);
+  says(drop, "fine by me go ahead");
+  const r = spawnSync(process.execPath, [gate, "verify", "--drop", "npx vitest run", "--user-ok", "fine by me go ahead"], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: drop, DONE_GATE_SESSION: "S1" } });
+  assert.match(r.stderr, /does not name/);
+});
+
+test("3.8 C13 a related entry counts as a test command, and an added test command left behind makes the drop free until it goes too", () => {
+  const dropIn = (repo, ...args) => spawnSync(process.execPath, [gate, "verify", "--drop", ...args], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" } });
+  const related = makeRepo("verbs-d7", { ".claude/gate.json": JSON.stringify({ testFiles: "npx vitest run {files}", verify: [{ related: true }, "npx eslint ."] }) });
+  cli(related, "open", ["t", "feature"]);
+  assert.match(dropIn(related, "related tests").stderr, /--user-ok/);
+
+  const beside = makeRepo("verbs-d8", { ".claude/gate.json": JSON.stringify({ testFiles: "npx vitest run {files}", verify: [{ related: true }, "npx jest"] }) });
+  cli(beside, "open", ["t", "feature"]);
+  assert.equal(dropIn(beside, "npx jest").status, 0, "the related entry is still a test command");
+
+  const swapped = makeRepo("verbs-d9", { ".claude/gate.json": JSON.stringify({ testFiles: null, verify: ["npx vitest run"] }) });
+  cli(swapped, "open", ["t", "feature"]);
+  cli(swapped, "verify", ["--add", "npx jest"]);
+  assert.equal(dropIn(swapped, "npx vitest run").status, 0);
+  assert.match(dropIn(swapped, "npx jest").stderr, /--user-ok/, "the second drop leaves none");
+});
+
+test("3.8 C14 common give-up shapes are refused, several questions are read, and malformed input never throws", () => {
+  const root = makeRepo("verbs-r4");
+  for (const q of [
+    question("Should I skip the review?", "Yes, skip it (Recommended)"),
+    question("Should I run the review?", "No (Recommended)"),
+    question("Skip the tests here?", "Go ahead (Recommended)"),
+    question("Skip the tests here?", "OK (Recommended)"),
+    question("Skip the drive?", "Sure (Recommended)"),
+    question("Skip the drive?", "Proceed (Recommended)"),
+  ]) assert.equal(decide(q, root, null, null, NEW).deny, true, JSON.stringify(q));
+  const several = { tool_name: "AskUserQuestion", tool_input: { questions: [question("Which runner?", "Vitest (Recommended)").tool_input.questions[0], question("Next?", "Skip the review (Recommended)").tool_input.questions[0]] } };
+  assert.equal(decide(several, root, null, null, NEW).deny, true);
+  assert.equal(decide(question("Should I run the review?", "Yes (Recommended)"), root, null, null, NEW).deny, false, "a yes to running it");
+  for (const tool_input of [undefined, {}, { questions: "x" }, { questions: [null] }, { questions: [{ options: "x" }] }, { questions: [{ options: [null] }] }]) {
+    assert.equal(decide({ tool_name: "AskUserQuestion", tool_input }, root, null, null, NEW).deny, false, JSON.stringify(tool_input));
+  }
+});
+
+test("3.8 C15 --na with --test or with --click still needs the words on a planned case", () => {
+  const repo = planned("verbs-n5");
+  assert.match(closeCase(repo, "C1", "--test", "tests/a.test.ts:a", "--na", "why").stderr, /--user-ok/);
+  cli(repo, "case", ["add", "the tab opens", "--kind", "click"]);
+  assert.match(closeCase(repo, "C2", "--click", "--na", "why").stderr, /--user-ok/);
+});
+
+test("3.8 C16 hints, usage, help and the README name --ran and the user's words on --na", () => {
+  const repo = planned("verbs-h1");
+  const usage = spawnSync(process.execPath, [gate, "case", "close", "C1"], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" } }).stderr;
+  assert.match(usage, /--ran/);
+  assert.match(usage, /--user-ok/);
+  const r8 = check(repo).split("\n").find((l) => /not closed/.test(l)) ?? "";
+  assert.match(r8, /--ran/);
+  assert.match(r8, /--user-ok/);
+  assert.match(cli(repo, "help").stdout, /--ran/);
+  const readme = readFileSync(path.join(pluginRoot, "README.md"), "utf8");
+  assert.match(readme, /case close C<n> --ran/);
+});
+
+test("3.8 C17 an earlier run's edit in the same session does not make this run's cases late", () => {
+  const repo = opened("verbs-n6");
+  editsCode(repo);
+  cli(repo, "abandon", ["t", "this case needs a second run"]);
+  cli(repo, "open", ["t2", "feature"]);
+  cli(repo, "case", ["add", "planned in the second run", "--kind", "happy"]);
+  assert.match(closeCase(repo, "C1", "--na", "covered").stderr, /--user-ok/);
 });

@@ -291,6 +291,10 @@ export function userSaid(ledger, events, words) {
   return saidSince(events, lookupWindowFrom(ledger, events), words);
 }
 
+// An answer the question itself marked (Recommended) is the agent's advice taken, not the user's
+// own words: it does not count where the words give something up.
+export const notRecommended = (events) => events.filter((e) => !(e.kind === "answer" && /\(recommended\)/i.test(e.text ?? "")));
+
 export const saidSince = (events, from, words) => Boolean(saidAt(events, from, words));
 
 // The user's newest message holding these words.
@@ -831,7 +835,7 @@ export function apiCalls(state, after) {
 
 // A click case reopens when source changed after its event: the control may have moved.
 export function clickStale(c, after) {
-  return c.kind === "click" && c.status === "closed" && Boolean(c.event) && Number(c.event.slice("events#".length)) < after;
+  return (c.kind === "click" || Boolean(c.ran)) && c.status === "closed" && Boolean(c.event) && Number(c.event.slice("events#".length)) < after;
 }
 
 export function caseOpen(c, after) {
@@ -933,11 +937,18 @@ const SAYS_THE_OPPOSITE = /\b(?:not|don't|dont|never)\s+(?:to\s+|just\s+)?(?:ski
 // Checks on code: words said before the last code edit were about other code.
 export const ON_CODE = new Set(["driver", "review", "review-2", "schema", "qa-pass", "tests", "qa", "slop", "coverage"]);
 
+// Too few words, or words that keep what they were asked to give up.
+export function wordsShapeProblem(words) {
+  const text = words.trim();
+  if (text.split(/\s+/).length < 3) return `"${text}" is too short: at least three of the user's words`;
+  return SAYS_THE_OPPOSITE.test(text) ? `"${text}" says not to give it up` : null;
+}
+
 // What is wrong with these words as a waiver of this key, whoever said them; null when nothing is.
 export function waiverWordsProblem(key, words) {
   const text = words.trim();
-  if (text.split(/\s+/).length < 3) return `"${text}" is too short: at least three of the user's words`;
-  if (SAYS_THE_OPPOSITE.test(text)) return `"${text}" says not to give it up`;
+  const shape = wordsShapeProblem(text);
+  if (shape) return shape;
   const names = [key, ...(NAMES_THE_CHECK[key] ?? [])];
   const named = names.some((name) => new RegExp(`(?:^|[^\\w-])${name.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&")}s?(?![\\w-])`, "i").test(text));
   return named ? null : `"${text}" does not name what is given up; the words have to name it (${names.join(", ")})`;
@@ -1017,13 +1028,16 @@ export function hasContextStep(ledger) {
   return (ledger?.steps ?? []).some((s) => s.key === "context");
 }
 
+// This task's first code edit: the events hold the whole session, and an earlier run's edit is not it.
+export const firstCodeEdit = ({ events, config, ledger }, since = ledger.baseline?.seq ?? 0) => (events ?? []).find((e) => implementationEdit(e, config) && e.seq > since);
+
 // Which of Context, Plan and case table came after the first source edit of this task, if
 // any: { late: ["Plan", "case table"], path: "<first edited file>" } or { late: [], path: null }.
 export function lateOrder(state) {
   const { config, ledger } = state;
   const none = { late: [], path: null };
   if (!ledger) return none;
-  const firstEdit = (state.events ?? []).find((e) => implementationEdit(e, config) && e.seq > (ledger.baseline?.seq ?? 0));
+  const firstEdit = firstCodeEdit(state);
   if (!firstEdit) return none;
   const firstCase = ledger.cases?.[0]?.seq ?? Infinity;
   const late = [];
@@ -1228,7 +1242,7 @@ export function evaluate(state) {
 
   // R8: nothing blank
   const openCases = (ledger.cases ?? []).filter((c) => caseOpen(c, after));
-  if (openCases.length) unmet.push({ rule: "R8", text: `case(s) not closed: ${openCases.map((c) => c.id).join(", ")}. \`gate case close <id> --test <file:name>\` or \`--na <reason>\`${openCases.some((c) => c.kind === "click") ? "; a click case: click the control in the real app after the last edit, then `gate case close <id> --click` (with more than one click case open: `--click events#<seq>`)" : ""}.` });
+  if (openCases.length) unmet.push({ rule: "R8", text: `case(s) not closed: ${openCases.map((c) => c.id).join(", ")}. \`gate case close <id> --test <file:name>\`, \`--ran "<part of the command>"\` or \`--na "<reason>"\` (with the user's words, \`--user-ok "<their words>"\`, on a case written before the code)${openCases.some((c) => c.kind === "click") ? "; a click case: click the control in the real app after the last edit, then `gate case close <id> --click` (with more than one click case open: `--click events#<seq>`)" : ""}.` });
   const blankSteps = (ledger.steps ?? []).filter((s) => !s.state);
   if (blankSteps.length) {
     const how = [];

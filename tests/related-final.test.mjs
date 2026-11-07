@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, userSays } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 
 function envFor(repo) {
@@ -177,7 +177,8 @@ test("C10 edge: the related entry is 'related tests' in verify output and the pa
   const packet = readFileSync(/^packet: (.+)$/m.exec(cli(repo, "brief", ["reviewer"]).stdout)[1], "utf8");
   assert.match(/## Test command\n([\s\S]*?)(?=\n## |$)/.exec(packet)[1], /related tests/);
   assert.doesNotMatch(packet, /`undefined`/);
-  cli(repo, "verify", ["--drop", "related tests"]);
+  userSays(repo, "drop the related tests");
+  cli(repo, "verify", ["--drop", "related tests", "--user-ok", "drop the related tests"]);
   write(repo, "docs/notes.md", "# the tree moved, so QUICK runs again\n");
   resetProbe(repo);
   cli(repo, "verify");

@@ -13,13 +13,13 @@ const HELP = `gate <verb>: node <plugin>/scripts/gate.mjs <verb>
   repo add <path>                                           add a further git repo to the open run, measured from its HEAD
   attach <slug>                                             join an open run from another session
   note task|context|plan "<text>" [--files a,b] [--size t]  write the ledger sections
-  case add "<case>" --kind <kind> · case add --batch <file> (one <kind><TAB><case> per line) · case amend <id> "<case>" · case close <id> --test <file:name> | --na "<why>"
+  case add "<case>" --kind <kind> · case add --batch <file> (one <kind><TAB><case> per line) · case amend <id> "<case>" · case close <id> --test <file:name> | --ran "<part of the command>" | --na "<why>"
   step <n|key> done|skipped|na "<note>" [--evidence <ptr>]   close a playbook step (the close step: gate close)
   next                                                      the next step in full (verbs print it short after the first time)
   brief <skeptic|qa|worker|reviewer|reviewer-2|arbiter> [--files a,b | a.ts:1-400]   write a helper's packet
   huddle add <role> --file <file> · huddle resolve <H#.#> --evidence <ptr> · huddle dispute · huddle reply --file worker-<n>.md
   verify [--final] [--force] [--step verify-before]         run the verify commands, write verify.json; --final also runs the "when": "final" area suite; --force runs them all, even on a tree they are green on
-  verify --add "<cmd>" · verify --drop "<cmd>"              change what verify runs for this run only (gate.json is untouched)
+  verify --add "<cmd>" · verify --drop "<cmd>" [--user-ok "<words>"]   change what verify runs for this run only (gate.json is untouched); the last test command needs the user's words
   test <test file>...                                       run gate.json's testFiles on these files; with serialTests, one test run at a time
   setup [--apply [file] | --decline] --user-ok "<words>"   propose the faster test loop's gate.json keys; write them on the user's yes
   check                                                     what is still unmet (clean when nothing)

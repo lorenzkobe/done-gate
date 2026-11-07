@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, here, waiveArgs } from "./helpers.mjs";
+import { makeRepo, write, gate, here, waiveArgs, naArgs, userSays } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 
@@ -124,7 +124,7 @@ test("C6 refused: a case test excluded by a command's --ignore is not covered by
 test("C7 edge: a case closed with --na needs no coverage; a red or skipped command covers nothing", () => {
   const na = opened("rv-c7-na", [ok("pytest", "tests/test_other.py")], { "tests/test_other.py": "" });
   cli(na, "case", ["add", "it works", "--kind", "happy"]);
-  cli(na, "case", ["close", "C1", "--na", "covered by an existing fixture"]);
+  cli(na, "case", naArgs(na, "C1", "covered by an existing fixture"));
   cli(na, "verify");
   assert.equal(ruleLines(cli(na, "check"), "R18"), "");
 
@@ -221,7 +221,8 @@ test("C15 refused: with lint green and the only test command dropped, a closed c
   const tests = ok("pytest");
   const repo = opened("rv-c15", [ok("lint"), tests], { "tests/test_new.py": "def test_x(): pass\n" });
   caseOn(repo, "tests/test_new.py:test_x");
-  cli(repo, "verify", ["--drop", tests]);
+  userSays(repo, "drop the test command");
+  cli(repo, "verify", ["--drop", tests, "--user-ok", "drop the test command"]);
   cli(repo, "verify");
   assert.match(ruleLines(cli(repo, "check"), "R18"), /tests\/test_new\.py/);
 });
