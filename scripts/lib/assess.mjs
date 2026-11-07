@@ -8,7 +8,7 @@ import { editedLast, implementationHash, reopenWorkedOut, writersOf } from "./ru
 import { nextSeq } from "./events.mjs";
 import { evaluate } from "./rules.mjs";
 import { ensureSession, loadSession, saveSession } from "./session-state.mjs";
-import { diffSnapshots, gitChanged, gitDiffers, gitHead, gitNumstat, gitTracked, mergedIn, snapshot } from "./tree.mjs";
+import { diffSnapshots, gitChanged, gitBrought, gitDiffers, gitHead, gitNumstat, gitTracked, snapshot } from "./tree.mjs";
 import { repoPath } from "./paths.mjs";
 
 export function readVerify(dir) {
@@ -74,9 +74,10 @@ function editedSince(ledger, events) {
   return new Set(events.filter((e) => e.kind === "edit" && e.seq > since).map((e) => e.path));
 }
 
-// A reflog entry that only moved HEAD or recorded a merge; any other new entry (a commit, an amend,
-// a rebase or pull --rebase pick, am, cherry-pick, revert, a subject git adds later) is the session's own.
-const MOVE_ENTRY = /^(?:checkout|switch|reset|branch|commit \(merge\)|merge [^:]*|pull(?: [^(:]*)?|(?:pull --rebase|rebase)[^:]*\((?:start|finish|abort)\)):/;
+// A reflog entry that only moved HEAD, recorded a merge or replayed a commit; any other new entry (a
+// commit, an amend, a rebase --continue, which holds a conflict's fix, am, cherry-pick, revert, a
+// subject git adds later) is the session's own.
+const MOVE_ENTRY = /^(?:checkout|switch|reset|branch|commit \(merge\)|merge [^:]*|pull(?: [^(:]*)?|(?:pull --rebase|rebase)[^:]*\((?:start|finish|abort|pick|reword|edit|fixup|squash)\)):/;
 
 // A checkout, pull or rebase that only moved the tree to what commits hold (events.mjs).
 const gitMove = (e) => e.git === true && e.commits === false;
@@ -135,8 +136,41 @@ export function foldIntoBaseline(holder, paths, now, config) {
   if (rest === holder.lastSourceHash || rest === before) holder.lastSourceHash = implementationHash(now, config);
 }
 
+// The run's git commands that may commit, and the commit ids they made: known only when every such
+// command's reflog says which entries are its own (those above the top its start saw).
+function ownCommits(ledger, events) {
+  const commits = events.filter((e) => e.kind === "command" && e.git && !gitMove(e) && e.seq > (ledger.openedSeq ?? 0));
+  const starts = new Map(events.filter((e) => e.kind === "command-start" && "reflogTop" in e).map((e) => [e.toolUseId, e.reflogTop]));
+  const same = (a, b) => Boolean(a && b) && a.join("\t") === b.join("\t");
+  const madeBy = (e) => {
+    if (!e.reflog || !starts.has(e.toolUseId)) return null;
+    const top = starts.get(e.toolUseId);
+    const at = top ? e.reflog.findIndex((r) => same(r, top)) : e.reflog.length;
+    return at < 0 ? null : e.reflog.slice(0, at);
+  };
+  const made = commits.map(madeBy);
+  const known = made.every((m) => m !== null);
+  return { commits, known, mine: known ? [...new Set(made.flat().filter(([, , subject]) => !MOVE_ENTRY.test(subject)).map(([sha]) => sha))] : [] };
+}
+
+// What git brought into the main repo since the run opened, less the run's own commits; null when
+// that cannot be told. A declared repo's reflog is not recorded, so its files are never in it.
+export function broughtSinceOpen(root, ledger, events) {
+  const { known, mine } = ownCommits(ledger, events);
+  const from = ledger.baseline?.head;
+  const head = from ? gitHead(root) : null;
+  return known && head ? gitBrought(root, from, head, mine) : null;
+}
+
+// Which of `paths` hold what HEAD holds. An untracked file does not, though git diff HEAD does not list it.
+export function cleanAtHead(root, paths, now, repos) {
+  const dirty = paths.length ? gitNumstat(root, paths, "HEAD", { repos }) : new Map();
+  const tracked = paths.some((p) => p in now.files) ? gitTracked(root, repos) : new Set();
+  return paths.filter((p) => !dirty.has(p) && (!(p in now.files) || tracked.has(p)));
+}
+
 // Folds into the baseline a source file git changed since the HEAD last seen, clean against HEAD
-// and not the task's own; after a git command of the task's that may commit, only what merges brought in.
+// and not the task's own; after a git command of the task's that may commit, less that command's commits.
 function absorbForeign(root, ledger, now, config, events) {
   const base = ledger.baseline;
   const repos = ledger.repos ?? [];
@@ -156,22 +190,9 @@ function absorbForeign(root, ledger, now, config, events) {
     if (head && head !== last) ahead.push({ ...r, last, head });
   }
   if (!ahead.length) return false;
-  // after a committing git command only what merge commits brought in is git's, less what the
-  // session's own commits changed; with a command's reflog unknown nothing folds, as before
-  const commits = events.filter((e) => e.kind === "command" && e.git && !gitMove(e) && e.seq > (ledger.openedSeq ?? 0));
-  const starts = new Map(events.filter((e) => e.kind === "command-start" && "reflogTop" in e).map((e) => [e.toolUseId, e.reflogTop]));
-  const same = (a, b) => Boolean(a && b) && a.join("\t") === b.join("\t");
-  // a command's own entries: those above its start's top (all of them when the reflog was empty)
-  const madeBy = (e) => {
-    if (!e.reflog || !starts.has(e.toolUseId)) return null;
-    const top = starts.get(e.toolUseId);
-    const at = top ? e.reflog.findIndex((r) => same(r, top)) : e.reflog.length;
-    return at < 0 ? null : e.reflog.slice(0, at);
-  };
-  const made = commits.map(madeBy);
-  const known = made.every((m) => m !== null);
-  const mine = known ? made.flat().filter(([, , subject]) => !MOVE_ENTRY.test(subject)).map(([sha]) => sha) : [];
-  const changedBy = ahead.map((r) => (!commits.length ? gitChanged(r.dir, r.last, r.head) : known && !r.prefix ? mergedIn(r.dir, r.last, r.head, [...new Set(mine)]) : null));
+  // with a committing command's reflog unknown nothing folds, as before
+  const { commits, known, mine } = ownCommits(ledger, events);
+  const changedBy = ahead.map((r) => (!commits.length ? gitChanged(r.dir, r.last, r.head) : known && !r.prefix ? gitBrought(r.dir, r.last, r.head, mine) : null));
   if (changedBy.some((c) => c === null)) return false;
   const committed = new Set();
   ahead.forEach((r, i) => {
@@ -184,10 +205,7 @@ function absorbForeign(root, ledger, now, config, events) {
   const candidates = diffSnapshots(base, now).changed.filter((p) => config.isSource(p) && committed.has(p) && base.files[p]?.h !== "HEAD" && !held.has(p));
   const own = ownWrites(ledger, events, now, candidates, [], { timed: commits.length > 0 });
   const moved = candidates.filter((p) => !own.has(p));
-  const dirty = moved.length ? gitNumstat(root, moved, "HEAD", { repos }) : new Map();
-  // an untracked file is not what HEAD holds, though git diff HEAD does not list it
-  const tracked = moved.some((p) => p in now.files) ? gitTracked(root, repos) : new Set();
-  const foreign = moved.filter((p) => !dirty.has(p) && (!(p in now.files) || tracked.has(p)));
+  const foreign = cleanAtHead(root, moved, now, repos);
   if (!foreign.length) return true;
   foldIntoBaseline(ledger, foreign, now, config);
   ledger.foreign = [...new Set([...(ledger.foreign ?? []), ...foreign])].sort();

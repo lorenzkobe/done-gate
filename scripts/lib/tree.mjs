@@ -137,12 +137,24 @@ export function headReflog(root, n = 30) {
   }
 }
 
-// What merge commits brought in from `from` to `to`, less every file the session's own commits
-// (`own`, commit ids) changed against their first parent. Null if git fails.
-export function mergedIn(root, from, to, own) {
+const REFLOG_READ = 200;
+const REFLOG_KEPT = 30;
+const REFLOG_RECENT_MS = 60 * 60 * 1000;
+
+// The reflog a git command's event keeps. A long rebase needs every entry back to the one its
+// start saw, the first older than the window here; the rest would only grow the event log.
+export function commandReflog(root) {
+  const all = headReflog(root, REFLOG_READ);
+  const older = all.findIndex(([, at]) => at * 1000 < Date.now() - REFLOG_RECENT_MS);
+  return all.slice(0, Math.max(REFLOG_KEPT, older < 0 ? all.length : older + 1));
+}
+
+// What git changed from `from` to `to`, less every file the session's own commits (`own`, commit
+// ids) changed against their first parent. Null if git fails.
+export function gitBrought(root, from, to, own) {
   try {
     const mine = new Set(own.flatMap((sha) => firstParentChain(root, ["-1", sha]).flatMap((c) => c.files)));
-    return new Set(firstParentChain(root, [`${from}..${to}`]).filter((c) => c.merge).flatMap((c) => c.files).filter((p) => !mine.has(p)));
+    return new Set(git(root, ["diff", "--name-only", "--no-renames", "-z", from, to]).split("\0").filter((p) => p && !mine.has(p)));
   } catch {
     return null;
   }

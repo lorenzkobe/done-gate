@@ -293,7 +293,9 @@ checked.
   fence let it start, so the time spent thinking before it does not count. A file both
   sessions' commands may have written stays this session's R1, and `gate rebaseline "<why>"`
   releases it; rebaseline never releases a file this task edited, nor one only another
-  session's background command could account for. A change no session's events explain stays
+  session's background command could account for. A file git brought while a command chained
+  git with something else (`npm run build && git rebase main`) is released if it is clean at HEAD
+  and no command without git wrote it last. A change no session's events explain stays
   this session's.
 - **A verb finds its own session.** Where the shell has no `CLAUDE_CODE_SESSION_ID`, the
   fence, which always has the real id, writes it to `.claude/gate/pids/<pid>` for its own

@@ -8,6 +8,7 @@ import { appendEvents, nextSeq, readEvents, toolUse } from "./events.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { ancestorPids, pidsDir } from "./context.mjs";
 import { headReflog } from "./tree.mjs";
+import { runsTests } from "./verify.mjs";
 
 // Files only the gate's own verbs may write. A model that could edit these could
 // forge its evidence, so the deny is unconditional and every attempt is logged.
@@ -490,6 +491,11 @@ const GIT_MOVES = new Set(["checkout", "switch", "restore", "reset", "pull", "fe
 const STASH_MOVES = new Set(["pop", "apply", "drop", "clear", "list", "show"]);
 const RESUMES = /\s--(?:continue|edit-todo)(?=\s|$)/;
 const RUNS_OR_STOPS = /\s(?:--exec(?:=|\s|$)|--interactive(?=\s|$)|--rebase=i\w*|-[a-zA-Z]*[ix][a-zA-Z]*(?=\s|$))/;
+// A test run chained with a move stays a move, as it writes no source. A script with a suffix
+// (test:fix), an update flag, a redirect or make can write or do anything.
+const TEST_WRITES = /^(?:-[a-zA-Z]*[uw][a-zA-Z]*|--update\S*|--fix\S*|--write\S*|--watch\S*|test[:\w-]+)$/;
+const plainTestRun = (words, text) => runsTests(text) && path.basename(words[0].text) !== "make" && !words.some((w) => redirect(w) !== null || TEST_WRITES.test(w.text));
+
 export function gitMoves(raw) {
   let moved = false;
   for (const seg of segments(withoutHeredocs(String(raw)))) {
@@ -497,7 +503,7 @@ export function gitMoves(raw) {
     if (!words.length) continue;
     const text = words.map((w) => w.text).join(" ");
     if (words[0].text !== "git") {
-      if (words[0].text === "cd" || readsOnly(text)) continue;
+      if (words[0].text === "cd" || readsOnly(text) || plainTestRun(words, text)) continue;
       return false;
     }
     let i = 1;
