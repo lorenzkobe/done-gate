@@ -189,6 +189,7 @@ export function loadConfig(root, repos = []) {
     testFiles: typeof r.testFiles === "string" && r.testFiles.includes("{files}") ? r.testFiles : null,
     testRelated: typeof r.testRelated === "string" && r.testRelated.includes("{files}") ? r.testRelated : null,
     serialTests: r.serialTests === true,
+    strengthReset: typeof r.strengthReset === "string" && r.strengthReset.trim() ? r.strengthReset.trim() : null,
     verify: normaliseVerify(r.verify ?? defaultVerify(root), DEFAULTS.verifyTimeout),
     verifySource: Array.isArray(r.verify) ? ".claude/gate.json" : "package.json scripts",
   };

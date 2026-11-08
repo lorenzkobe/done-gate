@@ -9,7 +9,7 @@ const MARKERS = /\/\/|\/\*|<!--|--|#|^\s*\*(?!\/)/g;
 
 // The quote char still open at index end, or null; a different quote inside an open string
 // and a backslash-escaped quote do not count.
-function openQuoteAt(line, end) {
+export function openQuoteAt(line, end) {
   let open = null;
   for (let i = 0; i < end; i++) {
     const ch = line[i];

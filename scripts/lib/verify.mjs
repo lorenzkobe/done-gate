@@ -43,7 +43,7 @@ function tail(text) {
 
 // Runs one command in its own process group. Resolves on the command's own exit, not
 // on stream close, so a background child that inherited stdout cannot hold us hostage.
-export function runCommand({ cmd, timeout, onlyNew = false, whole = false }, cwd, { onSpawn = () => {}, env = {} } = {}) {
+export function runCommand({ cmd, timeout, onlyNew = false, whole = false }, cwd, { onSpawn = () => {}, env = {}, unset = [] } = {}) {
   return new Promise((resolve) => {
     const started = Date.now();
     let output = "";
@@ -52,7 +52,9 @@ export function runCommand({ cmd, timeout, onlyNew = false, whole = false }, cwd
     let settled = false;
     let lastOutputAt = null;
     let atKill = {};
-    const child = spawn(cmd, { cwd, shell: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CI: "1", FORCE_COLOR: "0", ...env } });
+    const childEnv = { ...process.env, CI: "1", FORCE_COLOR: "0", ...env };
+    for (const key of unset) delete childEnv[key];
+    const child = spawn(cmd, { cwd, shell: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"], env: childEnv });
     onSpawn(child.pid);
     const collect = (chunk) => {
       const text = chunk.toString("utf8");

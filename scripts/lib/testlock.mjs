@@ -68,13 +68,13 @@ const SIGNALS = { SIGINT: 2, SIGTERM: 15 };
 // The repo-wide test lock: one run at a time, others wait. Taken by linking a fully written
 // temp file, so a reader never sees half a lock. Resolves to the held lock; throws BusyError
 // past the wait limit.
-export async function acquireTestLock(stateDir, label, { onWait = () => {} } = {}) {
+export async function acquireTestLock(stateDir, label, { onWait = () => {}, wait = true } = {}) {
   mkdirSync(stateDir, { recursive: true });
   const file = lockPath(stateDir);
   const mine = { pid: process.pid, pgid: null, label, startedAt: new Date().toISOString() };
   const tmp = `${file}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(mine));
-  const waitMs = Number(process.env.DONE_GATE_TEST_WAIT ?? WAIT_SECONDS) * 1000;
+  const waitMs = wait ? Number(process.env.DONE_GATE_TEST_WAIT ?? WAIT_SECONDS) * 1000 : 0;
   const deadline = Date.now() + waitMs;
   let told = false;
   try {
