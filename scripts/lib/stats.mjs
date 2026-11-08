@@ -28,6 +28,7 @@ const WORKER_FILE = /^(?:brief-)?worker-\d+\.md$/;
 const AFTER_CLOSE_MS = 30 * DAY_MS;
 const SESSION_ID = /^[\w-]+$/;
 const REVIEWER_TYPE = /^(?:done-gate:)?reviewer(?:-2)?$/;
+const WORKER_TYPE = /^(?:done-gate:)?worker$/;
 const NOT_A_FAILURE = new Set(["finished", "waiting"]);
 const REFUSAL_WORDS = 4;
 const BESIDE = "read beside another command";
@@ -443,15 +444,15 @@ function stoppedLines(counted, outside) {
   return out;
 }
 
-// One run's reviewers: each start paired with the same agent's next stop, whose agent type may be
-// empty, so a resumed helper's gap is not reviewing. A start with no stop has no known end.
-function reviewerSpans(records) {
-  const reviewers = new Set(records.filter((e) => e.kind === "subagent-start" && REVIEWER_TYPE.test(e.agentType ?? "")).map((e) => e.agent));
+// One run's helpers of a type: each start paired with the same agent's next stop, whose agent type
+// may be empty, so a resumed helper's gap is not work. A start with no stop has no known end.
+function agentSpans(records, type) {
+  const agents = new Set(records.filter((e) => e.kind === "subagent-start" && type.test(e.agentType ?? "")).map((e) => e.agent));
   const open = new Map();
   const spans = [];
   let noStop = 0;
   for (const e of records) {
-    if (!reviewers.has(e.agent)) continue;
+    if (!agents.has(e.agent)) continue;
     if (e.kind === "subagent-start") {
       if (open.has(e.agent)) noStop += 1;
       open.set(e.agent, e.seq);
@@ -460,7 +461,45 @@ function reviewerSpans(records) {
       open.delete(e.agent);
     }
   }
-  return { reviewers, spans, noStop: noStop + open.size };
+  return { agents, spans, noStop: noStop + open.size };
+}
+
+// The minutes two or more spans ran at once.
+function overlapMinutes(spans) {
+  const edges = spans.flatMap(([from, to]) => [[from, 1], [to, -1]]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  let out = 0;
+  let total = 0;
+  let last = null;
+  for (const [at, step] of edges) {
+    if (out >= 2) total += at - last;
+    out += step;
+    last = at;
+  }
+  return total / SEQ_PER_MINUTE;
+}
+
+// Closed runs by how their workers ran: two at once, one at a time, or none, with the pace and
+// the reviewers' findings of each.
+function workerLines(runRecords) {
+  const timed = runRecords.filter(({ ledger, records }) => records.length && !ledger.closedLate);
+  if (!timed.length) return [`workers by run: ${MISSING}`];
+  const classes = { parallel: [], "single worker": [], "lead only": [] };
+  for (const r of timed) {
+    const { agents, spans } = agentSpans(r.records, WORKER_TYPE);
+    const overlap = overlapMinutes(spans);
+    classes[overlap > 0 ? "parallel" : agents.size ? "single worker" : "lead only"].push({ ...r, overlap });
+  }
+  const text = (name, group) => {
+    if (!group.length) return `  ${name}: ${MISSING}`;
+    const paced = group.filter(({ ledger }) => ledger.lines > 0 && minutesOf(ledger) !== null);
+    const lines = paced.reduce((n, { ledger }) => n + ledger.lines, 0);
+    const minutes = paced.reduce((n, { ledger }) => n + minutesOf(ledger), 0);
+    const pace = lines ? `${((minutes / lines) * 100).toFixed(1)} min per 100 lines` : `min per 100 lines ${MISSING}`;
+    const findings = group.flatMap(({ ledger }) => ledger.huddles).filter((h) => REVIEWERS.has(h.role)).reduce((n, h) => n + h.actOn.length, 0);
+    const overlap = name === "parallel" ? `, ${group.reduce((n, g) => n + g.overlap, 0).toFixed(1)} overlap minutes` : "";
+    return `  ${name}: ${ofRuns(group.length, timed.length)}, ${pace}, ${findings} finding${findings === 1 ? "" : "s"}${overlap}`;
+  };
+  return [`workers by run: ${ofRuns(timed.length, runRecords.length)}`, ...Object.entries(classes).map(([name, group]) => text(name, group))];
 }
 
 function unionMinutes(spans) {
@@ -496,11 +535,11 @@ function reviewTimeLines(runRecords) {
   let waiting = 0;
   let withWait = 0;
   for (const { ledger, records } of timed) {
-    const found = reviewerSpans(records);
-    if (found.reviewers.size) withReviewer += 1;
+    const found = agentSpans(records, REVIEWER_TYPE);
+    if (found.agents.size) withReviewer += 1;
     running += unionMinutes(found.spans);
     noStop += found.noStop;
-    const wait = waitMinutes(ledger, records, found.reviewers);
+    const wait = waitMinutes(ledger, records, found.agents);
     if (wait !== null) {
       waiting += wait;
       withWait += 1;
@@ -529,12 +568,12 @@ function eventLines(recordsOf, closed, every, { version, cutoff, forFile }) {
   const runRecords = closed.map((ledger) => ({ ledger, records: ledger.sessions.flatMap((s) => records.get(s) ?? []).filter(inRun(ledger)).sort((a, b) => a.seq - b.seq) }));
   const covered = runRecords.filter((r) => r.records.length).length;
   const end = "lead-turn failures: not recorded";
-  if (!covered) return [`events: ${MISSING}`, `refusals: ${MISSING}`, `turns stopped: ${MISSING}`, `reviewer time: ${MISSING}`, `review wait: ${MISSING}`, `helper failures: ${MISSING}`, end];
+  if (!covered) return [`events: ${MISSING}`, `refusals: ${MISSING}`, `turns stopped: ${MISSING}`, `reviewer time: ${MISSING}`, `review wait: ${MISSING}`, `workers by run: ${MISSING}`, `helper failures: ${MISSING}`, end];
   const inSomeRun = (runs, e) => runs.some((l) => l.sessions.includes(e.session) && inRun(l)(e));
   const all = [...records.values()].flat();
   const counted = all.filter((e) => inSomeRun(closed, e));
   const outside = version ? [] : all.filter((e) => e.kind === "block" && e.seq / 1000 >= cutoff && !inSomeRun(every, e));
-  return [`events: ${ofRuns(covered, closed.length)}`, ...refusalLines(counted, forFile), ...stoppedLines(counted, outside), ...reviewTimeLines(runRecords), ...failureLines(counted), end];
+  return [`events: ${ofRuns(covered, closed.length)}`, ...refusalLines(counted, forFile), ...stoppedLines(counted, outside), ...reviewTimeLines(runRecords), ...workerLines(runRecords), ...failureLines(counted), end];
 }
 
 // Every stopped turn on disk per rule, with the verdicts that still have their block. Verdicts and

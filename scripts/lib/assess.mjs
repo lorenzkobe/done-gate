@@ -10,6 +10,7 @@ import { evaluate, settleSteps } from "./rules.mjs";
 import { ensureSession, loadSession, saveSession } from "./session-state.mjs";
 import { diffSnapshots, gitChanged, gitBrought, gitDiffers, gitHead, gitNumstat, gitTracked, snapshot } from "./tree.mjs";
 import { repoPath } from "./paths.mjs";
+import { cutWorkers } from "./diagnose.mjs";
 
 export function readVerify(dir) {
   const file = path.join(dir, "verify.json");
@@ -380,6 +381,8 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
     reviews: current ? reviewFiles(current.dir) : [],
     lastMessage,
   };
+  // a cut worker's piece is not done: the implement step waits for it (settleSteps)
+  if (current?.ledger.pieces) state.cutWorkers = cutWorkers(state);
   // the steps the gate has the facts for close here, on the whole state; saved only when one did
   if (current && settleSteps(state)) saveLedger(current.dir, current.ledger);
   return state;

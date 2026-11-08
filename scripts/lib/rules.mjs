@@ -1375,8 +1375,8 @@ export function settleSteps(state) {
     else if (codeAt === Infinity && verify && Date.parse(verify.finishedAt) > since && (verify.commands ?? []).some((c) => !c.skipped && runsTests(c.cmd, config.testFiles))) close("tests", `gate verify ran the tests after ${list(tests)}`, "verify.json");
   }
 
-  // on a pieces run the code is whole once every group was briefed and no worker is still out
-  const piecesOut = ledger.pieces && (nextGroup(ledger) >= 0 || workerRuns(state).some((r) => r.running));
+  // on a pieces run the code is whole once every group was briefed and no worker is out or cut
+  const piecesOut = ledger.pieces && (nextGroup(ledger) >= 0 || workerRuns(state).some((r) => r.running) || state.cutWorkers?.length > 0);
   if (changed.some(isCode) && verify && !piecesOut && !verifyProblem(state, { final: false })) close("implement", "a green `gate verify` ran on this code", "verify.json");
 
   const last = lastEditSeq(state, config, ledger);

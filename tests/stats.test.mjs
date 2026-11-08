@@ -1576,3 +1576,39 @@ test("6.11 strength check time: the median over the runs that ran it", () => {
   writeRun(repo, "2026-01-04-d", closedRun({ daysAgo: 2 }));
   assert.match(line(ok(repo), "strength check:") ?? "", /strength check: 3 of 4 runs, median 4\.0 s/, ok(repo));
 });
+
+// 7.4: closed runs split by how their workers ran
+const workerStart = (minute, agent) => ({ seq: seqAt(minute), kind: "subagent-start", agent, agentType: "done-gate:worker" });
+const workerStop = (minute, agent) => ({ seq: seqAt(minute), kind: "subagent-stop", agent, agentType: "" });
+const measured = (lines, findings = 0) => ({ tier: { measured: { tier: "standard", lines } }, huddles: [{ role: "reviewer", file: "review-1.md", actOn: Array.from({ length: findings }, () => finding()) }] });
+
+test("7.4 C7 happy: workers by run splits parallel, single worker and lead only, with overlap minutes", () => {
+  const repo = makeRepo("stats-w1");
+  writeRun(repo, "parallel", hourRun(["S1"], measured(1000, 2)));
+  writeRun(repo, "single", hourRun(["S2"], measured(500, 1)));
+  writeRun(repo, "lead", hourRun(["S3"], measured(2000)));
+  writeEvents(repo, "S1", [workerStart(1, "w1"), workerStart(11, "w2"), workerStop(31, "w1"), workerStop(41, "w2")]);
+  writeEvents(repo, "S2", [workerStart(1, "w3"), workerStop(31, "w3"), workerStart(36, "w3"), workerStop(41, "w3")]);
+  writeEvents(repo, "S3", [userPrompt(1)]);
+  const out = ok(repo);
+  assert.match(line(out, "workers by run:"), /^workers by run: 3 of 3 runs$/);
+  assert.match(line(out, "parallel:"), /parallel: 1 of 3 runs, 6\.0 min per 100 lines, 2 findings, 20\.0 overlap minutes$/);
+  assert.match(line(out, "single worker:"), /single worker: 1 of 3 runs, 12\.0 min per 100 lines, 1 finding$/);
+  assert.match(line(out, "lead only:"), /lead only: 1 of 3 runs, 3\.0 min per 100 lines, 0 findings$/);
+});
+
+test("7.4 C8 edge: a class with no run prints missing, no events prints missing, and --save keeps the numbers", () => {
+  const repo = makeRepo("stats-w2");
+  writeRun(repo, "lead", hourRun(["S1"], measured(600)));
+  writeEvents(repo, "S1", [userPrompt(1)]);
+  const out = ok(repo);
+  assert.match(line(out, "parallel:"), /parallel: missing$/);
+  assert.match(line(out, "single worker:"), /single worker: missing$/);
+  assert.match(line(out, "lead only:"), /lead only: 1 of 1 runs, 10\.0 min per 100 lines, 0 findings$/);
+  const none = makeRepo("stats-w3");
+  writeRun(none, "lead", hourRun(["S9"], measured(600)));
+  assert.match(line(ok(none), "workers by run:"), /^workers by run: missing$/);
+  const file = saveTarget("stats-w2");
+  assert.equal(save(repo, file).status, 0);
+  assert.match(readFileSync(file, "utf8"), /"workers by run \/ lead only": "1 of 1 runs, 10\.0 min per 100 lines, 0 findings"/);
+});

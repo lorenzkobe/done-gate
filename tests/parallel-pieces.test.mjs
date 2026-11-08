@@ -577,3 +577,154 @@ test("7.3 C10 reported-surface: the Test command line and the worker role say te
   const role = readFileSync(path.join(pluginRoot, "agents/worker.md"), "utf8");
   assert.doesNotMatch(role, /tests already written/i);
 });
+
+// 7.4: a failed worker holds only its own piece, and the whole route end to end
+
+const cutOff = (repo, id) => hook(repo, { hook_event_name: "UserPromptSubmit", prompt: `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>Agent "Worker" stopped at its 100-turn limit (partial result; SendMessage to task-id to continue)</summary>\n</task-notification>` });
+
+test("7.4 C1 happy: one of three workers cut off stops counting as running; the others run on and their edits stay", () => {
+  const repo = pieced("pp4-c1", ["src/a.ts", "src/b.ts", "src/c.ts"]);
+  spawned(repo, "W1", "src/a.ts");
+  spawned(repo, "W2", "src/b.ts");
+  spawned(repo, "W3", "src/c.ts");
+  cutOff(repo, "W2");
+  const running = Object.fromEntries(runsOf(repo).map((r) => [r.agent, r.running]));
+  assert.deepEqual(running, { W1: true, W2: false, W3: true });
+  editedBy(repo, "src/a.ts", "W1");
+  editedBy(repo, "src/c.ts", "W3");
+  stopped(repo, "W1");
+  stopped(repo, "W3");
+  const edits = readEvents(stateDir(repo), "S1").filter((e) => e.kind === "edit").map((e) => [e.agent, e.path]);
+  assert.deepEqual(edits, [["W1", "src/a.ts"], ["W3", "src/c.ts"]]);
+  assert.equal(editAs(repo, "src/b.ts"), null, "a cut worker's file is free again");
+});
+
+test("7.4 C2 happy: gate diagnose names a cut worker's piece and re-briefs that piece", async () => {
+  const { helperProblems } = await import("../scripts/lib/diagnose.mjs");
+  const repo = pieced("pp4-c2", ["src/a.ts", "src/b.ts", "src/c.ts"]);
+  spawned(repo, "W1", "src/a.ts");
+  spawned(repo, "W2", "src/b.ts");
+  cutOff(repo, "W2");
+  assert.match(cli(repo, "diagnose"), /worker W2 on src\/b\.ts stopped at its turn limit/);
+  const later = Date.now() + 46 * 60 * 1000;
+  const gone = helperProblems({ events: readEvents(stateDir(repo), "S1"), ledger: ledgerOf(repo), dir: path.join(repo, runRel(repo)), root: repo, now: later }).find((p) => p.agent === "W1");
+  assert.match(gone.line, /worker W1 on src\/a\.ts has been silent/);
+  assert.match(gone.line, /`gate brief worker --files src\/a\.ts` and spawn a fresh one/);
+});
+
+function cutGroupOne(name) {
+  const repo = pieced(name);
+  spawned(repo, "W1", "src/a.ts");
+  spawned(repo, "W2", "src/b.ts");
+  cutOff(repo, "W1");
+  stopped(repo, "W2");
+  cli(repo, "verify");
+  return repo;
+}
+
+test("7.4 C3 refused: group 2 waits while a group 1 worker is cut off and not handled", () => {
+  const repo = cutGroupOne("pp4-c3");
+  const why = refused(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts");
+  assert.match(why, /group 2 waits for group 1: worker 1 on src\/a\.ts was cut off/);
+  assert.match(why, /gate diagnose/);
+});
+
+test("7.4 C4 happy: a re-brief of the cut piece keeps its number, binds the new agent, then group 2 goes", () => {
+  const repo = cutGroupOne("pp4-c4");
+  assert.match(cli(repo, "brief", "worker", "--files", "src/a.ts"), /brief-worker-1\.md/);
+  started(repo, "W9");
+  fence(repo, "Read", { file_path: packetPath(repo, 1) }, ["W9", "worker"]);
+  assert.deepEqual(runsOf(repo).find((r) => r.agent === "W9"), { agent: "W9", n: 1, running: true });
+  assert.match(refused(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts"), /worker 1 is still running/);
+  stopped(repo, "W9");
+  cli(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts");
+});
+
+test("7.4 C5 happy: gate diagnose --handled on the cut worker lets group 2 go", () => {
+  const repo = cutGroupOne("pp4-c5");
+  cli(repo, "diagnose", "--handled", "W1");
+  cli(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts");
+});
+
+test("7.4 C6 happy: end to end, four workers at once, then group 2, then one review holding every piece", () => {
+  const repo = pieced("pp4-c6", ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/a.ts,src/e.ts"]);
+  assert.deepEqual(ledgerOf(repo).pieces.groups, [[0, 1, 2, 3], [4]]);
+  atImplement(repo);
+  const one = [["W1", "src/a.ts"], ["W2", "src/b.ts"], ["W3", "src/c.ts"], ["W4", "src/d.ts"]];
+  for (const [id, file] of one) spawned(repo, id, file);
+  for (const [id, file] of one) {
+    assert.equal(editAs(repo, file, [id, "worker"]), null, `${id} on ${file}`);
+    assert.equal(bash(repo, `sed -i '' s/x/x/ ${file}`, [id, "worker"]), null, `${id} shell on ${file}`);
+  }
+  for (const [id, file] of one) editedBy(repo, file, id);
+  for (const [id] of one) stopped(repo, id);
+  cli(repo, "verify");
+  spawned(repo, "W5", "src/a.ts,src/e.ts");
+  for (const file of ["src/a.ts", "src/e.ts"]) {
+    assert.equal(editAs(repo, file, ["W5", "worker"]), null);
+    editedBy(repo, file, "W5");
+  }
+  stopped(repo, "W5");
+  cli(repo, "verify");
+  const edits = readEvents(stateDir(repo), "S1").filter((e) => e.kind === "edit").map((e) => `${e.agent}:${e.path}`);
+  assert.deepEqual(edits, ["W1:src/a.ts", "W2:src/b.ts", "W3:src/c.ts", "W4:src/d.ts", "W5:src/a.ts", "W5:src/e.ts"]);
+  assert.equal(readEvents(stateDir(repo), "S1").filter((e) => e.kind === "deny").length, 0, "no refusal on the way");
+  const packet = packetText(cli(repo, "brief", "reviewer"));
+  for (const f of ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts"]) assert.match(packet, new RegExp(`\\+\\+\\+ b/${f.replace(".", "\\.")}`), f);
+});
+
+test("7.4 C9 happy: once a fresh worker finished the cut piece, diagnose lists nothing; failures on one piece count together", async () => {
+  const { helperProblems } = await import("../scripts/lib/diagnose.mjs");
+  const repo = cutGroupOne("pp4-c9");
+  cli(repo, "brief", "worker", "--files", "src/a.ts");
+  started(repo, "W9");
+  fence(repo, "Read", { file_path: packetPath(repo, 1) }, ["W9", "worker"]);
+  cutOff(repo, "W9");
+  const problems = () => helperProblems({ events: readEvents(stateDir(repo), "S1"), ledger: ledgerOf(repo), dir: path.join(repo, runRel(repo)), root: repo });
+  assert.deepEqual(problems().map((p) => [p.agent, p.attempts]), [["W9", 2]]);
+  started(repo, "W8");
+  fence(repo, "Read", { file_path: packetPath(repo, 1) }, ["W8", "worker"]);
+  stopped(repo, "W8");
+  assert.deepEqual(problems(), []);
+  assert.match(cli(repo, "diagnose"), /no helper problems/);
+  cli(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts");
+});
+
+test("7.4 C10 edge: a worker cut before it read its packet names no piece and still holds the next group", () => {
+  const repo = pieced("pp4-c10");
+  spawned(repo, "W1", "src/a.ts");
+  cli(repo, "brief", "worker", "--files", "src/b.ts");
+  started(repo, "W2");
+  cutOff(repo, "W2");
+  stopped(repo, "W1");
+  cli(repo, "verify");
+  assert.match(cli(repo, "diagnose"), /worker W2 stopped at its turn limit/);
+  assert.doesNotMatch(cli(repo, "diagnose"), /W2 on /);
+  assert.match(refused(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts"), /worker W2 was cut off before it read its packet/);
+  cli(repo, "diagnose", "--handled", "W2");
+  cli(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts");
+});
+
+test("7.4 C11 refused: a cut piece holds the reviewer brief and the implement step's self-close", () => {
+  const repo = pieced("pp4-c11", ["src/a.ts", "src/b.ts"]);
+  atImplement(repo);
+  spawned(repo, "W1", "src/a.ts");
+  spawned(repo, "W2", "src/b.ts");
+  editedBy(repo, "src/a.ts", "W1");
+  stopped(repo, "W1");
+  cutOff(repo, "W2");
+  cli(repo, "verify");
+  cli(repo, "check");
+  assert.equal(ledgerOf(repo).steps.find((s) => s.key === "implement").state, null);
+  assert.match(refused(repo, "brief", "reviewer"), /worker 2 on src\/b\.ts was cut off/);
+  cli(repo, "diagnose", "--handled", "W2");
+  cli(repo, "check");
+  assert.equal(ledgerOf(repo).steps.find((s) => s.key === "implement").state, "DONE");
+  cli(repo, "brief", "reviewer");
+});
+
+test("7.4 C12 refused: re-briefing the cut piece without spawning a worker keeps the next group waiting", () => {
+  const repo = cutGroupOne("pp4-c12");
+  cli(repo, "brief", "worker", "--files", "src/a.ts");
+  assert.match(refused(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts"), /worker 1 on src\/a\.ts was cut off/);
+});

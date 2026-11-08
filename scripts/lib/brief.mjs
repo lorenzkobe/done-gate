@@ -12,6 +12,7 @@ import { OWN_FILE } from "./guard.mjs";
 import { LOOKUP_EXAMPLE, newRules, waitingDisputes, fixCheckDone, capUnitsOf, nextPiece, roundOnDisk, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, pieceBriefed, reviewScope, runningPieces, uncovered, unfinishedFile, unfinishedVerify, verifyProblem, workerRuns } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
+import { cutText, cutWorkers } from "./diagnose.mjs";
 import { nextSeq } from "./events.mjs";
 import { caseTestFile, relatedTests, runsTests, verifyEntries } from "./verify.mjs";
 import { capRun, pickBreaks, runBreaks } from "./strength.mjs";
@@ -449,6 +450,9 @@ function pieceBrief(state, owned) {
   const groupOf = (j) => groups.findIndex((g) => g.includes(j)) + 1;
   const never = groups.slice(0, group).flat().find((j) => !pieceBriefed(state.ledger, list[j]));
   if (never !== undefined) throw new UsageError(`group ${group + 1} waits for group ${groupOf(never)}: ${list[never].join(",")} has not been briefed (\`gate brief worker --files ${list[never].join(",")}\`)`);
+  // a worker cut before it read its packet could hold any earlier piece
+  const cut = cutWorkers(state).find((p) => !p.piece || groups.slice(0, group).flat().some((j) => samePiece(list[j], p.piece)));
+  if (cut) throw new UsageError(`group ${group + 1} waits for group ${cut.piece ? groupOf(list.findIndex((q) => samePiece(q, cut.piece))) : group}: ${cutText(cut)}`);
   const earlier = running.find((r) => groups.slice(0, group).flat().some((j) => samePiece(list[j], r.files)));
   if (earlier) throw new UsageError(`group ${group + 1} waits for group ${groupOf(list.findIndex((p) => samePiece(p, earlier.files)))}: worker ${earlier.n} is still running`);
   const red = verifyProblem(state, { final: false });
@@ -468,6 +472,8 @@ export const verbs = {
     let piece = null;
     const out = reviewing && state.ledger.pieces ? workerRuns(state).find((r) => r.running) : null;
     if (out) throw new UsageError(`a review round waits while ${workerName(out)} is still running: its packet would show half-done work`);
+    const cut = reviewing && state.ledger.pieces ? cutWorkers(state)[0] : null;
+    if (cut) throw new UsageError(`a review round waits for a cut piece: ${cutText(cut)}`);
     if (reviewing) {
       const scope = reviewScope(state);
       const named = flag(ctx.args, "--files");

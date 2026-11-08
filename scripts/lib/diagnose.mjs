@@ -4,7 +4,7 @@ import { UsageError } from "./context.mjs";
 import { readEvents } from "./events.mjs";
 import { currentLedger, isDone, loadLedger, saveLedger } from "./ledger.mjs";
 import { toPosixRel } from "./paths.mjs";
-import { briefOf, fileRole, HELPER_MAX_MS, helperAlive, helpersOut, unfinishedFile } from "./rules.mjs";
+import { briefOf, fileRole, HELPER_MAX_MS, helperAlive, helpersOut, unfinishedFile, workerRuns } from "./rules.mjs";
 
 // What a cut helper's notice means and what the lead does next. Outages, a cause only the user
 // can fix and a stop someone chose are nobody's failure: they never move the ladder.
@@ -27,10 +27,12 @@ const HELPER_FILE = /^(?:skeptic|review|review2|arbiter)-\d+\.md$/;
 const summaryOf = (e) => (/<summary>([\s\S]*?)<\/summary>/.exec(e.text ?? "")?.[1] ?? "").replace(/^Agent ".*?" /s, "").trim();
 
 // The file a helper works on: the one it wrote in the run dir, else the one brief of its role
-// dated before its first start that no other helper wrote. A worker or QA, or a helper two
-// such briefs could be for, is counted under its own id.
-function keyOf(agent, writes, claimed, records) {
-  if (agent.role === "worker" || agent.role === "qa") return agent.id;
+// dated before its first start that no other helper wrote. A worker goes by the packet it read,
+// so a fresh worker on the same piece takes over its record; QA, a worker that read none, or a
+// helper two such briefs could be for, is counted under its own id.
+function keyOf(agent, writes, claimed, records, bound) {
+  if (agent.role === "worker") return bound.get(agent.id) != null ? `worker-${bound.get(agent.id)}.md` : agent.id;
+  if (agent.role === "qa") return agent.id;
   if (writes.get(agent.id)) return writes.get(agent.id);
   const fits = Object.entries(records).filter(([f, r]) => fileRole(f) === agent.role && !claimed.has(f) && [...(r.earlier ?? []), r.seq].some((s) => s < agent.first));
   return fits.length === 1 ? fits[0][0] : agent.id;
@@ -75,9 +77,10 @@ export function helperProblems({ events, ledger, dir, root, now = Date.now() }) 
   }
   const claimed = new Set(writes.values());
   const records = { ...(ledger.briefed ?? {}), ...(ledger.seen ?? {}) };
+  const bound = new Map(workerRuns({ ledger, events }).map((r) => [r.agent, r.n]));
   const groups = new Map();
   for (const a of agents.values()) {
-    const key = keyOf(a, writes, claimed, records);
+    const key = keyOf(a, writes, claimed, records, bound);
     groups.set(key, [...(groups.get(key) ?? []), a.id]);
   }
 
@@ -106,15 +109,25 @@ export function helperProblems({ events, ledger, dir, root, now = Date.now() }) 
     }
     if (cause === "no-file" || cause === "gone") attempts += 1;
 
-    const p = { agent, role, key, file, cause, attempts, seq: decides.seq };
+    // a worker's record is its packet's brief, which names the piece it re-briefs
+    const record = file ? briefOf(ledger, file) : role === "worker" && key !== agent ? ledger.briefed?.[key] ?? null : null;
+    const piece = role === "worker" && Array.isArray(record?.files) ? record.files : null;
+    const p = { agent, role, key, file, piece, n: piece ? Number(/\d+/.exec(key)[0]) : null, cause, attempts, seq: decides.seq };
     p.step = stepFor(cause, attempts);
     const raw = cause === "unknown" ? `: "${summaryOf(decides)}"` : "";
-    const count = attempts > 1 ? ` (failure ${attempts} on this ${file ? "file" : "helper"})` : "";
-    p.line = `${role} ${agent}${file ? ` on ${file}` : ""} ${SAYS[cause]}${raw}${count}: ${nextText(p.step, p, file ? briefOf(ledger, file) : null, dir)}`;
+    const count = attempts > 1 ? ` (failure ${attempts} on this ${file ? "file" : piece ? "piece" : "helper"})` : "";
+    p.line = `${role} ${agent}${file ? ` on ${file}` : piece ? ` on ${piece.join(", ")}` : ""} ${SAYS[cause]}${raw}${count}: ${nextText(p.step, p, record, dir)}`;
     problems.push(p);
   }
   return problems.sort((a, b) => a.seq - b.seq);
 }
+
+// The workers of a pieces run cut off and not handled: a fresh worker that read the same packet
+// and is out, or stopped, takes the piece over.
+export const cutWorkers = (state) => helperProblems({ events: state.events ?? [], ledger: state.ledger, dir: state.dir, root: state.root }).filter((p) => p.role === "worker");
+
+// Why a cut worker holds the next step, for the lead to act on.
+export const cutText = (p) => (p.piece ? `worker ${p.n} on ${p.piece.join(",")} was cut off` : `worker ${p.agent} was cut off before it read its packet`) + `: \`gate diagnose\` says what next (brief it again and spawn a fresh one), or \`gate diagnose --handled ${p.agent}\``;
 
 function runEvents(ctx, ledger) {
   const sessions = [...new Set([...(ledger.sessions ?? []), ctx.session].filter(Boolean))];
