@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { nextSeq } from "./events.mjs";
-import { blank, delegatedTier, effectiveTier, outsidePlan, policyFor, requires, tierOf, tiered } from "./size.mjs";
+import { blank, delegatedTier, effectiveTier, outsidePlan, policyFor, requires, tierOf, tiered, trialHolds } from "./size.mjs";
 import { baseCopy, changedUnits, fileDiff, gitTracked, hasReindent, indentMatters, sliceEnd } from "./tree.mjs";
 import { scanDiff } from "./slop.mjs";
 import { coverageGaps, runsTests } from "./verify.mjs";
@@ -429,6 +429,16 @@ export function wrongProblem(state, item, ptr) {
   const seq = /^events#(\d+)$/.exec(String(ptr ?? ""));
   const e = h && seq ? proofEvents(state, h).find((x) => x.seq === Number(seq[1])) : null;
   return e && (e.kind === "browser" || ranCleanly(e)) ? null : "a finding closes as wrong on `events#<seq>` of a browser call or a command run since its round that shows it wrong (not a read, a gate verb, a git command or a scratch write)";
+}
+
+// The small UI trial holds for this run now, and its review step closed N/A on the lead's reason.
+export function uiTrial(state) {
+  const policy = state.policy ?? policyFor(state.ledger);
+  return trialHolds(policy, state.config, state.changed ?? [], effectiveTier(policy, state.ledger, state.tier?.measured ?? null));
+}
+export function reviewTrialed(state) {
+  const step = (state.ledger.steps ?? []).find((s) => s.key === "review");
+  return Boolean(step?.state === "N/A" && step.trial && step.note) && uiTrial(state);
 }
 
 // An open finding the reviewer upheld; an older run's arbiter:reviewer verdict reads the same.
@@ -1439,7 +1449,7 @@ export function evaluate(state) {
   // item is closed. A tier that requires no reviewer (tiny) is exempt.
   const policy = state.policy ?? policyFor(ledger);
   const needsReviewer = requires(policy, effectiveTier(policy, ledger, state.tier?.measured ?? null)).includes("reviewer");
-  if (src.length && needsReviewer && !waived(ledger, "review")) {
+  if (src.length && needsReviewer && !waived(ledger, "review") && !reviewTrialed(state)) {
     const r = reviewed(state, "reviewer", after);
     if (r.partOpen) {
       unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer", r.openItems)}${upheldText("reviewer", r.openItems)}${orWaive("review")}` });

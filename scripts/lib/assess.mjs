@@ -3,7 +3,7 @@ import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { appendEvents, readEvents } from "./events.mjs";
 import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
-import { delegatedTier, leadDelegates, measure, policyFor, reconcileTier, tiered } from "./size.mjs";
+import { delegatedTier, effectiveTier, leadDelegates, measure, policyFor, reconcileTier, tiered, trialHolds } from "./size.mjs";
 import { editedLast, implementationHash, lapseWaivers, planDrift, reopenWorkedOut, writersOf } from "./rules.mjs";
 import { nextSeq } from "./events.mjs";
 import { evaluate, settleSteps } from "./rules.mjs";
@@ -335,7 +335,8 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
     if (lapseWaivers(current.ledger, implementationHash(now, config))) flipped = true;
     if (tiered(current.ledger)) {
       const measured = measure({ config, policy, diff, baseline, now, root: ctx.root, dir: current.dir, repos });
-      if (reconcileTier(current.ledger, policy, measured).length) flipped = true;
+      const trial = trialHolds(policy, config, diff.changed, effectiveTier(policy, current.ledger, measured));
+      if (reconcileTier(current.ledger, policy, measured, { trial }).length) flipped = true;
       // a new measured size is kept: a later re-prediction reads it
       if (current.ledger.tier?.measured?.tier !== measured.tier) flipped = true;
       current.ledger.tier = { ...current.ledger.tier, measured };

@@ -83,6 +83,7 @@ function readFields(ledger, dir) {
     hadWorkers: size === "large" && readdirSync(dir).some((f) => WORKER_FILE.test(f)),
     repos: list(ledger.repos),
     changedAtClose: ledger.changedAtClose,
+    uiTrial: ledger.uiTrial === true,
     waivers: list(ledger.waivers).filter(Boolean),
     rules: ledger.rules,
     huddles: list(ledger.huddles).filter(Boolean).map((h) => ({ role: h.role, file: h.file, actOn: list(h.actOn).filter(Boolean) })),
@@ -304,6 +305,19 @@ function largeLines(closed) {
     `  with workers: ${largeGroupText(large.filter((l) => l.hadWorkers), large.length)}`,
     `  without workers: ${largeGroupText(large.filter((l) => !l.hadWorkers), large.length)}`,
   ];
+}
+
+// Runs closed under the UI trial, and how many a bugfix opened in the month after touched: the
+// number the trial is judged on.
+function trialLines(closed, every) {
+  const onTime = closed.filter((l) => !l.closedLate);
+  const trials = onTime.filter((l) => l.uiTrial && Array.isArray(l.changedAtClose));
+  const fixes = every.filter((l) => l.playbook === "bugfix" && Array.isArray(l.changedAtClose));
+  const touched = trials.filter((t) => fixes.some((f) => {
+    const gap = Date.parse(f.openedAt) - Date.parse(t.closedAt);
+    return gap > 0 && gap <= AFTER_CLOSE_MS && f.changedAtClose.some((p) => t.changedAtClose.includes(p));
+  }));
+  return [`ui trial runs: ${trials.length ? `${ofRuns(trials.length, onTime.length)}, a later bugfix touched ${touched.length}` : MISSING}`];
 }
 
 // An estimate: a bugfix touching code a run closed in the month before it. It misses a feature run
@@ -791,7 +805,7 @@ async function report(ctx, { days, version, forFile = false }) {
   const recorded = closed.filter((l) => l.rules).flatMap((l) => l.waivers);
   const countOf = (flag) => (closed.some((l) => l.rules) ? String(recorded.filter((w) => w[flag]).length) : "not recorded");
   out.push(`could-not-run waivers: ${countOf("could")}`, `lapsed waivers: ${countOf("lapsed")}`);
-  out.push(...reRunLines(closed, ctx.stateDir), ...planLines(closed, configOf), ...largeLines(closed), ...afterCloseLines(closed, read?.ledgers ?? [], configOf, forFile));
+  out.push(...reRunLines(closed, ctx.stateDir), ...planLines(closed, configOf), ...largeLines(closed), ...afterCloseLines(closed, read?.ledgers ?? [], configOf, forFile), ...trialLines(closed, read?.ledgers ?? []));
   const recordsOf = sessionReader(ctx.stateDir);
   out.push(...eventLines(recordsOf, closed, read?.ledgers ?? [], { version, cutoff, forFile }), ...rateLines(ctx.stateDir, recordsOf), ...(await tokenLines(closed, forFile)));
   return out;

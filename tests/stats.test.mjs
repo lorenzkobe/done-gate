@@ -1555,3 +1555,14 @@ test("C98 happy: verify re-runs count the runs on an unchanged source hash; none
   ok(repo, ["--save", saved]);
   assert.match(readFileSync(saved, "utf8"), /verify re-runs/);
 });
+
+// 6.9: trial runs are counted apart, with the later bugfixes that touched their files
+test("6.9 ui trial runs: counted apart, with how many a later bugfix touched", () => {
+  const repo = makeRepo("stats-69-trial");
+  writeRun(repo, "2026-01-01-look", closedRun({ daysAgo: 5, uiTrial: true, changedAtClose: ["src/app/page.css"] }));
+  writeRun(repo, "2026-01-02-look2", closedRun({ daysAgo: 4, uiTrial: true, changedAtClose: ["src/app/other.tsx"] }));
+  writeRun(repo, "2026-01-03-plain", closedRun({ daysAgo: 4, changedAtClose: ["src/a.ts"] }));
+  writeRun(repo, "2026-01-04-fix", bugfixRun(1, ["src/app/page.css"]));
+  const out = ok(repo);
+  assert.match(line(out, "ui trial runs:") ?? "", /ui trial runs: 2 of 4 runs, a later bugfix touched 1/, out);
+});

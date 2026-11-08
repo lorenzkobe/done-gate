@@ -3,12 +3,12 @@ import path from "node:path";
 import { nextSeq } from "./events.mjs";
 import { addLessons, currentLedger, findRun, isDone, loadLedger, openRuns, saveLedger } from "./ledger.mjs";
 import { loadConfig } from "./config.mjs";
-import { applyPrediction, effectiveTier, inPlan, policyFor, requiredSteps, tierOf, tierOrder, tiered } from "./size.mjs";
+import { applyPrediction, effectiveTier, inPlan, policyFor, requiredSteps, requires, tierOf, tierOrder, tiered } from "./size.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, uncovered, afterReview, changedUnitsOf, parseEntry, pathOf, parseReplies, pointerResolver, proofProblem, wrongProblem, upheldItem, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
+import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, uncovered, afterReview, changedUnitsOf, parseEntry, pathOf, parseReplies, pointerResolver, proofProblem, wrongProblem, upheldItem, uiTrial, reviewTrialed, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
 import { assess, broughtSinceOpen, buildState, cleanAtHead, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
@@ -66,6 +66,7 @@ export function finalise(ctx, state) {
   ledger.changedAtClose = state.changed;
   ledger.weakened = weakened(state);
   ledger.afterReview = afterReview(state);
+  if (reviewTrialed(state)) ledger.uiTrial = true;
   if (state.tier) ledger.tier = state.tier;
   saveLedger(state.dir, ledger);
   const session = loadSession(ctx.stateDir, ctx.session);
@@ -562,7 +563,8 @@ export const verbs = {
     const state = states[String(stateWord).toLowerCase()];
     if (!ref || !state) throw new UsageError('usage: gate step <n|key> <done|skipped|na> "<note>" [--evidence <pointer> | --ran "<part of the command or url>"]');
     // the check's N/A is judged on the size measured now, not the last one saved
-    const checkNa = state === "N/A" && open(ctx).ledger.steps.find((s) => s.key === ref || String(s.n) === ref)?.key === "skeptic";
+    const naKey = state === "N/A" ? open(ctx).ledger.steps.find((s) => s.key === ref || String(s.n) === ref)?.key : null;
+    const checkNa = naKey === "skeptic" || naKey === "review";
     const gateState = state === "DONE" || checkNa ? buildState(ctx, {}) : null;
     let by = null;
     withLedger(ctx, (ledger, dir) => {
@@ -580,6 +582,13 @@ export const verbs = {
         const policy = policyFor(ledger);
         const size = effectiveTier(policy, ledger, gateState?.tier?.measured ?? tierOf(ledger).measured);
         if (requiredSteps(policy, size, ledger).includes("skeptic")) throw new UsageError(`step {skeptic} cannot be N/A at size ${size}: the plan check is owed there. Run it (\`gate brief skeptic\`), or get the user's waiver with \`gate waive skeptic "<reason>" --user-ok "<their words>"\``);
+      }
+      if (state === "N/A" && step.key === "review" && gateState && tiered(ledger)) {
+        const policy = policyFor(ledger);
+        const size = effectiveTier(policy, ledger, gateState.tier?.measured ?? tierOf(ledger).measured);
+        const owed = (gateState.changed ?? []).some((p) => gateState.config.isSource(p) && !gateState.config.isTest(p)) && requires(policy, size).includes("reviewer");
+        if (owed && !uiTrial(gateState)) throw new UsageError(`step {review} cannot be N/A at size ${size}: the review is owed. Only the UI trial skips it, for a looks-only change where every changed file is UI or a stylesheet and none is server, API, schema or high-risk code; otherwise run the review, or get the user's waiver with \`gate waive review "<reason>" --user-ok "<their words>"\``);
+        if (owed) step.trial = true;
       }
       if (state === "N/A" && newRules(ledger) && SURFACE_KEYS.has(step.key)) {
         // the tree alone: a full assess here would reopen the N/A steps it judges as a next check does

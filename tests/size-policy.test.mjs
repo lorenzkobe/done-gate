@@ -562,10 +562,11 @@ test("C16 happy: models.json carries the policy object and no escalate/never/cei
   assert.ok(!("roles" in m), "models.json still names models per role");
 
   assert.equal(typeof m.policy, "object");
-  assert.deepEqual(Object.keys(m.policy).sort(), ["delegatesAt", "forceStandard", "guards", "lateLines", "reviewMaxLines", "reviewRounds", "splitPast", "tiers"]);
+  assert.deepEqual(Object.keys(m.policy).sort(), ["delegatesAt", "forceStandard", "guards", "lateLines", "reviewMaxLines", "reviewRounds", "splitPast", "tiers", "uiTrial"]);
   assert.equal(m.policy.reviewMaxLines, 400);
   assert.equal(m.policy.reviewRounds, 1);
   assert.equal(m.policy.lateLines, "call");
+  assert.equal(m.policy.uiTrial, true);
   assert.equal(m.policy.delegatesAt, "large");
   assert.deepEqual(Object.keys(m.policy.tiers), ["tiny", "small", "standard", "large"]);
   assert.deepEqual(m.policy.tiers.tiny, { maxFiles: 1, maxLines: 15, requires: [] });
@@ -2005,4 +2006,79 @@ test("6.3 C1 idempotent: a pinned policy with no reviewRounds, and a broken mode
   writeFileSync(broken, "{ not json");
   assert.equal(loadPolicy(broken).reviewRounds, 3, "a broken models.json");
   rmSync(dir, { recursive: true, force: true });
+});
+
+// 6.9: the small UI trial: a looks-only change closes review on a stated reason
+function trialRun(name, { files = {}, config = {} } = {}) {
+  const repo = makeRepo(name, { "src/app/page.css": ".b { color: red; }\n", ".claude/gate.json": JSON.stringify({ testFiles: null, ...config }), ...files });
+  execFileSync("git", ["add", "-A"], { cwd: repo });
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
+  const run = (...args) => spawnSync(process.execPath, [gate, ...args], { encoding: "utf8", env });
+  run("open", name, "feature");
+  lookedUp(repo);
+  run("note", "task", "Turn the button blue. [inferred]");
+  run("note", "context", "Traced: src/app/page.tsx:1 · Related: none: `grep -rn button src` · Research: none needed: a colour");
+  run("note", "plan", "Colours only.", "--files", "src/app/page.tsx,src/app/page.css");
+  run("case", "add", "the button is blue", "--kind", "happy");
+  write(repo, "src/app/page.tsx", "export default () => null; // blue\n");
+  write(repo, "src/app/page.css", ".b { color: blue; }\n");
+  return { repo, run, r5: () => run("check").stdout.split("\n").find((l) => /\bR5\b/.test(l)) ?? "" };
+}
+const REASON = "colours only: the button turns blue, no logic or data path changed";
+
+test("6.9 T1 happy: a colour change to a .tsx and a .css closes review as N/A with a reason, and R5 is met", () => {
+  const { run, r5 } = trialRun("sp-69-t1");
+  assert.match(r5(), /R5/, "anchor: review owed before the call");
+  const r = run("step", "review", "na", REASON);
+  assert.doesNotMatch(r.stderr, /^done-gate: /m, r.stderr);
+  assert.equal(r5(), "", "the trial's reason meets R5");
+  assert.match(run("report", "--brief").stdout, /review skipped under the UI trial: colours only/);
+});
+
+test("6.9 T2 refused: review N/A with no reason is refused", () => {
+  const { run } = trialRun("sp-69-t2");
+  assert.match(run("step", "review", "na").stderr, /^done-gate: /m);
+});
+
+test("6.9 T3 refused: with a server, schema or high-risk file changed, review N/A is refused", () => {
+  const server = trialRun("sp-69-t3-server");
+  write(server.repo, "src/lib/price.ts", "export const price = 2;\n");
+  assert.match(server.run("step", "review", "na", REASON).stderr, /UI trial/);
+  const schema = trialRun("sp-69-t3-schema", { config: { schema: ["db/**"] }, files: { "db/1.sql": "select 1;\n" } });
+  write(schema.repo, "db/1.sql", "select 2;\n");
+  assert.match(schema.run("step", "review", "na", REASON).stderr, /UI trial/);
+  const risky = trialRun("sp-69-t3-risk", { config: { highRisk: ["src/app/page.css"] } });
+  assert.match(risky.run("step", "review", "na", REASON).stderr, /UI trial/);
+});
+
+test("6.9 T4 edge: a later change outside UI after the trial's N/A brings R5 back", () => {
+  const { repo, run, r5 } = trialRun("sp-69-t4");
+  run("step", "review", "na", REASON);
+  assert.equal(r5(), "");
+  write(repo, "src/lib/price.ts", "export const price = 2;\n");
+  assert.match(r5(), /R5/, "a server file ends the trial");
+});
+
+test("6.9 T5 idempotent: a run pinned before (no uiTrial) refuses review N/A at standard", () => {
+  const { repo, run } = trialRun("sp-69-t5");
+  const state = JSON.parse(readFileSync(path.join(repo, ".claude", "gate", "sessions", "S1", "state.json"), "utf8"));
+  const file = path.join(repo, ".claude", "gate", "runs", state.current, "ledger.json");
+  const ledger = JSON.parse(readFileSync(file, "utf8"));
+  delete ledger.policy.uiTrial;
+  writeFileSync(file, JSON.stringify(ledger, null, 2));
+  assert.match(run("step", "review", "na", REASON).stderr, /^done-gate: /m);
+});
+
+test("6.9 T6 refused: an API file breaks the trial, and at size large there is none", async () => {
+  const api = trialRun("sp-69-t6-api", { config: { api: ["src/app/api/**"] } });
+  write(api.repo, "src/app/api/route.tsx", "export const GET = () => null;\n");
+  assert.match(api.run("step", "review", "na", REASON).stderr, /UI trial/);
+  const { trialHolds, loadPolicy } = await import("../scripts/lib/size.mjs");
+  const config = { isSource: () => true, isTest: () => false, isUi: (p) => p.endsWith(".tsx"), isSchema: () => false, isHighRisk: () => false, isApi: () => false };
+  const policy = { ...loadPolicy(), uiTrial: true };
+  assert.equal(trialHolds(policy, config, ["src/app/a.tsx", "src/app/a.css"], "standard"), true);
+  assert.equal(trialHolds(policy, config, ["src/app/a.tsx"], "large"), false, "no trial at large");
+  assert.equal(trialHolds({ ...policy, uiTrial: false }, config, ["src/app/a.tsx"], "standard"), false, "off when the pin has none");
+  assert.equal(trialHolds(policy, config, [], "standard"), false, "nothing changed yet");
 });

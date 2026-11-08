@@ -32,6 +32,8 @@ export const DEFAULT_POLICY = Object.freeze({
   // "call": a line changed after a clean round or a re-check needs a round or the lead's reason;
   // off when absent, so a run pinned before keeps the rule it opened with
   lateLines: "off",
+  // a looks-only UI change may close review on the lead's stated reason; off when absent
+  uiTrial: false,
   // past this a run is advised to close and go on in new runs: 6 of 82 Courtly runs reached it
   // (Oct 2026), among them the two longest (10.9 h, 8.6 h) and the 111-file one that could not
   // afford its final review
@@ -70,6 +72,7 @@ function merge(raw) {
     reviewMaxLines: Math.max(1, Number.isFinite(p.reviewMaxLines) ? p.reviewMaxLines : DEFAULT_POLICY.reviewMaxLines),
     reviewRounds: Number.isInteger(p.reviewRounds) && p.reviewRounds > 0 ? p.reviewRounds : DEFAULT_POLICY.reviewRounds,
     lateLines: p.lateLines === "call" ? "call" : "off",
+    uiTrial: p.uiTrial === true,
     splitPast: Object.fromEntries(["files", "lines"].map((k) => [k, Number.isFinite(p.splitPast?.[k]) && p.splitPast[k] > 0 ? p.splitPast[k] : DEFAULT_POLICY.splitPast[k]])),
     guards: { planDiff: GUARD_MODES.has(p.guards?.planDiff) ? p.guards.planDiff : DEFAULT_POLICY.guards.planDiff },
   };
@@ -321,6 +324,7 @@ export function requiredSteps(policy, tier, ledger) {
 
 export function blank(step) {
   delete step.auto;
+  delete step.trial;
   Object.assign(step, { state: null, note: null, evidence: null, seq: nextSeq() });
 }
 
@@ -373,19 +377,30 @@ export function effectiveTier(policy, ledger, measured) {
 
 // The measured diff outgrew the prediction: any optional step still N/A (auto or by hand)
 // goes back to blank, and R8 names it. DONE, WAIVED and SKIPPED are never touched.
-export function reconcileTier(ledger, policy, measured) {
+export function reconcileTier(ledger, policy, measured, { trial = false } = {}) {
   if (!tiered(ledger)) return [];
   ledger.tier = tierOf(ledger);
   const reopened = [];
   for (const key of requiredSteps(policy, effectiveTier(policy, ledger, measured), ledger)) {
     const step = ledger.steps.find((s) => s.key === key);
-    if (step && step.state === "N/A") {
+    // the UI trial's review N/A stands while the trial holds
+    if (step && step.state === "N/A" && !(key === "review" && step.trial && trial)) {
       blank(step);
       reopened.push(key);
     }
   }
   ledger.tier.autoNa = ledger.tier.autoNa.filter((key) => !reopened.includes(key));
   return reopened;
+}
+
+const STYLESHEET = /\.(?:css|scss|sass|less)$/i;
+
+// The small UI trial: below size large, every changed source file is UI or a stylesheet and none
+// is schema, high-risk or API. A server component in a .tsx looks like UI by its name.
+export function trialHolds(policy, config, changed, tier) {
+  if (!policy.uiTrial || tier === "large") return false;
+  const files = sized(config, changed);
+  return files.length > 0 && files.every((p) => (config.isUi(p) || STYLESHEET.test(p)) && !config.isSchema(p) && !config.isHighRisk(p) && !config.isApi?.(p));
 }
 
 const plural = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;

@@ -8,7 +8,7 @@ import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
 import { readEvents } from "./events.mjs";
 import { delegatedTier, effectiveTier, policyFor, renderTierBlock, requires, splitAdvice, tiered, tierOf } from "./size.mjs";
-import { afterReview, clickStale, contextPart, drivenAfter, driverCommand, isRole, lastEditSeq, hasContextStep, lateOrder, timeoutText, tracedPointers, verifyWhere } from "./rules.mjs";
+import { afterReview, reviewTrialed, clickStale, contextPart, drivenAfter, driverCommand, isRole, lastEditSeq, hasContextStep, lateOrder, timeoutText, tracedPointers, verifyWhere } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { exclusionsOf } from "./verify.mjs";
 
@@ -135,6 +135,8 @@ const weakenedIn = (state) => (state.ledger.status === "open" ? weakened(state) 
 const resultText = (c) => (c.timedOut ? timeoutText(c) : c.noTests ? `no tests ran: ${c.noTestsWhy}` : `exit ${c.exit}`);
 const STAGE_ROLES = { skeptic: ["skeptic"], review: ["reviewer", "reviewer-2"] };
 
+const trialed = (state) => (state.ledger.status === "open" ? reviewTrialed(state) : Boolean(state.ledger.uiTrial));
+
 // One outcome per step: ran, skipped: <why>, failed: <why> or not run.
 export function stageOutcome(state, step) {
   const { ledger } = state;
@@ -171,6 +173,7 @@ export function attentionLines(state, unmet) {
   for (const a of ledger.huddles.flatMap((h) => h.actOn).filter((x) => x.dispute)) out.push(`- disputed ${a.id}: ${a.dispute.why} [${a.dispute.evidence}] — ${a.dispute.verdict ?? "unanswered"}${a.dispute.reviewerReason ? `; reviewer: ${a.dispute.reviewerReason}` : ""}${a.dispute.arbiterReason ? `; arbiter: ${a.dispute.arbiterReason}` : ""}`);
   for (const h of ledger.huddles) for (const c of h.cantVerify ?? []) out.push(`- can't verify (${h.id} ${h.role}): ${c}`);
   for (const c of ledger.unchanged ?? []) out.push(`- unchanged after review: ${c.entries.join(", ")} — ${c.why}`);
+  if (trialed(state)) out.push(`- review skipped under the UI trial: ${ledger.steps.find((s) => s.key === "review")?.note}`);
   const after = ledger.status === "open" ? afterReview(state) : ledger.afterReview ?? [];
   if (after.length) out.push(`- changed after its last review, not reviewed: ${after.join(", ")}`);
   if (denies) out.push(`- ${denies} denied write(s) to gate evidence files (see events)`);
@@ -461,6 +464,7 @@ function forYouLine(state, unmet) {
     else items.push(`skipped with your OK${w.batch ? ` for batch ${w.batch}` : ""}: ${plain(w.reason ?? w.quote)}${said(w)}`);
   }
   for (const a of ledger.planAdds ?? []) items.push(`added to the plan: ${a.files.join(", ")} (${plain(a.why)})`);
+  if (trialed(state)) items.push(`review skipped under the UI trial: ${plain(ledger.steps.find((s) => s.key === "review")?.note)}`);
   if (ledger.planDrift?.length) items.push(`outside the plan: ${ledger.planDrift.join(", ")}`);
   for (const a of ledger.huddles.flatMap((h) => h.actOn).filter((x) => x.closed && x.wrong)) {
     items.push(`closed as wrong: "${plain(a.text)}" (${a.wrong.evidence ? `shown by the run ${a.wrong.evidence}` : `you said: "${a.wrong.words}"`})`);

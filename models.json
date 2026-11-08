@@ -40,6 +40,7 @@
     "reviewMaxLines": 400,
     "reviewRounds": 1,
     "lateLines": "call",
+    "uiTrial": true,
     "splitPast": {
       "files": 40,
       "lines": 3000
