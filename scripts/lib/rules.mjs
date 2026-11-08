@@ -115,8 +115,10 @@ function bullets(lines) {
 // lookup), so it also catches an arbiter's Ruling-only stub, which has no "## Act on" section
 // at all. Built on bullets(), so a "- none" placeholder (agents/reviewer.md's Dismissed
 // section) is dropped the same way parseFindings drops it.
+// A Can't verify bullet past the bare placeholder is a finished answer, even "retry: unverified".
 export function isDraft(text) {
   const found = bullets(String(text ?? "").replace(/\r/g, "").split("\n"));
+  if (bullets(sectionLines(text, "Can't verify")).some((b) => !/^unverified[\s.,;:!-]*$/i.test(b))) return false;
   return found.length > 0 && found.every((b) => /^(?:[^:]{1,40}:\s*)?unverified[\s.,;:!-]*$/i.test(b));
 }
 

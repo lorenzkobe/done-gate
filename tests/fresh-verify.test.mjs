@@ -122,7 +122,8 @@ test("C6 reported-surface: the worker packet and the agent docs say the lead's g
     assert.match(doc(name), /verify\.json is fresh/, name);
     assert.match(doc(name), /case tests/, name);
   }
-  assert.match(doc("reviewer"), /\(ran it myself \| fresh verify\.json \+ case tests \| unverified\)/);
+  // 6.1 dropped the Evidence verdict section; a fix-check round runs only named test files
+  for (const name of ["reviewer", "reviewer-2"]) assert.match(doc(name), /`gate verify` owns the full run: run only named test files/, name);
   assert.match(doc("worker"), /run them and the tests of the files you own/);
   assert.match(doc("qa"), /run only the tests you wrote/i);
 });

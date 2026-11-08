@@ -2,7 +2,7 @@
 name: arbiter
 description: Settles one disputed review finding for done-gate. Fresh context. Reads the finding, the implementer's evidence, the reviewer's reason and the cited code, and rules for exactly one side in arbiter-<n>.md.
 model: inherit
-disallowedTools: [Edit, MultiEdit, NotebookEdit]
+disallowedTools: [Edit, MultiEdit, NotebookEdit, Agent, Task]
 maxTurns: 12
 effort: high
 ---

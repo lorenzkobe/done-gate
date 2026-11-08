@@ -2,6 +2,7 @@
 name: worker
 description: Implementer for done-gate. Takes one piece of a task from a packet, edits only the files it owns plus tests, runs its tests, and on review rounds answers each finding in worker-<n>.md. Spawned by the lead for a piece that can be edited independently of the rest.
 model: sonnet
+disallowedTools: [Agent, Task]
 maxTurns: 100
 effort: high
 ---

@@ -312,3 +312,46 @@ test("C18 edge: moving a guard added after several blank lines (twins before any
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:50"]);
   assert.ok(entriesOf(ruleLine(check(repo), "R5")).length > 0, "the moved guard reached no reviewer");
 });
+
+// 6.1: a fix-check runs only named test files; `gate verify` owns the full run
+const sectionIn = (packet, name) => {
+  const at = packet.indexOf(`\n## ${name}\n`);
+  if (at < 0) return "";
+  const rest = packet.slice(at + name.length + 5);
+  const end = rest.search(/\n## /);
+  return end < 0 ? rest : rest.slice(0, end);
+};
+const WHOLE_RUN = /run the test command yourself/i;
+const OWNS = /`gate verify` owns the full run/;
+
+test("6.1 C5 refused: a fix-check packet with stale verify never tells the reviewer to run the whole test command", () => {
+  const repo = opened("fc-61-c5");
+  for (let i = 1; i <= 3; i++) {
+    round(repo, "reviewer", null, [FINDING]);
+    fixLine30(repo, 1000 + i);
+    cli(repo, "huddle", ["resolve", `H${i}.1`, "--evidence", "src/mid.ts:30"]);
+  }
+  const packet = packetOf(cli(repo, "brief", ["reviewer"]));
+  assert.match(packet, /## Findings to re-check/, "anchor: round 4 is the fix-check");
+  const verify = sectionIn(packet, "Verify");
+  assert.match(verify, /not fresh/, `anchor: verify is stale:\n${verify}`);
+  assert.doesNotMatch(verify, WHOLE_RUN, verify);
+  assert.match(verify, OWNS, verify);
+  const command = sectionIn(packet, "Test command");
+  assert.match(command, OWNS, command);
+  assert.match(command, /only (?:the )?named test files/i, command);
+  assert.match(command, /^\s*This is a fix-check/, "the Test command section opens with the words the role files key on");
+  for (const role of ["reviewer", "reviewer-2"]) {
+    const doc = readFileSync(path.join(import.meta.dirname, "..", "agents", `${role}.md`), "utf8");
+    assert.match(doc, /Test command section opens with "This is a fix-check"/, role);
+    assert.doesNotMatch(doc, /fix-check round \(the packet has `## Findings to re-check`\)/, `${role}: keyed on a header ordinary rounds print too`);
+  }
+});
+
+test("6.1 C6 idempotent: a first round with stale verify still tells the reviewer to run the test command itself", () => {
+  const repo = opened("fc-61-c6");
+  const packet = packetOf(cli(repo, "brief", ["reviewer"]));
+  assert.doesNotMatch(packet, /## Findings to re-check/, "anchor: a first round");
+  assert.match(sectionIn(packet, "Verify"), WHOLE_RUN);
+  assert.doesNotMatch(packet, OWNS, "a first round's packet speaks of a fix-check");
+});

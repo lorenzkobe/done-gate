@@ -2,7 +2,7 @@
 name: skeptic
 description: Design huddle for done-gate. Reads a task's Plan and case table and attacks them before any code exists: wrong premise, missing case, cheaper shape, what breaks elsewhere. Writes skeptic-<n>.md in the run dir and replies with its Act-on list.
 model: inherit
-disallowedTools: [Edit, MultiEdit, NotebookEdit]
+disallowedTools: [Edit, MultiEdit, NotebookEdit, Agent, Task]
 maxTurns: 40
 effort: medium
 ---

@@ -85,12 +85,12 @@ const MODELS = JSON.parse(readFileSync(path.join(pluginRoot, "models.json"), "ut
 const AGENTS_DIR = path.join(pluginRoot, "agents");
 
 // the six roles T5 asks for, spelled out rather than read back from the file under test;
-// worker and reviewer run on Sonnet, the rest on the session's own model
-const EXPECTED_ROLES = { skeptic: "inherit", qa: "inherit", reviewer: "sonnet", "reviewer-2": "inherit", arbiter: "inherit", worker: "sonnet" };
+// the worker runs on Sonnet, the rest on the session's own model
+const EXPECTED_ROLES = { skeptic: "inherit", qa: "inherit", reviewer: "inherit", "reviewer-2": "inherit", arbiter: "inherit", worker: "sonnet" };
 const WORKER_MAX_TURNS = 100;
 
 // roles that must never touch code: they read and write their own findings file only.
-// qa is deliberately absent — it writes tests, so agents/qa.md carries no disallowedTools.
+// qa is deliberately absent — it writes tests, so agents/qa.md bans no edit tool.
 const EDIT_BANNED = ["skeptic", "reviewer", "reviewer-2", "arbiter"];
 
 const frontmatter = (md) => /^---\n([\s\S]*?)\n---\n/.exec(md);
@@ -242,10 +242,10 @@ test("C4 edge: every role in models.json has an agents/<role>.md whose model mat
     worker.replace(/^---\n[\s\S]*?\n---\n/, "").includes(`By turn ${WORKER_MAX_TURNS - 2}`),
     `agents/worker.md has maxTurns ${WORKER_MAX_TURNS} but no "By turn ${WORKER_MAX_TURNS - 2}" line`,
   );
-  assert.ok(
-    !/^\s*disallowedTools:/m.test(wfm),
-    `agents/worker.md must not disallow any tool — it writes the code:\n${wfm}`,
-  );
+  const wbanned = /^\s*disallowedTools:.*$/m.exec(wfm)?.[0] ?? "";
+  for (const tool of ["Edit", "MultiEdit", "NotebookEdit", "Write"]) {
+    assert.ok(!new RegExp(`\\b${tool}\\b`).test(wbanned), `agents/worker.md bans ${tool} — it writes the code: ${wbanned}`);
+  }
 
   // and nothing was taken away from the roles that only read
   for (const role of EDIT_BANNED) {
@@ -272,9 +272,12 @@ test("C5 happy: agents/reviewer.md and reviewer-2.md send the reviewer to the te
     assert.match(body, /\btests?\b/i, `agents/${role}.md never asks the reviewer to judge the tests`);
     assert.ok(body.includes("review-<n>.md"), `agents/${role}.md never names the file it writes`);
 
-    // the sections the implementer's parsers read (scripts/lib/rules.mjs parseFindings/parseDisputes)
-    for (const section of ["Act on", "Consider", "Noted", "Dismissed"]) {
+    // the file's sections; rules.mjs parseFindings/parseDisputes read Act on and Disputes
+    for (const section of ["Act on", "Can't verify", "Lessons", "Dismissed"]) {
       assert.ok(body.includes(section), `agents/${role}.md dropped the "${section}" section from the file shape`);
+    }
+    for (const gone of [/\bConsider\b/, /\bNoted\b/, /Evidence verdict/]) {
+      assert.doesNotMatch(body, gone, `agents/${role}.md still names an old section`);
     }
     assert.ok(body.includes("## Disputes"), `agents/${role}.md dropped the "## Disputes" instruction`);
 
@@ -322,6 +325,33 @@ test("C6 boundary: a worker stop is not a helper — the Tier block's helper cou
   const afterSkeptic = lineStarting(cli(repo, "report").stdout, "helpers:");
   assert.match(afterSkeptic, /^helpers: spawned 1 of /, afterSkeptic);
   assert.ok(afterSkeptic.includes("skeptic ✓"), afterSkeptic);
+});
+
+// ---------------------------------------------------------------------------
+// 6.1: helpers cannot spawn helpers; what the reviewer compares and leaves out
+// ---------------------------------------------------------------------------
+
+test("6.1 C2 happy: every role file bans Agent and Task in its frontmatter", () => {
+  const roles = readdirSync(AGENTS_DIR).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3));
+  assert.deepEqual(roles.sort(), Object.keys(EXPECTED_ROLES).sort(), "anchor: the role files");
+  for (const role of roles) {
+    const banned = /^\s*disallowedTools:.*$/m.exec(frontmatter(agentFile(role))[1])?.[0] ?? "";
+    for (const tool of ["Agent", "Task"]) {
+      assert.ok(new RegExp(`\\b${tool}\\b`).test(banned), `agents/${role}.md does not ban ${tool}: ${banned || "no disallowedTools line"}`);
+    }
+  }
+});
+
+test("6.1 C7 happy: reviewer.md asks for Missing/Extra/Misunderstood against the Plan, never reports open cases, names the complexity findings and words a Can't verify bullet", () => {
+  const body = agentFile("reviewer").replace(/^---\n[\s\S]*?\n---\n/, "");
+  for (const word of ["Missing:", "Extra:", "Misunderstood:"]) assert.ok(body.includes(word), `reviewer.md never names the ${word} prefix`);
+  assert.match(body, /## Plan/, "reviewer.md never points at the packet's Plan");
+  assert.match(body, /open case/i, "reviewer.md never says to leave open cases out");
+  assert.match(body, /800 lines/, "reviewer.md: file length signal");
+  assert.match(body, /\b80 lines/, "reviewer.md: block length signal");
+  assert.match(body, /Can't verify[^\n]*nam(?:es?|ing) what/i, "reviewer.md: a Can't verify bullet names what was not checked");
+  assert.doesNotMatch(body, /say "unverified"/, "reviewer.md still asks for the bare word");
+  assert.doesNotMatch(body, /elsewhere it is/i, "reviewer.md still sends off-path performance to another section");
 });
 }
 

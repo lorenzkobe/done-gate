@@ -229,17 +229,19 @@ function testCommands(state) {
   return [state.config.verify.length ? "_no verify command for this run: gate.json's are all dropped_" : "_no verify command in gate.json_"];
 }
 
-// Whether verify.json is the gate's own green run on exactly this code. When it is, a reviewer
-// runs the case tests instead of the whole command again: on a shared test database a second
-// full run only queues behind the first.
-function freshness(state) {
+const OWNS_RUN = "`gate verify` owns the full run.";
+
+// Whether verify.json is the gate's own green run on exactly this code. When it is, or on a
+// fix-check, a reviewer runs the case tests instead of the whole command: on a shared test
+// database a second full run only queues behind the first.
+function freshness(state, fixCheck = false) {
   const problem = verifyProblem(state, { final: false }) ?? ((state.verify.commands ?? []).some((c) => c.skipped && !c.covers && !c.final && runsTests(c.cmd)) ? { reason: "a test command was skipped, so tests added since never ran under it" } : null);
-  if (problem) return [`verify.json is not fresh (${problem.reason}): run the test command yourself.`];
+  if (problem && !fixCheck) return [`verify.json is not fresh (${problem.reason}): run the test command yourself.`];
   const files = [...new Set([
     ...state.ledger.cases.map((c) => caseTestFile(c, state.root, state.config)).filter(Boolean),
     ...(state.changed ?? []).filter((p) => state.config.isTest(p) && existsSync(absolute(state, p))),
   ])];
-  const head = "verify.json is fresh: the gate's own green run on exactly this code. Do not run the whole test command again;";
+  const head = problem ? `verify.json is not fresh (${problem.reason}), but this is a fix-check: ${OWNS_RUN} Do not run the whole test command;` : "verify.json is fresh: the gate's own green run on exactly this code. Do not run the whole test command again;";
   if (!files.length) return [`${head} there are no case tests to run.`];
   // `gate test` takes this repo's files; a declared repo's run through verify
   const own = state.config.testFiles ? files.filter((f) => !f.startsWith("../")) : [];
@@ -278,7 +280,7 @@ function diffOrFiles(state, heading = "Diff", files = state.changed ?? [], range
 
 // n is the number of the role's own file (skeptic-<n>.md, review-<n>.md, worker-<n>.md);
 // continueFrom is the text an earlier helper left in that file before it stopped.
-export function renderPacket(state, role, { round, n, item = null, piece = null, owned = null, continueFrom = null }) {
+export function renderPacket(state, role, { round, n, item = null, piece = null, owned = null, continueFrom = null, fixCheck = false }) {
   const out = header(state, role, round);
   out.push("## You may write", "", mayWrite(state, role, n), "");
   if (continueFrom !== null) {
@@ -341,8 +343,8 @@ export function renderPacket(state, role, { round, n, item = null, piece = null,
       out.push("## Shared tests", "", "Each of these tests closes more than one case. Check that it can fail for each case on its own; a case it cannot fail for is not covered.", "");
       out.push(...sharedTests.map(([ptr, ids]) => `- ${ptr} closes ${ids.join(", ")}`), "");
     }
-    out.push("## Verify", "", ...verifyLines(state.verify, { tails: false, unfinished: unfinishedVerify(state) }), "", ...freshness(state), "");
-    out.push("## Test command", "", ...testCommands(state), "");
+    out.push("## Verify", "", ...verifyLines(state.verify, { tails: false, unfinished: unfinishedVerify(state) }), "", ...freshness(state, fixCheck), "");
+    out.push("## Test command", "", ...(fixCheck ? [`This is a fix-check: ${OWNS_RUN} Run only named test files with the runner below, never the whole command.`, ""] : []), ...testCommands(state), "");
     out.push("", "## Write your findings to", "", path.join(state.dir, `${reviewPrefix(role)}-${n}.md`), "");
     if (role === "reviewer-2") {
       // the newest finished review-<n>.md; a draft or partial file (the reviewer still running,
@@ -565,7 +567,7 @@ export const verbs = {
     const left = own && role !== "worker" && existsSync(full) ? readFileSync(full, "utf8") : null;
     const continueFrom = left !== null && isPartial(left) ? left : null;
     const file = path.join(state.dir, `brief-${role}-${round}.md`);
-    writeFileSync(file, renderPacket(state, role, { round, n, item, piece, owned, continueFrom }));
+    writeFileSync(file, renderPacket(state, role, { round, n, item, piece, owned, continueFrom, fixCheck: fixCheck && !stillOpen }));
     ctx.out(`packet: ${file}`);
     const yours = !own || role === "worker" ? "" : continueFrom !== null
       ? ` Your file is ${full} and it already exists: keep its finished sections, never reset it to the all-unverified draft, and rewrite it after each finding.`

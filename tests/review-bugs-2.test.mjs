@@ -265,3 +265,28 @@ test("C18 edge: a second slop waiver stores only the newly flagged line, and one
   write(repo, "src/a.ts", "// helpers\nexport const a = 1;\n// constants\nexport const b = 2;\n// helpers\nexport const c = 3;\n");
   assert.match(r10(repo), /slop: 1 slop line/, r10(repo));
 });
+
+// 6.1: the reviewer file's sections are Act on, Can't verify, Lessons, Dismissed
+test("6.1 C4 edge: a review file reading - unverified in each new section is a draft; a real Can't verify bullet makes it a finished file", async () => {
+  const { isDraft, isPartial, parseFindings } = await import("../scripts/lib/rules.mjs");
+  const draft = "# Review 1 — x\n\n## Act on\n- unverified\n## Can't verify\n- unverified\n## Lessons\n- unverified\n## Dismissed\n- none\n";
+  assert.equal(isDraft(draft), true, "the all-unverified draft");
+  assert.equal(isPartial(draft), false);
+  const done = draft
+    .replace("## Act on\n- unverified", "## Act on\n- none")
+    .replace("## Can't verify\n- unverified", "## Can't verify\n- the retry path under a real network timeout: no way to run it here")
+    .replace("## Lessons\n- unverified", "## Lessons\n- none");
+  assert.equal(isDraft(done), false, "a real Can't verify bullet is a finding, not a placeholder");
+  assert.equal(isPartial(done), false);
+  assert.deepEqual(parseFindings(done), [], "Can't verify is not an Act-on item");
+  const labelled = done.replace("no way to run it here", "unverified").replace("the retry path under a real network timeout", "retry under load");
+  assert.match(labelled, /- retry under load: unverified/, "anchor: the label: unverified form");
+  assert.equal(isDraft(labelled), false, "a finished Can't verify bullet in label: unverified form is not a draft");
+  const bareCant = done.replace("- the retry path under a real network timeout: no way to run it here", "- unverified");
+  assert.ok(isDraft(bareCant) || isPartial(bareCant), "a bare - unverified under Can't verify is still unfinished");
+  assert.equal(isPartial(bareCant.replace("## Act on\n- none", "## Act on\n- off by one — src/a.ts:3")), true, "beside a real finding it is a cut-off section");
+  const oldDraft = "# Review 1 — x\n\n## Act on\n- unverified\n## Consider\n- unverified\n## Dismissed\n- none\n## Evidence verdict\n- tests: unverified\n";
+  assert.equal(isDraft(oldDraft), true, "an old-shape draft still reads as a draft");
+  const cut = done.replace("## Lessons\n- none", "## Lessons\n- unverified");
+  assert.equal(isPartial(cut), true, "a section still reading - unverified is a cut-off file");
+});

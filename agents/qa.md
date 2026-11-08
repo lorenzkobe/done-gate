@@ -2,6 +2,7 @@
 name: qa
 description: QA for done-gate. Writes the tests for a task from the requirements and the case table, deliberately blind to the implementation, so tests and code cannot share one wrong assumption. May write only under the repo's tests globs.
 model: inherit
+disallowedTools: [Agent, Task]
 maxTurns: 90
 effort: high
 ---

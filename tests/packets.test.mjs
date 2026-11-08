@@ -580,7 +580,8 @@ test("C13 happy: the four agent files say their inputs are in the packet and no 
     // and a bigger turn budget); tests/skeptic-file.test.mjs C5 owns those lines.
     if (role !== "skeptic") {
       // the model line is not pinned: every helper inherits the session's model now
-      const noModel = (lines) => lines.filter((l) => !/^\s*model:/.test(l));
+      // nor the 6.1 Agent and Task bans: every role gained them; the edit bans stay pinned
+      const noModel = (lines) => lines.filter((l) => !/^\s*model:/.test(l)).map((l) => l.replace(/,?\s*\b(?:Agent|Task)\b/g, "").replace(/\[,\s*/, "[")).filter((l) => !/^\s*disallowedTools:\s*\[\]\s*$/.test(l));
       assert.deepEqual(noModel(frontmatter(now)), noModel(frontmatter(head(rel))), `${rel}: pinned frontmatter lines changed`);
     }
     assert.ok(!now.includes("git diff"), `${rel} still names the literal phrase "git diff"`);
