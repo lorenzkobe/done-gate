@@ -429,18 +429,24 @@ export function parseHunks(text) {
 // Every changed line of a diff as a unit: its new-file position and a key made of its text
 // and the line before it, so a unit survives an edit above it (which moves its position) and
 // dies with an edit to it. A deletion is keyed on the text it removed.
-// Repeated line pairs get an occurrence ordinal, so a key is unique within the file.
+// Repeated line pairs get an occurrence ordinal, so a key is unique within the file. The flat
+// key is the same with all whitespace removed, so a re-indented line keeps it.
 export function changedUnits(text) {
   const out = [];
   const seen = new Map();
+  const ordinal = (base) => {
+    const n = (seen.get(base) ?? 0) + 1;
+    seen.set(base, n);
+    return n === 1 ? base : `${base}#${n}`;
+  };
+  const hash = (s) => createHash("sha1").update(s).digest("hex").slice(0, 12);
   for (const h of parseHunks(text).hunks) {
     let prev = "";
     for (const l of h.lines) {
       if (l.tag === "+" || l.tag === "-") {
-        const base = createHash("sha1").update(`${l.tag}${l.text.slice(1)}\u0000${prev}`).digest("hex").slice(0, 12);
-        const n = (seen.get(base) ?? 0) + 1;
-        seen.set(base, n);
-        out.push({ pos: l.pos, key: n === 1 ? base : `${base}#${n}` });
+        const key = ordinal(hash(`${l.tag}${l.text.slice(1)}\u0000${prev}`));
+        const flat = ordinal(`f${hash(`${l.tag}${l.text.slice(1).replace(/\s+/g, "")}\u0000${prev.replace(/\s+/g, "")}`)}`);
+        out.push({ pos: l.pos, key, flat });
       }
       if (l.tag !== "-") prev = l.text.slice(1);
     }

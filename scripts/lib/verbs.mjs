@@ -8,7 +8,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
+import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, uncovered, afterReview, changedUnitsOf, parseEntry, pathOf, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
 import { assess, broughtSinceOpen, buildState, cleanAtHead, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
@@ -33,6 +33,7 @@ export function finalise(ctx, state) {
   ledger.closedTreeHash = state.now.hash;
   ledger.changedAtClose = state.changed;
   ledger.weakened = weakened(state);
+  ledger.afterReview = afterReview(state);
   if (state.tier) ledger.tier = state.tier;
   saveLedger(state.dir, ledger);
   const session = loadSession(ctx.stateDir, ctx.session);
@@ -622,11 +623,11 @@ export const verbs = {
         let huddle = file ? ledger.huddles.find((h) => h.role === role && h.file === file) : null;
         const seen = file ? ledger.seen?.[file] : null;
         const seenFacts = () => Array.isArray(seen?.files)
-          ? { files: seen.files, briefSeq: seen.seq, ...(seen.units ? { units: seen.units } : {}), ...(seen.at ? { at: seen.at } : {}), ...(seen.edges ? { edges: seen.edges } : {}), ...(seen.fixCheck ? { fixCheck: true } : {}), ...(seen.part ? { part: true } : {}), ...(seen.answers ? { answers: true } : {}), ...(seen.disputes ? { disputes: seen.disputes } : {}) }
+          ? { files: seen.files, briefSeq: seen.seq, ...(seen.units ? { units: seen.units } : {}), ...(seen.at ? { at: seen.at } : {}), ...(seen.edges ? { edges: seen.edges } : {}), ...(seen.fixCheck ? { fixCheck: true } : {}), ...(seen.part ? { part: true } : {}), ...(seen.answers ? { answers: true } : {}), ...(seen.disputes ? { disputes: seen.disputes } : {}), ...(seen.flats ? { flats: seen.flats } : {}), ...(seen.late ? { late: seen.late } : {}) }
           : {};
         // a round whose file was lost and briefed again takes what the newer brief showed
         if (huddle && seen?.seq > (huddle.briefSeq ?? Infinity)) {
-          for (const key of ["files", "briefSeq", "units", "at", "edges", "fixCheck", "part", "answers", "disputes"]) delete huddle[key];
+          for (const key of ["files", "briefSeq", "units", "at", "edges", "fixCheck", "part", "answers", "disputes", "flats", "late"]) delete huddle[key];
           Object.assign(huddle, seenFacts());
         }
         if (!huddle) {
@@ -708,6 +709,39 @@ export const verbs = {
       for (const a of added) ctx.out(`${a.id} — ${a.text}`);
       for (const a of added.filter((x) => x.unresolved)) ctx.out(`note: ${a.id} cites ${a.unresolved.join(", ")}, which does not resolve: check the claim yourself before acting on it`);
       if (question) ctx.out(`The one question: ${question} Ask the user with AskUserQuestion before any code; once every item is answered, \`gate step skeptic done "<their answer>" --evidence ${file}\`.`);
+      printNext(ctx);
+      return;
+    }
+    if (action === "unchanged") {
+      const [list, ...words] = pos;
+      const why = words.join(" ").trim();
+      if (!list || !why) throw new UsageError('usage: gate huddle unchanged <path[:from-to],...> "<why behaviour did not change>"');
+      const state = buildState(ctx, {});
+      if (!state.ledger) throw new UsageError("no open ledger for this session");
+      if (state.policy.lateLines !== "call") throw new UsageError("this run's pinned policy has no calls on late lines: lines changed after review are covered as before");
+      const owed = ["reviewer", "reviewer-2"].flatMap((r) => uncovered(state, r) ?? []);
+      const sawn = new Set(state.ledger.huddles.filter((h) => (h.role === "reviewer" || h.role === "reviewer-2") && !h.answers).flatMap((h) => (h.files ?? []).map(pathOf)));
+      const inside = (a, b) => !a.from || !b.from || (a.from <= b.to && b.from <= a.to);
+      const entries = list.split(",").map((t) => t.trim()).filter(Boolean);
+      const keys = {};
+      const kept = {};
+      let count = 0;
+      for (const entry of entries) {
+        const e = parseEntry(entry);
+        const rel = toPosixRel(ctx.root, e.path, state.repos);
+        if (!rel || !sawn.has(rel)) throw new UsageError(`${entry}: no round saw ${rel ?? e.path}; a file no review has read needs a round, not a reason`);
+        const mine = owed.map(parseEntry).filter((u) => u.path === rel && inside(u, e));
+        if (!mine.length) throw new UsageError(`${entry}: none of these lines owe a review (\`gate check\` lists what does)`);
+        const units = changedUnitsOf(state, rel).filter((u) => (!e.from || (u.pos >= e.from && u.pos <= e.to)) && mine.some((m) => !m.from || (u.pos >= m.from && u.pos <= m.to)));
+        keys[rel] = [...(keys[rel] ?? []), ...units.map((u) => u.key)];
+        // the whole file: what it held now, so a deletion made later is not excused with it
+        if (!e.from) kept[rel] = changedUnitsOf(state, rel).map((u) => u.key);
+        count += units.length;
+      }
+      withLedger(ctx, (ledger) => {
+        ledger.unchanged = [...(ledger.unchanged ?? []), { entries, files: Object.keys(keys), keys, ...(Object.keys(kept).length ? { kept } : {}), why, seq: nextSeq() }];
+      });
+      ctx.out(`unchanged: ${count} line${count === 1 ? "" : "s"} in ${entries.join(", ")} — ${why}; the report lists it`);
       printNext(ctx);
       return;
     }
@@ -807,7 +841,7 @@ export const verbs = {
       printNext(ctx);
       return;
     }
-    throw new UsageError("usage: gate huddle add|acton|resolve|dispute|reply ...");
+    throw new UsageError("usage: gate huddle add|acton|resolve|dispute|reply|unchanged ...");
   },
 
   waive(ctx) {

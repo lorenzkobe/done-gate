@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, AT_GIT_TOPLEVEL, lookedUp, asOldRun, threeRounds } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, AT_GIT_TOPLEVEL, lookedUp, asOldRun, pinnedBefore } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { DEFAULTS } from "../scripts/lib/config.mjs";
 import { detectFramework } from "../scripts/lib/brief.mjs";
@@ -171,7 +171,7 @@ test("C1 happy: `gate brief <role>` writes brief-<role>-1.md in the run dir and 
 
 test("C2 happy: every packet starts with Task, Plan, Context and the case table; QA's adds the tests globs with the detected framework; then what the helper may write", () => {
   const repo = openedLarge("packets-c2");
-  threeRounds(repo);
+  pinnedBefore(repo);
   // review-1.md exists so reviewer-2 has something to embed; it does not change the header.
   writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1\n\n## Act on\n\n_none_\n");
 
@@ -1125,7 +1125,7 @@ function section(md, heading) {
 
 test("C5 refused: gate brief reviewer is refused while a recorded reviewer huddle's file is missing from the run dir, and passes once the file is there", () => {
   const repo = opened("budget-missing-file");
-  threeRounds(repo);
+  pinnedBefore(repo);
   const dir = runDir(repo);
   const own = path.join(dir, "review-1.md");
 

@@ -368,6 +368,13 @@ const linesIn = (state, entry) => {
   const e = parseEntry(entry);
   return capUnitsOf(state, e.path).filter((u) => !e.from || (u.pos >= e.from && u.pos <= e.to)).length;
 };
+// whether a piece entry holds all of an owed entry: the whole file, or a range around it
+function holds(entry, owedEntry) {
+  const e = parseEntry(entry);
+  const u = parseEntry(owedEntry);
+  return e.path === u.path && (!e.from || (u.from !== null && e.from <= u.from && u.to <= e.to));
+}
+
 function overlaps(a, b) {
   const [x, y] = [parseEntry(a), parseEntry(b)];
   return x.path === y.path && (!x.from || !y.from || (x.from <= y.to && y.from <= x.to));
@@ -422,9 +429,11 @@ export const verbs = {
       // a piece is remembered by the content keys of the lines it holds, so an edit above it
       // moves them without losing them, and a fix re-opens only the lines it changed
       const units = {};
+      const flats = {};
       const at = {};
       for (const r of rows) {
         units[r.e.path] = [...(units[r.e.path] ?? []), ...r.units.map((u) => u.key)];
+        flats[r.e.path] = [...(flats[r.e.path] ?? []), ...r.units.map((u) => u.flat)];
         at[r.e.path] = [...(at[r.e.path] ?? []), ...r.units.map((u) => u.pos)];
       }
       // a slice also keeps the changed line just outside each end, so a later fix at its edge
@@ -436,7 +445,7 @@ export const verbs = {
         const after = all.find((u) => u.pos > r.e.to) ?? null;
         edges[r.e.path] = [edges[r.e.path]?.[0] ?? (before && [before.key, before.pos]), after && [after.key, after.pos]];
       }
-      piece = { files: entries, lines, units, at, ...(Object.keys(edges).length ? { edges } : {}) };
+      piece = { files: entries, lines, units, flats, at, ...(Object.keys(edges).length ? { edges } : {}) };
     }
     // blind QA is for size large (a plan that named no files predicted nothing, and is not refused)
     if (role === "qa" && tierOf(state.ledger).predicted !== null && !leadDelegates(state.ledger, state.policy)) {
@@ -542,12 +551,23 @@ export const verbs = {
     const cites = (a, files) => files.some((f) => `${a.text} ${a.dispute.evidence ?? ""}`.includes(f));
     const toAnswer = reviewing ? waitingDisputes(state, role).filter((a) => cites(a, pieceFiles) || !cites(a, reviewScope(state))) : [];
     const answers = reviewing && done >= cap && toAnswer.length > 0;
+    // under lateLines "call" the fix-check follows fixed findings; owed lines with none behind
+    // them changed after review, and get a late round
+    const calls = state.policy.lateLines === "call";
+    const fixedHere = roleRounds.some((h) => h.actOn.length && h.actOn.every((a) => a.closed) && (h.files ?? []).some((e) => pieceFiles.includes(pathOf(e))));
     const fixCheck = !answers && reviewing && done >= cap && (unseen ?? []).some((u) => pieceFiles.includes(pathOf(u)))
       && roleRounds.every((h) => h.actOn.every((a) => a.closed))
-      && !fixChecks.some((f) => !f.h.part && fixCheckDone(state, f.h));
+      && !fixChecks.some((f) => !f.h.part && fixCheckDone(state, f.h))
+      && (!calls || fixedHere);
     // the fix-check is a file's last round, so it takes every unreviewed part of each file at
     // once; when those lines pass the cap it cannot, and it runs in parts, the last taking the rest
     const owed = (unseen ?? []).filter((u) => pieceFiles.includes(pathOf(u)));
+    // a late round ends a file once it holds every owed line of it; a part holding less ends nothing
+    const owedOf = (f) => owed.filter((u) => pathOf(u) === f);
+    const lateFiles = calls && reviewing && done >= cap && !fixCheck && !answers && piece
+      ? pieceFiles.filter((f) => seenByRole.has(f) && owedOf(f).length && owedOf(f).every((u) => piece.files.some((entry) => holds(entry, u))))
+      : [];
+    const late = calls && reviewing && done >= cap && !fixCheck && !answers && piece && owed.some((u) => seenByRole.has(pathOf(u)) && piece.files.some((entry) => overlaps(entry, u)));
     const split = fixCheck && piece ? owed.filter((u) => !piece.files.includes(u) && !piece.files.includes(pathOf(u))) : [];
     const inParts = split.length > 0 && owed.reduce((n, u) => n + linesIn(state, u), 0) > state.policy.reviewMaxLines;
     if (split.length && !stillOpen && !inParts) {
@@ -556,7 +576,7 @@ export const verbs = {
     if (inParts && !stillOpen && !piece.files.some((entry) => owed.some((u) => overlaps(entry, u)))) {
       throw new UsageError(`${role} fix-check: ${piece.files.join(",")} holds no unreviewed line. The next piece: \`gate brief ${role} --files ${nextPiece(state, owed).join(",")}\``);
     }
-    if (done >= cap && !(legacy && role === "reviewer-2") && !stillOpen && !fixCheck && !answers) {
+    if (done >= cap && !(legacy && role === "reviewer-2") && !stillOpen && !fixCheck && !answers && !late) {
       throw new UsageError(`${role} round ${done + 1}: ${NUMBER_WORDS[cap] ?? cap} round${cap === 1 ? "" : "s"} is the cap. What is still disputed goes to the arbiter (\`gate brief arbiter --item H<k>.<i>\`, spawn done-gate:arbiter); what is still open is fixed and closed with \`gate huddle resolve\`.`);
     }
     let item = null;
@@ -571,7 +591,7 @@ export const verbs = {
     // seen is what this round's reviewer is shown (its huddle inherits it); the other roles'
     // briefs are dated under briefed, so a ledger with no seen map stays a legacy one
     if (piece) {
-      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...earlierOf(state.ledger.seen?.[own]), ...(Object.keys(piece.units).length ? { units: piece.units } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true, ...(inParts ? { part: true } : {}) } : {}), ...(answers && !stillOpen ? { answers: true } : {}), ...(toAnswer.length ? { disputes: toAnswer.map((a) => a.id) } : {}) } };
+      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...earlierOf(state.ledger.seen?.[own]), ...(Object.keys(piece.units).length ? { units: piece.units, flats: piece.flats } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true, ...(inParts ? { part: true } : {}) } : {}), ...(answers && !stillOpen ? { answers: true } : {}), ...(lateFiles.length ? { late: lateFiles } : {}), ...(toAnswer.length ? { disputes: toAnswer.map((a) => a.id) } : {}) } };
       saveLedger(state.dir, state.ledger);
     } else if (own) {
       state.ledger.briefed = { ...(state.ledger.briefed ?? {}), [own]: { seq: nextSeq(), ...earlierOf(state.ledger.briefed?.[own]), ...(owned ? { files: owned } : {}), ...(item ? { item: item.id } : {}) } };

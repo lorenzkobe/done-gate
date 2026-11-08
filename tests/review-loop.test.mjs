@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, doneArgs, lookedUp, asOldRun, planChecked, threeRounds } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, doneArgs, lookedUp, asOldRun, planChecked, pinnedBefore } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { pointerResolver } from "../scripts/lib/rules.mjs";
@@ -188,7 +188,7 @@ function opened(name, { slug = name } = {}) {
 // upholding the dispute: the exact state `gate brief arbiter --item H1.2` is for.
 function upheld(name, { findings = [FIND_1, FIND_2] } = {}) {
   const repo = opened(name);
-  threeRounds(repo);
+  pinnedBefore(repo);
   helperFile(repo, "review-1.md", reviewFile(1, name, findings));
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
   // H1.1 is fixed the ordinary way, so H1.2 is the only thing R5 can still be waiting on
@@ -1765,7 +1765,7 @@ test("C9 refused: with a ledger open, the skeptic and the reviewer may write the
 
 test("C10 edge: with review-1.md and skeptic-1.md on disk, the round-2 packets name review-2.md and skeptic-2.md", () => {
   const repo = opened("skeptic-round2");
-  threeRounds(repo);
+  pinnedBefore(repo);
   // a second plan check is an old run's (tests/plan-hold.test.mjs C12)
   asOldRun(repo);
   const dir = runDir(repo);

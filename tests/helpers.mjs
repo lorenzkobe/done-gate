@@ -117,14 +117,15 @@ export function planChecked(repo, { session = "S1" } = {}) {
   if (!ledger.steps.find((s) => s.key === "skeptic")?.state) run(["step", "skeptic", "done", "checked", "--evidence", path.basename(file)]);
 }
 
-// The run's pinned policy reviews three rounds before the fix-check, as a run opened before
-// reviewRounds 1 does; for tests of the mechanics a run needs three rounds to reach.
-export function threeRounds(repo, session = "S1") {
+// The run's pinned policy as a run pinned before 0.22 holds it: three rounds before the fix-check,
+// and no call owed for lines changed after review; for the mechanics those runs keep.
+export function pinnedBefore(repo, session = "S1") {
   const stateDir = path.join(repo, ".claude", "gate");
   const { current } = JSON.parse(readFileSync(path.join(stateDir, "sessions", session, "state.json"), "utf8"));
   const ledgerFile = path.join(stateDir, "runs", current, "ledger.json");
   const ledger = JSON.parse(readFileSync(ledgerFile, "utf8"));
-  ledger.policy = { ...ledger.policy, reviewRounds: 3 };
+  const { lateLines: _new, ...policy } = ledger.policy;
+  ledger.policy = { ...policy, reviewRounds: 3 };
   writeFileSync(ledgerFile, JSON.stringify(ledger, null, 2));
 }
 

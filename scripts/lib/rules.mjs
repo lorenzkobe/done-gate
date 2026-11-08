@@ -662,9 +662,24 @@ function spans(rel, open, all) {
 // recorded (see fixDeleted), the rule from before applies.
 // Returns the entries still uncovered ("path" or "path:from-to"), or null for a ledger from
 // before seen sets, which keeps the old rule.
+// Under the pinned lateLines "call", a line changed after a clean round or a re-check is one no
+// round saw: owed unless gate huddle unchanged excused it, or listed once its file has ended (a
+// finished late round held all of its owed lines), so a file comes back at most once.
 export function uncovered(state, role, after = lastEditSeq(state, state.config, state.ledger)) {
+  return coverage(state, role, after)?.out ?? null;
+}
+
+// The lines changed after their file's last review that no rule holds any more, for the report.
+export function afterReview(state) {
+  const after = lastEditSeq(state, state.config, state.ledger);
+  return [...new Set(["reviewer", "reviewer-2"].flatMap((role) => coverage(state, role, after)?.listed ?? []))];
+}
+
+function coverage(state, role, after) {
   const recorded = (state.ledger.huddles ?? []).filter((h) => h.role === role && h.file && Array.isArray(h.files));
   if (!recorded.length) return null;
+  const calls = (state.policy ?? policyFor(state.ledger)).lateLines === "call";
+  const listed = [];
   // a round answering disputes judges them, not lines
   const rounds = recorded.filter((h) => roundOnDisk(state, h) && !h.answers);
   const cap = (state.policy ?? policyFor(state.ledger)).reviewRounds;
@@ -690,7 +705,7 @@ export function uncovered(state, role, after = lastEditSeq(state, state.config, 
     }
     // a fix inside the fix-check round gives its lines new keys; the round still ends the file's
     // review, unless it was a part of one too long for a round
-    if (seeing.some((h) => h.fixCheck && !h.part && fixCheckDone(state, h))) continue;
+    if (!calls && seeing.some((h) => h.fixCheck && !h.part && fixCheckDone(state, h))) continue;
     const whole = (h) => h.files.includes(rel);
     const keyed = (h) => Array.isArray(h.units?.[rel]);
     if (seeing.every((h) => whole(h) && !keyed(h))) {
@@ -706,17 +721,41 @@ export function uncovered(state, role, after = lastEditSeq(state, state.config, 
     // slice, waits for a round)
     const fixed = seeing.filter((h) => !h.part && keyed(h) && h.actOn.length && h.actOn.every((a) => a.closed) && stopOf(h) && after > stopOf(h).seq);
     const narrow = !fixed.some((h) => fixDeleted(h.units[rel], units, whole(h), h.edges?.[rel], h.at?.[rel]));
-    // with slices the cap counts the rounds that saw this line, not the file
-    const saw = (h, u) => whole(h) || (h.units?.[rel] ?? []).includes(u.key);
+    // with slices the cap counts the rounds that saw this line, not the file; under "call" a
+    // round saw what it recorded, a re-indented line by its flat key where indentation is free
+    const flat = !indentMatters(rel);
+    const saw = (h, u) => (calls && keyed(h)
+      ? h.units[rel].includes(u.key) || (flat && (h.flats?.[rel] ?? []).includes(u.flat))
+      : whole(h) || (h.units?.[rel] ?? []).includes(u.key));
+    const excused = new Set((state.ledger.unchanged ?? []).flatMap((c) => c.keys?.[rel] ?? []));
+    // a whitespace-only change to a line the task did not add is not in a whitespace-ignoring diff
+    const real = calls ? new Set(capUnitsOf(state, rel).map((u) => u.pos)) : null;
+    const ended = calls && seeing.some((h) => (h.late ?? []).includes(rel) && stopOf(h));
+    const late = [];
     const open = positionsOf(units.filter((u) => {
       const rounds = seeing.filter((h) => saw(h, u));
       const last = rounds[rounds.length - 1];
+      if (!last && calls) {
+        if (excused.has(u.key) || !real.has(u.pos)) return false;
+        if (ended) late.push(u.pos);
+        return !ended;
+      }
       return !last || !covered(last, rounds.length, rel, narrow ? u.key : null);
     }));
+    if (late.length) listed.push(...spans(rel, positionsOf(late.map((pos) => ({ pos }))), all));
+    // a reviewed line deleted with nothing in its place: the newest round's view of the file is owed
+    const newest = calls && narrow ? [...seeing].reverse().find((h) => keyed(h) && stopOf(h)) : null;
+    // a call on the whole file excuses the lines gone when it was made, not a later deletion
+    const gone = newest ? newest.units[rel].filter((k) => !units.some((u) => u.key === k)) : [];
+    const deleted = newest && fixDeleted(newest.units[rel], units, whole(newest), newest.edges?.[rel], newest.at?.[rel])
+      && !(state.ledger.unchanged ?? []).some((c) => c.kept?.[rel] && c.seq > stopOf(newest).seq && gone.every((k) => !c.kept[rel].includes(k)));
+    const entry = newest && (whole(newest) ? rel : newest.files.find((e) => pathOf(e) === rel));
+    if (deleted && ended) listed.push(entry);
     if (!units.length && !covered(seeing[seeing.length - 1], seeing.length)) out.push(rel);
+    else if (deleted && !ended) out.push(entry);
     else if (open.length) out.push(...spans(rel, open, all));
   }
-  return out;
+  return { out, listed };
 }
 
 // Twin lines (the same text after the same line) share a key base and are told apart by order,
@@ -1198,6 +1237,11 @@ function ownChanges(state, paths) {
 // An open finding with enough of its text to act on, so `gate check` is the list of what is open.
 export const openItem = (a) => `${a.id} (${a.text.length > 80 ? `${a.text.slice(0, 80)}…` : a.text})`;
 
+// lines changed after review that did not change behaviour take the lead's reason instead
+const unchangedRoute = (policy, pending) => (policy.lateLines === "call"
+  ? ` Lines changed after their review whose behaviour did not change: \`gate huddle unchanged ${pending.join(",")} "<why>"\` instead; the report lists it.`
+  : "");
+
 // an open finding still disputed goes back to its reviewer, not to a fix
 const disputedText = (role, items) => {
   const waiting = items.filter((a) => a.dispute && !a.dispute.verdict).map((a) => a.id);
@@ -1345,7 +1389,7 @@ export function evaluate(state) {
       unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer", r.openItems)}${orWaive("review")}` });
     } else if (!r.stopped || !r.hasFile) {
       unmet.push({ rule: "R5", text: stillOpen(r) + (r.pending.length && r.hasFile
-        ? `no clean reviewer round yet for ${list(r.pending)}: \`gate brief reviewer --files ${nextPiece(state, r.pending).join(",")}\` (a piece of at most ${policy.reviewMaxLines} source lines), spawn \`done-gate:reviewer\`, then \`gate huddle add reviewer --file review-<n>.md\`.${orWaive("review")}`
+        ? `no clean reviewer round yet for ${list(r.pending)}: \`gate brief reviewer --files ${nextPiece(state, r.pending).join(",")}\` (a piece of at most ${policy.reviewMaxLines} source lines), spawn \`done-gate:reviewer\`, then \`gate huddle add reviewer --file review-<n>.md\`.${unchangedRoute(policy, r.pending)}${orWaive("review")}`
         : `no reviewer pass after the last edit. Spawn \`done-gate:reviewer\` (it writes review-<n>.md), then \`gate huddle add reviewer --file review-<n>.md\`.${orWaive("review")}`) });
     } else if (r.openItems.length) {
       unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer", r.openItems)}${orWaive("review")}` });
@@ -1368,7 +1412,7 @@ export function evaluate(state) {
       unmet.push({ rule: "R9", text: `reviewer-2 Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer-2", r.openItems)}${orWaive("review-2")}` });
     } else if (!r.stopped || !r.hasFile) {
       unmet.push({ rule: "R9", text: stillOpen(r) + (r.pending.length && r.hasFile
-        ? `high-risk paths changed: no clean reviewer-2 round yet for ${list(r.pending)}: \`gate brief reviewer-2 --files ${nextPiece(state, r.pending).join(",")}\`, spawn \`done-gate:reviewer-2\`, then \`gate huddle add reviewer-2 --file review2-<n>.md\`.${orWaive("review-2")}`
+        ? `high-risk paths changed: no clean reviewer-2 round yet for ${list(r.pending)}: \`gate brief reviewer-2 --files ${nextPiece(state, r.pending).join(",")}\`, spawn \`done-gate:reviewer-2\`, then \`gate huddle add reviewer-2 --file review2-<n>.md\`.${unchangedRoute(policy, r.pending)}${orWaive("review-2")}`
         : `${highRisk ? `high-risk paths changed (${list(changed.filter((p) => config.isHighRisk(p)))})` : `this run is size ${sizeNow}${grew}`}: a second review by \`done-gate:reviewer-2\` is required after the last edit, with its review2-<n>.md recorded via \`gate huddle add reviewer-2 --file ...\` and every Act-on item closed.${orWaive("review-2")}`) });
     }
   }

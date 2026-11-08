@@ -29,6 +29,9 @@ export const DEFAULT_POLICY = Object.freeze({
   reviewMaxLines: 400,
   // review rounds per reviewer role before the last one (a fix-check, or a round answering disputes)
   reviewRounds: 3,
+  // "call": a line changed after a clean round or a re-check needs a round or the lead's reason;
+  // off when absent, so a run pinned before keeps the rule it opened with
+  lateLines: "off",
   // past this a run is advised to close and go on in new runs: 6 of 82 Courtly runs reached it
   // (Oct 2026), among them the two longest (10.9 h, 8.6 h) and the 111-file one that could not
   // afford its final review
@@ -66,6 +69,7 @@ function merge(raw) {
     delegatesAt: typeof p.delegatesAt === "string" && p.delegatesAt ? p.delegatesAt : DEFAULT_POLICY.delegatesAt,
     reviewMaxLines: Math.max(1, Number.isFinite(p.reviewMaxLines) ? p.reviewMaxLines : DEFAULT_POLICY.reviewMaxLines),
     reviewRounds: Number.isInteger(p.reviewRounds) && p.reviewRounds > 0 ? p.reviewRounds : DEFAULT_POLICY.reviewRounds,
+    lateLines: p.lateLines === "call" ? "call" : "off",
     splitPast: Object.fromEntries(["files", "lines"].map((k) => [k, Number.isFinite(p.splitPast?.[k]) && p.splitPast[k] > 0 ? p.splitPast[k] : DEFAULT_POLICY.splitPast[k]])),
     guards: { planDiff: GUARD_MODES.has(p.guards?.planDiff) ? p.guards.planDiff : DEFAULT_POLICY.guards.planDiff },
   };

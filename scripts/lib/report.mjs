@@ -8,7 +8,7 @@ import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
 import { readEvents } from "./events.mjs";
 import { delegatedTier, effectiveTier, policyFor, renderTierBlock, requires, splitAdvice, tiered, tierOf } from "./size.mjs";
-import { clickStale, contextPart, drivenAfter, driverCommand, isRole, lastEditSeq, hasContextStep, lateOrder, timeoutText, tracedPointers, verifyWhere } from "./rules.mjs";
+import { afterReview, clickStale, contextPart, drivenAfter, driverCommand, isRole, lastEditSeq, hasContextStep, lateOrder, timeoutText, tracedPointers, verifyWhere } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { exclusionsOf } from "./verify.mjs";
 
@@ -170,6 +170,9 @@ export function attentionLines(state, unmet) {
   if (ledger.planDrift?.length) out.push(`- outside the plan: ${ledger.planDrift.join(", ")} (${policyFor(ledger).guards.planDiff === "active" ? "blocks until added or reverted" : "noted, nothing blocked"})`);
   for (const a of ledger.huddles.flatMap((h) => h.actOn).filter((x) => x.dispute)) out.push(`- disputed ${a.id}: ${a.dispute.why} [${a.dispute.evidence}] — ${a.dispute.verdict ?? "unanswered"}${a.dispute.reviewerReason ? `; reviewer: ${a.dispute.reviewerReason}` : ""}${a.dispute.arbiterReason ? `; arbiter: ${a.dispute.arbiterReason}` : ""}`);
   for (const h of ledger.huddles) for (const c of h.cantVerify ?? []) out.push(`- can't verify (${h.id} ${h.role}): ${c}`);
+  for (const c of ledger.unchanged ?? []) out.push(`- unchanged after review: ${c.entries.join(", ")} — ${c.why}`);
+  const after = ledger.status === "open" ? afterReview(state) : ledger.afterReview ?? [];
+  if (after.length) out.push(`- changed after its last review, not reviewed: ${after.join(", ")}`);
   if (denies) out.push(`- ${denies} denied write(s) to gate evidence files (see events)`);
   if (handoffs) out.push(`- ${handoffs} lead edit(s) fenced off at this size and handed to a worker`);
   const blocks = events.filter((e) => e.kind === "block" && inRun(ledger)(e)).length;

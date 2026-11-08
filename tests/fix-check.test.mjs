@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp, threeRounds } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, pinnedBefore } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { sliceEnd } from "../scripts/lib/tree.mjs";
 
@@ -84,11 +84,13 @@ test("C1 happy: a whole-file round's fixed finding re-opens only the edited line
 
 test("C3 refused: an open finding keeps the whole file uncovered; closed items with no edit after the round cover it, as today", () => {
   const repo = opened("fc-c3");
+  pinnedBefore(repo);
   round(repo, "reviewer", null, [FINDING]);
   fixLine30(repo);
   assert.deepEqual(entriesOf(ruleLine(check(repo), "R5")), [MID], "an open finding: the whole file");
 
   const quiet = opened("fc-c3-quiet");
+  pinnedBefore(quiet);
   round(quiet, "reviewer", null, [FINDING]);
   cli(quiet, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:30"]);
   assert.ok(!blocks(check(quiet), "R5"), check(quiet));
@@ -106,11 +108,13 @@ test("C4 edge: a fix that only deletes lines re-opens the whole file", () => {
 
 test("C5 idempotent: a clean round still covers the file after an edit; a ledger with no recorded line keys keeps the whole-file rule", () => {
   const repo = opened("fc-c5");
+  pinnedBefore(repo); // the rule a run pinned before keeps; 6.4 L1 below is the new one
   round(repo, "reviewer", null);
   fixLine30(repo);
   assert.ok(!blocks(check(repo), "R5"), check(repo));
 
   const legacy = opened("fc-c5-legacy");
+  pinnedBefore(legacy);
   round(legacy, "reviewer", null, [FINDING]);
   const file = path.join(runDir(legacy), "ledger.json");
   const ledger = JSON.parse(readFileSync(file, "utf8"));
@@ -139,7 +143,7 @@ test("C6 reported-surface: the fix-check packet lists the findings to re-check w
 
 test("C7 boundary: three whole-file rounds, each with a fixed finding, leave only the fixed lines for one fix-check round, which ends the review", () => {
   const repo = opened("fc-c7");
-  threeRounds(repo);
+  pinnedBefore(repo);
   for (let i = 1; i <= 3; i++) {
     round(repo, "reviewer", null, [FINDING]);
     fixLine30(repo, 1000 + i);
@@ -155,7 +159,7 @@ test("C7 boundary: three whole-file rounds, each with a fixed finding, leave onl
 
 test("C8 edge: a clean round then a round with a fixed finding: only the fixed lines re-open", () => {
   const repo = opened("fc-c8");
-  threeRounds(repo);
+  pinnedBefore(repo);
   round(repo, "reviewer", null);
   round(repo, "reviewer", null, [FINDING]);
   fixLine30(repo);
@@ -207,7 +211,7 @@ test("C12 reported-surface: a finding whose fix landed in the piece's file is re
 
 test("C13 happy: a fix-check slice round with a finding, fixed again, re-opens only the lines edited the second time", () => {
   const repo = opened("fc-c13");
-  threeRounds(repo);
+  pinnedBefore(repo);
   round(repo, "reviewer", null, [FINDING]);
   fixLine30(repo, 999);
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:31"]);
@@ -358,4 +362,141 @@ test("6.1 C6 idempotent: a first round with stale verify still tells the reviewe
   assert.doesNotMatch(packet, /## Findings to re-check/, "anchor: a first round");
   assert.match(sectionIn(packet, "Verify"), WHOLE_RUN);
   assert.doesNotMatch(packet, OWNS, "a first round's packet speaks of a fix-check");
+});
+
+// 6.4: after a clean round or a re-check, a line no round saw needs a call: a round, or the
+// lead's one-line reason that behaviour did not change, which the report lists
+const lateEdit = (repo, from, to, v = 7) => {
+  let text = body(60, "mid");
+  for (let i = from; i <= to; i++) text = text.replace(`mid${i - 1} = ${i - 1};`, `mid${i - 1} = ${i - 1 + v * 1000};`);
+  edit(repo, MID, text);
+};
+const reportOf = (repo) => cli(repo, "report");
+const oldPin = (repo) => {
+  const file = path.join(runDir(repo), "ledger.json");
+  const ledger = JSON.parse(readFileSync(file, "utf8"));
+  delete ledger.policy.lateLines;
+  writeFileSync(file, JSON.stringify(ledger, null, 2));
+};
+
+test("6.4 L1 happy: a 3-line change after a clean round is held until a round reviews it, and R5's printed command runs past the cap", () => {
+  const repo = opened("fc-64-l1");
+  round(repo, "reviewer", null);
+  assert.ok(!blocks(check(repo), "R5"), "anchor: the clean round covers the file");
+  lateEdit(repo, 10, 12);
+  const r5 = ruleLine(check(repo), "R5");
+  // the line after an edit is owed too: its key holds the line before it
+  assert.match(r5, /src\/mid\.ts:10-13/, r5);
+  const printed = /`gate brief reviewer --files ([^`]+)`/.exec(r5)?.[1];
+  assert.equal(printed, "src/mid.ts:10-13", r5);
+  round(repo, "reviewer", printed);
+  assert.ok(!blocks(check(repo), "R5"), check(repo));
+});
+
+test("6.4 L2 edge: a 3-line change after a finished re-check is held the same way", () => {
+  const repo = opened("fc-64-l2");
+  round(repo, "reviewer", null, [FINDING]);
+  fixLine30(repo);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:30"]);
+  round(repo, "reviewer", null);
+  assert.ok(!blocks(check(repo), "R5"), "anchor: the re-check clears R5");
+  let text = body(60, "mid").replace("mid30 = 30", "mid30 = 999");
+  for (const i of [40, 41, 42]) text = text.replace(`mid${i} = ${i};`, `mid${i} = ${i + 5000};`);
+  edit(repo, MID, text);
+  assert.match(ruleLine(check(repo), "R5"), /src\/mid\.ts:41-44/);
+});
+
+test("6.4 L3 happy: gate huddle unchanged with a reason clears the hold, and the report lists the reason", () => {
+  const repo = opened("fc-64-l3");
+  round(repo, "reviewer", null);
+  lateEdit(repo, 10, 12);
+  const out = cli(repo, "huddle", ["unchanged", "src/mid.ts:10-13", "renamed constants only, no caller reads them"]);
+  assert.match(out, /4 lines/);
+  assert.ok(!blocks(check(repo), "R5"), check(repo));
+  assert.match(reportOf(repo), /unchanged after review: src\/mid\.ts:10-13 — renamed constants only, no caller reads them/);
+  lateEdit(repo, 10, 12, 8);
+  assert.match(ruleLine(check(repo), "R5"), /src\/mid\.ts:10-1[23]/, "a later edit to excused lines is a new change");
+});
+
+test("6.4 L5 boundary: 500 late lines are owed in pieces under the cap, and each printed piece is briefed", () => {
+  const repo = opened("fc-64-l5");
+  round(repo, "reviewer", null);
+  edit(repo, MID, body(60, "mid") + body(500, "late", 1000));
+  const first = /`gate brief reviewer --files ([^`]+)`/.exec(ruleLine(check(repo), "R5"))?.[1];
+  assert.match(first ?? "", /^src\/mid\.ts:61-\d+$/, ruleLine(check(repo), "R5"));
+  assert.ok(Number(first.split("-")[1]) - 61 + 1 <= 400, first);
+  round(repo, "reviewer", first);
+  const second = /`gate brief reviewer --files ([^`]+)`/.exec(ruleLine(check(repo), "R5"))?.[1];
+  assert.match(second ?? "", /^src\/mid\.ts:\d+-560$/, `the rest is still owed after the first part:\n${check(repo)}`);
+  round(repo, "reviewer", second);
+  assert.ok(!blocks(check(repo), "R5"), check(repo));
+});
+
+test("6.4 L6 edge: a formatter re-indent after a clean round needs no call", () => {
+  const repo = opened("fc-64-l6");
+  round(repo, "reviewer", null);
+  edit(repo, MID, body(60, "mid").split("\n").map((l) => (l ? `  ${l}` : l)).join("\n"));
+  assert.ok(!blocks(check(repo), "R5"), check(repo));
+});
+
+test("6.4 L7 boundary: a file's second return ends it: new late lines after a finished late round are listed, not held", () => {
+  const repo = opened("fc-64-l7");
+  round(repo, "reviewer", null);
+  lateEdit(repo, 10, 12);
+  round(repo, "reviewer", "src/mid.ts:10-13");
+  lateEdit(repo, 10, 12, 9);
+  assert.ok(!blocks(check(repo), "R5"), check(repo));
+  assert.match(reportOf(repo), /changed after its last review, not reviewed: src\/mid\.ts:10-1[23]/);
+});
+
+test("6.4 L8 refused: gate huddle unchanged with no reason, for a file no round saw, for lines that owe nothing, and on an old pin", () => {
+  const repo = opened("fc-64-l8");
+  edit(repo, "src/other.ts", "export const o = 1;\n");
+  round(repo, "reviewer", MID);
+  lateEdit(repo, 10, 12);
+  const refusedWith = (args) => run(repo, "huddle", ["unchanged", ...args]).stderr;
+  assert.match(refusedWith(["src/mid.ts:10-12"]), REFUSAL, "no reason");
+  assert.match(refusedWith(["src/other.ts", "a new file"]), /no round saw/, "a file no round saw needs a round");
+  assert.match(refusedWith(["src/mid.ts:50-55", "nothing changed there"]), /owe/, "lines that owe nothing");
+  assert.equal(ledgerOf(repo).unchanged ?? undefined, undefined, "nothing recorded");
+  const old = opened("fc-64-l8-old");
+  oldPin(old);
+  round(old, "reviewer", null);
+  lateEdit(old, 10, 12);
+  assert.match(run(old, "huddle", ["unchanged", "src/mid.ts:10-12", "renamed"]).stderr, /pinned/, "an old pin has no calls");
+});
+
+test("6.4 L9 idempotent: a run pinned before keeps today's rule: a clean round covers later edits", () => {
+  const repo = opened("fc-64-l9");
+  oldPin(repo);
+  round(repo, "reviewer", null);
+  lateEdit(repo, 10, 12);
+  assert.ok(!blocks(check(repo), "R5"), check(repo));
+});
+
+test("6.4 L10 edge: a reviewed line deleted after a clean round is held until a round sees the file again, or a call excuses it", () => {
+  const repo = opened("fc-64-l10");
+  round(repo, "reviewer", null);
+  edit(repo, MID, body(60, "mid").replace("export const mid59 = 59;\n", ""));
+  assert.match(ruleLine(check(repo), "R5"), /src\/mid\.ts/, "a deleted reviewed line owes a call");
+  cli(repo, "huddle", ["unchanged", MID, "the last constant had no reader"]);
+  assert.ok(!blocks(check(repo), "R5"), check(repo));
+  edit(repo, MID, body(60, "mid").replace("export const mid59 = 59;\n", "").replace("export const mid58 = 58;\n", ""));
+  assert.match(ruleLine(check(repo), "R5"), /src\/mid\.ts/, "a second deletion after the call owes a call of its own");
+});
+
+test("6.4 L11 boundary: a late round in parts ends the file only with the part that takes the rest", () => {
+  const repo = opened("fc-64-l11");
+  round(repo, "reviewer", null);
+  edit(repo, MID, body(60, "mid") + body(500, "late", 1000));
+  const first = /`gate brief reviewer --files ([^`]+)`/.exec(ruleLine(check(repo), "R5"))[1];
+  round(repo, "reviewer", first, [`off by one — ${MID}:70 — x — []`]);
+  const id = ledgerOf(repo).huddles.at(-1).actOn[0].id;
+  edit(repo, MID, (body(60, "mid") + body(500, "late", 1000)).replace("late1009 = 1009", "late1009 = 77"));
+  cli(repo, "huddle", ["resolve", id, "--evidence", `${MID}:70`]);
+  const r5 = ruleLine(check(repo), "R5");
+  assert.match(r5, /src\/mid\.ts:70-71/, `the part's fixed line is still owed:\n${r5}`);
+  const rest = /`gate brief reviewer --files ([^`]+)`/.exec(r5)[1];
+  round(repo, "reviewer", rest);
+  assert.ok(!blocks(check(repo), "R5"), `the part that takes the rest ends the file:\n${check(repo)}`);
 });
