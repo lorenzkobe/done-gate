@@ -1004,6 +1004,29 @@ export function waiverWordsProblem(key, words) {
   return named ? null : `"${text}" does not name what is given up; the words have to name it (${names.join(", ")})`;
 }
 
+// What is wrong with these words as the user's OK to give up a run; null when nothing is. A bare
+// "run" says which only when it is the session's own or the only one open; else the slug must.
+export function abandonWordsProblem(words, slug, { bareRunOk = false } = {}) {
+  const text = words.trim();
+  if (text.split(/\s+/).length < 3) return `"${text}" is too short: at least three of the user's words`;
+  if (/\b(?:not|don't|dont|never|no)\s+(?:\S+\s+){0,2}(?:abandon|drop|give up)/i.test(text)) return `"${text}" says not to give it up`;
+  if (!/\b(?:abandon|abandoning|drop|dropping|give up|giving up)\b/i.test(text)) return `"${text}" does not say to abandon, drop or give up the run`;
+  if (new RegExp(`(?:^|[^\\w-])${slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "i").test(text)) return null;
+  if (/\brun\b/i.test(text)) return bareRunOk ? null : `"${text}" does not say which run, and more than one is open: the words have to name ${slug}`;
+  return `"${text}" does not name the run: "this run" or ${slug}`;
+}
+
+// The sentence holding the words ends in a question mark: the user asked, they did not decide.
+export function askedNotSaid(text, words) {
+  const norm = (s) => String(s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  const t = norm(text);
+  const at = t.indexOf(norm(words));
+  if (at < 0) return false;
+  const rest = t.slice(at);
+  const end = rest.search(/[.!]/);
+  return (end < 0 ? rest : rest.slice(0, end)).includes("?");
+}
+
 export const newRules = (ledger) => (ledger?.rules ?? 0) >= 1;
 
 // A test or doc file is no surface: nobody drives it or probes it, whatever a glob says. A run from
@@ -1277,7 +1300,7 @@ export function evaluate(state) {
   }
   for (const repo of config.repos ?? []) {
     if (repo.missing) {
-      unmet.push({ rule: "R13", text: `the declared repo ${repo.prefix} is gone (${repo.root} is no directory): its files read as deleted. Restore the directory, or give the run up with \`gate abandon ${ledger.slug} "<reason>"\`; no waiver clears this.` });
+      unmet.push({ rule: "R13", text: `the declared repo ${repo.prefix} is gone (${repo.root} is no directory): its files read as deleted. Restore the directory, or ask the user whether to give the run up (\`gate abandon ${ledger.slug} "<why>" --user-ok "<their words>"\`); no waiver clears this.` });
     } else if (repo.config.hash !== repo.gateHash && !waived(ledger, "gate-config")) {
       unmet.push({ rule: "R13", text: `.claude/gate.json or the verify commands of the declared repo ${repo.prefix} changed since it was declared. Restore them, or get the user's waiver (\`gate waive gate-config "<reason>" --user-ok "<their words>"\`).` });
     }

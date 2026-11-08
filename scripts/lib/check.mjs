@@ -30,7 +30,7 @@ const HELP = `gate <verb>: node <plugin>/scripts/gate.mjs <verb>
   stats [--days n] [--version x] [--save <file>]            read past runs of this repo and print the numbers; writes nothing, prints missing for what was not recorded; --save writes them as JSON to a new file outside the repo, numbers only, and sends nothing
   stats wrong <R#> "<words>"                                the user calls a stopped turn wrong: record it on the newest such turn before their words; only moves that rule's rate
   diagnose [--handled <agent id>]                           what became of each cut helper and the next step: resume, brief a fresh one or ask; --handled hides one until a newer notice
-  waive <key> "<why>" · decide <phase> <decision> <why> <evidence> <result> · abandon <slug> "<why>"
+  waive <key> "<why>" · decide <phase> <decision> <why> <evidence> <result> · abandon <slug> "<why>" --user-ok "<words>" (the user's, unless the run is empty)
   rebaseline "<why>"                                        take changes that are not this task's (another terminal, a stash pop) out of it
   steps · size · doctor · help`;
 
@@ -52,7 +52,7 @@ function reasonOf(ctx, run) {
 function staleRuns(ctx) {
   return openRuns(ctx.stateDir)
     .filter((run) => staleForeign(run, ctx.session))
-    .map((run) => `open run ${run.ledger.slug}, opened ${age(run.ledger.openedAt)} ago by another session${reasonOf(ctx, run)}: if that work is over, \`gate abandon ${run.ledger.slug} "<reason>"\``);
+    .map((run) => `open run ${run.ledger.slug}, opened ${age(run.ledger.openedAt)} ago by another session${reasonOf(ctx, run)}: ask the user whether to finish it or give it up`);
 }
 
 export const verbs = {

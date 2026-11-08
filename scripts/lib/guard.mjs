@@ -931,6 +931,12 @@ export function ownFileWrites(raw, agentType, root) {
 const GIVES_UP = /\b(?:waive|waiving|skip|skipping|without|give up|gives up|giving up)\b/i;
 const NAMES_CHECK = /\b(?:tests?|testing|reviews?|reviewer|drive|driver|driving|probe|click|clicking|qa|schema|verify)\b/i;
 const RECOMMENDED = /\(recommended\)/i;
+// a run given up is the user's call in every run, old or new, and with no run open in this session
+const GIVES_UP_RUN = /\babandon|\b(?:drop|give up)\s+(?:this|the)\s+run\b/i;
+function recommendsGivingUpRun(input) {
+  const questions = Array.isArray(input.tool_input?.questions) ? input.tool_input.questions : [];
+  return questions.some((q) => (Array.isArray(q?.options) ? q.options : []).some((o) => RECOMMENDED.test(String(o?.label ?? "")) && GIVES_UP_RUN.test(`${o.label} ${o?.description ?? ""}`)));
+}
 function recommendsGivingUp(input) {
   const questions = Array.isArray(input.tool_input?.questions) ? input.tool_input.questions : [];
   return questions.some((q) => (Array.isArray(q?.options) ? q.options : []).some((option) => {
@@ -938,7 +944,6 @@ function recommendsGivingUp(input) {
     if (!RECOMMENDED.test(label)) return false;
     const asked = String(q.question ?? "");
     const own = `${label} ${option?.description ?? ""}`;
-    if (/\babandon/i.test(own)) return true;
     // a yes takes the question's words; a no to "should I run the review?" gives it up
     if (/^\s*(?:yes|ok|okay|sure|go ahead|proceed|continue)\b/i.test(label)) return GIVES_UP.test(`${asked} ${own}`) && NAMES_CHECK.test(`${asked} ${own}`);
     if (/^\s*no\b/i.test(label) && NAMES_CHECK.test(asked) && !GIVES_UP.test(asked)) return true;
@@ -966,7 +971,7 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
   }
   if (tool === "Read") return { deny: false };
   if (tool === "AskUserQuestion") {
-    if (!newRules(ledger) || !recommendsGivingUp(input)) return { deny: false };
+    if (!recommendsGivingUpRun(input) && !(newRules(ledger) && recommendsGivingUp(input))) return { deny: false };
     return { deny: true, reason: "done-gate: a question that gives up a check or abandons a run cannot mark an option (Recommended). The choice is the user's, and a recommended answer does not count as their words. Ask it again with no recommendation, naming what is given up.", paths: [] };
   }
 

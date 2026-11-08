@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync, execSync, execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, here, pluginRoot, doneArgs, lookedUp, waiveArgs, asOldRun, naArgs } from "./helpers.mjs";
+import { makeRepo, write, gate, here, pluginRoot, doneArgs, lookedUp, waiveArgs, asOldRun, naArgs, abandonArgs } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { actOnRows, pauseLines } from "../scripts/lib/report.mjs";
 import { unmetLines } from "../scripts/lib/assess.mjs";
@@ -1242,7 +1242,7 @@ test("3.10 C7 a test turned into it.skip is one finding; one commented out count
 
   const abandoned = committedRepo("rep-w14", { "tests/a.test.ts": "it('a', () => {});\n" });
   write(abandoned, "tests/a.test.ts", "it.skip('a', () => {});\n");
-  cli(abandoned, "abandon", ["t", "this case stops here"]);
+  cli(abandoned, "abandon", abandonArgs(abandoned, "t", "this case stops here"));
   const dir = path.join(abandoned, ".claude", "gate", "runs");
   const name = readdirSync(dir)[0];
   assert.doesNotMatch(readFileSync(path.join(dir, name, "report.md"), "utf8"), /weakened/);

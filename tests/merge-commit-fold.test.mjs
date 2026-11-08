@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, gate, write } from "./helpers.mjs";
+import { makeRepo, gate, write, abandonArgs } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { readEvents, sessionDir } from "../scripts/lib/events.mjs";
@@ -509,7 +509,7 @@ test("3.2 C15 a declared repo's file a chain wrote stays through rebaseline", ()
 
 test("3.2 C15 with no run open rebaseline works as before: a chain's files stay", () => {
   const repo = ahead("mcf-32c15b");
-  assert.equal(run(repo, "abandon", "t", "this case needs no run").status, 0);
+  assert.equal(run(repo, "abandon", ...abandonArgs(repo, "t", "this case needs no run")).status, 0);
   gap();
   shell(repo, "npm run build && git rebase main", () => git(repo, "rebase", "main"));
   const out = run(repo, "rebaseline", "brought in by the rebase, as the user said");

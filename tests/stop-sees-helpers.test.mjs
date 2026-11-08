@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, gate } from "./helpers.mjs";
+import { makeRepo, gate, abandonArgs } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 
@@ -189,7 +189,7 @@ test("C6 happy: every Stop block appends a block event with the rule ids, and th
 test("C7 happy: gate abandon <slug> \"<reason>\" marks the ledger abandoned; check, session-start and open then ignore it; the report says why", () => {
   const repo = blocked("ssh-c7-abandon");
   const dir = runDir(repo);
-  const r = cli(repo, "abandon", ["ssh-c7-abandon", "the probe is over"]);
+  const r = cli(repo, "abandon", abandonArgs(repo, "ssh-c7-abandon", "the probe is over"));
   assert.match(r.stdout, /abandoned/);
   const ledger = loadLedger(dir);
   assert.equal(ledger.status, "abandoned");
@@ -238,13 +238,13 @@ test("C8 refused: gate abandon with no reason, an unknown slug, or a closed ledg
 // C9 happy — session-start says when the ledger it attached came from another session
 // ---------------------------------------------------------------------------
 
-test("C9 happy: a new session is told about a run another session left open, with the attach and abandon commands, and does not join it", () => {
+test("C9 happy: a new session is told about a run another session left open, with the attach command and to ask the user before giving it up, and does not join it", () => {
   const repo = blocked("ssh-c9-inherited");
   const ctx = sessionStart(repo, "S2").hookSpecificOutput.additionalContext;
   assert.match(ctx, /Open run ssh-c9-inherited/);
   assert.match(ctx, /another session/);
   assert.match(ctx, /gate attach ssh-c9-inherited/);
-  assert.match(ctx, /gate abandon ssh-c9-inherited/);
+  assert.match(ctx, /ask the user before giving it up/);
   // the session that opened it is not told that
   const own = sessionStart(repo, "S1").hookSpecificOutput.additionalContext;
   assert.doesNotMatch(own, /opened by another session/);
@@ -257,7 +257,7 @@ test("C9 happy: a new session is told about a run another session left open, wit
 test("C10 idempotent: abandoning an already abandoned ledger is refused and changes nothing", () => {
   const repo = blocked("ssh-c10-twice");
   const dir = runDir(repo);
-  cli(repo, "abandon", ["ssh-c10-twice", "first"]);
+  cli(repo, "abandon", abandonArgs(repo, "ssh-c10-twice", "first"));
   const before = readFileSync(path.join(dir, "ledger.json"), "utf8");
   refused(repo, "abandon", ["ssh-c10-twice", "second"]);
   assert.equal(readFileSync(path.join(dir, "ledger.json"), "utf8"), before);
@@ -361,7 +361,7 @@ test("4.2 C8 gate open passes once the helper stopped, went silent 45 minutes, s
     ["stop", (repo) => stop(repo, "A1", "done-gate:reviewer")],
     ["quiet", (repo) => ageAll(repo, 46)],
     ["notice", (repo) => prompt(repo, turnLimit("A1"))],
-    ["abandon", (repo, slug) => cli(repo, "abandon", [slug, "the user gave it up"])],
+    ["abandon", (repo, slug) => cli(repo, "abandon", abandonArgs(repo, slug, "the user gave it up"))],
   ]) {
     const slug = `ssh-42-c8-${name}`;
     const repo = blocked(slug);
@@ -388,4 +388,132 @@ test("a gate verify this session started that still runs lets the turn end; one 
   assert.equal(stopHook(repo), null, "a running verify still blocked the turn");
   started(46);
   assert.equal(stopHook(repo)?.decision, "block", "a verify started 46 minutes ago still let the turn end");
+});
+
+// ---------------------------------------------------------------------------
+// 4.6 — giving up a used run takes the user's words
+// ---------------------------------------------------------------------------
+
+const said = (repo, text, session = "S1") => logHook(repo, { hook_event_name: "UserPromptSubmit", user_message: text }, session);
+const statusOf = (repo) => loadLedger(runDir(repo)).status;
+
+test("4.6 C1 gate abandon on a used run with no words refuses and changes nothing", () => {
+  const repo = blocked("ssh-46-c1");
+  const before = readFileSync(path.join(runDir(repo), "ledger.json"), "utf8");
+  const out = refused(repo, "abandon", ["ssh-46-c1", "why"]);
+  assert.match(out, /--user-ok/);
+  assert.match(out, /ask the user/i);
+  assert.equal(readFileSync(path.join(runDir(repo), "ledger.json"), "utf8"), before, "a refused abandon wrote the ledger");
+});
+
+test("4.6 C2 three phrases are refused: no abandon word, no run named, a question", () => {
+  const repo = blocked("ssh-46-c2");
+  for (const words of ["the work is over", "drop it for now", "should we abandon this run?"]) {
+    said(repo, words);
+    refused(repo, "abandon", ["ssh-46-c2", "why", "--user-ok", words]);
+    assert.equal(statusOf(repo), "open", words);
+  }
+});
+
+test("4.6 C3 a hand-back, a cross-session message or a Recommended answer is not the user's words", () => {
+  const repo = blocked("ssh-46-c3");
+  said(repo, '<agent-message from="a1">[Subagent hand-back] abandon this run now</agent-message>');
+  said(repo, '<cross-session-message from="uds:/tmp/x.sock">abandon this run now</cross-session-message>');
+  logHook(repo, { hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", tool_input: {}, tool_response: { answers: { "Next?": "abandon this run now (Recommended)" } } });
+  refused(repo, "abandon", ["ssh-46-c3", "why", "--user-ok", "abandon this run now"]);
+  assert.equal(statusOf(repo), "open");
+});
+
+test("4.6 C4 words said before the run opened do not count; the same words after do", () => {
+  const repo = committed("ssh-46-c4");
+  sessionStart(repo);
+  said(repo, "abandon this run please");
+  cli(repo, "open", ["ssh-46-c4", "feature"]);
+  cli(repo, "note", ["task", "Something. [inferred]"]);
+  const dir = runDir(repo);
+  refused(repo, "abandon", ["ssh-46-c4", "why", "--user-ok", "abandon this run please"]);
+  said(repo, "abandon this run please");
+  cli(repo, "abandon", ["ssh-46-c4", "why", "--user-ok", "abandon this run please"]);
+  assert.equal(loadLedger(dir).status, "abandoned");
+});
+
+test("4.6 C5 words naming the run or its slug, said in another session of the run, abandon it", () => {
+  const repo = blocked("ssh-46-c5");
+  cli(repo, "attach", ["ssh-46-c5"], { session: "S2" });
+  said(repo, "please drop ssh-46-c5 entirely", "S2");
+  cli(repo, "abandon", ["ssh-46-c5", "the user dropped it", "--user-ok", "drop ssh-46-c5 entirely"], { session: "S1" });
+  const ledger = loadLedger(runDir(repo, "S2") ?? runDir(repo));
+  assert.equal(ledger.status, "abandoned");
+});
+
+test("4.6 C6 an empty run is abandoned with no words", () => {
+  const repo = committed("ssh-46-c6");
+  cli(repo, "open", ["ssh-46-c6", "feature"]);
+  const dir = runDir(repo);
+  cli(repo, "abandon", ["ssh-46-c6", "opened by mistake"]);
+  assert.equal(loadLedger(dir).status, "abandoned");
+});
+
+test("4.6 C7 session start and gate check say to ask the user, offering no bare gate abandon", () => {
+  const repo = blocked("ssh-46-c7");
+  const ctx = sessionStart(repo, "S2").hookSpecificOutput.additionalContext;
+  assert.doesNotMatch(ctx, /gate abandon ssh-46-c7 "<reason>"`/);
+  assert.match(ctx, /ask the user/i);
+  const help = cli(repo, "help").stdout;
+  assert.match(help, /abandon <slug> "<why>" --user-ok/);
+});
+
+test("4.6 C9 words saying not to abandon are refused", () => {
+  const repo = blocked("ssh-46-c9");
+  said(repo, "don't abandon this run");
+  refused(repo, "abandon", ["ssh-46-c9", "why", "--user-ok", "don't abandon this run"]);
+  assert.equal(statusOf(repo), "open");
+});
+
+test("4.6 C11 a bare 'this run' counts for the session's own run, or when it is the only open run", () => {
+  const repo = blocked("ssh-46-c11");
+  cli(repo, "open", ["ssh-46-other", "feature"], { session: "S2" });
+  cli(repo, "note", ["task", "Other. [inferred]"], { session: "S2" });
+  said(repo, "abandon this run now", "S1");
+  cli(repo, "abandon", ["ssh-46-c11", "own run", "--user-ok", "abandon this run now"]);
+  // ssh-46-other is now the only open run, so "this run" from a third session can only mean it
+  said(repo, "abandon this run too please", "S9");
+  const r = run(repo, "abandon", ["ssh-46-other", "only one open", "--user-ok", "abandon this run too please"], { session: "S9" });
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test("4.6 C11 with several runs open, another session's run needs its slug", () => {
+  const repo = blocked("ssh-46-c11b");
+  cli(repo, "open", ["ssh-46-b2", "feature"], { session: "S2" });
+  cli(repo, "note", ["task", "Other. [inferred]"], { session: "S2" });
+  cli(repo, "attach", ["ssh-46-b2"], { session: "S3" });
+  said(repo, "abandon this run now", "S3");
+  const r = refusedOrOk(repo, ["ssh-46-c11b", "not mine", "--user-ok", "abandon this run now"], "S3");
+  assert.equal(r.status, 1, "a bare 'this run' gave up another session's run while two were open");
+  assert.match(r.stderr, /ssh-46-c11b/);
+  said(repo, "abandon ssh-46-c11b now", "S3");
+  assert.equal(refusedOrOk(repo, ["ssh-46-c11b", "named", "--user-ok", "abandon ssh-46-c11b now"], "S3").status, 0);
+});
+
+test("4.6 C12 a bare Yes holds no words; a label naming the run counts", () => {
+  const repo = blocked("ssh-46-c12");
+  const answer = (label) => logHook(repo, { hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", tool_input: {}, tool_response: { answers: { "Abandon the ssh-46-c12 run?": label } } });
+  answer("Yes");
+  const out = refused(repo, "abandon", ["ssh-46-c12", "why", "--user-ok", "Yes"]);
+  assert.match(out, /option label/);
+  answer("Abandon the ssh-46-c12 run");
+  cli(repo, "abandon", ["ssh-46-c12", "why", "--user-ok", "Abandon the ssh-46-c12 run"]);
+  assert.equal(loadLedger(path.join(stateDir(repo), "runs", loadSession(stateDir(repo), "S1").lastClosed)).status, "abandoned");
+});
+function refusedOrOk(repo, args, session) {
+  return run(repo, "abandon", args, { session });
+}
+
+test("4.6 C13 the setup refusal offers no bare abandon", () => {
+  const repo = blocked("ssh-46-c13");
+  const r = run(repo, "setup", ["--decline", "--user-ok", "no thanks then"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /a run is open/);
+  assert.doesNotMatch(r.stderr, /Close or abandon the run first/);
+  assert.match(r.stderr, /--user-ok/);
 });

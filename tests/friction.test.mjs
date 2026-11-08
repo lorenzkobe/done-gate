@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, here, CODE_LOOKUP, MEMORY_LOOKUP } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, CODE_LOOKUP, MEMORY_LOOKUP, abandonArgs } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { decide, shellWrites } from "../scripts/lib/guard.mjs";
@@ -153,7 +153,7 @@ test("C7 edge: gate open warns when a newer done-gate version sits beside this o
   assert.doesNotMatch(cli(dev, "open", ["t", "feature"]), /newer|superseded/);
 });
 
-test("C8 happy: gate check shows each open run's age and points a stale one at gate abandon", () => {
+test("C8 happy: gate check shows each open run's age and says to ask the user about a stale one", () => {
   const repo = committed("fr-c8");
   cli(repo, "open", ["old", "feature"]);
   const ledger = ledgerOf(repo);
@@ -161,12 +161,12 @@ test("C8 happy: gate check shows each open run's age and points a stale one at g
   ledger.sessions = ["S0"];
   saveLedger(runDir(repo), ledger);
   const check = () => spawnSync(process.execPath, [gate, "check"], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S2" } });
-  assert.doesNotMatch(check().stdout, /gate abandon old/, "touched just now: another session may still be on it");
+  assert.doesNotMatch(check().stdout, /open run old/, "touched just now: another session may still be on it");
   const longAgo = new Date(Date.now() - 5 * 24 * 3600 * 1000);
   utimesSync(path.join(runDir(repo), "ledger.json"), longAgo, longAgo);
   const r = check();
   assert.match(r.stdout, /old[^\n]*5 days/, r.stdout);
-  assert.match(r.stdout, /gate abandon old/, r.stdout);
+  assert.match(r.stdout, /open run old[^\n]*ask the user whether to finish it or give it up/, r.stdout);
 });
 
 test("C9 reported-surface: lookups before a clarifying answer still count when the run opens after it", () => {
@@ -229,7 +229,7 @@ test("C13 edge: abandoning another session's stale run keeps this session's look
   s2("session-start", [], JSON.stringify({ session_id: "S2", cwd: repo, hook_event_name: "SessionStart", session_start_source: "startup" }));
   log2({ hook_event_name: "UserPromptSubmit", prompt: "add a badge" });
   for (const tool_name of [CODE_LOOKUP, MEMORY_LOOKUP]) log2({ hook_event_name: "PostToolUse", tool_name, tool_input: { query: "badge" }, tool_response: {} });
-  assert.equal(s2("abandon", ["old", "left by another session"]).status, 0);
+  assert.equal(s2("abandon", abandonArgs(repo, "old", "left by another session", { session: "S2" })).status, 0);
   log2({ hook_event_name: "UserPromptSubmit", prompt: "yes, go ahead" });
   assert.equal(s2("open", ["new", "feature"]).status, 0);
   assert.equal(s2("note", ["task", "Add a badge. [inferred]"]).status, 0);

@@ -263,7 +263,7 @@ function validated(json, name) {
 function guardNoRun(ctx) {
   const current = currentLedger(ctx.stateDir, ctx.session);
   if ((current && !isDone(current.ledger)) || openRuns(ctx.stateDir).some((r) => r.ledger.status !== "closed" && !staleForeign(r, ctx.session))) {
-    throw new UsageError("a run is open: changing gate.json now trips R13. Close or abandon the run first, then set up.");
+    throw new UsageError('a run is open: changing gate.json now trips R13. Close the run first (giving it up takes the user\'s words: `gate abandon <slug> "<why>" --user-ok "<their words>"`), then set up.');
   }
 }
 

@@ -111,7 +111,7 @@ export const verbs = {
           // the reason is a courtesy; the run is still listed
         }
         const by = ledger.sessions?.includes(ctx.session) ? "opened by this session" : "left by another session";
-        return `Open run ${ledger.slug} (${ledger.playbook}), ${by} on ${String(ledger.openedAt).slice(0, 10)}, is not joined:${why} To continue it: \`gate attach ${ledger.slug}\`; if that work is over: \`gate abandon ${ledger.slug} "<reason>"\`.`;
+        return `Open run ${ledger.slug} (${ledger.playbook}), ${by} on ${String(ledger.openedAt).slice(0, 10)}, is not joined:${why} To continue it: \`gate attach ${ledger.slug}\`; if that work looks over, ask the user before giving it up.`;
       });
       const more = left.length > 5 ? [`and ${left.length - 5} more open run${left.length - 5 === 1 ? "" : "s"}: \`gate check\` lists them`] : [];
       parts.push(`\n<done-gate-status>\n${[...lines, ...more].join("\n")}\nA new task opens its own run.\n</done-gate-status>`);
@@ -124,7 +124,7 @@ export const verbs = {
         parts.push(
           `\n<done-gate-status>\nOpen ledger: ${state.dir} (${state.ledger.playbook}, ${state.ledger.status}). ` +
             `${unmetCount(unmet)} unmet gate item(s). Run \`gate check\` before continuing.` +
-            (inherited ? ` This ledger was opened by another session on ${String(state.ledger.openedAt).slice(0, 10)}; if that work is over, \`gate abandon ${state.ledger.slug} "<reason>"\` lets it go.` : "") +
+            (inherited ? ` This ledger was opened by another session on ${String(state.ledger.openedAt).slice(0, 10)}; if that work looks over, ask the user before giving it up.` : "") +
             `\n</done-gate-status>`,
         );
       }

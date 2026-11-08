@@ -1,14 +1,14 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { nextSeq } from "./events.mjs";
-import { currentLedger, findRun, isDone, loadLedger, saveLedger } from "./ledger.mjs";
+import { currentLedger, findRun, isDone, loadLedger, openRuns, saveLedger } from "./ledger.mjs";
 import { loadConfig } from "./config.mjs";
 import { applyPrediction, policyFor, tierOrder, tiered } from "./size.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
+import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
 import { assess, broughtSinceOpen, buildState, cleanAtHead, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
@@ -182,6 +182,31 @@ function checkLookups(ctx, ledger, rest) {
 }
 
 export const outsideRepos = (given) => `"${given}" is outside this repo and every declared repo: declare its repo with \`gate repo add <dir>\`, then name the file again`;
+
+// Opened and nothing more: no note, case, step, round, waiver, brief, decision, edit or helper.
+function emptyRun(ctx, dir, ledger) {
+  const briefs = Object.keys({ ...(ledger.briefed ?? {}), ...(ledger.seen ?? {}) }).length;
+  if (ledger.taskSeq || ledger.contextSeq || ledger.planSeq || ledger.cases?.length || ledger.steps?.some((s) => s.state) || ledger.huddles?.length || ledger.waivers?.length || briefs || ledger.lastSourceChangeSeq) return false;
+  const decisions = path.join(dir, "decisions.tsv");
+  if (existsSync(decisions) && readFileSync(decisions, "utf8").trim().split("\n").length > 1) return false;
+  const events = (ledger.sessions ?? []).flatMap((s) => readEvents(ctx.stateDir, s));
+  return !events.some((e) => e.seq > (ledger.openedSeq ?? 0) && (e.kind === "edit" || e.kind === "subagent-start"));
+}
+
+// Giving up a used run is the user's call: their own words since it opened, saying to abandon,
+// drop or give up this run, not asked as a question and not a recommended answer.
+function abandonWords(ctx, dir, ledger, words) {
+  const tell = `ask the user, then \`gate abandon ${ledger.slug} "<why>" --user-ok "<their words, at least three, saying to abandon, drop or give up this run or ${ledger.slug}>"\`; asking with a question, put the words in its option label, since an answer holds only the chosen label`;
+  if (!words?.trim()) throw new UsageError(`giving up run ${ledger.slug} is the user's call: ${tell}`);
+  const own = loadSession(ctx.stateDir, ctx.session)?.current === path.basename(dir);
+  const problem = abandonWordsProblem(words, ledger.slug, { bareRunOk: own || openRuns(ctx.stateDir).length === 1 });
+  if (problem) throw new UsageError(`gate abandon: ${problem}. ${tell}`);
+  const sessions = [...new Set([ctx.session, ...(ledger.sessions ?? [])].filter(Boolean))];
+  const events = notRecommended(sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq));
+  const hit = saidAt(events, ledger.openedSeq ?? 0, words);
+  if (!hit) throw new UsageError(`the user did not say "${words.trim()}" since run ${ledger.slug} opened: ${tell}`);
+  if (askedNotSaid(hit.text, words)) throw new UsageError(`"${words.trim()}" was the user's question, not their decision: ${tell}`);
+}
 
 export const verbs = {
   note(ctx) {
@@ -738,7 +763,7 @@ export const verbs = {
     });
     ctx.out(`waived ${key} (clears ${clears}) — the report will show the reason`);
     const gone = key === "gate-config" ? ctx.repos.filter((r) => !existsSync(r.root)).map((r) => r.prefix) : [];
-    if (gone.length) ctx.out(`not cleared: the R13 line for the declared repo ${gone.join(", ")}, whose directory is gone; restore it or abandon the run`);
+    if (gone.length) ctx.out(`not cleared: the R13 line for the declared repo ${gone.join(", ")}, whose directory is gone; restore it, or ask the user whether to give the run up`);
     printNext(ctx);
   },
 
@@ -805,10 +830,11 @@ export const verbs = {
   abandon(ctx) {
     const [slug, ...rest] = positional(ctx.args);
     const reason = rest.join(" ").trim();
-    if (!slug || !reason) throw new UsageError('usage: gate abandon <slug> "<reason>"');
+    if (!slug || !reason) throw new UsageError('usage: gate abandon <slug> "<why>" --user-ok "<the user\'s words>"');
     const found = findRun(ctx.stateDir, slug);
     if (!found) throw new UsageError(`no open run for slug "${slug}" (a closed or abandoned run cannot be abandoned)`);
     const { dir, ledger } = found;
+    if (!emptyRun(ctx, dir, ledger)) abandonWords(ctx, dir, ledger, flag(ctx.args, "--user-ok"));
     ledger.status = "abandoned";
     ledger.abandonedAt = new Date().toISOString();
     ledger.abandonReason = reason;

@@ -126,6 +126,13 @@ export function waiveArgs(repo, key, reason, { session = "S1" } = {}) {
   return [key, reason, "--user-ok", words];
 }
 
+// The user's words for giving a used run up, logged as their message, and the args that abandon on them.
+export function abandonArgs(repo, slug, reason, { session = "S1" } = {}) {
+  const words = `abandon the ${slug} run`;
+  userSays(repo, words, session);
+  return [slug, reason, "--user-ok", words];
+}
+
 // The args that close a planned case N/A, on words the user just said.
 export function naArgs(repo, id, reason, { session = "S1" } = {}) {
   const words = "no test for this case";

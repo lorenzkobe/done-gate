@@ -363,7 +363,7 @@ test("4.5 C6 session start lists each open run with its reason, at most five, an
     assert.match(l, /another session/);
     assert.match(l, /steps done/);
     assert.match(l, /no event records[\s\S]*ask the user/, "a shell-opened run with no records says so");
-    assert.match(l, /gate attach run-\d[\s\S]*gate abandon run-\d/);
+    assert.match(l, /gate attach run-\d[\s\S]*ask the user before giving it up/);
   }
   assert.equal(loadSession(path.join(repo, ".claude", "gate"), "S9").current, null, "session start joined another session's run");
 });
@@ -388,7 +388,7 @@ test("4.5 C7 gate attach prints the full story; gate check's stale line names th
   const old = new Date(Date.now() - 5 * 24 * 3600 * 1000);
   utimesSync(ledgerFile, old, old);
   const check = as(stale, "S2", "check").stdout;
-  assert.match(check, /open run gone[^\n]*5 days[^\n]*no event records[^\n]*gate abandon gone/, check);
+  assert.match(check, /open run gone[^\n]*5 days[^\n]*no event records[^\n]*ask the user whether to finish it or give it up/, check);
 });
 
 test("4.5 C8 six open runs, the newest with a 4 MB log and the sixth unreadable: five are listed, under 2 s", () => {
@@ -444,5 +444,5 @@ test("4.5 C11 gate check with a stale run whose log cannot be read still lists i
   mkdirSync(path.join(repo, ".claude", "gate", "sessions", "S0", "events.jsonl"), { recursive: true });
   const r = as(repo, "S2", "check");
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /open run gone[^\n]*5 days[^\n]*gate abandon gone/, r.stdout);
+  assert.match(r.stdout, /open run gone[^\n]*5 days[^\n]*ask the user/, r.stdout);
 });

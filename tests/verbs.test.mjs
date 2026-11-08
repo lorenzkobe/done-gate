@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, lookedUp, waiveArgs, naArgs } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, lookedUp, waiveArgs, naArgs, abandonArgs } from "./helpers.mjs";
 import { decide } from "../scripts/lib/guard.mjs";
 import { saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
@@ -643,6 +643,7 @@ test("3.8 C2 the fence refuses a (Recommended) option that skips a check, waives
     question("Ship it?", "Ship without tests (Recommended)"),
     question("Next?", "Go on (Recommended)", "gives up the schema probe"),
     question("Next?", "Abandon this run (Recommended)"),
+    question("What now?", "Drop this run (Recommended)"),
   ]) {
     const verdict = decide(q, root, null, null, NEW);
     assert.equal(verdict.deny, true, JSON.stringify(q));
@@ -650,6 +651,14 @@ test("3.8 C2 the fence refuses a (Recommended) option that skips a check, waives
   }
   const hooks = JSON.parse(readFileSync(path.join(pluginRoot, "hooks", "hooks.json"), "utf8"));
   assert.ok(hooks.hooks.PreToolUse.some((h) => /AskUserQuestion/.test(h.matcher)));
+});
+
+test("4.6 C10 a recommendation to abandon or drop a run is refused even with no run open", () => {
+  const root = makeRepo("verbs-46-c10");
+  for (const label of ["Abandon this run (Recommended)", "Drop this run (Recommended)"]) {
+    assert.equal(decide(question("What now?", label), root, null, null, null).deny, true, label);
+  }
+  assert.equal(decide(question("Which migration?", "Drop the users column (Recommended)"), root, null, null, null).deny, false);
 });
 
 test("3.8 C3 a recommendation that gives up no check passes; a bare yes on a question skipping one is refused; an old run or no run passes", () => {
@@ -877,7 +886,7 @@ test("3.8 C16 hints, usage, help and the README name --ran and the user's words 
 test("3.8 C17 an earlier run's edit in the same session does not make this run's cases late", () => {
   const repo = opened("verbs-n6");
   editsCode(repo);
-  cli(repo, "abandon", ["t", "this case needs a second run"]);
+  cli(repo, "abandon", abandonArgs(repo, "t", "this case needs a second run"));
   cli(repo, "open", ["t2", "feature"]);
   cli(repo, "case", ["add", "planned in the second run", "--kind", "happy"]);
   assert.match(closeCase(repo, "C1", "--na", "covered").stderr, /--user-ok/);

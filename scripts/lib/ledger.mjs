@@ -482,7 +482,7 @@ function refuseWhileHelpersOut(ctx, slug) {
   const out = helpersOut(readEvents(ctx.stateDir, ctx.session), ctx.session, current.ledger.openedSeq ?? 0);
   if (!out.length) return;
   const one = out.length === 1;
-  throw new UsageError(`${out.map((e) => `${e.agentType} (${e.agent})`).join(", ")} ${one ? "is" : "are"} still out on run ${current.ledger.slug}: wait for ${one ? "its" : "their"} hand-back, or give that run up with \`gate abandon ${current.ledger.slug} "<why>"\`. Moving to another run now leaves ${one ? "its file" : "their files"} outside the run ${one ? "it was" : "they were"} briefed for.`);
+  throw new UsageError(`${out.map((e) => `${e.agentType} (${e.agent})`).join(", ")} ${one ? "is" : "are"} still out on run ${current.ledger.slug}: wait for ${one ? "its" : "their"} hand-back, or, if the user says to give that run up, \`gate abandon ${current.ledger.slug} "<why>" --user-ok "<their words>"\`. Moving to another run now leaves ${one ? "its file" : "their files"} outside the run ${one ? "it was" : "they were"} briefed for.`);
 }
 
 export const verbs = {

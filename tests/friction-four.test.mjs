@@ -79,14 +79,15 @@ test("C3 edge: an older finished verify plus a newer marker reads as a rerun tha
   assert.doesNotMatch(lines[0], /stale/);
 });
 
-test("C4 reported-surface: a fresh session does not join another session's open run; it is told how to attach or abandon, and a Stop with nothing changed passes", () => {
+test("C4 reported-surface: a fresh session does not join another session's open run; it is told how to attach and to ask the user before giving it up, and a Stop with nothing changed passes", () => {
   const repo = makeRepo("ff-foreign");
   start(repo, "S1", "startup");
   run(repo, "open", "S1", {}, ["badge", "feature"]);
   write(repo, "src/a.ts", "changed\n");
   const ctx = startContext(repo, "S2", "startup");
   assert.match(ctx, /gate attach badge/);
-  assert.match(ctx, /gate abandon badge/);
+  assert.match(ctx, /ask the user before giving it up/);
+  assert.doesNotMatch(ctx, /gate abandon badge/);
   assert.ok(!loadSession(stateDir(repo), "S2")?.current, "S2 did not join");
   assert.equal(stop(repo, "S2").stdout.trim(), "", "S2 is not blocked for S1's diff");
 });

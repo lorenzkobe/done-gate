@@ -266,7 +266,9 @@ checked.
   that could not end can be diagnosed afterwards.
 - **A stale ledger can be let go.** A ledger left open by an earlier session is joined again
   after a /clear, resume or compaction; a new session is only told it is there, with
-  `gate attach <slug>` to continue it and `gate abandon <slug> "<reason>"` to mark it abandoned
+  `gate attach <slug>` to continue it, and to ask you before giving it up: `gate abandon <slug>
+  "<reason>" --user-ok "<your words>"` takes your own words, said since the run opened, saying to
+  abandon, drop or give up this run (a run with nothing in it needs none), and marks it abandoned
   (reason in its report) so it no longer blocks anything. Nothing is finalised: the changes it
   left behind still count against the next ledger.
 - **The lead may edit at any size.** It holds the context, so handing a piece to a fresh worker
@@ -392,7 +394,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `test <test file>...` | run gate.json's `testFiles` on these test files of this repo, output streamed, exit code passed through; with `serialTests` it waits for the repo-wide test lock (exit 75 when busy past five minutes) |
 | `decide <phase> <decision> <why> <evidence> <result>` | append a decision-log row |
 | `brief <skeptic\|qa\|worker\|reviewer\|reviewer-2\|arbiter> [--files a,b \| a.ts:1-400] [--item H#.#]` | write the helper's packet and print its spawn prompt; a packet is numbered like the file it names; a worker's `--files` are the files it owns |
-| `abandon <slug> "<reason>"` | give a run up: marks it abandoned with the reason; it stops attaching to sessions and blocking turns |
+| `abandon <slug> "<reason>" --user-ok "<words>"` | give a run up: marks it abandoned with the reason; it stops attaching to sessions and blocking turns. A run with anything in it takes your words since it opened, at least three, saying to abandon, drop or give up this run (or naming its slug when more than one is open and it is not this session's); a question, a hand-back or a recommended answer does not count |
 | `diagnose [--handled <agent id>]` | what became of each helper of the open run that was cut off, read from its notice or its silence, and the next step: resume the same helper twice, then brief a fresh one from its file, then ask you with no option marked Recommended. Attempts count per helper file (per agent for a worker or QA); outages, a cause only you can fix and a stop someone chose never count, and a turn limit after new edits is progress. A notice arriving during a run brings the same line to the lead. It writes nothing, except `--handled`, which hides one helper until a newer notice |
 | `stats [--days n] [--version x] [--save <file>]` | read this repo's past runs and print the numbers: runs by outcome, median minutes per size, per role rounds, findings, closed as wrong and closed on a test, waivers, code outside the plan, large runs with and without workers, bugs after close (an estimate, naming its runs), how many runs have events, refusals grouped for a person to read, turns stopped per rule, reviewer time, review wait, helper failures by cause, and output tokens per size and helper role, read from Claude Code's transcripts, numbers only. Default the last 30 days, by when a run opened; `--version` keeps one plugin version. It writes nothing and prints `missing` for what was not recorded, never 0. `--save` writes those numbers as JSON to a new file outside the repo, with the repo folder's name and the plugin version, to carry to another laptop and compare: numbers only, with no run names, commands, file paths, refusal text or other agents' names. It sends nothing |
 | `stats wrong <R#> "<words>"` | the user calls a stop wrong: refused unless they said those words in this session; records the verdict on the newest turn stopped by that rule before their message. `gate stats` then prints each rule's rate over every record on disk, ignoring `--days`: too few under 20 turns, probation from 10%, ask from 25%. It only reports: nothing turns a rule off |
@@ -434,7 +436,7 @@ main root, whatever the shell's directory. `gate open`, `gate attach` and
   implementation of its own repo changed.
 - **R13 covers it.** Changing a declared repo's gate.json or verify command list mid-run
   blocks like the main one (`gate waive gate-config`). A declared repo whose directory is
-  gone is an unmet R13 line with no waiver: restore it or abandon the run.
+  gone is an unmet R13 line with no waiver: restore it, or give the run up with your words.
 - **Other sessions' commits** in a declared repo are left out the same way as in the main one.
 
 ## Configuration

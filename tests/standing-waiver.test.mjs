@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { gate, here, lookedUp, makeRepo, userSays, write } from "./helpers.mjs";
+import { abandonArgs, gate, here, lookedUp, makeRepo, userSays, write } from "./helpers.mjs";
 import { decide } from "../scripts/lib/guard.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 
@@ -124,7 +124,7 @@ test("C6 two runs in a batch close with the waiver listed in both reports, namin
     const full = cli(repo, "report");
     assert.match(full, /waived driver:[^\n]*rollout/, name);
     assert.match(cli(repo, "report", ["--brief"]), /rollout/, name);
-    cli(repo, "abandon", [name, "this case stops at the report"]);
+    cli(repo, "abandon", abandonArgs(repo, name, "this case stops at the report"));
   }
 });
 
@@ -148,7 +148,7 @@ test("C8 gate waive --end stops it: a later open is refused, and a copy in an op
   assert.equal(ledgerOf(repo).waivers[0].lapsed, true);
   assert.equal(stepState(repo, "driver"), null);
   assert.equal(r4(repo), true);
-  cli(repo, "abandon", ["t", "this case stops here"]);
+  cli(repo, "abandon", abandonArgs(repo, "t", "this case stops here"));
   assert.match(run(repo, "open", ["u", "feature", "--batch", "rollout"]).stderr, /no live standing waiver/);
   assert.match(run(repo, "waive", ["--end", "never-made"]).stderr, /no standing waiver/);
 });

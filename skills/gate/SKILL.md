@@ -60,7 +60,6 @@ with what you skipped or did not check: `gate note caveat`.
 - Two readings of the ask: `AskUserQuestion` before step 2. New ask mid-run: new run.
 - A helper that stops mid-file: `gate brief <role>` again; a fresh one continues
   from it.
-- A dead session's open run: `gate abandon`.
 - At most ten helpers a task.
 - A step you cannot do: ask, then `gate waive <key> "<why>" --user-ok "<words>"`.
 - Never hand-edit `.claude/gate/runs/**` except `ledger.md`. No commits unless asked; the
