@@ -60,7 +60,7 @@ function sha1(buf) {
 
 // Newline count, plus one for an unterminated last line; an empty file has no lines and a
 // binary file (a NUL byte in its first 8 KB) has null, so it is never sized by lines.
-export function countLines(buf) {
+function countLines(buf) {
   if (!buf.length) return 0;
   const probe = buf.subarray(0, 8000);
   for (let i = 0; i < probe.length; i++) if (probe[i] === 0) return null;

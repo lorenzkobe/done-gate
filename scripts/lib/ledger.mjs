@@ -69,7 +69,7 @@ export function addLessons(stateDir, lines) {
 
 // Playbook steps: the `## <name>` section of playbooks.md, numbered lines, optional
 // trailing {key} naming the evidence kind.
-export function playbookSteps(playbook) {
+function playbookSteps(playbook) {
   const file = path.join(pluginRoot, "skills", "gate", "playbooks.md");
   const text = section(readFileSync(file, "utf8").replace(/\r/g, ""), playbook);
   if (!PLAYBOOKS.includes(playbook) || !text) throw new UsageError(`unknown playbook "${playbook}" (have: ${PLAYBOOKS.join(", ")})`);

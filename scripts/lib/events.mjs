@@ -248,7 +248,7 @@ function helperNotice(text) {
   return { agent: /<task-id>\s*([^<\s]+)\s*<\/task-id>/.exec(text)?.[1] ?? null, ...found };
 }
 
-export const SILENT = { continue: true, suppressOutput: true };
+const SILENT = { continue: true, suppressOutput: true };
 
 // The same command failing the same way twice in a row from one agent, with no edit of its
 // own between, gets one note: a third run would fail the same way. Never a block.

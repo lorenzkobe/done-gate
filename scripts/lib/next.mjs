@@ -1,5 +1,5 @@
 import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
-import { optionalSteps, policyFor, tiered } from "./size.mjs";
+import { policyFor, tiered } from "./size.mjs";
 import { loadConfig } from "./config.mjs";
 import { readEvents } from "./events.mjs";
 import { clickStale, driverCommand, lastEditSeq, newRules, nextGroup } from "./rules.mjs";
@@ -115,5 +115,3 @@ export const verbs = {
     printNext(ctx, { full: true });
   },
 };
-
-export { optionalSteps };
