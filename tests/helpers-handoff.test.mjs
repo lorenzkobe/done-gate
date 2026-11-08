@@ -691,3 +691,41 @@ test("a worker packet briefed with --files lists only the open findings that cit
   const rest = section(brief(repo, "worker").text, "Open findings");
   assert.ok(rest.includes("H1.4") && rest.includes(NO_FILE), `the finding that cites no file is in no packet:\n${rest}`);
 });
+
+test("4.2 C1 right after a turn-limit notice, gate check names the helper's unfinished file; a resume hides it again", () => {
+  const repo = standard("hh-42-c1");
+  brief(repo, "skeptic");
+  start(repo, "A1", "skeptic");
+  helperWrites(repo, "A1", "skeptic", "skeptic-1.md", skepticPartial(1, "hh-42-c1"));
+  assert.ok(!unfinishedLine(check(repo), "skeptic-1.md", "skeptic"), `premise: a running helper is not listed:\n${check(repo)}`);
+  hook(repo, { hook_event_name: "UserPromptSubmit", prompt: '<task-notification>\n<task-id>A1</task-id>\n<status>completed</status>\n<summary>Agent "Skeptic" stopped at its 40-turn limit (partial result; SendMessage to task-id to continue)</summary>\n</task-notification>' });
+  const line = unfinishedLine(check(repo), "skeptic-1.md", "skeptic");
+  assert.ok(line, `a turn-limited skeptic's partial file is not named:\n${check(repo)}`);
+  assert.match(line, /\bR15\b/);
+  start(repo, "A1", "skeptic");
+  assert.ok(!unfinishedLine(check(repo), "skeptic-1.md", "skeptic"), `a resumed skeptic is listed as stopped:\n${check(repo)}`);
+});
+
+test("4.2 C12 after a turn-limit notice, huddle add of the partial file says re-brief, not still running", () => {
+  const repo = standard("hh-42-c12");
+  brief(repo, "skeptic");
+  start(repo, "A1", "skeptic");
+  helperWrites(repo, "A1", "skeptic", "skeptic-1.md", skepticPartial(1, "hh-42-c12"));
+  const add = () => spawnSync(process.execPath, [gate, "huddle", "add", "skeptic", "--file", "skeptic-1.md"], { encoding: "utf8", env: envFor(repo) }).stderr;
+  assert.match(add(), /still running/, "premise: a running helper's partial file waits");
+  hook(repo, { hook_event_name: "UserPromptSubmit", prompt: '<task-notification>\n<task-id>A1</task-id>\n<status>completed</status>\n<summary>Agent "Skeptic" stopped at its 40-turn limit (partial result; SendMessage to task-id to continue)</summary>\n</task-notification>' });
+  const after = add();
+  assert.doesNotMatch(after, /still running/);
+  assert.match(after, /gate brief skeptic/);
+});
+
+test("4.2 C2 a helper resumed after its stop is running again for R15 (it was read as stopped)", () => {
+  const repo = standard("hh-42-c2");
+  brief(repo, "skeptic");
+  start(repo, "A1", "skeptic");
+  helperWrites(repo, "A1", "skeptic", "skeptic-1.md", skepticPartial(1, "hh-42-c2"));
+  stop(repo, "A1", "skeptic");
+  assert.ok(unfinishedLine(check(repo), "skeptic-1.md", "skeptic"), "premise: a stopped helper with a partial file is listed");
+  start(repo, "A1", "skeptic");
+  assert.ok(!unfinishedLine(check(repo), "skeptic-1.md", "skeptic"), `a resumed skeptic is listed as stopped:\n${check(repo)}`);
+});

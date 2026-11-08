@@ -524,6 +524,32 @@ export function briefOf(ledger, file) {
 // this counts as gone.
 export const HELPER_MAX_MS = 45 * 60 * 1000;
 
+// Whether a helper is still out. The newest of its start, its stop and a notice naming it
+// decides: a resume starts it again, and a notice that it waits on its own background work
+// (it lands seconds after that stop) keeps it out. Gone once its newest event is HELPER_MAX_MS old.
+export function helperAlive(events, id, now = Date.now()) {
+  let decides = null;
+  let newest = null;
+  for (const e of events) {
+    const told = e.notice?.agent === id;
+    if (e.agent !== id && !told) continue;
+    if (!newest || e.seq > newest.seq) newest = e;
+    if ((told || e.kind === "subagent-start" || e.kind === "subagent-stop") && (!decides || e.seq > decides.seq)) decides = e;
+  }
+  const out = decides?.kind === "subagent-start" || decides?.notice?.cause === "waiting";
+  return out && now - Date.parse(newest.ts ?? 0) < HELPER_MAX_MS;
+}
+
+// This session's done-gate helpers started after a seq and still out, one start each.
+export function helpersOut(events, session, since, now = Date.now()) {
+  const mine = events.filter((e) => e.session === session);
+  const starts = new Map();
+  for (const e of mine) {
+    if (e.kind === "subagent-start" && e.seq > since && String(e.agentType ?? "").startsWith("done-gate:")) starts.set(e.agent, e);
+  }
+  return [...starts.values()].filter((e) => helperAlive(mine, e.agent, now));
+}
+
 // Who worked on a helper file since its brief, per agent id: the agents that wrote it, or
 // with none, those of the role started since. Silence is measured from an agent's newest event.
 export function helperRun(state, role, file, since, now = Date.now()) {
@@ -531,10 +557,7 @@ export function helperRun(state, role, file, since, now = Date.now()) {
   const events = (state.events ?? []).filter((e) => e.seq > since && e.agent && isRole(e.agentType, role));
   const writers = events.filter((e) => e.kind === "edit" && e.path === rel).map((e) => e.agent);
   const ids = [...new Set(writers.length ? writers : events.filter((e) => e.kind === "subagent-start").map((e) => e.agent))];
-  const running = ids.some((id) => {
-    const own = events.filter((e) => e.agent === id);
-    return now - Date.parse(own[own.length - 1].ts) < HELPER_MAX_MS && !own.some((e) => e.kind === "subagent-stop");
-  });
+  const running = ids.some((id) => helperAlive(state.events ?? [], id, now));
   const stopped = ids.some((id) => events.some((e) => e.agent === id && e.kind === "subagent-stop"));
   return { ran: ids.length > 0, running, stopped };
 }

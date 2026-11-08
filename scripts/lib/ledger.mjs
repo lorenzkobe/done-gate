@@ -12,7 +12,7 @@ import { emptyTier } from "./size.mjs";
 // size.mjs imports assess.mjs, which imports this module: loadPolicy is only ever called at
 // verb time, never at module top level, or the cycle would hit a TDZ error.
 import { loadPolicy } from "./size.mjs";
-import { implementationHash, saidSince } from "./rules.mjs";
+import { helpersOut, implementationHash, saidSince } from "./rules.mjs";
 import { carryStanding, requireLiveBatch } from "./standing.mjs";
 import { knownNewer, UPDATE_COMMANDS } from "./release.mjs";
 import { UsageError } from "./context.mjs";
@@ -446,6 +446,17 @@ function refuseSetup(ctx, words, later) {
   throw new UsageError(`this repo is not set up for the faster test loop, and gate.json cannot change once a run is open. Run \`gate setup\` now, check its proposal and show it to the user: on their yes \`gate setup --apply [edited.json] --user-ok "<their words>"\`, on a no \`gate setup --decline --user-ok "<their words>"\`. If they want to decide later: \`${again} --setup-later "<their words, at least three>"\`${later ? ` (the user did not say "${later}" in this session)` : ""}.`);
 }
 
+// A helper out on this session's run writes into that run's folder: moving the session to
+// another run leaves its file outside the run it was briefed for.
+function refuseWhileHelpersOut(ctx, slug) {
+  const current = currentLedger(ctx.stateDir, ctx.session);
+  if (!current || isDone(current.ledger) || findRun(ctx.stateDir, slug)?.dir === current.dir) return;
+  const out = helpersOut(readEvents(ctx.stateDir, ctx.session), ctx.session, current.ledger.openedSeq ?? 0);
+  if (!out.length) return;
+  const one = out.length === 1;
+  throw new UsageError(`${out.map((e) => `${e.agentType} (${e.agent})`).join(", ")} ${one ? "is" : "are"} still out on run ${current.ledger.slug}: wait for ${one ? "its" : "their"} hand-back, or give that run up with \`gate abandon ${current.ledger.slug} "<why>"\`. Moving to another run now leaves ${one ? "its file" : "their files"} outside the run ${one ? "it was" : "they were"} briefed for.`);
+}
+
 export const verbs = {
   open(ctx) {
     const rest = [];
@@ -481,6 +492,7 @@ export const verbs = {
     const named = repos.flatMap((r) => ["--repo", r]);
     // a run opened elsewhere sees none of this session's events, its words for an old version included
     refuseElsewhere(ctx, ["open", slug, ...(playbook ? [playbook] : []), ...said("--old-version-ok", oldOk), ...said("--setup-later", setupLater), ...said("--batch", batch)], repos.map((r) => path.resolve(ctx.root, r)));
+    refuseWhileHelpersOut(ctx, slug);
     const latest = knownNewer(ctx.version);
     const joining = openRuns(ctx.stateDir).some(({ ledger }) => ledger.slug === slug);
     if (latest && !joining && !saidSince(readEvents(ctx.stateDir, ctx.session), 0, oldOk)) {
@@ -506,6 +518,7 @@ export const verbs = {
     const [slug] = ctx.args;
     if (!slug) throw new UsageError("usage: gate attach <slug>");
     refuseElsewhere(ctx, ["open", slug]);
+    refuseWhileHelpersOut(ctx, slug);
     const { dir, ledger } = attachLedger(ctx, slug);
     printOpen(ctx, dir, ledger);
   },

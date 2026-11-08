@@ -509,3 +509,13 @@ test("a <cross-session-message> prompt from another session is tagged as a hand-
   assert.equal(ev('<cross-session-message from="uds:/tmp/cc-socks/42468.sock" f>after task 12 stop</cross-session-message>').handback, true);
   assert.equal(ev("fix the badge").handback, undefined);
 });
+
+test("4.2 C4 a helper's notice rides on its prompt event as agent, status and cause; other texts carry none", () => {
+  const ev = (text) => eventsFromHookInput({ hook_event_name: "UserPromptSubmit", session_id: "S1", prompt: text }, "/repo")[0];
+  const tn = (status, summary) => `<task-notification>\n<task-id>a89641e7ffb541041</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>${status}</status>\n<summary>${summary}</summary>\n</task-notification>`;
+  assert.deepEqual(ev(tn("completed", 'Agent "Blind QA tests" stopped at its 60-turn limit (partial result; SendMessage to task-id to continue)')).notice, { agent: "a89641e7ffb541041", status: "completed", cause: "turn-limit" });
+  assert.deepEqual(ev(tn("completed", 'Agent "Review" finished')).notice, { agent: "a89641e7ffb541041", status: "completed", cause: "finished" });
+  assert.equal(ev(tn("completed", 'Background command "Run the full checks" completed (exit code 0)')).notice, undefined);
+  assert.equal(ev("fix the badge").notice, undefined);
+  assert.equal(ev(`<agent-message from="a1">see ${tn("failed", 'Agent "x" failed: server error')}</agent-message>`).notice, undefined);
+});

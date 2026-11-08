@@ -835,6 +835,15 @@ test("C51 refused: a background command, a quoted notice, a name holding a cause
   assert.equal(noticeCause(notice("completed", 'Agent "turn "limit" work" stopped at its 60-turn limit'))?.cause, "turn-limit");
 });
 
+test("4.2 C5 refused: a failure naming the model, an account or a credit reads unknown; the wording that needs the owner still reads only-you", () => {
+  for (const tail of ["failed: the model returned an empty response", "failed: could not account for the tool result", "failed: credit the original author in the header"]) {
+    assert.equal(noticeCause(notice("failed", `Agent "x" ${tail}`))?.cause, "unknown", tail);
+  }
+  for (const tail of ["failed: Invalid API key · Please run /login", "failed: Credit balance too low, check billing", "failed: You are not logged in. Please log in again"]) {
+    assert.equal(noticeCause(notice("failed", `Agent "x" ${tail}`))?.cause, "only-you", tail);
+  }
+});
+
 test("C52 happy: helper failures print as at least n per cause; finished and waiting are not failures", () => {
   const repo = makeRepo("stats-e11");
   writeRun(repo, "one", hourRun());

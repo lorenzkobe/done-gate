@@ -3,7 +3,7 @@ import { recordGateError } from "./context.mjs";
 import { appendEvents, nextSeq } from "./events.mjs";
 import { loadLedger, saveLedger } from "./ledger.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
-import { HELPER_MAX_MS, NOT_THE_USER, unfinishedVerify } from "./rules.mjs";
+import { HELPER_MAX_MS, helperAlive, NOT_THE_USER, unfinishedVerify } from "./rules.mjs";
 
 // Stuck: from ASK_AFTER identical blocks the lead must ask the user; BRAKE_AFTER stops a gate-bug loop.
 export const ASK_AFTER = 3;
@@ -43,14 +43,13 @@ function clearBlocks(ctx) {
 
 // An agent this session started since the user's last prompt and that has not stopped: a
 // done-gate helper or any other agent the lead spawned. A helper's hand-back arrives as a
-// prompt too (events.mjs tags it), and does not count as a new turn. Bounded: a start older
-// than HELPER_MAX_MS is treated as gone, so a crashed or hung agent cannot let the turn end
-// quietly forever.
+// prompt too (events.mjs tags it), and does not count as a new turn. helperAlive bounds it, so
+// a crashed or hung agent cannot let the turn end quietly forever.
 function helperRunning(events, session, now = Date.now()) {
   const mine = events.filter((e) => e.session === session);
   const lastPrompt = mine.filter((e) => e.kind === "prompt" && !e.handback).pop()?.seq ?? 0;
-  const starts = mine.filter((e) => e.kind === "subagent-start" && e.seq > lastPrompt);
-  return starts.some((st) => now - Date.parse(st.ts ?? 0) < HELPER_MAX_MS && !mine.some((e) => e.kind === "subagent-stop" && e.agent === st.agent && e.seq > st.seq));
+  const ids = new Set(mine.filter((e) => e.kind === "subagent-start" && e.seq > lastPrompt).map((e) => e.agent));
+  return [...ids].some((id) => helperAlive(mine, id, now));
 }
 
 function renderReason(unmet, { ledgerOpen, repeat = false, stuck = 0 }) {

@@ -60,7 +60,7 @@ const reflogField = (root) => {
 // The call's id, which pairs a command with the start the fence logged for it.
 export const toolUse = (input) => (typeof input.tool_use_id === "string" && input.tool_use_id ? { toolUseId: input.tool_use_id } : {});
 
-export const HANDBACK = /^\s*<(?:agent-message|task-notification|cross-session-message)\b/;
+export const HANDBACK = /^\s*(?:\[SYSTEM NOTIFICATION[\s\S]*?)?<(?:agent-message|task-notification|cross-session-message)\b/;
 
 // One hook payload → zero or more event records. Never throws on odd input.
 export function eventsFromHookInput(input, root, repos = []) {
@@ -78,7 +78,9 @@ export function eventsFromHookInput(input, root, repos = []) {
     // arrive as prompts too; they are tagged so the Stop hook does not mistake them for a new
     // turn from the user
     const handback = HANDBACK.test(text);
-    return [{ ...b(), kind: "prompt", text: text.slice(0, WORDS_LIMIT), ...(handback ? { handback: true } : {}) }];
+    // the helper it names sits inside notice, not as the event's agent: the prompt stays the lead's
+    const notice = handback ? helperNotice(text) : null;
+    return [{ ...b(), kind: "prompt", text: text.slice(0, WORDS_LIMIT), ...(handback ? { handback: true } : {}), ...(notice ? { notice } : {}) }];
   }
   if (event === "SessionStart") return [{ ...b(), kind: "session-start", source: input.session_start_source ?? null }];
   const tool = input.tool_name ?? "";
@@ -180,7 +182,7 @@ const NOTICE_CAUSES = [
   [/session limit/i, "session-limit"],
   [/stalled: no progress/i, "stalled"],
   [/overloaded|rate limit|server error/i, "api-problem"],
-  [/\b(?:login|log in|billing|credit|account|api key|model)\b/i, "only-you"],
+  [/\/login\b|\b(?:log in|logged in|billing|credit balance|api key)\b/i, "only-you"],
   [/was stopped by user/, "stopped-by-user"],
   [/was stopped by Claude/, "stopped-by-lead"],
   [/^finished\b/, "finished"],
@@ -196,6 +198,13 @@ export function noticeCause(text) {
   if (tail === undefined) return null;
   const status = /<status>([^<]*)<\/status>/.exec(text)?.[1] ?? null;
   return { status, cause: NOTICE_CAUSES.find(([pattern]) => pattern.test(tail))?.[1] ?? "unknown" };
+}
+
+// A helper's notice with the helper it names: the task id is the id its start and stop carry.
+export function helperNotice(text) {
+  const found = noticeCause(text);
+  if (!found) return null;
+  return { agent: /<task-id>\s*([^<\s]+)\s*<\/task-id>/.exec(text)?.[1] ?? null, ...found };
 }
 
 export const SILENT = { continue: true, suppressOutput: true };

@@ -263,3 +263,129 @@ test("C10 idempotent: abandoning an already abandoned ledger is refused and chan
   assert.equal(readFileSync(path.join(dir, "ledger.json"), "utf8"), before);
   assert.equal(loadLedger(dir).abandonReason, "first");
 });
+
+// ---------------------------------------------------------------------------
+// 4.2 — a helper's notice ends it; a resume brings it back; no other run while one is out
+// ---------------------------------------------------------------------------
+
+const notice = (id, status, summary, prefix = "") =>
+  `${prefix}<task-notification>\n<task-id>${id}</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<output-file>/tmp/tasks/${id}.output</output-file>\n<status>${status}</status>\n<summary>${summary}</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own.</note>\n</task-notification>`;
+const turnLimit = (id) => notice(id, "completed", 'Agent "Blind QA tests" stopped at its 60-turn limit (partial result; SendMessage to task-id to continue)');
+const ageAll = (repo, minutes) => {
+  const file = path.join(stateDir(repo), "sessions", "S1", "events.jsonl");
+  const ts = new Date(Date.now() - minutes * 60 * 1000).toISOString();
+  writeFileSync(file, eventsOf(repo).map((e) => `${JSON.stringify({ ...e, ts })}\n`).join(""));
+};
+
+test("4.2 C1 a turn-limit notice ends a running helper: the Stop hook blocks again", () => {
+  const repo = blocked("ssh-42-c1");
+  prompt(repo, "go");
+  start(repo, "A1", "done-gate:qa");
+  assert.equal(stopHook(repo), null, "premise: a running helper lets the turn end");
+  prompt(repo, turnLimit("A1"));
+  assert.equal(stopHook(repo)?.decision, "block", "a turn-limited helper still read as running");
+});
+
+test("4.2 C2 a helper resumed after a notice or after a stop is alive again", () => {
+  const repo = blocked("ssh-42-c2");
+  prompt(repo, "go");
+  start(repo, "A1", "done-gate:qa");
+  prompt(repo, turnLimit("A1"));
+  start(repo, "A1", "done-gate:qa");
+  assert.equal(stopHook(repo), null, "a helper resumed after its notice read as gone");
+  stop(repo, "A1", "done-gate:qa");
+  start(repo, "A1", "done-gate:qa");
+  assert.equal(stopHook(repo), null, "a helper resumed after its stop read as gone");
+});
+
+test("4.2 C3 a helper waiting on its own background work is still alive", () => {
+  const repo = blocked("ssh-42-c3");
+  prompt(repo, "go");
+  start(repo, "A1", "done-gate:reviewer");
+  prompt(repo, notice("A1", "completed", 'Agent "Review" is waiting on its own background work'));
+  assert.equal(stopHook(repo), null, "a waiting helper read as gone");
+});
+
+test("4.2 C10 the real order (start, stop, then the waiting notice) reads alive, and gone after 45 silent minutes", () => {
+  const repo = blocked("ssh-42-c10");
+  prompt(repo, "go");
+  start(repo, "A1", "done-gate:reviewer");
+  stop(repo, "A1", "done-gate:reviewer");
+  prompt(repo, notice("A1", "completed", 'Agent "Review" is waiting on its own background work'));
+  assert.equal(stopHook(repo), null, "a helper waiting after its stop read as gone");
+  ageAll(repo, 46);
+  assert.equal(stopHook(repo)?.decision, "block", "a waiting helper silent for 46 minutes still held the turn");
+});
+
+test("4.2 C11 rejoining the same run passes under its dated folder name too", () => {
+  const repo = blocked("ssh-42-c11");
+  prompt(repo, "go");
+  start(repo, "A1", "done-gate:reviewer");
+  const folder = loadSession(stateDir(repo), "S1").current;
+  cli(repo, "attach", [folder]);
+  cli(repo, "open", ["SSH-42-C11", "feature"]);
+  assert.equal(loadSession(stateDir(repo), "S1").current, folder);
+});
+
+test("4.2 C6 a notice behind a [SYSTEM NOTIFICATION prefix is a hand-back and is read", () => {
+  const repo = blocked("ssh-42-c6");
+  prompt(repo, "go");
+  start(repo, "A1", "done-gate:qa");
+  start(repo, "A2", "done-gate:reviewer");
+  prompt(repo, notice("A1", "failed", `Agent "QA" failed: API Error: Can't reach the API server`, "[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event.\n\n"));
+  const last = eventsOf(repo).filter((e) => e.kind === "prompt").pop();
+  assert.equal(last.handback, true, "a prefixed notice counted as a user turn");
+  assert.deepEqual(last.notice, { agent: "A1", status: "failed", cause: "lost-connection" });
+  assert.equal(stopHook(repo), null, "the reviewer, still out, no longer counted after the prefixed notice");
+});
+
+test("4.2 C7 gate open and gate attach refuse another run while a done-gate helper is out on this one", () => {
+  const repo = blocked("ssh-42-c7");
+  cli(repo, "open", ["ssh-42-other", "feature"]);
+  cli(repo, "attach", ["ssh-42-c7"]);
+  prompt(repo, "go");
+  start(repo, "A1", "done-gate:reviewer");
+  const out = refused(repo, "open", ["ssh-42-new", "feature"]);
+  assert.match(out, /done-gate:reviewer/);
+  assert.match(out, /A1/);
+  assert.match(out, /ssh-42-c7/);
+  assert.match(out, /gate abandon ssh-42-c7/);
+  assert.match(refused(repo, "attach", ["ssh-42-other"]), /done-gate:reviewer[\s\S]*gate abandon ssh-42-c7/);
+  assert.equal(loadSession(stateDir(repo), "S1").current.endsWith("ssh-42-c7"), true, "a refused open moved the session");
+  cli(repo, "open", ["ssh-42-c7", "feature"]);
+  assert.equal(loadSession(stateDir(repo), "S1").current.endsWith("ssh-42-c7"), true, "rejoining the same run was refused");
+});
+
+test("4.2 C8 gate open passes once the helper stopped, went silent 45 minutes, sent its notice, or the run was abandoned", () => {
+  for (const [name, end] of [
+    ["stop", (repo) => stop(repo, "A1", "done-gate:reviewer")],
+    ["quiet", (repo) => ageAll(repo, 46)],
+    ["notice", (repo) => prompt(repo, turnLimit("A1"))],
+    ["abandon", (repo, slug) => cli(repo, "abandon", [slug, "the user gave it up"])],
+  ]) {
+    const slug = `ssh-42-c8-${name}`;
+    const repo = blocked(slug);
+    prompt(repo, "go");
+    start(repo, "A1", "done-gate:reviewer");
+    refused(repo, "open", [`${slug}-next`, "feature"]);
+    end(repo, slug);
+    cli(repo, "open", [`${slug}-next`, "feature"]);
+    assert.equal(loadSession(stateDir(repo), "S1").current.endsWith(`${slug}-next`), true, `${name}: open did not move the session`);
+  }
+});
+
+test("4.2 C9 an Explore agent out does not hold gate open", () => {
+  const repo = blocked("ssh-42-c9");
+  prompt(repo, "go");
+  start(repo, "X1", "Explore");
+  cli(repo, "open", ["ssh-42-c9-next", "feature"]);
+});
+
+test("a gate verify this session started that still runs lets the turn end; one past 45 minutes does not", () => {
+  const repo = blocked("ssh-verify-running");
+  const started = (minutes) => writeFileSync(path.join(runDir(repo), "verify.started.json"), JSON.stringify({ startedAt: new Date(Date.now() - minutes * 60 * 1000).toISOString(), pid: process.pid, session: "S1" }));
+  started(1);
+  assert.equal(stopHook(repo), null, "a running verify still blocked the turn");
+  started(46);
+  assert.equal(stopHook(repo)?.decision, "block", "a verify started 46 minutes ago still let the turn end");
+});
