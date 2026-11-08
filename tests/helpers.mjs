@@ -117,6 +117,14 @@ export function planChecked(repo, { session = "S1" } = {}) {
   if (!ledger.steps.find((s) => s.key === "skeptic")?.state) run(["step", "skeptic", "done", "checked", "--evidence", path.basename(file)]);
 }
 
+// A failed run of a test file, logged as the lead's command: what closes a reviewer finding on a
+// test pointer on a run under the new rules.
+export function redRun(repo, file = "tests/a.test.ts", session = "S1") {
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: session };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  spawnSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: session, cwd: repo, hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command: `node --test ${file}` }, tool_error: "Exit code 1\nnot ok 1" }), encoding: "utf8", env });
+}
+
 // The run's pinned policy as a run pinned before 0.22 holds it: three rounds before the fix-check,
 // and no call owed for lines changed after review; for the mechanics those runs keep.
 export function pinnedBefore(repo, session = "S1") {

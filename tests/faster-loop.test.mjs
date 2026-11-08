@@ -75,7 +75,7 @@ function round(repo, role, n, actOn = []) {
   cli(repo, "huddle", ["add", role, "--file", own]);
 }
 const closeAll = (repo) => {
-  for (const h of ledgerOf(repo).huddles) for (const a of h.actOn) if (!a.closed) cli(repo, "huddle", ["resolve", a.id, "--evidence", "src/a.ts:1"]);
+  for (const h of ledgerOf(repo).huddles) for (const a of h.actOn) if (!a.closed) cli(repo, "huddle", ["resolve", a.id, "--evidence", "doc"]);
 };
 
 // ---------------------------------------------------------------- review loop

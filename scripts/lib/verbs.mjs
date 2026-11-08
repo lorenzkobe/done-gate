@@ -8,7 +8,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, uncovered, afterReview, changedUnitsOf, parseEntry, pathOf, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
+import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, uncovered, afterReview, changedUnitsOf, parseEntry, pathOf, parseReplies, parseRuling, pointerResolver, proofProblem, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
 import { assess, broughtSinceOpen, buildState, cleanAtHead, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
@@ -784,7 +784,11 @@ export const verbs = {
       const [aid] = pos;
       const evidence = flag(rest, "--evidence");
       if (!aid || !evidence) throw new UsageError("usage: gate huddle resolve <H#.#> --evidence <pointer>");
-      if (!pointerResolver(buildState(ctx, {}))(evidence)) throw new UsageError(`resolve evidence "${evidence}" does not resolve; point at a test (file:name), a file:line, ledger.md#<section>, verify.json, events#<seq> or a helper file`);
+      const state = buildState(ctx, {});
+      const found = state.ledger?.huddles.flatMap((h) => h.actOn).find((a) => a.id === aid);
+      const proof = found ? proofProblem(state, found, evidence) : undefined;
+      if (proof) throw new UsageError(`${aid}: on this run ${proof}`);
+      if (proof === undefined && !pointerResolver(state)(evidence)) throw new UsageError(`resolve evidence "${evidence}" does not resolve; point at a test (file:name), a file:line, ledger.md#<section>, verify.json, events#<seq> or a helper file`);
       withLedger(ctx, (ledger, dir) => {
         const item = ledger.huddles.flatMap((h) => h.actOn).find((a) => a.id === aid);
         if (!item) throw new UsageError(`no act-on item ${aid}`);
@@ -808,7 +812,8 @@ export const verbs = {
       if (!replies.length) throw new UsageError(`${file} has no '## Replies' lines of the form ${shape}`);
       const bulletCount = parseFindings(text.replace(/^## Replies\s*$/m, "## Act on")).length;
       if (bulletCount > replies.length) throw new UsageError(`${file}: ${bulletCount - replies.length} line(s) under ## Replies do not read ${shape}; every bullet must be a reply`);
-      const resolves = pointerResolver(buildState(ctx, {}));
+      const state = buildState(ctx, {});
+      const resolves = pointerResolver(state);
       const lines = [];
       withLedger(ctx, (ledger, dir) => {
         const items = ledger.huddles.flatMap((h) => h.actOn);
@@ -819,7 +824,9 @@ export const verbs = {
           if (a.closed) continue;
           // a fix is shown by a test, a source line, verify.json or an event, never by the
           // worker's own reply file or a packet
-          if (r.kind === "fixed" && (/^(?:worker|brief)-/.test(r.pointer) || !resolves(r.pointer))) throw new UsageError(`${r.id} fixed: pointer "${r.pointer}" does not resolve; point at a test (file:name), a file:line, ledger.md#<section>, verify.json or events#<seq>`);
+          const proof = r.kind === "fixed" ? proofProblem(state, a, r.pointer) : undefined;
+          if (proof) throw new UsageError(`${r.id} fixed: on this run ${proof}`);
+          if (r.kind === "fixed" && proof === undefined && (/^(?:worker|brief)-/.test(r.pointer) || !resolves(r.pointer))) throw new UsageError(`${r.id} fixed: pointer "${r.pointer}" does not resolve; point at a test (file:name), a file:line, ledger.md#<section>, verify.json or events#<seq>`);
           if (r.kind === "disagree" && (!r.pointer || /^(?:worker|brief)-/.test(r.pointer) || !resolves(r.pointer))) throw new UsageError(`${r.id} disagree: needs a pointer that resolves after the reason (… — <ptr>), not the worker's own file`);
           if (r.kind === "disagree" && a.dispute) throw new UsageError(`${r.id} was already disputed once; one round is the limit${a.dispute.verdict?.startsWith("arbiter:") ? " and the arbiter has ruled" : ""}`);
         }

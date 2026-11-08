@@ -74,7 +74,7 @@ test("C1 happy: a whole-file round's fixed finding re-opens only the edited line
   const repo = opened("fc-c1");
   round(repo, "reviewer", null, [FINDING]);
   fixLine30(repo);
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:30"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   const entries = entriesOf(ruleLine(check(repo), "R5"));
   assert.ok(entries.length > 0, check(repo));
   assert.ok(entries.every((e) => /^src\/mid\.ts:3[12]-3[12]$/.test(e)), `R5 asks for more than the fixed lines: ${entries.join(", ")}`);
@@ -92,7 +92,7 @@ test("C3 refused: an open finding keeps the whole file uncovered; closed items w
   const quiet = opened("fc-c3-quiet");
   pinnedBefore(quiet);
   round(quiet, "reviewer", null, [FINDING]);
-  cli(quiet, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:30"]);
+  cli(quiet, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   assert.ok(!blocks(check(quiet), "R5"), check(quiet));
 });
 
@@ -100,7 +100,7 @@ test("C4 edge: a fix that only deletes lines re-opens the whole file", () => {
   const repo = opened("fc-c4");
   round(repo, "reviewer", null, ["dead line — src/mid.ts:60 — x — []"]);
   edit(repo, MID, body(59, "mid"));
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:59"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   assert.deepEqual(entriesOf(ruleLine(check(repo), "R5")), [MID]);
   round(repo, "reviewer", null);
   assert.ok(!blocks(check(repo), "R5"), `a clean round after the deleting fix must clear R5:\n${check(repo)}`);
@@ -122,7 +122,7 @@ test("C5 idempotent: a clean round still covers the file after an edit; a ledger
   for (const s of Object.values(ledger.seen ?? {})) delete s.units;
   writeFileSync(file, JSON.stringify(ledger, null, 2));
   fixLine30(legacy);
-  cli(legacy, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:30"]);
+  cli(legacy, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   assert.deepEqual(entriesOf(ruleLine(check(legacy), "R5")), [MID]);
 });
 
@@ -131,7 +131,7 @@ test("C6 reported-surface: the fix-check packet lists the findings to re-check w
   const first = packetOf(round(repo, "reviewer", null, [FINDING]));
   assert.doesNotMatch(first, /## Findings to re-check/);
   fixLine30(repo);
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:30"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   const entry = entriesOf(ruleLine(check(repo), "R5"))[0];
   const packet = packetOf(cli(repo, "brief", ["reviewer", "--files", entry]));
   const section = /## Findings to re-check\n([\s\S]*?)(?=\n## |$)/.exec(packet)?.[1] ?? "";
@@ -147,13 +147,13 @@ test("C7 boundary: three whole-file rounds, each with a fixed finding, leave onl
   for (let i = 1; i <= 3; i++) {
     round(repo, "reviewer", null, [FINDING]);
     fixLine30(repo, 1000 + i);
-    cli(repo, "huddle", ["resolve", `H${i}.1`, "--evidence", "src/mid.ts:30"]);
+    cli(repo, "huddle", ["resolve", `H${i}.1`, "--evidence", "doc"]);
   }
   const entries = entriesOf(ruleLine(check(repo), "R5"));
   assert.ok(entries.length > 0 && entries.every((e) => /^src\/mid\.ts:\d+-\d+$/.test(e)), entries.join(", "));
   round(repo, "reviewer", null, [FINDING]);
   fixLine30(repo, 2000);
-  cli(repo, "huddle", ["resolve", "H4.1", "--evidence", "src/mid.ts:30"]);
+  cli(repo, "huddle", ["resolve", "H4.1", "--evidence", "doc"]);
   assert.ok(!blocks(check(repo), "R5"), check(repo));
 });
 
@@ -163,7 +163,7 @@ test("C8 edge: a clean round then a round with a fixed finding: only the fixed l
   round(repo, "reviewer", null);
   round(repo, "reviewer", null, [FINDING]);
   fixLine30(repo);
-  cli(repo, "huddle", ["resolve", "H2.1", "--evidence", "src/mid.ts:30"]);
+  cli(repo, "huddle", ["resolve", "H2.1", "--evidence", "doc"]);
   const entries = entriesOf(ruleLine(check(repo), "R5"));
   assert.ok(entries.length > 0, "the earlier clean round covered lines a later fix changed");
   assert.ok(entries.every((e) => /^src\/mid\.ts:3[12]-3[12]$/.test(e)), entries.join(", "));
@@ -173,7 +173,7 @@ test("C9 edge: a fix that deletes one line and edits another re-opens the whole 
   const repo = opened("fc-c9");
   round(repo, "reviewer", null, [FINDING]);
   edit(repo, MID, body(60, "mid").replace("mid30 = 30", "mid30 = 999").replace("export const mid10 = 10;\n", ""));
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:29"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   assert.deepEqual(entriesOf(ruleLine(check(repo), "R5")), [MID]);
 });
 
@@ -181,7 +181,7 @@ test("C10 edge: deleting one line and inserting another elsewhere re-opens the w
   const repo = opened("fc-c10");
   round(repo, "reviewer", null, [FINDING]);
   edit(repo, MID, body(59, "mid").replace("export const mid30 = 30;\n", "export const extra = 1;\nexport const mid30 = 30;\n"));
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:31"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   assert.deepEqual(entriesOf(ruleLine(check(repo), "R5")), [MID]);
 });
 
@@ -194,7 +194,7 @@ test("C11 refused: three slice rounds with fixed findings leave the lines no rou
     round(repo, "reviewer", `${MID}:${span}`, [`slip — src/mid.ts:${span.split("-")[0]} — x — []`]);
     const at = Number(span.split("-")[0]) + 5;
     edit(repo, MID, readFileSync(path.join(repo, MID), "utf8").replace(`mid${at - 1} = ${at - 1};`, `mid${at - 1} = ${at - 1 + 1000};`));
-    cli(repo, "huddle", ["resolve", `H${n}.1`, "--evidence", `src/mid.ts:${at}`]);
+    cli(repo, "huddle", ["resolve", `H${n}.1`, "--evidence", "doc"]);
   }
   const entries = entriesOf(ruleLine(check(repo), "R5"));
   assert.ok(entries.some((e) => /:9[01]-100$/.test(e)), `lines 91-100 were never reviewed: ${entries.join(", ")}`);
@@ -204,7 +204,7 @@ test("C12 reported-surface: a finding whose fix landed in the piece's file is re
   const repo = opened("fc-c12");
   round(repo, "reviewer", null, ["caller passes null — src/other.ts:1 — x — []"]);
   fixLine30(repo);
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:31"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   const packet = packetOf(cli(repo, "brief", ["reviewer", "--files", "src/mid.ts:31-32"]));
   assert.match(/## Findings to re-check\n([\s\S]*?)(?=\n## |$)/.exec(packet)?.[1] ?? "", /H1\.1/, packet);
 });
@@ -214,10 +214,10 @@ test("C13 happy: a fix-check slice round with a finding, fixed again, re-opens o
   pinnedBefore(repo);
   round(repo, "reviewer", null, [FINDING]);
   fixLine30(repo, 999);
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:31"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   round(repo, "reviewer", "src/mid.ts:31-32", ["still off — src/mid.ts:31 — x — []"]);
   fixLine30(repo, 777);
-  cli(repo, "huddle", ["resolve", "H2.1", "--evidence", "src/mid.ts:31"]);
+  cli(repo, "huddle", ["resolve", "H2.1", "--evidence", "doc"]);
   const entries = entriesOf(ruleLine(check(repo), "R5"));
   assert.ok(entries.length > 0, check(repo));
   assert.ok(entries.every((e) => /^src\/mid\.ts:3[12]-3[12]$/.test(e)), `the second fix re-opened more than its lines: ${entries.join(", ")}`);
@@ -229,7 +229,7 @@ test("C14 edge: an inserted copy of reviewed lines is asked for, not counted as 
   const lines = body(60, "mid").split("\n");
   lines.splice(6, 0, "export const new1 = 1;", lines[19], lines[20], lines[21]);
   edit(repo, MID, lines.join("\n"));
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:7"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   const asked = entriesOf(ruleLine(check(repo), "R5")).flatMap((e) => {
     const m = /:(\d+)-(\d+)$/.exec(e);
     return m ? Array.from({ length: Number(m[2]) - Number(m[1]) + 1 }, (_, i) => Number(m[1]) + i) : [];
@@ -255,7 +255,7 @@ test("C15 edge: a deletion and a far insertion in the same gap still re-open the
   const fixed = task.filter((l) => l !== "export const A3 = 3;");
   fixed.splice(50, 0, "export const Z = 0;");
   edit(repo, MID, fixed.join("\n"));
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:13"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   assert.deepEqual(entriesOf(ruleLine(check(repo), "R5")), [MID], "the deleted A3 was hidden by an unrelated insertion");
 });
 
@@ -266,7 +266,7 @@ test("C16 edge: deleting one twin line while inserting a copy of it elsewhere do
   edit(repo, MID, "export const mid0 = 0;\n" + body(20, "mid", 1) + trio + body(20, "mid", 30) + trio);
   round(repo, "reviewer", null, [FINDING]);
   edit(repo, MID, "export const mid0 = 0;\n" + body(20, "mid", 1) + trio + "if (!ok) {\n  throw new Error('no');\n" + body(20, "mid", 30) + "export const p = gate();\nif (!ok) {\n");
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:25"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   assert.deepEqual(entriesOf(ruleLine(check(repo), "R5")), [MID], "the deleted twin at the end reached no reviewer");
 });
 
@@ -289,7 +289,7 @@ test("C17 edge: in a round over two slices of one file, a deletion at one slice'
   round(repo, "reviewer", "src/mid.ts:5-5", []);
   round(repo, "reviewer", "src/mid.ts:22-22,src/mid.ts:43-43", ["x — src/mid.ts:42 — x — []"]);
   edit(repo, MID, [...lines.slice(0, 4), "export const top = 1;", ...lines.slice(4, 29), "export const gap = 1;", ...lines.slice(29, 40), "export const added = 1;", ...lines.slice(40)].join("\n"));
-  cli(repo, "huddle", ["resolve", "H3.1", "--evidence", "src/mid.ts:30"]);
+  cli(repo, "huddle", ["resolve", "H3.1", "--evidence", "doc"]);
   const asked = entriesOf(ruleLine(check(repo), "R5"));
   assert.ok(asked.includes(MID) || asked.some((e) => /:43-43$|:\d+-4[3-9]$/.test(e)), `the round was narrowed past the deleted guard: ${asked.join(", ")}`);
 });
@@ -316,7 +316,7 @@ test("C18 edge: moving a guard added after several blank lines (twins before any
   edit(repo, "src/other.ts", body(80, "other"));
   round(repo, "reviewer", null, ["x — src/mid.ts:50 — x — []"]);
   edit(repo, MID, at([20, 30]));
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:50"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   assert.ok(entriesOf(ruleLine(check(repo), "R5")).length > 0, "the moved guard reached no reviewer");
 });
 
@@ -337,7 +337,7 @@ test("6.1 C5 refused: a fix-check packet with stale verify never tells the revie
   for (let i = 1; i <= 1; i++) {
     round(repo, "reviewer", null, [FINDING]);
     fixLine30(repo, 1000 + i);
-    cli(repo, "huddle", ["resolve", `H${i}.1`, "--evidence", "src/mid.ts:30"]);
+    cli(repo, "huddle", ["resolve", `H${i}.1`, "--evidence", "doc"]);
   }
   const packet = packetOf(cli(repo, "brief", ["reviewer"]));
   assert.match(packet, /## Findings to re-check/, "anchor: round 4 is the fix-check");
@@ -397,7 +397,7 @@ test("6.4 L2 edge: a 3-line change after a finished re-check is held the same wa
   const repo = opened("fc-64-l2");
   round(repo, "reviewer", null, [FINDING]);
   fixLine30(repo);
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:30"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   round(repo, "reviewer", null);
   assert.ok(!blocks(check(repo), "R5"), "anchor: the re-check clears R5");
   let text = body(60, "mid").replace("mid30 = 30", "mid30 = 999");
@@ -493,7 +493,7 @@ test("6.4 L11 boundary: a late round in parts ends the file only with the part t
   round(repo, "reviewer", first, [`off by one — ${MID}:70 — x — []`]);
   const id = ledgerOf(repo).huddles.at(-1).actOn[0].id;
   edit(repo, MID, (body(60, "mid") + body(500, "late", 1000)).replace("late1009 = 1009", "late1009 = 77"));
-  cli(repo, "huddle", ["resolve", id, "--evidence", `${MID}:70`]);
+  cli(repo, "huddle", ["resolve", id, "--evidence", "doc"]);
   const r5 = ruleLine(check(repo), "R5");
   assert.match(r5, /src\/mid\.ts:70-71/, `the part's fixed line is still owed:\n${r5}`);
   const rest = /`gate brief reviewer --files ([^`]+)`/.exec(r5)[1];
@@ -516,7 +516,7 @@ test("6.5 K1 happy: a fix that deletes a comment clears R5 with no re-check", ()
   edit(repo, MID, commented());
   round(repo, "reviewer", null, ["slop comment — src/mid.ts:21 — labels a block — []"]);
   edit(repo, MID, body(60, "mid"));
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:21"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   assert.ok(!blocks(check(repo), "R5"), check(repo));
 });
 
@@ -527,7 +527,7 @@ test("6.5 K2 edge: a fix that adds a comment and edits code names only the code 
   const fixed = commented(body(60, "mid").replace("mid44 = 44", "mid44 = 4400")).split("\n");
   fixed.splice(40, 0, "// why the total skips the header row");
   edit(repo, MID, fixed.join("\n"));
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:47"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   const entries = entriesOf(ruleLine(check(repo), "R5"));
   assert.deepEqual(entries, ["src/mid.ts:47-48"], entries.join(", ")); // the edited line and the one after it; not the comment at 41 or the line below it
 });
@@ -554,7 +554,7 @@ test("6.5 K5 idempotent: an old round with no comment keys keeps the old rule: a
   round(repo, "reviewer", null, ["slop comment — src/mid.ts:21 — labels a block — []"]);
   unpin(repo);
   edit(repo, MID, body(60, "mid"));
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:21"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   assert.deepEqual(entriesOf(ruleLine(check(repo), "R5")), [MID]);
 });
 
@@ -590,6 +590,6 @@ test("6.5 K7 edge: a .py fix that deletes a comment and re-indents a code line n
   const fixed = [...code];
   fixed[5] = `        y5 = 5`;
   edit(repo, "src/m.py", py(["x = 0", "def f():", ...fixed]));
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/m.py:3"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   assert.match(ruleLine(check(repo), "R5"), /src\/m\.py:8-/, `the re-indented line is owed:\n${check(repo)}`);
 });

@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, here, lookedUp, CODE_LOOKUP, MEMORY_LOOKUP, waiveArgs } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, lookedUp, CODE_LOOKUP, MEMORY_LOOKUP, waiveArgs, redRun } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { eventsFromHookInput, appendEvents, readEvents } from "../scripts/lib/events.mjs";
 
@@ -399,6 +399,7 @@ function upheld(name) {
   const repo = changed(name);
   writeFileSync(path.join(runDir(repo), "review-1.md"), reviewFile(1, name, [FIND_1, FIND_2]));
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
+  redRun(repo);
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts:empty list"]);
   cli(repo, "huddle", ["dispute", "H1.2", "the caller already null-checks venue", "--evidence", "src/a.ts:2"]);
   writeFileSync(path.join(runDir(repo), "review-2.md"), reviewFile(2, name, [], "\n## Disputes\n- H1.2 — upheld: the card renders before the venue query resolves\n\n"));
@@ -435,7 +436,7 @@ test("C12 refused: a worker that edited with no lookups shows as R17 in gate che
   writeFileSync(path.join(runDir(repo), "review-1.md"), reviewFile(1, "srch-c12"));
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
   start(repo, "W1", "worker");
-  helperWrites(repo, "W1", "worker", "worker-1.md", workerFile(1, "srch-c12", ["H1.1 — fixed: src/f0.ts:1"]));
+  helperWrites(repo, "W1", "worker", "worker-1.md", workerFile(1, "srch-c12", ["H1.1 — fixed: doc"]));
   stop(repo, "W1", "worker");
   const err = refused(repo, "huddle", ["reply", "--file", "worker-1.md"]);
   assert.match(err, /worker/, err);
@@ -453,6 +454,7 @@ test("C13 idempotent: a reviewer resumed for round 2 (same agent id) keeps its r
   helperWrites(repo, "R1", "reviewer", "review-1.md", reviewFile(1, "srch-c13"));
   stop(repo, "R1", "reviewer");
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
+  redRun(repo);
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts:empty list"]);
   shellWrite(repo, "src/a.ts", "export const a = 3;\nexport const venue = null;\nexport const badge = null;\n");
   start(repo, "R1", "reviewer");

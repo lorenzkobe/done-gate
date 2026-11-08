@@ -113,7 +113,7 @@ test("C4 a piece with a fixed finding stays uncovered until a clean round sees i
   bigChange(repo);
   round(repo, "reviewer", "src/a.ts", ["stray comma — src/a.ts:1 — join on empty — []"]);
   edit(repo, "src/a.ts", lines(151, "a"));
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/a.ts:1"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   assert.match(ruleLine(check(repo), "R5"), /src\/a\.ts/);
   round(repo, "reviewer", "src/b.ts");
   assert.match(ruleLine(check(repo), "R5"), /src\/a\.ts/, "a clean round on B does not cover A");
@@ -175,7 +175,7 @@ test("C4 the three-round cap is counted per file: a fourth round on piece A is r
   bigChange(repo);
   for (let i = 0; i < 3; i++) {
     round(repo, "reviewer", "src/a.ts", [`finding ${i} — src/a.ts:1 — x — []`]);
-    cli(repo, "huddle", ["resolve", `H${i + 1}.1`, "--evidence", "src/a.ts:1"]);
+    cli(repo, "huddle", ["resolve", `H${i + 1}.1`, "--evidence", "doc"]);
   }
   assert.doesNotMatch(ruleLine(check(repo), "R5"), /src\/a\.ts/, "three rounds saw A: the cap closes it");
   assert.match(ruleLine(check(repo), "R5"), /src\/b\.ts/);
@@ -195,7 +195,7 @@ test("C4 three pieces, each with one fixed finding, never deadlock: the cap coun
     round(repo, "reviewer", f, [`finding — ${f}:1 — x — []`]);
     n += 1;
     edit(repo, f, lines(301, f.slice(4, 5)));
-    cli(repo, "huddle", ["resolve", `H${n}.1`, "--evidence", `${f}:1`]);
+    cli(repo, "huddle", ["resolve", `H${n}.1`, "--evidence", "doc"]);
   }
   const line = ruleLine(check(repo), "R5");
   assert.match(line, /--files src\/a\.ts\b/);

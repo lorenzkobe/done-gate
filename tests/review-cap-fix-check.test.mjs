@@ -56,7 +56,7 @@ function round(repo, role, n, { finding = true, fix = true } = {}) {
   if (!finding || !fix) return brief;
   edit(repo, n);
   const id = ledgerOf(repo).huddles.at(-1).actOn[0].id;
-  assert.equal(run(repo, "huddle", "resolve", id, "--evidence", "src/pay.ts:1", "fixed").status, 0);
+  assert.equal(run(repo, "huddle", "resolve", id, "--evidence", "doc", "fixed").status, 0);
   return brief;
 }
 const capped = (r) => /three rounds is the cap/.test(r.stderr);
@@ -81,7 +81,7 @@ test("C2 boundary: a fix after the fix-check round clears R9 with no fifth round
   assert.match(ruleLine(repo, "R9"), /still open/, "the fix-check's finding is fixed and resolved");
   assert.doesNotMatch(ruleLine(repo, "R9"), /gate brief/);
   edit(repo, 4);
-  assert.equal(run(repo, "huddle", "resolve", ledgerOf(repo).huddles.at(-1).actOn[0].id, "--evidence", "src/pay.ts:1", "fixed").status, 0);
+  assert.equal(run(repo, "huddle", "resolve", ledgerOf(repo).huddles.at(-1).actOn[0].id, "--evidence", "doc", "fixed").status, 0);
   assert.equal(ruleLine(repo, "R9"), "");
   assert.ok(capped(run(repo, "brief", "reviewer-2")));
 });
@@ -152,7 +152,7 @@ function sliceRound(repo, n, entry, { stop = true } = {}) {
   const abs = path.join(repo, BIG);
   write(repo, BIG, readFileSync(abs, "utf8").replace(/^export const v5 = .*$/m, `export const v5 = ${1000 + n};`));
   hook(repo, { hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: abs }, tool_response: {} });
-  assert.equal(run(repo, "huddle", "resolve", ledgerOf(repo).huddles.at(-1).actOn[0].id, "--evidence", "src/pay.ts:1", "fixed").status, 0);
+  assert.equal(run(repo, "huddle", "resolve", ledgerOf(repo).huddles.at(-1).actOn[0].id, "--evidence", "doc", "fixed").status, 0);
   return brief;
 }
 const slicePending = (repo) => /--files (\S+?)`/.exec(ruleLine(repo, "R5"))?.[1];
@@ -271,7 +271,7 @@ test("a fix inside a part reopens only the lines it changed, and the last round 
   const abs = path.join(repo, FILE);
   write(repo, FILE, readFileSync(abs, "utf8").replace("late3 = 3;", "late3 = 300;"));
   hook(repo, { hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: abs }, tool_response: {} });
-  assert.equal(run(repo, "huddle", "resolve", ledgerOf(repo).huddles.at(-1).actOn[0].id, "--evidence", "src/pay.ts:1", "fixed").status, 0);
+  assert.equal(run(repo, "huddle", "resolve", ledgerOf(repo).huddles.at(-1).actOn[0].id, "--evidence", "doc", "fixed").status, 0);
   const left = /--files (\S+?)`/.exec(ruleLine(repo, "R9"))[1].split(",");
   const fixedLine = readFileSync(abs, "utf8").split("\n").findIndex((l) => l.includes("late3 = 300")) + 1;
   const reviewed = readFileSync(abs, "utf8").split("\n").findIndex((l) => l.includes("late10 = 10")) + 1;
@@ -344,7 +344,7 @@ test("a fix inside a part that deletes a line does not reopen lines earlier roun
   const abs = path.join(repo, FILE);
   write(repo, FILE, readFileSync(abs, "utf8").replace("export const late3 = 3;\n", ""));
   hook(repo, { hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: abs }, tool_response: {} });
-  assert.equal(run(repo, "huddle", "resolve", ledgerOf(repo).huddles.at(-1).actOn[0].id, "--evidence", "src/pay.ts:1", "fixed").status, 0);
+  assert.equal(run(repo, "huddle", "resolve", ledgerOf(repo).huddles.at(-1).actOn[0].id, "--evidence", "doc", "fixed").status, 0);
   const pending = ruleLine(repo, "R9");
   assert.doesNotMatch(pending, /src\/pay\.ts:2-|src\/pay\.ts:1-\d{2,}/, pending);
 });
@@ -465,7 +465,7 @@ test("6.3 C11 boundary: an upheld finding fixed after its answers round still ge
   answer(repo, brief, "reviewer", clean(`## Disputes\n- ${id} — upheld: the last row is still skipped\n`), 2);
   assert.equal(itemOf(repo, id).dispute.verdict, "upheld");
   edit(repo, 1);
-  assert.equal(run(repo, "huddle", "resolve", id, "--evidence", "src/pay.ts:1", "fixed").status, 0);
+  assert.equal(run(repo, "huddle", "resolve", id, "--evidence", "doc", "fixed").status, 0);
   assert.match(ruleLine(repo, "R5"), /gate brief reviewer/, "the fix waits for its review");
   const check = run(repo, "brief", "reviewer");
   assert.doesNotMatch(check.stderr, /^done-gate: /m, check.stderr);
@@ -510,7 +510,7 @@ test("6.4 C3 boundary: a 900-line file in slices: the re-check of a fixed line r
   assert.equal(first.status, 0, first.stderr);
   answer(repo, first, "reviewer", reviewOf(1, `off by one at ${BIG}:30 — wrong`), 1);
   fixBig(repo, 1, 30);
-  assert.equal(run(repo, "huddle", "resolve", ledgerOf(repo).huddles.at(-1).actOn[0].id, "--evidence", `${BIG}:30`, "fixed").status, 0);
+  assert.equal(run(repo, "huddle", "resolve", ledgerOf(repo).huddles.at(-1).actOn[0].id, "--evidence", "doc", "fixed").status, 0);
   const part = run(repo, "brief", "reviewer", "--files", `${BIG}:30-30`);
   assert.doesNotMatch(part.stderr, /^done-gate: /m, part.stderr);
   assert.match(packetOf(part), /This is a fix-check/);
@@ -529,7 +529,7 @@ test("6.4 C6 boundary: a 500-line file in slices: the fixed line alone is refuse
   assert.equal(first.status, 0, first.stderr);
   answer(repo, first, "reviewer", reviewOf(1, `off by one at ${BIG}:30 — wrong`), 1);
   fixBig(repo, 1, 30);
-  assert.equal(run(repo, "huddle", "resolve", ledgerOf(repo).huddles.at(-1).actOn[0].id, "--evidence", `${BIG}:30`, "fixed").status, 0);
+  assert.equal(run(repo, "huddle", "resolve", ledgerOf(repo).huddles.at(-1).actOn[0].id, "--evidence", "doc", "fixed").status, 0);
   const alone = run(repo, "brief", "reviewer", "--files", `${BIG}:30-30`);
   assert.match(alone.stderr, /takes all of its unreviewed lines at once: `gate brief reviewer --files ([^`]+)`/, alone.stderr);
   const all = /--files ([^`]+)`/.exec(alone.stderr)[1];

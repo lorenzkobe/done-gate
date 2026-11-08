@@ -23,11 +23,11 @@ Rules:
 # Worker <n> — <slug>
 
 ## Replies
-- H<k>.<i> — fixed: <file:line or test file:name>
+- H<k>.<i> — fixed: <a test file you ran red since the finding, events#<seq> of the run, or doc for a text-only fix>
 - H<k>.<i> — disagree: <why, in one sentence> — <file:line, test, or verify.json>
 ```
 
-A `fixed:` pointer must resolve; a `disagree:` needs a pointer too. Do not restate the finding.
+A `fixed:` pointer must prove the fix on a run: a source line does not. A `disagree:` needs a pointer that resolves. Do not restate the finding.
 
 Your reply to the lead is short: the files you changed, the command you ran for your tests and its result (exit code and count), and on a review round the path of your `worker-<n>.md`. Never claim a test passed that you did not run.
 

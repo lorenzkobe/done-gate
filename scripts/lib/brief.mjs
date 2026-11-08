@@ -334,7 +334,9 @@ export function renderPacket(state, role, { round, n, item = null, piece = null,
     const shown = piece ? (state.changed ?? []).filter((p) => paths.has(p) || !scopeSet.has(p)) : state.changed ?? [];
     // a fix-check round: the role's earlier findings on these files, each closed, to confirm
     const cites = (text) => (paths ? [...paths] : reviewScope(state)).some((f) => text.includes(f));
-    const recheck = state.ledger.huddles.filter((h) => h.role === role).flatMap((h) => h.actOn.filter((a) => a.closed && (cites(a.text) || cites(String(a.closed)))));
+    // on a new run a closed pointer is a run or doc, which no longer names the file the fix landed
+    // in, so a fix-check re-checks every closed finding of its role
+    const recheck = state.ledger.huddles.filter((h) => h.role === role).flatMap((h) => h.actOn.filter((a) => a.closed && (cites(a.text) || cites(String(a.closed)) || (fixCheck && newRules(state.ledger)))));
     if (recheck.length) {
       out.push("## Findings to re-check", "", "Earlier rounds found these and each was closed as shown. For each, say ADDRESSED or NOT ADDRESSED, and flag anything the fix broke in the lines below.", "");
       out.push(...recheck.map((a) => `- ${a.id} — ${a.text} — closed: ${a.closed}`), "");

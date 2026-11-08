@@ -141,7 +141,7 @@ test("C3 a range round with a finding, fixed by an edit inside the range, leaves
   round(repo, "reviewer", `${BIG}:401-800`, ["off by one — src/big.ts:500 — x — []"]);
   round(repo, "reviewer", `${BIG}:801-1200`);
   edit(repo, BIG, body(1200, "big").replace("big500 = 500", "big500 = 501"));
-  cli(repo, "huddle", ["resolve", "H2.1", "--evidence", "src/big.ts:500"]);
+  cli(repo, "huddle", ["resolve", "H2.1", "--evidence", "doc"]);
   const line = ruleLine(check(repo), "R5");
   // the edited line and the next one (its key holds the line above): not the whole slice
   assert.match(line, /big\.ts:501-502/);
@@ -181,11 +181,11 @@ test("C6 the round cap counts the rounds that saw a line: whole-file and slice r
   edit(repo, "src/other.ts", body(30, "o"));
   cli(repo, "plan", ["add", "src/other.ts", "the second module"]);
   round(repo, "reviewer", BIG, ["a — src/big.ts:1 — x — []"]);
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/big.ts:1"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   round(repo, "reviewer", BIG, ["b — src/big.ts:200 — x — []"]);
-  cli(repo, "huddle", ["resolve", "H2.1", "--evidence", "src/big.ts:200"]);
+  cli(repo, "huddle", ["resolve", "H2.1", "--evidence", "doc"]);
   round(repo, "reviewer", `${BIG}:1-150`, ["c — src/big.ts:5 — x — []"]);
-  cli(repo, "huddle", ["resolve", "H3.1", "--evidence", "src/big.ts:5"]);
+  cli(repo, "huddle", ["resolve", "H3.1", "--evidence", "doc"]);
   assert.match(run(repo, "brief", ["reviewer", "--files", `${BIG}:1-150`]).stderr, /three rounds is the cap/, "lines 1-150 were seen three times");
   assert.match(cli(repo, "brief", ["reviewer", "--files", `${BIG}:151-300`]), /^packet: /m, "lines 151-300 were seen twice: one more round is allowed");
   stop(repo, "reviewer");

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, lookedUp, waiveArgs, naArgs, abandonArgs } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, lookedUp, waiveArgs, naArgs, abandonArgs, redRun } from "./helpers.mjs";
 import { decide } from "../scripts/lib/guard.mjs";
 import { saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
@@ -88,6 +88,7 @@ test("huddle add / acton / resolve track a review round and its Act-on items", (
   cli(repo, "huddle", ["acton", "H1", "null venue crashes the badge"]);
   cli(repo, "huddle", ["acton", "H1", "missing refused-side test"]);
   // `huddle resolve` requires a pointer that actually resolves; tests/a.test.ts is in the fixture
+  redRun(repo);
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts:null venue"]);
   const [h] = ledgerOf(repo).huddles;
   assert.equal(h.role, "reviewer");

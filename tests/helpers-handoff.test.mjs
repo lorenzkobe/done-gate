@@ -401,7 +401,7 @@ test("C9 reported-surface: gate huddle add reviewer prints each new id with its 
     );
   }
 
-  cli(repo, "huddle", ["resolve", "H1.2", "--evidence", "src/a.ts:2"]);
+  cli(repo, "huddle", ["resolve", "H1.2", "--evidence", "doc"]);
   helperFile(repo, "worker-1.md", "# Worker 1 — hh-c9\n\n## Replies\n- H9.9 — fixed: src/a.ts:1\n");
   const r = refused(repo, "huddle", ["reply", "--file", "worker-1.md"]);
   assert.ok(r.stderr.includes("H9.9"), `the refusal does not name the unknown id: ${r.stderr}`);

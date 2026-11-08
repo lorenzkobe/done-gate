@@ -162,7 +162,7 @@ test("below large a worker takes a piece, answers a finding, and a path outside 
   assert.doesNotMatch(text, /QA wrote/);
   // the plan check is H1, so the reviewer's finding is H2.1
   assert.match(text, /H2\.1/);
-  writeFileSync(path.join(runDir(repo), "worker-1.md"), `# Worker 1\n\n## Replies\n- H2.1 — fixed: ${STANDARD_FILES[0]}:1\n`);
+  writeFileSync(path.join(runDir(repo), "worker-1.md"), `# Worker 1\n\n## Replies\n- H2.1 — fixed: doc\n`);
   cli(repo, "huddle", ["reply", "--file", "worker-1.md"]);
   assert.ok(ledgerOf(repo).huddles.find((h) => h.role === "reviewer").actOn[0].closed, "the worker's answer closes the finding");
 });
@@ -303,7 +303,7 @@ test("a large run whose lead fixed the findings itself closes with no worker and
   cli(repo, "huddle", ["add", "reviewer-2", "--file", helper("reviewer-2", 1, round("- none"))]);
   write(repo, "src/f0.ts", "export const x = 3;\n");
   leadEdit(repo, "src/f0.ts");
-  cli(repo, "huddle", ["resolve", ledgerOf(repo).huddles.find((h) => h.file === first).actOn[0].id, "--evidence", "src/f0.ts:1"]);
+  cli(repo, "huddle", ["resolve", ledgerOf(repo).huddles.find((h) => h.file === first).actOn[0].id, "--evidence", "doc"]);
   cli(repo, "verify", []);
   for (const [role, n] of [["reviewer", 2], ["reviewer-2", 2]]) cli(repo, "huddle", ["add", role, "--file", helper(role, n, round("- none"))]);
   cli(repo, "step", ["review", "done", "clean", "--evidence", "review-2.md"]);

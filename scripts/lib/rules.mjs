@@ -407,6 +407,28 @@ export function ranEvents(state) {
   return (state.events ?? []).filter((e) => RUN_KINDS.has(e.kind) && !e.reused && e.seq > since && !e.background && (!e.readOnly || e.runs) && !e.failed && !gateNote(e.cmd) && (e.kind !== "skill" || e.skill === "verify") && !notesTool(e));
 }
 
+// On a run under the new rules a reviewer's finding closes on a run, not on a pointer. undefined:
+// the rule does not apply (a skeptic item, an older run); null: proven; else the refusal.
+export const PROOF_TEXT = "a reviewer finding closes on a run: a test file named in a test command that failed since the finding (run it red first), `events#<seq>` of a browser call or a command that ran cleanly since (not a gate verb, a git command or a scratch write), or `doc` when the fix is text only";
+export function proofProblem(state, item, ptr) {
+  const h = (state.ledger.huddles ?? []).find((x) => x.actOn.some((a) => a.id === item.id));
+  if (!h || !newRules(state.ledger) || (h.role !== "reviewer" && h.role !== "reviewer-2")) return undefined;
+  if (ptr === "doc") return null;
+  // the lead's runs and a worker's; a reviewer, QA or arbiter run is not the fix's proof
+  const since = (state.events ?? []).filter((e) => e.seq > (h.seq ?? 0) && !e.background && (!e.agentType || isRole(e.agentType, "worker")));
+  const gateCall = (cmd) => GATE_CALL.exec(cmd ?? "")?.[1];
+  const testRun = (e) => runsTests(e.cmd ?? "") || gateCall(e.cmd) === "test";
+  const red = (e) => e.kind === "command" && testRun(e) && (e.exit ?? 0) !== 0;
+  const seq = /^events#(\d+)$/.exec(String(ptr ?? ""));
+  if (seq) {
+    const e = since.find((x) => x.seq === Number(seq[1]));
+    const clean = (x) => x.kind === "command" && !gateCall(x.cmd) && !x.git && !x.scratch && !x.failed && (!x.readOnly || x.runs) && (x.exit ?? 0) === 0;
+    return e && (e.kind === "browser" || red(e) || (clean(e) && !testRun(e))) ? null : PROOF_TEXT;
+  }
+  const file = String(ptr ?? "").replace(/:[^/]*$/, "");
+  return state.config.isTest(file) && since.some((e) => red(e) && e.cmd.includes(file)) ? null : PROOF_TEXT;
+}
+
 export function ranText(e) {
   return [e.cmd, e.skill, e.kind === "tool" ? e.tool : null, e.input, e.action, e.target, e.url, ...(e.actions ?? []).flatMap((a) => [a.action, a.target, a.url])].filter(Boolean).join(" ");
 }

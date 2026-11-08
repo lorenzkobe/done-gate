@@ -3,11 +3,12 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, doneArgs, lookedUp, asOldRun, planChecked, pinnedBefore } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, doneArgs, lookedUp, asOldRun, planChecked, pinnedBefore, redRun } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { pointerResolver } from "../scripts/lib/rules.mjs";
 import { reviewFiles } from "../scripts/lib/assess.mjs";
+import { readEvents } from "../scripts/lib/events.mjs";
 import { nextHint } from "../scripts/lib/next.mjs";
 
 // ===== from tests/review-dispute.test.mjs =====
@@ -192,6 +193,7 @@ function upheld(name, { findings = [FIND_1, FIND_2] } = {}) {
   helperFile(repo, "review-1.md", reviewFile(1, name, findings));
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
   // H1.1 is fixed the ordinary way, so H1.2 is the only thing R5 can still be waiting on
+  redRun(repo);
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts:empty list"]);
   cli(repo, "huddle", ["dispute", "H1.2", WHY, "--evidence", EVIDENCE]);
   helperFile(repo, "review-2.md", reviewFile(2, name, [], `\n## Disputes\n- H1.2 — upheld: ${UPHELD_REASON}\n\n`));
@@ -350,6 +352,7 @@ test("C4 refused: gate huddle dispute H1.2 without --evidence is refused; with e
   );
 
   // a closed finding cannot be disputed
+  redRun(repo);
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts:empty list"]);
   assert.ok(itemById(ledgerOf(repo), "H1.1").closed, "premise: H1.1 is closed");
   refused(repo, "huddle", ["dispute", "H1.1", "too late", "--evidence", "src/a.ts:1"]);
@@ -512,6 +515,8 @@ test("C8 edge: gate huddle add arbiter --file arbiter-1.md with a ruling for the
   assert.equal(kept.dispute.verdict, "arbiter:reviewer");
   assert.ok(ruleLine(check(lose), "R5"), `R5 does not block while the arbiter's reviewer-side finding is open:\n${check(lose)}`);
 
+  redRun(lose);
+
   cli(lose, "huddle", ["resolve", "H1.2", "--evidence", "tests/a.test.ts:null venue"]);
   assert.ok(itemById(ledgerOf(lose), "H1.2").closed, "resolve did not close the finding");
   assert.ok(!ruleLine(check(lose), "R5"), `R5 still blocks after the finding was fixed:\n${check(lose)}`);
@@ -526,7 +531,9 @@ test("C9 happy: the brief's review line reads n problems, k fixed, m overruled b
   const repo = opened("rd-c9");
   helperFile(repo, "review-1.md", reviewFile(1, "rd-c9", [FIND_1, FIND_2, FIND_3]));
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
+  redRun(repo);
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts:empty list"]);
+  redRun(repo);
   cli(repo, "huddle", ["resolve", "H1.3", "--evidence", "tests/a.test.ts:unknown role"]);
   cli(repo, "huddle", ["dispute", "H1.2", WHY, "--evidence", EVIDENCE]);
   helperFile(repo, "review-2.md", reviewFile(2, "rd-c9", [], `\n## Disputes\n- H1.2 — upheld: ${UPHELD_REASON}\n\n`));
@@ -784,6 +791,7 @@ test("C17 refused: gate huddle add reviewer --file skeptic-1.md is refused and n
 
 test("C18 refused: gate huddle resolve H1.1 --evidence nope-nothing is refused and the item stays open; --evidence verify.json after a green verify closes it", () => {
   const repo = opened("rd-c18");
+  asOldRun(repo); // the pointer rule this test pins; on a new run 6.6 P1 holds the proof rule
   helperFile(repo, "review-1.md", reviewFile(1, "rd-c18", [FIND_1]));
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
 
@@ -866,6 +874,7 @@ test("C20 refused: hand-typed acton items do not pay for a bullet the file lists
 
 test("C21 refused: gate huddle resolve --evidence decisions#9999 is refused and the item stays open; after one decide row decisions#1 closes it and decisions#2 is refused", () => {
   const repo = opened("rd-c21");
+  asOldRun(repo); // the pointer rule this test pins; on a new run 6.6 P1 holds the proof rule
   helperFile(repo, "review-1.md", reviewFile(1, "rd-c21", [FIND_1, FIND_2]));
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
 
@@ -1029,6 +1038,7 @@ test("C1 happy: gate huddle reply --file worker-1.md with 'H1.1 — fixed: tests
   const POINTER = "tests/a.test.ts:renders";
   assert.equal(itemById(ledgerOf(repo), "H1.1").closed, null, "premise: H1.1 starts open");
 
+  redRun(repo);
   helperFile(repo, "worker-1.md", workerFile(1, "rl-c1", [`H1.1 — fixed: ${POINTER}`]));
   cli(repo, "huddle", ["reply", "--file", "worker-1.md"]);
 
@@ -1059,6 +1069,7 @@ test("C1 happy: gate huddle reply --file worker-1.md with 'H1.1 — fixed: tests
 
 test("C2 refused: gate huddle reply with a 'fixed:' pointer that does not resolve is refused, names the pointer, and H1.1 stays open", () => {
   const repo = reviewed("rl-c2");
+  asOldRun(repo); // the pointer rule this test pins; on a new run 6.6 P1 holds the proof rule
   helperFile(repo, "worker-1.md", workerFile(1, "rl-c2", ["H1.1 — fixed: nope-nothing"]));
 
   const r = refused(repo, "huddle", ["reply", "--file", "worker-1.md"]);
@@ -1127,6 +1138,7 @@ test("C3 happy: 'H1.2 — disagree: <why> — src/a.ts:3' records a dispute on H
 test("C4 idempotent: a reply naming an item the implementer already resolved, or one the reviewer withdrew, leaves both closes exactly as they were and the verb says the item was skipped", () => {
   const repo = reviewed("rl-c4", [FIND_1, FIND_2]);
   // H1.1 closed the ordinary way
+  redRun(repo);
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts:empty list"]);
   // H1.2 disputed, then withdrawn by the reviewer's next file
   cli(repo, "huddle", ["dispute", "H1.2", WHY, "--evidence", "src/a.ts:2"]);
@@ -1319,6 +1331,74 @@ test("C8 happy: the next: hint for the {review} step names gate brief reviewer, 
   assert.doesNotMatch(h, /at most three rounds/, `the {review} hint still caps new runs at three:\n${h}`);
   // the worker answers in worker-<n>.md, and the reviewer's file is what the loop feeds it
   assert.match(h, /worker-<n>\.md/, `the hint does not name the file the worker writes:\n${h}`);
+});
+
+// 6.6: on a new run a reviewer finding closes on a run: a test that failed since the finding, a
+// recorded command or browser call, or doc for a text-only fix
+// a failed Bash call arrives as PostToolUseFailure; a green one as PostToolUse
+const shell = (repo, command, exit, agent = {}) => spawnSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: "S1", cwd: repo, ...agent, tool_name: "Bash", tool_input: { command }, ...(exit ? { hook_event_name: "PostToolUseFailure", tool_error: `Exit code ${exit}` } : { hook_event_name: "PostToolUse", tool_response: { exit_code: 0 } }) }), encoding: "utf8", env: envFor(repo) });
+const browse = (repo, url) => spawnSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: "S1", cwd: repo, hook_event_name: "PostToolUse", tool_name: "mcp__claude-in-chrome__navigate", tool_input: { url }, tool_response: {} }), encoding: "utf8", env: envFor(repo) });
+const newestSeq = (repo, kind) => readEvents(stateDir(repo), "S1").filter((e) => e.kind === kind).at(-1).seq;
+const PROOF = /closes on a run/;
+
+test("6.6 P1 refused: a source line, verify.json, a green-only test run and a red run from before the finding cannot close a reviewer finding", () => {
+  const repo = opened("rl-66-p1");
+  shell(repo, "node --test tests/a.test.ts", 1);
+  helperFile(repo, "review-1.md", reviewFile(1, "rl-66-p1", [FIND_1, FIND_2]));
+  cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
+  assert.match(refused(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts"]).stderr, PROOF, "a red run from before the round");
+  for (const ptr of ["src/a.ts:1", "verify.json"]) assert.match(refused(repo, "huddle", ["resolve", "H1.1", "--evidence", ptr]).stderr, PROOF, ptr);
+  shell(repo, "node --test tests/a.test.ts", 0);
+  assert.match(refused(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts"]).stderr, PROOF, "a green run proves nothing about the finding");
+  assert.equal(itemById(ledgerOf(repo), "H1.1").closed, null);
+});
+
+test("6.6 P2 happy: a test that failed since the finding, a browser call and doc each close a reviewer finding", () => {
+  const repo = reviewed("rl-66-p2", [FIND_1, FIND_2, FIND_3]);
+  shell(repo, "node --test tests/a.test.ts", 1);
+  redRun(repo);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts"]);
+  browse(repo, "http://localhost:3000/venues");
+  cli(repo, "huddle", ["resolve", "H1.2", "--evidence", `events#${newestSeq(repo, "browser")}`]);
+  cli(repo, "huddle", ["resolve", "H1.3", "--evidence", "doc"]);
+  assert.ok(itemsOf(ledgerOf(repo)).every((a) => a.closed), JSON.stringify(itemsOf(ledgerOf(repo))));
+});
+
+test("6.6 P3 idempotent: a skeptic item and a run from before keep today's pointer rule", () => {
+  const repo = committed("rl-66-p3");
+  cli(repo, "open", ["rl-66-p3", "feature"]);
+  helperFile(repo, "skeptic-1.md", "# Skeptic 1\n\n## Act on\n- the plan misses the empty list — src/a.ts:1\n");
+  cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/a.ts:1"]);
+  const old = reviewed("rl-66-p3-old");
+  asOldRun(old);
+  cli(old, "huddle", ["resolve", "H1.1", "--evidence", "src/a.ts:1"]);
+});
+
+test("6.6 P5 refused: a gate verb, a failed command, a git command and a reviewer's red run do not close a reviewer finding", () => {
+  const repo = reviewed("rl-66-p5");
+  const tries = [
+    () => shell(repo, `node "${gate}" check`, 0),
+    () => shell(repo, "node scripts/repro.mjs", 2),
+    () => shell(repo, "git add -A", 0),
+  ];
+  for (const t of tries) {
+    t();
+    assert.match(refused(repo, "huddle", ["resolve", "H1.1", "--evidence", `events#${newestSeq(repo, "command")}`]).stderr, PROOF);
+  }
+  shell(repo, "node --test tests/a.test.ts", 1, { agent_id: "R2", agent_type: "done-gate:reviewer" });
+  assert.match(refused(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts"]).stderr, PROOF, "the reviewer's own red run");
+  shell(repo, "node scripts/repro.mjs", 0);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", `events#${newestSeq(repo, "command")}`]);
+});
+
+test("6.6 P4 refused: a worker's fixed reply needs the same proof", () => {
+  const repo = reviewed("rl-66-p4");
+  helperFile(repo, "worker-1.md", workerFile(1, "rl-66-p4", ["H1.1 — fixed: src/a.ts:1"]));
+  assert.match(refused(repo, "huddle", ["reply", "--file", "worker-1.md"]).stderr, PROOF);
+  helperFile(repo, "worker-1.md", workerFile(1, "rl-66-p4", ["H1.1 — fixed: doc"]));
+  cli(repo, "huddle", ["reply", "--file", "worker-1.md"]);
+  assert.equal(itemById(ledgerOf(repo), "H1.1").closed !== null, true);
 });
 }
 

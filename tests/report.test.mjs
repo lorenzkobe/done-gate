@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync, execSync, execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync, chmodSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, here, pluginRoot, doneArgs, lookedUp, waiveArgs, asOldRun, naArgs, abandonArgs } from "./helpers.mjs";
+import { makeRepo, write, gate, here, pluginRoot, doneArgs, lookedUp, waiveArgs, asOldRun, naArgs, abandonArgs, redRun } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { actOnRows, pauseLines, stageOutcome } from "../scripts/lib/report.mjs";
 import { unmetLines } from "../scripts/lib/assess.mjs";
@@ -827,7 +827,9 @@ function closedRun(name, slug = name) {
   helperFile(repo, "review-1.md", reviewFile(1, slug, [FIND_1, FIND_2]));
   reviewerStop(repo);
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
+  redRun(repo);
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts:renders the badge"]);
+  redRun(repo);
   cli(repo, "huddle", ["resolve", "H1.2", "--evidence", "tests/a.test.ts:refuses an unknown role"]);
   closeEveryStep(repo);
   cli(repo, "verify");
@@ -971,6 +973,7 @@ function attentionRun(name, slug = name) {
   cli(repo, "waive", waiveArgs(repo, "driver", WAIVER_REASON));
   helperFile(repo, "review-1.md", reviewFile(1, slug, [FIND_1, FIND_2]));
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
+  redRun(repo);
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts:renders the badge"]);
   cli(repo, "huddle", ["dispute", "H1.2", WHY, "--evidence", EVIDENCE]);
   stopHook(repo, `Some progress.\n\nPAUSED: ${PAUSE_TEXT}`);
