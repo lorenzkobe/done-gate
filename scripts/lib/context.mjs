@@ -9,13 +9,13 @@ import { currentLedger, isDone } from "./ledger.mjs";
 export class UsageError extends Error {}
 
 // Where the gate keeps its state for a repo. Tests override with DONE_GATE_STATE_DIR.
-export function stateDirFor(root) {
+function stateDirFor(root) {
   return process.env.DONE_GATE_STATE_DIR ?? path.join(root, ".claude", "gate");
 }
 
 // The model's shell carries no CLAUDE_PROJECT_DIR and may stand in a subfolder: the root is
 // the nearest folder up that holds the gate's state or config, or else a .git.
-export function projectRootFrom(input) {
+function projectRootFrom(input) {
   if (process.env.CLAUDE_PROJECT_DIR) return path.resolve(process.env.CLAUDE_PROJECT_DIR);
   const start = path.resolve(input?.cwd ?? process.cwd());
   for (let dir = start; ; dir = path.dirname(dir)) {
@@ -28,7 +28,7 @@ export function projectRootFrom(input) {
 // to that shell as CLAUDE_CODE_SESSION_ID (per terminal, exact). Without it the pid files the
 // fence writes decide, then the marker the SessionStart hook writes, which is shared by every
 // terminal in the repo, newest wins.
-export function readSessionMarker(stateDir) {
+function readSessionMarker(stateDir) {
   try {
     return readFileSync(path.join(stateDir, "current-session"), "utf8").trim() || null;
   } catch {

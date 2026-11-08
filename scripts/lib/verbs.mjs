@@ -58,7 +58,7 @@ export function writeReport(ctx, dir, ledger) {
 
 // A clean run closes: the ledger records the tree it closed on, and the session's baseline
 // moves to that tree so the next task starts from zero changes.
-export function finalise(ctx, state) {
+function finalise(ctx, state) {
   const ledger = loadLedger(state.dir);
   ledger.status = "closed";
   ledger.closedAt = new Date().toISOString();
@@ -79,7 +79,7 @@ export function finalise(ctx, state) {
 
 const SURFACE_KEYS = new Set(["driver", "schema"]);
 // Steps whose evidence comes from a script or an agent: DONE or WAIVED only.
-export const EVIDENCED_KEYS = new Set(["context", "verify", "verify-before", "driver", "review", "tests", "qa", "skeptic", "close", "repro", "rootcause"]);
+const EVIDENCED_KEYS = new Set(["context", "verify", "verify-before", "driver", "review", "tests", "qa", "skeptic", "close", "repro", "rootcause"]);
 // Steps that claim something was run: DONE only on a run the hooks recorded.
 const RUN_KEYS = new Set(["repro", "rootcause", "schema"]);
 export const CASE_KINDS = ["happy", "edge", "refused", "boundary", "idempotent", "reported-surface", "performance", "click"];

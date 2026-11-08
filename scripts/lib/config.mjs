@@ -124,7 +124,7 @@ function defaultVerify(root) {
 const WHEN = new Set(["always", "source", "final"]);
 
 // The name a {"related": true} verify entry goes by: its rows, --drop, the packets.
-export const RELATED = "related tests";
+const RELATED = "related tests";
 
 // One package.json build script call and nothing else: `npm run build`, `pnpm build`. A
 // compound command (&&, ;, |), or a tool whose build also tests (gradle, make), runs always.

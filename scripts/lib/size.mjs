@@ -244,7 +244,7 @@ export function outsidePlan(named, changed, config) {
 
 const CATEGORY_PRED = { ui: "isUi", schema: "isSchema", highRisk: "isHighRisk" };
 
-export function forcedFor(config, policy, paths) {
+function forcedFor(config, policy, paths) {
   return policy.forceStandard.filter((cat) => {
     const pred = config[CATEGORY_PRED[cat]];
     return typeof pred === "function" && paths.some((p) => pred(p));

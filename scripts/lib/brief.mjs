@@ -42,7 +42,7 @@ export function detectFramework(root) {
 }
 
 // Starting points for a reader, not a parser: named exports in JS/TS, defs and classes in Python.
-export function exportedSymbols(abs) {
+function exportedSymbols(abs) {
   if (!existsSync(abs)) return [];
   const text = readFileSync(abs, "utf8");
   const out = new Set();
@@ -66,7 +66,7 @@ function distance(a, b) {
   return pa.length - i + (pb.length - i);
 }
 
-export function nearestTests(state, targets, max = 3) {
+function nearestTests(state, targets, max = 3) {
   const tests = Object.keys(state.now?.files ?? {}).filter((p) => state.config.isTest(p));
   if (!targets.length) return tests.sort().slice(0, max);
   const score = (t) => Math.min(...targets.map((x) => distance(x, t)));
@@ -84,7 +84,7 @@ function isBinary(buf) {
 // changes are reviewable too), from git against the commit that was HEAD when the task
 // opened, or a synthetic all-added block when git has no history for the file. A file with
 // ranges shows only the hunk lines inside them.
-export function unifiedDiff(state, { cap = DIFF_CAP, files = state.diff.changed, ranges = new Map() } = {}) {
+function unifiedDiff(state, { cap = DIFF_CAP, files = state.diff.changed, ranges = new Map() } = {}) {
   const { diff, baseline, root } = state;
   const ref = baseline?.head ?? "HEAD";
   const dirty = new Set(baseline?.dirty ?? []);
@@ -170,12 +170,12 @@ function mayWrite(state, role, n) {
 
 // The reviewer writes review-<n>.md, the second reviewer review2-<n>.md: two streams, so
 // two packets briefed before either file exists never name the same file.
-export function reviewPrefix(role) {
+function reviewPrefix(role) {
   return role === "reviewer-2" ? "review2" : "review";
 }
 
 // The round number of a helper file: the digits before .md, never the 2 in review2-.
-export function fileNumber(name) {
+function fileNumber(name) {
   return Number(/-(\d+)\.md$/.exec(name)?.[1] ?? 0);
 }
 
@@ -266,7 +266,7 @@ function diffOrFiles(state, heading = "Diff", files = state.changed ?? [], range
 
 // n is the number of the role's own file (skeptic-<n>.md, review-<n>.md, worker-<n>.md);
 // continueFrom is the text an earlier helper left in that file before it stopped.
-export function renderPacket(state, role, { round, n, piece = null, owned = null, continueFrom = null, fixCheck = false, disputes = [], strength = [] }) {
+function renderPacket(state, role, { round, n, piece = null, owned = null, continueFrom = null, fixCheck = false, disputes = [], strength = [] }) {
   const out = header(state, role, round);
   out.push("## You may write", "", mayWrite(state, role, n), "");
   if (continueFrom !== null) {

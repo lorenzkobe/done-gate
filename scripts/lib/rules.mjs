@@ -60,7 +60,7 @@ const CHECKS = {
   },
 };
 
-export function runChecks(state) {
+function runChecks(state) {
   const { config, ledger } = state;
   const out = [];
   const names = new Set(config.checks ?? []);
@@ -251,7 +251,7 @@ const WRITE_WORDS = new Set(["add", "write", "update", "delete", "mine", "index"
 
 // "code", "memory" or null for one event; a failed call is no lookup (the user's choice in 0.17:
 // retry it, or declare the tool missing).
-export function lookupKind(e) {
+function lookupKind(e) {
   return e.failed ? null : toolKind(e);
 }
 
@@ -270,7 +270,7 @@ export const LOOKUP_EXAMPLE = { code: "SocratiCode `codebase_search`", memory: "
 // message after the previous run ended (closed or abandoned) or the session started, so an answer to a clarifying
 // question keeps them; else from the newest message before open; else from open. `failed`
 // lists calls that failed.
-export function lookupWindowFrom(ledger, events) {
+function lookupWindowFrom(ledger, events) {
   const opened = ledger.openedSeq ?? 0;
   const base = ledger.lookupsFrom ?? ledger.baseline?.seq ?? 0;
   const prompts = events.filter((e) => e.seq <= opened && e.kind === "prompt" && !e.agent && !e.handback);
@@ -397,7 +397,7 @@ export function ranEvents(state) {
 
 // On a run under the new rules a reviewer's finding closes on a run, not on a pointer. undefined:
 // the rule does not apply (a skeptic item, an older run); null: proven; else the refusal.
-export const PROOF_TEXT = "a reviewer finding closes on a run: a test file named in a test command that failed since the finding (run it red first), `events#<seq>` of a browser call or a command that ran cleanly since (not a gate verb, a git command or a scratch write), or `doc` when the fix is text only";
+const PROOF_TEXT = "a reviewer finding closes on a run: a test file named in a test command that failed since the finding (run it red first), `events#<seq>` of a browser call or a command that ran cleanly since (not a gate verb, a git command or a scratch write), or `doc` when the fix is text only";
 export function proofProblem(state, item, ptr) {
   const h = (state.ledger.huddles ?? []).find((x) => x.actOn.some((a) => a.id === item.id));
   if (!h || !newRules(state.ledger) || (h.role !== "reviewer" && h.role !== "reviewer-2")) return undefined;
@@ -544,7 +544,7 @@ export function isRole(agentType, role) {
 // moment the source hash moved (edits made with sed, perl or git apply leave no tool event).
 // An implementation edit: a source edit by anyone but QA (the lead, a worker, or any other
 // agent the lead spawned). QA's test edits and helper file writes are not implementation.
-export function implementationEdit(e, config) {
+function implementationEdit(e, config) {
   return e.kind === "edit" && Boolean(e.path) && config.isSource(e.path) && !isRole(e.agentType, "qa");
 }
 
@@ -693,7 +693,7 @@ export function capUnitsOf(state, rel) {
   if (!state.capUnits.has(rel)) state.capUnits.set(rel, changedUnits(taskDiff(state, rel, { ignoreWhitespace: true }), rel));
   return state.capUnits.get(rel);
 }
-export const positionsOf = (units) => [...new Set(units.map((u) => u.pos))].sort((a, b) => a - b);
+const positionsOf = (units) => [...new Set(units.map((u) => u.pos))].sort((a, b) => a - b);
 
 // Uncovered positions folded into "path:from-to" spans along the file's changed positions;
 // every position uncovered is the bare path.
@@ -1176,7 +1176,7 @@ export function planDrift({ ledger, config, changed }) {
 // before the stamp keeps reading the globs alone.
 const surfaceOf = (ledger, config, changed, matches) => changed.filter((p) => matches(p) && (!newRules(ledger) || (!config.isTest(p) && !config.isDoc(p))));
 export const uiFiles = (ledger, config, changed) => surfaceOf(ledger, config, changed, config.isUi);
-export const schemaFiles = (ledger, config, changed) => surfaceOf(ledger, config, changed, config.isSchema);
+const schemaFiles = (ledger, config, changed) => surfaceOf(ledger, config, changed, config.isSchema);
 // A run from before the stamp closes driver on a note, whatever changed.
 export const apiFiles = (ledger, config, changed) => (newRules(ledger) ? surfaceOf(ledger, config, changed, config.isApi) : []);
 
@@ -1304,7 +1304,7 @@ export const editedIn = (events, since, file) => events.some((e) => e.kind === "
 export const editedLast = (events, since, file, mtime) =>
   mtime !== undefined && events.some((e) => e.kind === "edit" && e.path === file && e.seq > since && Math.abs(Date.parse(e.ts) - mtime) <= WRITE_SLACK_MS);
 
-export const explains = (events, since, file, mtime) => editedIn(events, since, file) || writersOf(events, since, mtime).length > 0;
+const explains = (events, since, file, mtime) => editedIn(events, since, file) || writersOf(events, since, mtime).length > 0;
 
 // With no ledger open, a change is this session's when it edited the file, not when another session's
 // edit wrote it last, else when its own command or no session's events may have written it.

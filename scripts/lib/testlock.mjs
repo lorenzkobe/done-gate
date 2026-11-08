@@ -9,7 +9,7 @@ import { processAlive } from "./rules.mjs";
 // Bash call leaves the tests their time. Tests shorten it with DONE_GATE_TEST_WAIT (seconds).
 const WAIT_SECONDS = 300;
 const POLL_MS = 500;
-export const BUSY_EXIT = 75;
+const BUSY_EXIT = 75;
 
 // not a UsageError subclass: this module loads inside the context.mjs import cycle
 export class BusyError extends Error {}

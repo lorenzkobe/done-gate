@@ -6,8 +6,8 @@ import { loadSession, saveSession } from "./session-state.mjs";
 import { HELPER_MAX_MS, helperAlive, NOT_THE_USER, unfinishedVerify } from "./rules.mjs";
 
 // Stuck: from ASK_AFTER identical blocks the lead must ask the user; BRAKE_AFTER stops a gate-bug loop.
-export const ASK_AFTER = 3;
-export const BRAKE_AFTER = 20;
+const ASK_AFTER = 3;
+const BRAKE_AFTER = 20;
 const PAUSE_RE = /(?:^|\n)\s*PAUSED:\s*(.+?)\s*$/;
 const STOP_WORD_RE = /^\s*(?:stop|pause|wait|hold on|cancel)[\s.!]*$/i;
 // A question does not end the turn: "All done, want me to push?" would then skip every check.

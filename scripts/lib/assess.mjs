@@ -44,7 +44,7 @@ export class LedgerParseError extends Error {}
 // PostToolUse hook right after any tool that can write files, so the stamp is the tool call
 // that made the change; and by every assess, where a change with no cause is dated now.
 // Returns true when the ledger changed and needs saving.
-export function stampSourceChange(ledger, hash, events, tree = null) {
+function stampSourceChange(ledger, hash, events, tree = null) {
   if (ledger.lastSourceHash === hash) return false;
   const first = ledger.lastSourceHash === undefined; // the opening stamp is not an edit
   const prev = ledger.lastSourceChangeSeq ?? 0;

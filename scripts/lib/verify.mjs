@@ -415,7 +415,7 @@ const ANSI = /\x1b\[[0-9;]*m/g;
 const ZERO_LINES = [/No tests found, exiting with code 0/, /No test files found, exiting with code 0/, /^\s*(?:Test Files|Tests)\s+no tests\s*$/m, /\bno tests ran\b/, /\[no test files\]/, /\[no tests to run\]/];
 const TOTALS = [/^\s*Tests:\s+.*?(\d+) total\s*$/gm, /^\s*Tests\s+.*\((\d+)\)\s*$/gm, /^(?:ℹ|#) tests (\d+)\s*$/gm, /^collected (\d+) items?/gm, /^running (\d+) tests?\s*$/gm];
 const SOME_RAN = /\b[1-9]\d* (?:passed|passing|tests?\b)|^ok\s+\S+\s+(?:\(cached\)|[\d.]+s)\s*$/m;
-export function ranNoTests(output) {
+function ranNoTests(output) {
   if (typeof output !== "string") return false;
   const text = output.replace(ANSI, "");
   const totals = TOTALS.flatMap((pattern) => [...text.matchAll(pattern)].map((m) => Number(m[1])));
@@ -454,7 +454,7 @@ function refuseSourceReport(entries, config, root) {
   }
 }
 
-export async function runVerify(ctx, { stepKey = "verify", final = false, force = false } = {}) {
+async function runVerify(ctx, { stepKey = "verify", final = false, force = false } = {}) {
   const current = currentLedger(ctx.stateDir, ctx.session);
   if (!current || isDone(current.ledger)) {
     throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
