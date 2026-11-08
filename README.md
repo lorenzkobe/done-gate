@@ -161,6 +161,7 @@ attempt to finish, and a plain question gets one line saying how to pause.
 | R15 | a helper's file lists more findings than the ledger recorded, a briefed skeptic, reviewer or arbiter stopped before finishing its file, or an Act-on item outside the reviewers' rounds is still open (a skeptic item added after its step closed, one typed by hand) |
 | R17 | a skeptic, reviewer, reviewer-2, worker or arbiter that wrote its file or edited source made no code or no memory lookup since the run opened (QA: no memory lookup), less any kind the lead declared missing; waivable with `gate waive lookups` |
 | R18 | verify ran no test command covering a closed case's test file: lint and build never count, a test command that names paths covers only those (a `cd` is followed, `--ignore` and `--deselect file::name` take a file out); waivable with `gate waive coverage` |
+| R19 | in active mode (`guards.planDiff` in `models.json`, pinned per run; the default is shadow, which only records and reports), code outside the plan changed: `gate plan add <files> "<why>"` or revert it; it has no waiver |
 
 Waivers are the only way past a keyed step: the user OKs it, Claude records the reason and
 their words with `gate waive <key> "…" --user-ok "<their words>"`, and the report lists every

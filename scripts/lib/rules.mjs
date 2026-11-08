@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { nextSeq } from "./events.mjs";
-import { blank, delegatedTier, effectiveTier, policyFor, requires } from "./size.mjs";
+import { blank, delegatedTier, effectiveTier, outsidePlan, policyFor, requires, tierOf, tiered } from "./size.mjs";
 import { baseCopy, changedUnits, fileDiff, gitTracked, hasReindent, indentMatters, sliceEnd } from "./tree.mjs";
 import { scanDiff } from "./slop.mjs";
 import { coverageGaps } from "./verify.mjs";
@@ -1029,6 +1029,12 @@ export function askedNotSaid(text, words) {
 
 export const newRules = (ledger) => (ledger?.rules ?? 0) >= 1;
 
+// The code this task changed that its plan does not name, on a run whose plan binds.
+export function planDrift({ ledger, config, changed }) {
+  if (!newRules(ledger) || !tiered(ledger)) return [];
+  return outsidePlan(tierOf(ledger).predictedFiles, changed ?? [], config);
+}
+
 // A test or doc file is no surface: nobody drives it or probes it, whatever a glob says. A run from
 // before the stamp keeps reading the globs alone.
 const surfaceOf = (ledger, config, changed, matches) => changed.filter((p) => matches(p) && (!newRules(ledger) || (!config.isTest(p) && !config.isDoc(p))));
@@ -1255,6 +1261,11 @@ export function evaluate(state) {
       unmet.push({ rule: "R4", text: `API files changed (${list(api)}) but no recorded call closes the driver step after the last edit. Call the endpoint, then \`gate step driver done "<what it returned>" --ran "<part of the command or url>"\`, or get the user's waiver (\`gate waive driver "<reason>" --user-ok "<their words>"\`).` });
     }
   }
+
+  // R19: in active mode the diff stays inside the plan. Its exit is gate plan add, not a waiver:
+  // the plan's list is what the reviewer and the user were shown
+  const drift = (state.policy ?? policyFor(ledger)).guards.planDiff === "active" ? planDrift(state) : [];
+  if (drift.length) unmet.push({ rule: "R19", text: `code outside the plan changed: ${list(drift)}. If the task needs it, \`gate plan add <files> "<why>"\`, and ask the user first when it changes behaviour they did not ask for; otherwise revert it. Past what one plan holds, close this run and open a new one for the rest.` });
 
   // R5: source changed → an independent reviewer looked after the last edit and every Act-on
   // item is closed. A tier that requires no reviewer (tiny) is exempt.

@@ -1,5 +1,5 @@
 import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
-import { optionalSteps, tiered } from "./size.mjs";
+import { optionalSteps, policyFor, tiered } from "./size.mjs";
 import { loadConfig } from "./config.mjs";
 import { readEvents } from "./events.mjs";
 import { clickStale, driverCommand, lastEditSeq, newRules } from "./rules.mjs";
@@ -70,6 +70,7 @@ export function printNext(ctx, { full = false } = {}) {
       ? lastEditSeq({ events: ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq) }, loadConfig(ctx.root, ledger.repos), ledger)
       : 0;
     const { text, step } = hintOf(ledger, after, ledger ? loadConfig(ctx.root, ledger.repos) : null);
+    if (ledger && !isDone(ledger) && ledger.planDrift?.length && policyFor(ledger).guards.planDiff === "active") ctx.out(`warning: code outside the plan: ${ledger.planDrift.join(", ")}. \`gate plan add <files> "<why>"\` or revert it; the run cannot close until then`);
     if (!text) return;
     const key = step ? step.key ?? String(step.n) : null;
     const shown = ledger.hinted?.[ctx.session] ?? [];

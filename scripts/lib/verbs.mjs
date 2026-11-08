@@ -130,7 +130,7 @@ function holdForCheck(ledger) {
 function refuseNotFiles(ctx, ledger, given, named) {
   if (!newRules(ledger)) return;
   if (!named.length) throw new UsageError(`--files "${given}" names no file; leave --files out to keep the plan's list`);
-  const loose = named.find((f) => /\/$|[*?[\]{}]/.test(f) || (existsSync(path.resolve(ctx.root, f)) && statSync(path.resolve(ctx.root, f)).isDirectory()));
+  const loose = named.find((f) => /\/$|[*?]/.test(f) || (existsSync(path.resolve(ctx.root, f)) && statSync(path.resolve(ctx.root, f)).isDirectory()));
   if (loose) throw new UsageError(`"${loose}" is a folder or a pattern: a plan names each file it changes (a new file is fine)`);
 }
 
@@ -363,6 +363,7 @@ export const verbs = {
     withLedger(ctx, (l) => {
       predicted = applyPrediction(l, policyFor(l), loadConfig(ctx.root, l.repos), [...tierOf(l).predictedFiles, ...fresh], null);
       l.planAdds = [...(l.planAdds ?? []), { files: fresh, why, seq: nextSeq() }];
+      if (l.planDrift) l.planDrift = l.planDrift.filter((p) => !inPlan(fresh, p));
       holdForCheck(l);
     });
     ctx.out(`added to the plan: ${fresh.join(", ")} · tier predicted ${predicted.tier} (${predicted.files} file${predicted.files === 1 ? "" : "s"})`);

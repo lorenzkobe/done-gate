@@ -77,6 +77,9 @@ function readFields(ledger, dir) {
     size,
     lines: tier.measured?.lines,
     named: tier.predictedFiles,
+    // a run that never drifted keeps no record: whether the check ran at all is in its pinned policy
+    driftSeen: ["shadow", "active"].includes(ledger.policy?.guards?.planDiff) && (ledger.rules ?? 0) >= 1 ? list(ledger.planDriftSeen) : null,
+    added: list(ledger.planAdds).flatMap((a) => list(a?.files)),
     hadWorkers: size === "large" && readdirSync(dir).some((f) => WORKER_FILE.test(f)),
     repos: list(ledger.repos),
     changedAtClose: ledger.changedAtClose,
@@ -271,6 +274,13 @@ function planLines(closed, configOf) {
   if (noList) out.push(`  no list: ${ofRuns(noList, scope.length)}`);
   if (noChanged) out.push(`  no changed list: ${ofRuns(noChanged, scope.length)}`);
   if (noConfig) out.push(`  no usable gate.json: ${ofRuns(noConfig, scope.length)}`);
+  // every file the shadow diff check flagged, whatever became of it: the flip to active is judged on these
+  const kept = scope.filter((l) => l.driftSeen);
+  if (kept.length) {
+    const flagged = kept.flatMap((l) => l.driftSeen);
+    const added = kept.reduce((n, l) => n + l.driftSeen.filter((p) => l.added.includes(p)).length, 0);
+    out.push(`plan drift: ${ofRuns(kept.filter((l) => l.driftSeen.length).length, kept.length)}, ${flagged.length} files flagged, ${added} later added to the plan`);
+  }
   return out;
 }
 

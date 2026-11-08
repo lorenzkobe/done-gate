@@ -276,3 +276,10 @@ test("C10 idempotent: a repeated --files entry is the same set, one add of two s
   assert.deepEqual(ledgerOf(repo).planAdds[0].files, IGNORE_CASE ? ["src/c.ts"] : ["src/c.ts", "SRC/C.ts"]);
   assert.match(refused(repo, "plan", "add", ",", "why"), /names no file/);
 });
+
+test("C13 boundary: a bracketed route file is a file for --files and gate plan add; * and ? stay patterns", () => {
+  const repo = planned("pb-c13-route");
+  cli(repo, "note", "plan", "p", "--files", "src/a.ts,src/app/[id]/page.tsx");
+  cli(repo, "plan", "add", "src/app/[slug]/{x}.tsx", "a second route");
+  assert.match(refused(repo, "plan", "add", "src/?.ts", "a pattern"), /pattern/);
+});

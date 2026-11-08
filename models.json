@@ -41,6 +41,9 @@
     "splitPast": {
       "files": 40,
       "lines": 3000
+    },
+    "guards": {
+      "planDiff": "shadow"
     }
   }
 }

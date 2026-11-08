@@ -154,3 +154,16 @@ test("C5 happy: the old copy reads a run with a plan addition and lists the same
   assert.equal(ledgerOf(repo).planAdds.length, 1, "premise: the addition is recorded");
   assert.deepEqual(ruleIds(run(old, repo, ["check"]).stdout), ruleIds(run(gate, repo, ["check"]).stdout));
 });
+
+test("C6 happy: the old copy reads a run with a recorded plan drift and a pinned guards policy", { skip }, () => {
+  const old = oldGate();
+  const repo = committed("ov-c6");
+  opened(gate, repo, "ov-c6");
+  planAndEdit(gate, repo);
+  edit(gate, repo, "src/app/page.tsx", "null", "1");
+  run(gate, repo, ["check"]);
+  const l = ledgerOf(repo);
+  assert.equal(l.policy.guards.planDiff, "shadow", "premise: the mode is pinned");
+  assert.deepEqual(l.planDrift, ["src/app/page.tsx"], "premise: the drift is recorded");
+  assert.deepEqual(ruleIds(run(old, repo, ["check"]).stdout), ruleIds(run(gate, repo, ["check"]).stdout));
+});

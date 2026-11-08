@@ -4,7 +4,7 @@ import { loadConfig } from "./config.mjs";
 import { appendEvents, readEvents } from "./events.mjs";
 import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
 import { delegatedTier, leadDelegates, measure, policyFor, reconcileTier, tiered } from "./size.mjs";
-import { editedLast, implementationHash, lapseWaivers, reopenWorkedOut, writersOf } from "./rules.mjs";
+import { editedLast, implementationHash, lapseWaivers, planDrift, reopenWorkedOut, writersOf } from "./rules.mjs";
 import { nextSeq } from "./events.mjs";
 import { evaluate } from "./rules.mjs";
 import { ensureSession, loadSession, saveSession } from "./session-state.mjs";
@@ -276,6 +276,20 @@ export function otherSessionsEvents(stateDir, own, since) {
     .map((s) => readEvents(stateDir, s));
 }
 
+// The code outside the plan, kept when the set changes, with one event for it; every file ever
+// flagged stays in planDriftSeen, which gate stats reads for the shadow numbers.
+function recordDrift(ctx, ledger, policy, { config, changed }) {
+  const mode = policy.guards.planDiff;
+  if (mode === "off") return false;
+  const drift = planDrift({ ledger, config, changed });
+  const before = ledger.planDrift;
+  if ((before === undefined && !drift.length) || JSON.stringify(before ?? []) === JSON.stringify(drift)) return false;
+  ledger.planDrift = drift;
+  ledger.planDriftSeen = [...new Set([...(ledger.planDriftSeen ?? []), ...drift])].sort();
+  appendEvents(ctx.stateDir, ctx.session, [{ seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, agent: null, agentType: null, kind: "plan-drift", files: drift, mode }]);
+  return true;
+}
+
 export function buildState(ctx, { lastMessage = "" } = {}) {
   const session = ensureSession(ctx.stateDir, ctx.root, ctx.session);
   let current = null;
@@ -327,6 +341,7 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
       current.ledger.tier = { ...current.ledger.tier, measured };
       if (markDelegated(current.ledger, policy)) flipped = true;
       tier = current.ledger.tier;
+      if (recordDrift(ctx, current.ledger, policy, { config, changed: diff.changed })) flipped = true;
     }
     if (flipped) saveLedger(current.dir, current.ledger);
   }

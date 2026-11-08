@@ -31,7 +31,10 @@ export const DEFAULT_POLICY = Object.freeze({
   // (Oct 2026), among them the two longest (10.9 h, 8.6 h) and the 111-file one that could not
   // afford its final review
   splitPast: { files: 40, lines: 3000 },
+  // the diff checked against the plan: off, shadow (recorded and reported) or active (R19)
+  guards: { planDiff: "shadow" },
 });
+const GUARD_MODES = new Set(["off", "shadow", "active"]);
 
 // A requires entry names a role. An older policy wrote "reviewer:opus" for the second review
 // round; that is the reviewer-2 role now. Any other "role:model" keeps its role.
@@ -61,6 +64,7 @@ function merge(raw) {
     delegatesAt: typeof p.delegatesAt === "string" && p.delegatesAt ? p.delegatesAt : DEFAULT_POLICY.delegatesAt,
     reviewMaxLines: Math.max(1, Number.isFinite(p.reviewMaxLines) ? p.reviewMaxLines : DEFAULT_POLICY.reviewMaxLines),
     splitPast: Object.fromEntries(["files", "lines"].map((k) => [k, Number.isFinite(p.splitPast?.[k]) && p.splitPast[k] > 0 ? p.splitPast[k] : DEFAULT_POLICY.splitPast[k]])),
+    guards: { planDiff: GUARD_MODES.has(p.guards?.planDiff) ? p.guards.planDiff : DEFAULT_POLICY.guards.planDiff },
   };
   // hashed like the repo config, so a mid-task edit to models.json is caught (R13)
   return { ...resolved, hash: createHash("sha1").update(JSON.stringify(resolved)).digest("hex") };
@@ -205,7 +209,7 @@ export const inPlan = (named, p) => named.some((n) => fold(n) === fold(p));
 // The fence and gate stats both read it, so they agree.
 export function outsidePlan(named, changed, config) {
   const planned = new Set(named.map(fold));
-  return changed.filter((p) => config.isSource(p) && !planFree(config, p) && !planned.has(fold(p)));
+  return changed.filter((p) => config.isSource(p) && !planFree(config, p) && !config.isDriverFile(p) && !planned.has(fold(p)));
 }
 
 const CATEGORY_PRED = { ui: "isUi", schema: "isSchema", highRisk: "isHighRisk" };
