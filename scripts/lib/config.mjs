@@ -184,6 +184,7 @@ export function loadConfig(root, repos = []) {
     highRisk: arr(r.highRisk, DEFAULTS.highRisk),
     checks: arr(r.checks, DEFAULTS.checks),
     slop: r.slop !== false,
+    strength: r.strength !== false,
     driver: typeof r.driver === "string" ? r.driver : DEFAULTS.driver,
     helperNote: typeof r.helperNote === "string" && r.helperNote.trim() ? r.helperNote.trim() : null,
     testFiles: typeof r.testFiles === "string" && r.testFiles.includes("{files}") ? r.testFiles : null,

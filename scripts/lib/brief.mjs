@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { buildState } from "./assess.mjs";
@@ -12,7 +13,8 @@ import { LOOKUP_EXAMPLE, newRules, waitingDisputes, fixCheckDone, capUnitsOf, ne
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { nextSeq } from "./events.mjs";
-import { caseTestFile, runsTests, verifyEntries } from "./verify.mjs";
+import { caseTestFile, relatedTests, runsTests, verifyEntries } from "./verify.mjs";
+import { capRun, pickBreaks, runBreaks } from "./strength.mjs";
 
 // A packet is everything a helper needs, generated from gate state and the working tree.
 // The model authors none of it; the helper reads it instead of the ledger and the diff.
@@ -263,7 +265,7 @@ function diffOrFiles(state, heading = "Diff", files = state.changed ?? [], range
 
 // n is the number of the role's own file (skeptic-<n>.md, review-<n>.md, worker-<n>.md);
 // continueFrom is the text an earlier helper left in that file before it stopped.
-export function renderPacket(state, role, { round, n, piece = null, owned = null, continueFrom = null, fixCheck = false, disputes = [] }) {
+export function renderPacket(state, role, { round, n, piece = null, owned = null, continueFrom = null, fixCheck = false, disputes = [], strength = [] }) {
   const out = header(state, role, round);
   out.push("## You may write", "", mayWrite(state, role, n), "");
   if (continueFrom !== null) {
@@ -337,6 +339,16 @@ export function renderPacket(state, role, { round, n, piece = null, owned = null
     }
     out.push("## Verify", "", ...verifyLines(state.verify, { tails: false, unfinished: unfinishedVerify(state) }), "", ...freshness(state, fixCheck), "");
     out.push("## Test command", "", ...(fixCheck ? [`This is a fix-check: ${OWNS_RUN} Run only named test files with the runner below, never the whole command.`, ""] : []), ...testCommands(state), "");
+    if (strength.length) {
+      const missed = strength.filter((b) => !b.noticed);
+      out.push("## Breaks no test noticed", "");
+      if (!missed.length) out.push(`All ${strength.length} lines broken on purpose in a copy made a related test fail.`, "");
+      else {
+        out.push(`These lines were broken on purpose in a copy of the tree, and no related test failed (${strength.length - missed.length} of ${strength.length} were noticed). Each may mean a weak test: judge it, and put it under Act on only if it matters.`, "");
+        const code = (t) => (t.includes("`") ? `\`\` ${t.trim()} \`\`` : `\`${t.trim()}\``);
+        out.push(...missed.map((b) => `- ${b.file}:${b.pos} — was ${code(b.was)} — became ${code(b.now)}`), "");
+      }
+    }
     out.push("", "## Write your findings to", "", path.join(state.dir, `${reviewPrefix(role)}-${n}.md`), "");
     if (role === "reviewer-2") {
       // the newest finished review-<n>.md; a draft or partial file (the reviewer still running,
@@ -364,8 +376,54 @@ function overlaps(a, b) {
   return x.path === y.path && (!x.from || !y.from || (x.from <= y.to && y.from <= x.to));
 }
 
+const STRENGTH_MAX = 9;
+
+// The strength check for a reviewer's piece. strength.json keeps the code state (the piece's
+// source and its related tests), each break's result for that state, the run's count of breaks
+// tried and the last skip's reason; a skip and a break left untried are never kept as results.
+async function strengthFor(state, piece) {
+  const file = path.join(state.dir, "strength.json");
+  let saved = { results: {}, tried: 0, ms: 0 };
+  try {
+    if (existsSync(file)) saved = { ...saved, ...JSON.parse(readFileSync(file, "utf8")) };
+  } catch {
+    // a torn file starts over
+  }
+  const tests = relatedTests(state.root, state.config, state.ledger, state.now, state.changed ?? []);
+  const files = [...new Set(piece.files.map(pathOf))];
+  const key = createHash("sha1").update(JSON.stringify([...files, ...tests].sort().map((f) => [f, state.now.files[f]?.h ?? null]))).digest("hex").slice(0, 16);
+  if (saved.state !== key) Object.assign(saved, { state: key, results: {} });
+  const breaks = [];
+  for (const entry of piece.files) {
+    const e = parseEntry(entry);
+    const abs = path.join(state.root, e.path);
+    if (e.path.startsWith("../") || !existsSync(abs)) continue;
+    // the line's text from the working tree, which is what the copy is made of
+    const text = readFileSync(abs, "utf8").split("\n");
+    const lines = changedUnitsOf(state, e.path).filter((u) => !u.minus && (!e.from || (u.pos >= e.from && u.pos <= e.to))).map((u) => ({ pos: u.pos, text: text[u.pos - 1] ?? "" }));
+    breaks.push(...pickBreaks(e.path, lines, state.config));
+  }
+  const id = (b) => `${b.file}:${b.pos}:${b.now}`;
+  const fresh = breaks.filter((b) => !(id(b) in saved.results));
+  const toRun = capRun(fresh, Math.max(0, STRENGTH_MAX - saved.tried));
+  if (fresh.length && !toRun.length) saved.skipped = `this run's ${STRENGTH_MAX} breaks are used`;
+  if (toRun.length) {
+    const r = await runBreaks({ root: state.root, stateDir: state.stateDir, config: state.config, tests, breaks: toRun });
+    if (r.skipped) saved.skipped = r.skipped;
+    else {
+      delete saved.skipped;
+      for (const b of r.noticed) saved.results[id(b)] = { ...b, noticed: true };
+      for (const b of r.survivors) saved.results[id(b)] = { ...b, noticed: false };
+      saved.tried += r.tried;
+      saved.ms += r.ms;
+    }
+  }
+  if (breaks.length) writeFileSync(file, JSON.stringify(saved, null, 2));
+  return breaks.map(id).filter((k) => k in saved.results).map((k) => saved.results[k]);
+}
+
 export const verbs = {
-  brief(ctx) {
+  async brief(ctx) {
     const [role] = positional(ctx.args);
     if (!ROLES.includes(role)) throw new UsageError(`usage: gate brief <${ROLES.join("|")}> [--files a,b] [--round n, qa only]`);
     const state = buildState(ctx, {});
@@ -579,7 +637,9 @@ export const verbs = {
     const left = own && role !== "worker" && existsSync(full) ? readFileSync(full, "utf8") : null;
     const continueFrom = left !== null && isPartial(left) ? left : null;
     const file = path.join(state.dir, `brief-${role}-${round}.md`);
-    writeFileSync(file, renderPacket(state, role, { round, n, piece, owned, continueFrom, fixCheck: fixCheck && !stillOpen, disputes: toAnswer }));
+    // after the ledger save: the check may take its 90s, and writes only strength.json
+    const strength = reviewing && piece && state.config.strength && !(fixCheck && !stillOpen) ? await strengthFor(state, piece) : [];
+    writeFileSync(file, renderPacket(state, role, { round, n, piece, owned, continueFrom, fixCheck: fixCheck && !stillOpen, disputes: toAnswer, strength }));
     ctx.out(`packet: ${file}`);
     const yours = !own || role === "worker" ? "" : continueFrom !== null
       ? ` Your file is ${full} and it already exists: keep its finished sections, never reset it to the all-unverified draft, and rewrite it after each finding.`

@@ -290,3 +290,15 @@ test("6.1 C4 edge: a review file reading - unverified in each new section is a d
   const cut = done.replace("## Lessons\n- none", "## Lessons\n- unverified");
   assert.equal(isPartial(cut), true, "a section still reading - unverified is a cut-off file");
 });
+
+test("6.11 both reviewer files say what to look for beyond the tests and how to judge a break no test noticed, by the packet's section name", () => {
+  for (const role of ["reviewer", "reviewer-2"]) {
+    const md = readFileSync(path.join(pluginRoot, "agents", `${role}.md`), "utf8");
+    assert.match(md, /what the passing tests (?:already )?prove/i, role);
+    assert.match(md, /cases nobody thought of/i, role);
+    assert.match(md, /wrong assumptions/i, role);
+    assert.match(md, /data safety/i, role);
+    assert.match(md, /## Breaks no test noticed/, role);
+    assert.match(md, /weak test/i, role);
+  }
+});

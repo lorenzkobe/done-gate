@@ -135,6 +135,21 @@ const weakenedIn = (state) => (state.ledger.status === "open" ? weakened(state) 
 const resultText = (c) => (c.timedOut ? timeoutText(c) : c.noTests ? `no tests ran: ${c.noTestsWhy}` : `exit ${c.exit}`);
 const STAGE_ROLES = { skeptic: ["skeptic"], review: ["reviewer", "reviewer-2"] };
 
+// What the strength check found for the code as it last ran, or why it skipped.
+function strengthLine(dir) {
+  let saved;
+  try {
+    saved = dir && JSON.parse(readFileSync(path.join(dir, "strength.json"), "utf8"));
+  } catch {
+    return null;
+  }
+  if (!saved) return null;
+  const results = Object.values(saved.results ?? {});
+  if (!results.length) return saved.skipped ? `strength check skipped: ${saved.skipped}` : null;
+  const missed = results.filter((b) => !b.noticed);
+  return `strength check: ${results.length} tried, ${results.length - missed.length} noticed${missed.length ? `; no test noticed ${missed.map((b) => `${b.file}:${b.pos}`).join(", ")}` : ""}`;
+}
+
 const trialed = (state) => (state.ledger.status === "open" ? reviewTrialed(state) : Boolean(state.ledger.uiTrial));
 
 // One outcome per step: ran, skipped: <why>, failed: <why> or not run.
@@ -174,6 +189,8 @@ export function attentionLines(state, unmet) {
   for (const h of ledger.huddles) for (const c of h.cantVerify ?? []) out.push(`- can't verify (${h.id} ${h.role}): ${c}`);
   for (const c of ledger.unchanged ?? []) out.push(`- unchanged after review: ${c.entries.join(", ")} — ${c.why}`);
   if (trialed(state)) out.push(`- review skipped under the UI trial: ${ledger.steps.find((s) => s.key === "review")?.note}`);
+  const strength = strengthLine(state.dir);
+  if (strength) out.push(`- ${strength}`);
   const after = ledger.status === "open" ? afterReview(state) : ledger.afterReview ?? [];
   if (after.length) out.push(`- changed after its last review, not reviewed: ${after.join(", ")}`);
   if (denies) out.push(`- ${denies} denied write(s) to gate evidence files (see events)`);

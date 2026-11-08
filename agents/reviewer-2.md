@@ -15,6 +15,8 @@ Your inputs are in the packet named in your prompt (a `brief-<role>-<n>.md` file
 
 One bullet per finding, with any detail indented beneath it and its `file:line` on the top bullet, the only line recorded; a follow-on line at the top level is recorded as another finding.
 
+Leave what the passing tests already prove: they ran, and the gate holds their result. Look for what they cannot show: cases nobody thought of, wrong assumptions, security and data safety, and what no test sees (comments, docs, slop). When the packet has `## Breaks no test noticed`, each line there was broken on purpose in a copy and no related test failed: judge whether that is a weak test, and put it under Act on only if it matters.
+
 If the worker disputes a finding, your next file has a `## Disputes` section: one line per disputed id, `- H<k>.<i> — withdrawn: <reason>` or `- H<k>.<i> — upheld: <reason and a pointer>`. Do not restate the original finding. New findings still go under `## Act on`.
 
 You have 90 turns. By turn 88, stop investigating; the file you wrote stands. Confirm it exists with one read, then reply with its Act-on list only.

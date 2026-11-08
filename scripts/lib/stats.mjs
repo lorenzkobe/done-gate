@@ -59,6 +59,16 @@ function parseArgs(args) {
   return { days: days ? Number(days) : 30, version, save };
 }
 
+// The strength check's total time in a run, or null when it never ran there.
+function strengthMsOf(dir) {
+  try {
+    const ms = JSON.parse(readFileSync(path.join(dir, "strength.json"), "utf8")).ms;
+    return Number.isFinite(ms) && ms > 0 ? ms : null;
+  } catch {
+    return null;
+  }
+}
+
 // Only what stats reads: one repo's ledgers came to 189 MB, mostly baselines and review units.
 function readFields(ledger, dir) {
   const tier = tierOf(ledger);
@@ -81,6 +91,7 @@ function readFields(ledger, dir) {
     driftSeen: ["shadow", "active"].includes(ledger.policy?.guards?.planDiff) && (ledger.rules ?? 0) >= 1 ? list(ledger.planDriftSeen) : null,
     added: list(ledger.planAdds).flatMap((a) => list(a?.files)),
     hadWorkers: size === "large" && readdirSync(dir).some((f) => WORKER_FILE.test(f)),
+    strengthMs: strengthMsOf(dir),
     repos: list(ledger.repos),
     changedAtClose: ledger.changedAtClose,
     uiTrial: ledger.uiTrial === true,
@@ -305,6 +316,13 @@ function largeLines(closed) {
     `  with workers: ${largeGroupText(large.filter((l) => l.hadWorkers), large.length)}`,
     `  without workers: ${largeGroupText(large.filter((l) => !l.hadWorkers), large.length)}`,
   ];
+}
+
+// How long the strength check took, over the runs that ran it.
+function strengthLines(closed) {
+  const onTime = closed.filter((l) => !l.closedLate);
+  const ran = onTime.map((l) => l.strengthMs).filter((ms) => ms !== null && ms !== undefined);
+  return [`strength check: ${ran.length ? `${ofRuns(ran.length, onTime.length)}, median ${(median(ran) / 1000).toFixed(1)} s` : MISSING}`];
 }
 
 // Runs closed under the UI trial, and how many a bugfix opened in the month after touched: the
@@ -805,7 +823,7 @@ async function report(ctx, { days, version, forFile = false }) {
   const recorded = closed.filter((l) => l.rules).flatMap((l) => l.waivers);
   const countOf = (flag) => (closed.some((l) => l.rules) ? String(recorded.filter((w) => w[flag]).length) : "not recorded");
   out.push(`could-not-run waivers: ${countOf("could")}`, `lapsed waivers: ${countOf("lapsed")}`);
-  out.push(...reRunLines(closed, ctx.stateDir), ...planLines(closed, configOf), ...largeLines(closed), ...afterCloseLines(closed, read?.ledgers ?? [], configOf, forFile), ...trialLines(closed, read?.ledgers ?? []));
+  out.push(...reRunLines(closed, ctx.stateDir), ...planLines(closed, configOf), ...largeLines(closed), ...afterCloseLines(closed, read?.ledgers ?? [], configOf, forFile), ...trialLines(closed, read?.ledgers ?? []), ...strengthLines(closed));
   const recordsOf = sessionReader(ctx.stateDir);
   out.push(...eventLines(recordsOf, closed, read?.ledgers ?? [], { version, cutoff, forFile }), ...rateLines(ctx.stateDir, recordsOf), ...(await tokenLines(closed, forFile)));
   return out;

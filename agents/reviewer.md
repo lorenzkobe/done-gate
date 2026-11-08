@@ -42,6 +42,8 @@ Write the file in this shape:
 
 One bullet per finding, with any detail indented beneath it and its `file:line` on the top bullet, the only line recorded; a follow-on line at the top level is recorded as another finding. "Act on" is for things that would block a real PR. A Can't verify bullet names what you could not check and why, never the bare word "unverified", which marks a section still unfinished. Lessons are for the repo, not this diff. Both read `- none` when empty. Do not number findings; the gate assigns the ids when the file is recorded. Cite real lines. Never invent a caller.
 
+Leave what the passing tests already prove: they ran, and the gate holds their result. Look for what they cannot show: cases nobody thought of, wrong assumptions, security and data safety, and what no test sees (comments, docs, slop). When the packet has `## Breaks no test noticed`, each line there was broken on purpose in a copy and no related test failed: judge whether that is a weak test, and put it under Act on only if it matters.
+
 If the worker disputes a finding, your next file has a `## Disputes` section: one line per disputed id, `- H<k>.<i> — withdrawn: <reason>` or `- H<k>.<i> — upheld: <reason and a pointer>`. Do not restate the original finding. New findings still go under `## Act on`.
 
 You have 60 turns. By turn 58, stop investigating; the file you wrote stands. Confirm it exists with one read, then reply with its Act-on list only.

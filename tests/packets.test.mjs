@@ -1289,3 +1289,102 @@ test("C5 reported-surface: a directory in the plan's --files is listed as a dire
     assert.match(packet, /^(?:- |\d+\. )src\/a\.ts \(/m, `${role} packet keeps the plain file`);
   }
 });
+
+// 6.11: the strength check's survivors reach the reviewer packet and the report
+{
+const LOG = (name) => path.join(path.dirname(new URL(import.meta.url).pathname), ".tmp", `${name}.runs`);
+function strengthRepo(name, config = {}) {
+  const log = LOG(name);
+  rmSync(log, { force: true });
+  const repo = makeRepo(name, {
+    "src/calc.mjs": "export const v = 0;\n",
+    "tests/calc.test.mjs": [
+      "import { test } from \"node:test\";",
+      "import assert from \"node:assert/strict\";",
+      "import { appendFileSync } from \"node:fs\";",
+      "import { atLeast, both } from \"../src/calc.mjs\";",
+      `appendFileSync(${JSON.stringify(log)}, "run\\n");`,
+      "test(\"atLeast\", () => { assert.equal(atLeast(2, 1), true); assert.equal(atLeast(1, 2), false); });",
+      "test(\"both\", () => { assert.equal(both(true, true), true); });",
+      "",
+    ].join("\n"),
+    ".claude/gate.json": JSON.stringify({ source: ["src/**", "tests/**"], tests: ["tests/**"], testFiles: "node --test {files}", ...config }),
+  });
+  execFileSync("git", ["add", "-A"], { cwd: repo });
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  const g = (...args) => spawnSync(process.execPath, [gate, ...args], { encoding: "utf8", env });
+  g("open", name, "feature");
+  lookedUp(repo);
+  g("note", "task", "Add the calc helpers. [inferred]");
+  g("note", "context", "Traced: src/calc.mjs:1 · Related: tests/calc.test.mjs · Research: none needed: a fixture");
+  g("note", "plan", "Two helpers.", "--files", "src/calc.mjs");
+  g("case", "add", "atLeast compares", "--kind", "happy");
+  write(repo, "src/calc.mjs", "export const atLeast = (n, m) => n >= m;\nexport const both = (a, b) => a && b;\n");
+  const dir = () => path.join(repo, ".claude", "gate", "runs", loadSession(path.join(repo, ".claude", "gate"), "S1").current);
+  const packetOf = (role) => {
+    const r = g("brief", role);
+    assert.doesNotMatch(r.stderr, /^done-gate: /m, r.stderr);
+    return readFileSync(/packet: (\S+)/.exec(r.stdout)[1], "utf8");
+  };
+  const runs = () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").length : 0);
+  return { repo, g, dir, packetOf, runs };
+}
+const sectionOf = (text, name) => {
+  const at = text.indexOf(`\n## ${name}\n`);
+  if (at < 0) return null;
+  const rest = text.slice(at + name.length + 5);
+  const end = rest.search(/\n## /);
+  return end < 0 ? rest : rest.slice(0, end);
+};
+
+test("6.11 B1 B2 B3: a survivor shows in the reviewer packet, nothing blocks on it, and reviewer-2's brief on the same code runs nothing", () => {
+  const s = strengthRepo("pk-611-b1");
+  const packet = s.packetOf("reviewer");
+  const breaks = sectionOf(packet, "Breaks no test noticed");
+  assert.ok(breaks, packet.slice(0, 2000));
+  assert.match(breaks, /src\/calc\.mjs:2/, breaks);
+  assert.match(breaks, /a && b/, breaks);
+  assert.match(breaks, /a \|\| b/, breaks);
+  assert.doesNotMatch(breaks, /src\/calc\.mjs:1\b/, "the noticed break is not listed as a survivor");
+  assert.ok(existsSync(path.join(s.dir(), "strength.json")));
+  assert.doesNotMatch(s.g("check").stdout, /strength|no test noticed/i, "no rule reads the result");
+  const ran = s.runs();
+  const again = s.packetOf("reviewer-2");
+  assert.equal(s.runs(), ran, "the cached result is reused, nothing ran again");
+  assert.equal(sectionOf(again, "Breaks no test noticed"), breaks);
+});
+
+test("6.11 B6 edge: a stronger test with the source unchanged reruns the check and drops the survivor; a skip is never cached", () => {
+  const s = strengthRepo("pk-611-b6");
+  assert.match(sectionOf(s.packetOf("reviewer"), "Breaks no test noticed") ?? "", /src\/calc\.mjs:2/);
+  const file = path.join(s.repo, "tests", "calc.test.mjs");
+  write(s.repo, "tests/calc.test.mjs", readFileSync(file, "utf8").replace("assert.equal(both(true, true), true);", "assert.equal(both(true, true), true); assert.equal(both(true, false), false);"));
+  const ran = s.runs();
+  const again = sectionOf(s.packetOf("reviewer-2"), "Breaks no test noticed") ?? "";
+  assert.ok(s.runs() > ran, "the stronger test made it run again");
+  assert.doesNotMatch(again, /src\/calc\.mjs:2/, again);
+  const skip = strengthRepo("pk-611-b6-skip", { testFiles: null });
+  skip.packetOf("reviewer");
+  const saved = JSON.parse(readFileSync(path.join(skip.dir(), "strength.json"), "utf8"));
+  assert.deepEqual(saved.results ?? {}, {}, "a skip caches no result");
+  assert.match(saved.skipped ?? "", /testFiles/);
+});
+
+test("6.11 B4 refused: strength false in gate.json turns it off", () => {
+  const s = strengthRepo("pk-611-b4", { strength: false });
+  assert.equal(sectionOf(s.packetOf("reviewer"), "Breaks no test noticed"), null);
+  assert.equal(existsSync(path.join(s.dir(), "strength.json")), false);
+  assert.equal(s.runs(), 0);
+});
+
+test("6.11 B5 reported-surface: the report shows the outcome, and a skip's reason", () => {
+  const s = strengthRepo("pk-611-b5");
+  s.packetOf("reviewer");
+  assert.match(s.g("report").stdout, /strength check: 2 tried, 1 noticed; no test noticed src\/calc\.mjs:2/);
+  const none = strengthRepo("pk-611-b5-none", { testFiles: null });
+  none.packetOf("reviewer");
+  assert.match(none.g("report").stdout, /strength check skipped: no testFiles/);
+});
+}

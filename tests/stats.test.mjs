@@ -1566,3 +1566,13 @@ test("6.9 ui trial runs: counted apart, with how many a later bugfix touched", (
   const out = ok(repo);
   assert.match(line(out, "ui trial runs:") ?? "", /ui trial runs: 2 of 4 runs, a later bugfix touched 1/, out);
 });
+
+test("6.11 strength check time: the median over the runs that ran it", () => {
+  const repo = makeRepo("stats-611-strength");
+  for (const [name, ms] of [["2026-01-01-a", 2000], ["2026-01-02-b", 4000], ["2026-01-03-c", 9000]]) {
+    writeRun(repo, name, closedRun({ daysAgo: 2 }));
+    writeFileSync(path.join(runsOf(repo), name, "strength.json"), JSON.stringify({ state: "x", results: {}, tried: 1, ms }));
+  }
+  writeRun(repo, "2026-01-04-d", closedRun({ daysAgo: 2 }));
+  assert.match(line(ok(repo), "strength check:") ?? "", /strength check: 3 of 4 runs, median 4\.0 s/, ok(repo));
+});

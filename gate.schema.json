@@ -143,6 +143,10 @@
       },
       "description": "Named repo checks run at every Stop (R10)."
     },
+    "strength": {
+      "type": "boolean",
+      "description": "false turns off the strength check: gate brief reviewer breaks up to 3 added lines per file (9 per run) on a throwaway copy, runs the related tests, and lists the breaks no test noticed in the packet and the report. On by default; advice only, no rule reads it."
+    },
     "slop": {
       "type": "boolean",
       "description": "Scan the task's added lines for greppable slop (banner comments, step narration, empty labels, end markers, emoji, bare TODOs, @param echoes) at every Stop while a ledger is open; test files are not scanned (R10). Default: true. Change it between tasks; mid-task a false positive is waived with `gate waive slop`."
