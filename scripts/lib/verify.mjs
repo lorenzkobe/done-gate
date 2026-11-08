@@ -647,6 +647,12 @@ export const verbs = {
     const stepKey = stepIdx >= 0 ? ctx.args[stepIdx + 1] ?? null : "verify";
     const force = ctx.args.includes("--force");
     const { record, red, moved, driveEvent, driverCmd, dir } = await runVerify(ctx, { stepKey, force, final: force || ctx.args.includes("--final") });
+    // the steps a green run settles close now, so the hint below is current
+    try {
+      buildState(ctx, {});
+    } catch {
+      // an unreadable run is the next check's to report
+    }
     for (const c of record.commands) {
       if (c.skipped) {
         ctx.out(`– ${c.cmd}${verifyWhere(c)} — skipped: ${c.skipped}${c.oldFindings ? ` (${c.oldFindings} old finding${c.oldFindings === 1 ? "" : "s"} off this task's lines ignored)` : ""}`);

@@ -725,7 +725,7 @@ test("C5 edge: after the case table the hint names {context}/{repro}; the {imple
   cli(feature, "note", ["context", CONTEXT]);
   const afterQa = hintOf(cli(feature, "step", ["tests", "done", "wrote the tests, red first", "--evidence", "tests/a.test.ts"]).stdout);
   assert.equal(stepOf(ledgerOf(feature), "skeptic").state, "N/A", "premise: tier small auto-N/As {skeptic}");
-  assert.match(afterQa, /`gate step implement done/, `{implement} is the next blank step:\n${afterQa}`);
+  assert.match(afterQa, /^next: step \d+: implement/, `{implement} is the next blank step:\n${afterQa}`);
   assert.ok(!/reconcile/i.test(afterQa), `the {implement} hint must not mention reconcile:\n${afterQa}`);
 
   // a step key with no hint of its own falls back to the step's own text and number
@@ -888,7 +888,11 @@ function hint(repo, verb, args = [], opts = {}) {
 // The step key a hint points at: `gate step <key>` directly, or `gate brief <role>` where
 // the role is the step that spawning it closes.
 const ROLE_STEP = { skeptic: "skeptic", qa: "qa", reviewer: "review", "reviewer-2": "review" };
+// a step the gate closes itself is hinted by its own opening words, with no `gate step`
+const SELF_CLOSING = [[/^next: step \d+: write the tests/, "tests"], [/^next: step \d+: implement/, "implement"], [/^next: step \d+: drive the real surface/, "driver"], [/^next: step \d+: the loop/, "review"]];
 function hintedKey(h) {
+  const own = SELF_CLOSING.find(([re]) => re.test(h));
+  if (own) return own[1];
   const flagged = /--step ([a-z0-9-]+)/.exec(h); // e.g. `gate verify --step verify-before`
   if (flagged) return flagged[1];
   const step = /`gate step ([a-z0-9-]+)/.exec(h);
@@ -958,7 +962,7 @@ test("C2 edge: after the case table the hint names `gate brief skeptic` at tier 
   cli(small, "note", ["context", CONTEXT]); // the understand-first step
   const sml = hint(small, "case", ["add", "renders the badge", "--kind", "happy"]);
   assert.equal(stepOf(ledgerOf(small), "skeptic").state, "N/A", "premise: tier small auto-N/As {skeptic}");
-  assert.match(sml, /`gate step tests done/, sml);
+  assert.equal(hintedKey(sml), "tests", sml);
   assert.ok(!/skeptic/.test(sml), `a step that is already N/A must never be hinted:\n${sml}`);
 });
 
@@ -977,7 +981,7 @@ test("C3 happy: once {tests} is closed the hint moves to the next blank step; a 
     .slice(feature.indexOf("tests") + 1)
     .find((k) => stepOf(ledgerOf(repo), k).state === null);
   assert.equal(next, "implement", "premise: {implement} is the next blank step after {tests} at tier small");
-  assert.match(afterQa, new RegExp("`gate step " + next + "\\b"), afterQa);
+  assert.equal(hintedKey(afterQa), next, afterQa);
 
   // A bug fix's playbook opens with {repro}, so that is the first step the hint names.
   const bug = opened("next-c3-bugfix", { playbook: "bugfix", planFiles: "src/a.ts" });

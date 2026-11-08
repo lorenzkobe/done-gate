@@ -6,7 +6,7 @@ import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
 import { delegatedTier, leadDelegates, measure, policyFor, reconcileTier, tiered } from "./size.mjs";
 import { editedLast, implementationHash, lapseWaivers, planDrift, reopenWorkedOut, writersOf } from "./rules.mjs";
 import { nextSeq } from "./events.mjs";
-import { evaluate } from "./rules.mjs";
+import { evaluate, settleSteps } from "./rules.mjs";
 import { ensureSession, loadSession, saveSession } from "./session-state.mjs";
 import { diffSnapshots, gitChanged, gitBrought, gitDiffers, gitHead, gitNumstat, gitTracked, snapshot } from "./tree.mjs";
 import { repoPath } from "./paths.mjs";
@@ -356,7 +356,7 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
   }
   const ledgerMd = current && existsSync(path.join(current.dir, "ledger.md")) ? readFileSync(path.join(current.dir, "ledger.md"), "utf8") : "";
 
-  return {
+  const state = {
     root: ctx.root,
     stateDir: ctx.stateDir,
     repos,
@@ -379,6 +379,9 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
     reviews: current ? reviewFiles(current.dir) : [],
     lastMessage,
   };
+  // the steps the gate has the facts for close here, on the whole state; saved only when one did
+  if (current && settleSteps(state)) saveLedger(current.dir, current.ledger);
+  return state;
 }
 
 // One numbered line per rule, in the order rules first appear; a rule with several items

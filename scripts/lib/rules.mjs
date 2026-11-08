@@ -6,7 +6,7 @@ import { nextSeq } from "./events.mjs";
 import { blank, delegatedTier, effectiveTier, outsidePlan, policyFor, requires, tierOf, tiered } from "./size.mjs";
 import { baseCopy, changedUnits, fileDiff, gitTracked, hasReindent, indentMatters, sliceEnd } from "./tree.mjs";
 import { scanDiff } from "./slop.mjs";
-import { coverageGaps } from "./verify.mjs";
+import { coverageGaps, runsTests } from "./verify.mjs";
 import { repoPath, toPosixRel } from "./paths.mjs";
 
 const SLOP_SHOWN = 12;
@@ -1064,7 +1064,8 @@ export function workOutSteps(ledger, config, touched, hash) {
   if (!newRules(ledger) || ledger.repos?.length) return;
   for (const [key, surface] of Object.entries(STEP_SURFACE)) {
     const step = ledger.steps.find((s) => s.key === key);
-    if (!step || !(step.state === null || step.auto)) continue;
+    // a step the gate closed from a fact is not a worked-out mark
+    if (!step || step.auto === "fact" || !(step.state === null || step.auto)) continue;
     const clear = surfaceClear(key, ledger, config, touched);
     if (clear) Object.assign(step, { state: "N/A", note: `worked out: no ${surface.names} file changed`, evidence: null, auto: hash, seq: nextSeq() });
     else if (step.auto) blank(step);
@@ -1077,7 +1078,7 @@ export function reopenWorkedOut(ledger, config, changed, hash) {
   let moved = false;
   for (const key of Object.keys(STEP_SURFACE)) {
     const step = ledger.steps?.find((s) => s.key === key);
-    if (!step?.auto || (step.auto === hash && !stepSurfaceFiles(key, ledger, config, changed).length)) continue;
+    if (!step?.auto || step.auto === "fact" || (step.auto === hash && !stepSurfaceFiles(key, ledger, config, changed).length)) continue;
     blank(step);
     moved = true;
   }
@@ -1189,6 +1190,57 @@ export const openItem = (a) => `${a.id} (${a.text.length > 80 ? `${a.text.slice(
 const stillOpen = (r) => (r.openItems?.length ? `still open from earlier rounds: ${r.openItems.map(openItem).join(", ")}; ` : "");
 
 // Pure: state in, unmet rules out. Every item says what to do next.
+// On a run under the new rules the gate closes these steps from what it recorded. Blank steps
+// only, and a close is never taken back: R3, R4 and R5 judge the same facts after every edit, so
+// a closed step hides nothing. Schema stays by hand: the gate cannot tell which run was the probe.
+const GATE_TEST = /\bgate(?:\.mjs)?["']?\s+test\b/;
+export function settleSteps(state) {
+  const { ledger, config, changed = [], events = [], verify, now } = state;
+  if (!ledger || !newRules(ledger)) return false;
+  let moved = false;
+  const close = (key, note, evidence) => {
+    const step = ledger.steps?.find((s) => s.key === key);
+    if (!step || step.state !== null) return;
+    Object.assign(step, { state: "DONE", note: `closed by the gate: ${note}`, evidence, auto: "fact", seq: nextSeq() });
+    moved = true;
+  };
+  const opened = ledger.openedSeq ?? 0;
+  const isCode = (p) => config.isSource(p) && !config.isTest(p);
+  // the first code change: an edit, or one that came through the shell
+  const codeAt = Math.min(
+    events.find((e) => e.kind === "edit" && e.path && isCode(e.path) && e.seq > opened)?.seq ?? Infinity,
+    (ledger.unexplainedChanges ?? []).find((u) => u.seq > opened)?.seq ?? Infinity,
+  );
+
+  // tests first: a test run, red or green, after the tests were written and before the code
+  const tests = changed.filter((p) => config.isTest(p) && now?.files?.[p]);
+  if (tests.length) {
+    const wrote = events.find((e) => e.kind === "edit" && e.path && config.isTest(e.path) && e.seq > opened);
+    const since = wrote ? Date.parse(wrote.ts) : Math.min(...tests.map((p) => now.files[p].m ?? Infinity));
+    const after = (e) => (wrote ? e.seq > wrote.seq : Date.parse(e.ts) > since);
+    const run = events.find((e) => e.kind === "command" && !e.background && e.seq < codeAt && after(e) && (runsTests(e.cmd ?? "", config.testFiles) || GATE_TEST.test(e.cmd ?? "")));
+    if (run) close("tests", `${list(tests)} ran by \`${ranText(run).slice(0, 80)}\` exit ${run.exit ?? "unknown"}`, `events#${run.seq}`);
+    else if (codeAt === Infinity && verify && Date.parse(verify.finishedAt) > since && (verify.commands ?? []).some((c) => !c.skipped && runsTests(c.cmd, config.testFiles))) close("tests", `gate verify ran the tests after ${list(tests)}`, "verify.json");
+  }
+
+  if (changed.some(isCode) && verify && !verifyProblem(state, { final: false })) close("implement", "a green `gate verify` ran on this code", "verify.json");
+
+  const last = lastEditSeq(state, config, ledger);
+  // an API change closes on a recorded call (gate step driver done --ran)
+  if (uiFiles(ledger, config, changed).length && !apiFiles(ledger, config, changed).length) {
+    const drive = drivenAfter(state, last);
+    if (drive) close("driver", `driven after the last edit (${drive.tool ?? drive.kind})`, `events#${drive.seq}`);
+  }
+
+  const policy = state.policy ?? policyFor(ledger);
+  if (changed.some((p) => config.isSource(p)) && requires(policy, effectiveTier(policy, ledger, state.tier?.measured ?? null)).includes("reviewer") && !waived(ledger, "review")) {
+    const r = reviewed(state, "reviewer", last);
+    const round = (ledger.huddles ?? []).filter((h) => h.role === "reviewer" && h.file).at(-1);
+    if (round && r.stopped && r.hasFile && !r.openItems.length && !r.partOpen) close("review", "a clean reviewer round with every item closed", round.file);
+  }
+  return moved;
+}
+
 export function evaluate(state) {
   const { config, ledger, changed, now, verify } = state;
   const unmet = [];

@@ -167,3 +167,21 @@ test("C6 happy: the old copy reads a run with a recorded plan drift and a pinned
   assert.deepEqual(l.planDrift, ["src/app/page.tsx"], "premise: the drift is recorded");
   assert.deepEqual(ruleIds(run(old, repo, ["check"]).stdout), ruleIds(run(gate, repo, ["check"]).stdout));
 });
+
+test("C7 happy: the old copy reads and closes a run whose steps the gate closed", { skip }, () => {
+  const old = oldGate();
+  const repo = committed("ov-c7");
+  opened(gate, repo, "ov-c7");
+  planAndEdit(gate, repo);
+  edit(gate, repo, "src/a.ts", "a0 = 0", "a0 = 2");
+  edit(gate, repo, "tests/a.test.ts", "'a'", "'a0 is 2'");
+  ok(gate, repo, ["case", "close", "C1", "--test", "tests/a.test.ts:1"]);
+  ok(gate, repo, ["verify"]);
+  const auto = ledgerOf(repo).steps.filter((s) => s.auto === "fact").map((s) => s.key);
+  assert.ok(auto.includes("implement"), `premise: the gate closed it: ${auto.join(", ")}`);
+  // what is left is closed by hand with the old copy: tests (no run came before the code), driver, schema
+  ok(old, repo, ["step", "tests", "done", "ran after the edit", "--evidence", "tests/a.test.ts"]);
+  for (const key of ["driver", "schema"]) if (!ledgerOf(repo).steps.find((s) => s.key === key).state) ok(old, repo, ["step", key, "na", "no UI or schema changed"]);
+  const close = run(old, repo, ["close"]);
+  assert.equal(close.status, 0, `${close.stdout}${close.stderr}`);
+});

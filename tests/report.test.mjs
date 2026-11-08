@@ -250,7 +250,8 @@ test("C3 happy: `open`/`attach` print the run dir and keyed steps only; `gate st
   for (const line of openSteps) {
     assert.match(line, /\{[a-z0-9-]+\}/, `unkeyed step printed by \`gate open\`: ${JSON.stringify(line)}`);
   }
-  assert.equal(openSteps.length, keyed(feature).length);
+  // a run under the new rules leaves out the five steps the gate closes itself (tests/steps-from-facts.test.mjs C11)
+  assert.equal(openSteps.length, keyed(feature).length - 5);
 
   const attach = cli(repo, "attach", ["slug-c3"], { session: "S2" }).stdout;
   assert.equal(lines(attach)[0], `ledger: ${dir}`);

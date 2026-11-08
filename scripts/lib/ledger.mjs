@@ -12,7 +12,7 @@ import { emptyTier } from "./size.mjs";
 // size.mjs imports assess.mjs, which imports this module: loadPolicy is only ever called at
 // verb time, never at module top level, or the cycle would hit a TDZ error.
 import { loadPolicy } from "./size.mjs";
-import { helpersOut, implementationHash, saidSince } from "./rules.mjs";
+import { helpersOut, implementationHash, newRules, saidSince } from "./rules.mjs";
 import { carryStanding, requireLiveBatch } from "./standing.mjs";
 import { leftBehind } from "./diagnose.mjs";
 import { knownNewer, UPDATE_COMMANDS } from "./release.mjs";
@@ -343,6 +343,8 @@ export function currentLedger(stateDir, session) {
   return { dir, ledger: loadLedger(dir) };
 }
 
+const SELF_CLOSING = ["skeptic", "tests", "implement", "driver", "review"];
+
 function printStepLines(ctx, steps, { short = false } = {}) {
   for (const s of steps) ctx.out(`${String(s.n).padStart(2)}. [${s.state ?? "    "}] ${short ? firstClause(s.text) : s.text}${s.key ? `  {${s.key}}` : ""}`);
 }
@@ -392,7 +394,10 @@ function printOpen(ctx, dir, ledger, story = []) {
   if (ledger.verifyAdded?.length) ctx.out(`verify added by this run: ${ledger.verifyAdded.join(" · ")}`);
   const newer = newerInstalled(ctx.version);
   if (newer) ctx.out(`done-gate ${newer} is installed, but this session runs ${ctx.version}: restart Claude Code to use it`);
-  printStepLines(ctx, ledger.steps.filter((s) => s.key), { short: true });
+  // the steps the gate closes from what it records are left out; `gate steps` lists every one
+  const own = newRules(ledger) ? ledger.steps.filter((s) => SELF_CLOSING.includes(s.key)).map((s) => s.key) : [];
+  printStepLines(ctx, ledger.steps.filter((s) => s.key && !own.includes(s.key)), { short: true });
+  if (own.length) ctx.out(`the gate closes ${own.slice(0, -1).join(", ")}${own.length > 1 ? " and " : ""}${own.at(-1)} itself from what it records (\`gate steps\` lists them)`);
   for (const line of story) ctx.out(line);
   printNext(ctx);
 }

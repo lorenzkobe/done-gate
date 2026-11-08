@@ -4,7 +4,7 @@
 // wrote. Session start → blocked stop → open → the task → close → the finalising stop.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, write, gate, lookedUp, naArgs } from "./helpers.mjs";
@@ -179,4 +179,49 @@ test("C9 happy: one session end to end — session start, a blocked stop, open, 
   assert.ok(closedState.lastClosed, "the session records the run it just closed");
   assert.equal(closedState.lastClosed, path.basename(dir));
   assert.equal(closedState.current, null, "no ledger is open any more");
+});
+
+// One standard feature on a run under the new rules: every step closes from what the gate
+// recorded, so the lead types no `gate step` at all.
+test("C13 happy: a standard feature reaches gate close with no gate step", () => {
+  const repo = makeRepo("e2e-no-steps", {
+    "src/b.ts": "export const b = 1;\n",
+    ".claude/gate.json": JSON.stringify({ testFiles: null, verify: [`${NODE} -e "process.exit(0)" # lint`, "npm test"], ui: ["src/app/**"], api: ["src/api/**"], schema: ["db/**"] }),
+  });
+  execFileSync("git", ["add", "-A"], { cwd: repo });
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
+  sessionStart(repo);
+  hookVerb(repo, "log", { hook_event_name: "UserPromptSubmit", prompt: "make a and b return 2" });
+  sh(repo, ["open", "no-steps", "feature"]);
+  lookedUp(repo, { session: SESSION });
+  sh(repo, ["note", "task", "\"make a and b return 2\" Two constants."]);
+  sh(repo, ["note", "context", "Traced: src/a.ts:1 and src/b.ts:1 · Related: tests/a.test.ts · Research: none needed: a local change"]);
+  sh(repo, ["note", "plan", "Two constants, one test.", "--files", "src/a.ts,src/b.ts"]);
+  sh(repo, ["case", "add", "a and b return 2", "--kind", "happy"]);
+  const dir = runDir(repo);
+
+  // the plan check: brief, its file, recorded; it closes itself
+  const file = /Your file is (\S+\.md)/.exec(sh(repo, ["brief", "skeptic"]).stdout)[1];
+  writeFileSync(file, "# Skeptic 1\n\n## Act on\n- none\n## Consider\n- none\n## Noted\n- none\n## The one question\n- none\n");
+  sh(repo, ["huddle", "add", "skeptic", "--file", path.basename(file)]);
+
+  // tests first, run red; then the code
+  edit(repo, "Write", "tests/a.test.ts", "test('a and b return 2', () => {});\n");
+  hookVerb(repo, "log", { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "npm test" }, tool_response: { exit_code: 1 } });
+  edit(repo, "Edit", "src/a.ts", "export const a = 2;\n");
+  edit(repo, "Edit", "src/b.ts", "export const b = 2;\n");
+  sh(repo, ["case", "close", "C1", "--test", "tests/a.test.ts:a and b return 2"]);
+  sh(repo, ["verify", "--final"]);
+
+  // the review round
+  sh(repo, ["brief", "reviewer"]);
+  hookVerb(repo, "log", { hook_event_name: "SubagentStop", agent_id: "R1", agent_type: "done-gate:reviewer", stop_hook_active: false });
+  writeFileSync(path.join(dir, "review-1.md"), "# Review 1\n\n## Act on\n- none\n## Consider\n- none\n## Noted\n- none\n## Dismissed\n- none\n## Evidence verdict\n- tests: fresh verify.json\n");
+  sh(repo, ["huddle", "add", "reviewer", "--file", "review-1.md"]);
+
+  const closed = spawnSync(process.execPath, [gate, "close"], { input: "", encoding: "utf8", env: shellEnv(repo) });
+  assert.equal(closed.status, 0, `${closed.stdout}${closed.stderr}\n${spawnSync(process.execPath, [gate, "steps"], { input: "", encoding: "utf8", env: shellEnv(repo) }).stdout}`);
+  const events = readFileSync(path.join(sessionsOf(repo), SESSION, "events.jsonl"), "utf8");
+  assert.doesNotMatch(events, /gate(?:\.mjs)? step /, "the lead typed a gate step");
+  assert.equal(ledgerOf(dir).status, "closed");
 });
