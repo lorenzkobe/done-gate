@@ -23,7 +23,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, threeRounds } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { reviewFiles } from "../scripts/lib/assess.mjs";
 
@@ -172,6 +172,7 @@ function opened(name, { slug = name } = {}) {
 // draft placeholder is on disk and no huddle ever recorded it.
 function cutOffOnRound3(name) {
   const repo = opened(name);
+  threeRounds(repo);
   for (const [n, find] of [[1, FIND_1], [2, FIND_2]]) {
     helperFile(repo, `review-${n}.md`, reviewFile(n, name, [find]));
     cli(repo, "huddle", ["add", "reviewer", "--file", `review-${n}.md`]);
@@ -403,6 +404,7 @@ test("C5 idempotent: a finished review whose Act-on section reads none is not a 
 
 test("C6 edge: a review whose Act-on section holds a real bullet while Consider, Noted and Evidence verdict still read unverified is partial and refused; once those sections are finished the round is recorded with that finding and no R15", () => {
   const repo = opened("rdr-c6");
+  threeRounds(repo);
   const partly =
     `# Review 1 — rdr-c6\n\n## Act on\n- ${FIND_1}\n## Consider\n- unverified\n` +
     `## Noted\n- unverified\n## Dismissed\n- none\n## Evidence verdict\n- unverified\n`;
@@ -537,6 +539,7 @@ test("a lost round is briefed again under its number, uses up no round, and the 
 
 test("rounds whose files were lost do not reach the cap", () => {
   const repo = standardRun("rdr-cap");
+  threeRounds(repo);
   for (const n of [1, 2, 3]) {
     const file = briefedRound(repo, n);
     cli(repo, "huddle", ["add", "reviewer", "--file", file]);

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, threeRounds } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { sliceEnd } from "../scripts/lib/tree.mjs";
 
@@ -139,6 +139,7 @@ test("C6 reported-surface: the fix-check packet lists the findings to re-check w
 
 test("C7 boundary: three whole-file rounds, each with a fixed finding, leave only the fixed lines for one fix-check round, which ends the review", () => {
   const repo = opened("fc-c7");
+  threeRounds(repo);
   for (let i = 1; i <= 3; i++) {
     round(repo, "reviewer", null, [FINDING]);
     fixLine30(repo, 1000 + i);
@@ -154,6 +155,7 @@ test("C7 boundary: three whole-file rounds, each with a fixed finding, leave onl
 
 test("C8 edge: a clean round then a round with a fixed finding: only the fixed lines re-open", () => {
   const repo = opened("fc-c8");
+  threeRounds(repo);
   round(repo, "reviewer", null);
   round(repo, "reviewer", null, [FINDING]);
   fixLine30(repo);
@@ -205,6 +207,7 @@ test("C12 reported-surface: a finding whose fix landed in the piece's file is re
 
 test("C13 happy: a fix-check slice round with a finding, fixed again, re-opens only the lines edited the second time", () => {
   const repo = opened("fc-c13");
+  threeRounds(repo);
   round(repo, "reviewer", null, [FINDING]);
   fixLine30(repo, 999);
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:31"]);
@@ -326,7 +329,8 @@ const OWNS = /`gate verify` owns the full run/;
 
 test("6.1 C5 refused: a fix-check packet with stale verify never tells the reviewer to run the whole test command", () => {
   const repo = opened("fc-61-c5");
-  for (let i = 1; i <= 3; i++) {
+  // at the default cap of one, the round after a fixed round is the fix-check
+  for (let i = 1; i <= 1; i++) {
     round(repo, "reviewer", null, [FINDING]);
     fixLine30(repo, 1000 + i);
     cli(repo, "huddle", ["resolve", `H${i}.1`, "--evidence", "src/mid.ts:30"]);

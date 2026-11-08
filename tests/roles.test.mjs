@@ -405,7 +405,7 @@ function matches(text, re, file, why = "") {
 // C1 — SKILL.md fits the budget and names every verb and agent the team loop needs
 // ---------------------------------------------------------------------------
 
-test("C1 happy: SKILL.md stays under 4096 bytes and names the whole team loop — open/note/case, brief worker, done-gate:worker, SendMessage, huddle reply, huddle dispute, arbiter, three rounds, ten helpers, verify, report --brief, and the hand-off to a fresh helper", () => {
+test("C1 happy: SKILL.md stays under 4096 bytes and names the whole team loop — open/note/case, brief worker, done-gate:worker, SendMessage, huddle reply, huddle dispute, arbiter, one round plus a fix-check, ten helpers, verify, report --brief, and the hand-off to a fresh helper", () => {
   const size = statSync(SKILL_MD).size;
   assert.ok(size < 4096, `skills/gate/SKILL.md is ${size} bytes, the budget is 4096`);
 
@@ -430,8 +430,8 @@ test("C1 happy: SKILL.md stays under 4096 bytes and names the whole team loop �
   has(md, "done-gate:worker", file, "the agent the lead spawns per piece");
   has(md, "SendMessage", file, "how the lead relays a review file to a running worker");
 
-  // the review loop's shape: three rounds, then the arbiter
-  matches(md, /three rounds/i, file, "the round cap");
+  // the review loop's shape: one round and a fix-check, then the arbiter
+  matches(md, /one round \+ a fix-check/i, file, "the round cap");
   matches(md, /arbiter/i, file, "what settles a dispute after round three");
 
   // the helper ceiling — ten per task

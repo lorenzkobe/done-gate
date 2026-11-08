@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, doneArgs, lookedUp, asOldRun, planChecked } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, doneArgs, lookedUp, asOldRun, planChecked, threeRounds } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { pointerResolver } from "../scripts/lib/rules.mjs";
@@ -188,6 +188,7 @@ function opened(name, { slug = name } = {}) {
 // upholding the dispute: the exact state `gate brief arbiter --item H1.2` is for.
 function upheld(name, { findings = [FIND_1, FIND_2] } = {}) {
   const repo = opened(name);
+  threeRounds(repo);
   helperFile(repo, "review-1.md", reviewFile(1, name, findings));
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
   // H1.1 is fixed the ordinary way, so H1.2 is the only thing R5 can still be waiting on
@@ -1313,12 +1314,9 @@ test("C8 happy: the next: hint for the {review} step names gate brief reviewer, 
   ]) {
     assert.match(h, re, `the {review} hint never names ${what}:\n${h}`);
   }
-  // the arbiter is where the loop ends, after the third round
-  assert.match(
-    h,
-    /\bthree\b|\bthird\b|\b3\b/,
-    `the {review} hint does not say the loop caps at three rounds:\n${h}`,
-  );
+  // one round plus one re-check is the loop; a run pinned before keeps three
+  assert.match(h, /\bone round\b[^.;]*\bre-check\b/, `the {review} hint does not say one round plus a re-check:\n${h}`);
+  assert.doesNotMatch(h, /at most three rounds/, `the {review} hint still caps new runs at three:\n${h}`);
   // the worker answers in worker-<n>.md, and the reviewer's file is what the loop feeds it
   assert.match(h, /worker-<n>\.md/, `the hint does not name the file the worker writes:\n${h}`);
 });
@@ -1767,6 +1765,7 @@ test("C9 refused: with a ledger open, the skeptic and the reviewer may write the
 
 test("C10 edge: with review-1.md and skeptic-1.md on disk, the round-2 packets name review-2.md and skeptic-2.md", () => {
   const repo = opened("skeptic-round2");
+  threeRounds(repo);
   // a second plan check is an old run's (tests/plan-hold.test.mjs C12)
   asOldRun(repo);
   const dir = runDir(repo);

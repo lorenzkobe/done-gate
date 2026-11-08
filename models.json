@@ -38,7 +38,7 @@
     ],
     "delegatesAt": "large",
     "reviewMaxLines": 400,
-    "reviewRounds": 3,
+    "reviewRounds": 1,
     "splitPast": {
       "files": 40,
       "lines": 3000

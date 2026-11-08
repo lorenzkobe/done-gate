@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, threeRounds } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadPolicy, policyFor } from "../scripts/lib/size.mjs";
 
@@ -171,6 +171,7 @@ test("C2 a second piece for the same role is briefed while the first reviewer is
 
 test("C4 the three-round cap is counted per file: a fourth round on piece A is refused while piece B, never seen, can still be briefed", () => {
   const repo = opened("rp-c4b");
+  threeRounds(repo);
   bigChange(repo);
   for (let i = 0; i < 3; i++) {
     round(repo, "reviewer", "src/a.ts", [`finding ${i} — src/a.ts:1 — x — []`]);

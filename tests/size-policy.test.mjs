@@ -564,7 +564,7 @@ test("C16 happy: models.json carries the policy object and no escalate/never/cei
   assert.equal(typeof m.policy, "object");
   assert.deepEqual(Object.keys(m.policy).sort(), ["delegatesAt", "forceStandard", "guards", "reviewMaxLines", "reviewRounds", "splitPast", "tiers"]);
   assert.equal(m.policy.reviewMaxLines, 400);
-  assert.equal(m.policy.reviewRounds, 3);
+  assert.equal(m.policy.reviewRounds, 1);
   assert.equal(m.policy.delegatesAt, "large");
   assert.deepEqual(Object.keys(m.policy.tiers), ["tiny", "small", "standard", "large"]);
   assert.deepEqual(m.policy.tiers.tiny, { maxFiles: 1, maxLines: 15, requires: [] });

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp, waiveArgs, asOldRun } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, waiveArgs, asOldRun, threeRounds } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 
@@ -47,6 +47,7 @@ function planned(name, planArgs = ["--files", "src/a.ts"]) {
 // a lead edit past 400 lines: the measurement crosses into large
 function grown(name) {
   const repo = planned(name);
+  threeRounds(repo);
   leadEdit(repo, "src/a.ts", lines(440, "a"));
   cli(repo, "check");
   return repo;

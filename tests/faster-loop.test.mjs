@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, threeRounds } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 
@@ -108,6 +108,7 @@ test("C3 refused: a round with Act-on items, fixed and closed below the cap: R5 
 
 test("C4 boundary: round three has items, fixed and closed: R5 asks one fix-check round, and after it closed items are enough", () => {
   const repo = opened("fl-c4");
+  threeRounds(repo);
   edit(repo, "src/a.ts", "export const a = 2;\n");
   for (const n of [1, 2, 3]) {
     round(repo, "reviewer", n, [`finding ${n} — src/a.ts:1`]);
@@ -123,6 +124,7 @@ test("C4 boundary: round three has items, fixed and closed: R5 asks one fix-chec
 
 test("C5 edge: reviewer-2 on a high-risk path: a clean round then an edit in a seen file passes R9; a fourth reviewer-2 round is refused", () => {
   const repo = opened("fl-c5", { files: { "src/lib/auth/x.ts": "export const x = 1;\n" }, planFiles: "src/lib/auth/x.ts" });
+  threeRounds(repo);
   edit(repo, "src/lib/auth/x.ts", "export const x = 2;\n");
   round(repo, "reviewer", 1);
   round(repo, "reviewer-2", 2);
@@ -132,6 +134,7 @@ test("C5 edge: reviewer-2 on a high-risk path: a clean round then an edit in a s
   assert.ok(!blocks(out, "R5"), out);
 
   const capped = opened("fl-c5b", { files: { "src/lib/auth/x.ts": "export const x = 1;\n" }, planFiles: "src/lib/auth/x.ts" });
+  threeRounds(capped);
   edit(capped, "src/lib/auth/x.ts", "export const x = 2;\n");
   for (const n of [1, 2, 3]) {
     round(capped, "reviewer-2", n, [`finding ${n} — src/lib/auth/x.ts:1`]);
@@ -155,6 +158,7 @@ test("C6 idempotent: a huddle recorded before this change (no files) keeps the o
 
 test("C16 boundary: past the cap and its fix-check round, a round is briefed only when a file no round saw exists", () => {
   const repo = opened("fl-c16");
+  threeRounds(repo);
   edit(repo, "src/a.ts", "export const a = 2;\n");
   for (const n of [1, 2, 3, 4]) {
     round(repo, "reviewer", n, [`finding ${n} — src/a.ts:1`]);

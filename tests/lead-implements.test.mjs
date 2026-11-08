@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, lookedUp, planChecked } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, lookedUp, planChecked, threeRounds } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadPolicy } from "../scripts/lib/size.mjs";
@@ -261,6 +261,7 @@ test("a large run whose lead fixed the findings itself closes with no worker and
   execFileSync("git", ["add", "-A"], { cwd: repo });
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
   cli(repo, "open", ["big", "feature"]);
+  threeRounds(repo);
   cli(repo, "note", ["task", "A big change. [inferred]"]);
   lookedUp(repo);
   cli(repo, "note", ["context", "Traced: src/f0.ts:1 · Related: none: `grep -rn x src` · Research: none needed: a test fixture"]);
