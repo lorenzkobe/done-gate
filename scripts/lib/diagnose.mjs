@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { UsageError } from "./context.mjs";
 import { readEvents } from "./events.mjs";
-import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
+import { currentLedger, isDone, loadLedger, saveLedger } from "./ledger.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { briefOf, fileRole, HELPER_MAX_MS, helperAlive, helpersOut, unfinishedFile } from "./rules.mjs";
 
@@ -198,7 +198,61 @@ export function leftBehind(ctx, { dir, ledger }, now = Date.now()) {
   };
 }
 
+const envMs = (name, fallback) => {
+  const v = Number(process.env[name]);
+  return process.env[name] !== undefined && Number.isFinite(v) && v >= 0 ? v : fallback;
+};
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// The done-gate helpers of the run still out now, one start each.
+function outNow(events, ledger, now) {
+  const starts = new Map();
+  for (const e of events) {
+    if (e.kind === "subagent-start" && e.seq > (ledger.openedSeq ?? 0) && String(e.agentType ?? "").startsWith("done-gate:")) starts.set(e.agent, e);
+  }
+  return [...starts.values()].filter((e) => helperAlive(events, e.agent, now));
+}
+
 export const verbs = {
+  // Waits, reading only, until no helper of the run is out, then prints what became of each one
+  // it saw. A notice already wakes the lead; this is for helpers that end without one. Run in
+  // the background, its exit is what wakes the lead.
+  async watch(ctx) {
+    const current = openRun(ctx);
+    if (!current) throw new UsageError("no open run for this session: gate watch waits on the open run's helpers");
+    const poll = envMs("DONE_GATE_WATCH_POLL_MS", 5000);
+    const grace = envMs("DONE_GATE_WATCH_GRACE_MS", 30 * 1000);
+    const quiet = envMs("DONE_GATE_WATCH_QUIET_MS", 20 * 60 * 1000);
+    const started = Date.now();
+    const seen = new Map();
+    let emptyPolls = 0;
+    for (;;) {
+      const ledger = loadLedger(current.dir);
+      const events = runEvents(ctx, ledger);
+      const now = Date.now();
+      const out = outNow(events, ledger, now);
+      for (const e of out) seen.set(e.agent, e.agentType);
+      emptyPolls = out.length ? 0 : emptyPolls + 1;
+      const newest = events.length ? Date.parse(events.at(-1).ts) : 0;
+      if (out.length && now - Math.max(started, newest) >= quiet) {
+        ctx.out(`quiet: no new event for ${ago(quiet)} with ${out.map((e) => `${e.agentType} (${e.agent})`).join(", ")} still out: run \`gate watch\` again to keep waiting; this is not a failure`);
+        return;
+      }
+      // a helper waiting on its own background work stops, then says so seconds later: a second
+      // empty poll confirms none came back
+      if (!out.length && (seen.size ? emptyPolls >= 2 : now - started >= grace)) {
+        const problems = helperProblems({ events, ledger, dir: current.dir, root: ctx.root, now });
+        for (const [id, type] of seen) ctx.out(problems.find((p) => p.agent === id)?.line ?? `${type.slice("done-gate:".length)} ${id} finished`);
+        if (!seen.size) ctx.out("no helper is out");
+        const older = problems.filter((p) => !seen.has(p.agent)).length;
+        if (older) ctx.out(`\`gate diagnose\` lists ${older === 1 ? "1 helper" : `${older} helpers`} cut off before this watch`);
+        if (seen.size) ctx.out("If their hand-backs already reached you, nothing more is owed; otherwise act on the lines above.");
+        return;
+      }
+      await pause(poll);
+    }
+  },
+
   diagnose(ctx) {
     const current = openRun(ctx);
     if (!current) throw new UsageError("no open run for this session: gate diagnose reads the open run's helpers");

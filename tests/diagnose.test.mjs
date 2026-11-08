@@ -446,3 +446,179 @@ test("4.5 C11 gate check with a stale run whose log cannot be read still lists i
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /open run gone[^\n]*5 days[^\n]*ask the user/, r.stdout);
 });
+
+// ---- 4.7: gate watch ----
+
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readdirSync } from "node:fs";
+
+const FAST = { DONE_GATE_WATCH_POLL_MS: "100", DONE_GATE_WATCH_GRACE_MS: "600", DONE_GATE_WATCH_QUIET_MS: "60000" };
+function watch(repo, extra = {}) {
+  const child = spawn(process.execPath, [gate, "watch"], { env: { ...envFor(repo), ...FAST, ...extra } });
+  let out = "";
+  child.stdout.on("data", (d) => (out += d));
+  child.stderr.on("data", (d) => (out += d));
+  return new Promise((resolve) => child.on("exit", (code) => resolve({ code, out, at: Date.now() })));
+}
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+const startHelper = (repo, id, role = "reviewer") => hook(repo, { hook_event_name: "SubagentStart", agent_id: id, agent_type: `done-gate:${role}` });
+const stopHelper = (repo, id, role = "reviewer") => hook(repo, { hook_event_name: "SubagentStop", agent_id: id, agent_type: `done-gate:${role}` });
+
+test("4.7 C1 a watch exits within one poll of the last helper stopping, saying it finished", async () => {
+  const repo = opened("w-c1");
+  startHelper(repo, "A1");
+  const done = watch(repo);
+  await pause(400);
+  stopHelper(repo, "A1");
+  const stoppedAt = Date.now();
+  const r = await done;
+  assert.equal(r.code, 0, r.out);
+  assert.ok(r.at - stoppedAt < 1000, `the watch took ${r.at - stoppedAt} ms after the stop`);
+  assert.match(r.out, /reviewer A1[^\n]*finished/);
+});
+
+test("4.7 C2 a turn-limit notice ends the watch with that helper's cause and next step", async () => {
+  const repo = opened("w-c2");
+  startHelper(repo, "A1", "skeptic");
+  const done = watch(repo);
+  await pause(300);
+  hook(repo, { hook_event_name: "UserPromptSubmit", prompt: LIMIT("A1") });
+  const r = await done;
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /skeptic A1[\s\S]*turn limit[\s\S]*SendMessage A1/);
+});
+
+test("4.7 C3 with no helper out it waits the grace, then says none is out", async () => {
+  const repo = opened("w-c3");
+  const started = Date.now();
+  const r = await watch(repo);
+  assert.equal(r.code, 0, r.out);
+  assert.ok(r.at - started >= 600, "it did not wait the grace");
+  assert.match(r.out, /no helper is out/);
+});
+
+test("4.7 C4 no new event for the quiet time: it exits, names the helper still out, and says to run it again", async () => {
+  const repo = opened("w-c4");
+  startHelper(repo, "A1");
+  const r = await watch(repo, { DONE_GATE_WATCH_QUIET_MS: "500" });
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /quiet/);
+  assert.match(r.out, /done-gate:reviewer \(A1\)/);
+  assert.match(r.out, /gate watch/);
+});
+
+test("4.7 C5 a helper silent past 45 minutes ends the watch with cause gone", async () => {
+  const repo = opened("w-c5");
+  startHelper(repo, "A1");
+  const file = path.join(repo, ".claude", "gate", "sessions", "S1", "events.jsonl");
+  const old = new Date(Date.now() - 46 * 60 * 1000).toISOString();
+  writeFileSync(file, readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => `${JSON.stringify({ ...JSON.parse(l), ts: old })}\n`).join(""));
+  const r = await watch(repo);
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /no helper is out/);
+  assert.match(r.out, /gate diagnose[^\n]*1 helper/);
+});
+
+test("4.7 C10 a stop followed by a waiting notice within the confirming poll keeps the watch going", async () => {
+  const repo = opened("w-c10");
+  startHelper(repo, "A1");
+  let ended = false;
+  const done = watch(repo, { DONE_GATE_WATCH_POLL_MS: "400", DONE_GATE_WATCH_QUIET_MS: "2500" }).then((r) => ((ended = true), r));
+  await pause(500);
+  stopHelper(repo, "A1");
+  hook(repo, { hook_event_name: "UserPromptSubmit", prompt: tn("A1", 'Agent "Review" is waiting on its own background work') });
+  await pause(1200);
+  assert.equal(ended, false, "a waiting helper was reported back");
+  const r = await done;
+  assert.match(r.out, /quiet[\s\S]*A1/);
+});
+
+test("4.7 C11 helpers from an earlier round are not named when this watch ends", async () => {
+  const repo = opened("w-c11");
+  startHelper(repo, "R0");
+  stopHelper(repo, "R0");
+  const done = watch(repo);
+  await pause(200);
+  startHelper(repo, "A2");
+  await pause(300);
+  stopHelper(repo, "A2");
+  const r = await done;
+  assert.match(r.out, /A2[^\n]*finished/);
+  assert.doesNotMatch(r.out, /R0/);
+});
+
+test("4.7 C12 quiet counts from the watch's start when the newest event is older", async () => {
+  const repo = opened("w-c12");
+  startHelper(repo, "A1");
+  const file = path.join(repo, ".claude", "gate", "sessions", "S1", "events.jsonl");
+  const old = new Date(Date.now() - 19 * 60 * 1000).toISOString();
+  writeFileSync(file, readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => `${JSON.stringify({ ...JSON.parse(l), ts: old })}\n`).join(""));
+  const started = Date.now();
+  const r = await watch(repo, { DONE_GATE_WATCH_QUIET_MS: "800" });
+  assert.match(r.out, /quiet/);
+  assert.ok(r.at - started >= 800, `the watch went quiet after ${r.at - started} ms`);
+});
+
+test("4.7 C13 the exit says nothing more is owed if the hand-backs came; the brief line says one watch per wait", async () => {
+  const repo = opened("w-c13");
+  startHelper(repo, "A1");
+  const done = watch(repo);
+  await pause(300);
+  stopHelper(repo, "A1");
+  assert.match((await done).out, /nothing more is owed/);
+  cli(repo, "note", ["task", "A task. [inferred]"]);
+  assert.match(cli(repo, "brief", ["skeptic"]).stdout, /one watch per wait/);
+});
+
+test("4.7 C6 with two helpers out the first stopping does not end the watch", async () => {
+  const repo = opened("w-c6");
+  startHelper(repo, "A1");
+  startHelper(repo, "A2", "reviewer-2");
+  let ended = false;
+  const done = watch(repo).then((r) => ((ended = true), r));
+  await pause(300);
+  stopHelper(repo, "A1");
+  await pause(500);
+  assert.equal(ended, false, "the watch ended with A2 still out");
+  stopHelper(repo, "A2", "reviewer-2");
+  const r = await done;
+  assert.match(r.out, /A1[^\n]*finished[\s\S]*A2[^\n]*finished|A2[^\n]*finished[\s\S]*A1[^\n]*finished/);
+});
+
+test("4.7 C7 the watch writes nothing", async () => {
+  const repo = opened("w-c7");
+  startHelper(repo, "A1");
+  const gateDir = path.join(repo, ".claude", "gate");
+  const sum = () => {
+    const files = [path.join(runDir(repo), "ledger.json"), ...readdirSync(path.join(gateDir, "sessions")).flatMap((s) => readdirSync(path.join(gateDir, "sessions", s)).map((f) => path.join(gateDir, "sessions", s, f)))];
+    return files.map((f) => `${f}:${createHash("sha1").update(readFileSync(f)).digest("hex")}`).join("\n");
+  };
+  const before = sum();
+  await watch(repo, { DONE_GATE_WATCH_QUIET_MS: "300" });
+  assert.equal(sum(), before);
+});
+
+test("4.7 C8 no run open is refused; gate brief's one-helper line names gate watch", async () => {
+  const none = makeRepo("w-c8-none");
+  const r = await watch(none);
+  assert.equal(r.code, 1);
+  assert.match(r.out, /no open run/);
+  const repo = opened("w-c8");
+  cli(repo, "note", ["task", "A task. [inferred]"]);
+  assert.match(cli(repo, "brief", ["skeptic"]).stdout, /one helper per packet[^\n]*gate watch/);
+});
+
+test("4.7 C9 a poll over a 4 MB session log stays well under the 5 s poll", async () => {
+  const repo = opened("w-c9");
+  const file = path.join(repo, ".claude", "gate", "sessions", "S1", "events.jsonl");
+  const line = (n) => `${JSON.stringify({ seq: 1e15 + n, ts: new Date().toISOString(), session: "S1", agent: null, agentType: null, kind: "command", tool: "Bash", cmd: "x".repeat(150), exit: 0 })}\n`;
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, Array.from({ length: 16000 }, (_, n) => line(n)).join(""));
+  startHelper(repo, "A1");
+  stopHelper(repo, "A1");
+  const started = Date.now();
+  const r = await watch(repo, { DONE_GATE_WATCH_GRACE_MS: "0" });
+  assert.equal(r.code, 0, r.out);
+  assert.ok(r.at - started < 2000, `one poll took ${r.at - started} ms`);
+});

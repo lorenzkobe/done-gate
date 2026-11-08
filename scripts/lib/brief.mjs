@@ -563,7 +563,7 @@ export const verbs = {
       ? ` Your file is ${full} and it already exists: keep its finished sections, never reset it to the all-unverified draft, and rewrite it after each finding.`
       : ` Your file is ${full}: write it first, then investigate and rewrite it after each finding.`;
     ctx.out(`prompt: Read ${file} and follow your role brief.${yours}`);
-    ctx.out("one helper per packet: a helper handed several writes one file, and the others read as unreviewed.");
+    ctx.out("one helper per packet: a helper handed several writes one file, and the others read as unreviewed. While helpers run, one `gate watch` in the background (one watch per wait, not per helper) wakes you when the last one stops.");
     printNext(ctx);
   },
 };
