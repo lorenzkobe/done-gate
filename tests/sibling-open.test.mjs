@@ -107,7 +107,7 @@ test("C7 refused: gate attach from the wrong repo is refused with the open --rep
   assert.ok(r.stderr.includes(`cd ${main} && gate open t --repo ${other}`), r.stderr);
 });
 
-// From docs/after-0.21.0.md, limit 8: the printed line must run as printed.
+// Fixed in 91212f3, a limit left after 0.21.0: the printed line must run as printed.
 test("C1 reported-surface: paths with spaces are quoted in the printed line", () => {
   const top = path.join(here, ".tmp", "sib spaces");
   rmSync(top, { recursive: true, force: true });

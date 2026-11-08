@@ -253,7 +253,7 @@ test("C17 refused: an untiered plan ledger with source edits still gets R5; a ti
   assert.ok(blocks(check(unpredicted), "R5"), check(unpredicted));
 });
 
-// From docs/after-0.21.0.md and docs/friction.md (version-0-19-0): a bump names only non-source
+// Fixed in 325c607, from docs/friction.md (version-0-19-0): a bump names only non-source
 // files, so its prediction is a placeholder; the measurement decides once there is one.
 const BUMP = { files: { "package.json": "{\"version\": \"1.0.0\"}\n", "src/b.ts": "export const b = 1;\n", ".claude/gate.json": JSON.stringify({ source: ["src/**"], tests: ["tests/**"], verify: [] }) }, playbook: "refactor", planFiles: "package.json" };
 const bumped = (name, extra = {}) => {

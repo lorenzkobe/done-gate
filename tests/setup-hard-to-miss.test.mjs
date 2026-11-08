@@ -136,7 +136,7 @@ test("C9 refused: R18: with no testFiles the wrapper is not a test command, and 
   assert.deepEqual(gapsFor(set, "ruff check tests/test_a.py").map((g) => g.id), ["C1"]);
 });
 
-// From docs/after-0.21.0.md, limits 1 and 2: a one-word template matched every call of its
+// Fixed in b4ea255, two limits left after 0.21.0: a one-word template matched every call of its
 // program, and a linter naming a folder was taken as the template.
 const ONE_WORD = { "run.sh": "#!/bin/sh\n", "tests/test_a.py": "def test_a():\n    pass\n", "tests/test_b.py": "def test_b():\n    pass\n", ".claude/gate.json": JSON.stringify({ tests: ["tests/**"], testFiles: "./run.sh {files}" }) };
 

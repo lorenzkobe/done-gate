@@ -127,7 +127,7 @@ test("C6 refused: a fix-check that leaves out part of a file's unreviewed lines 
   assert.equal(run(repo, "brief", "reviewer-2", "--files", entries.join(",")).status, 0);
 });
 
-// From docs/after-0.21.0.md, limits 3 and 4: a fix gives its lines new keys, so rounds on a slice
+// Fixed in d39cedf, two limits left after 0.21.0: a fix gives its lines new keys, so rounds on a slice
 // never reached the cap; and a fix-check cut off before its helper stopped used up the file's one.
 const BIG = "src/big.ts";
 function sliced(name) {

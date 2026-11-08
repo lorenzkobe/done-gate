@@ -92,22 +92,16 @@ courtly's 115 runs closed since 10-20. The numbers come from each repo's `.claud
   next; the 6-minute suite ran after nearly every batch of fixes; and the Stop hook blocked a turn
   that was only waiting for the owner's answer.
 
-From the 0.20.0 review (`docs/reviews/review-0.20.0.md`, 66 runs over a work repo, kwenta-web and
-courtly, 2026-10-21 to 10-29). Details and evidence are in that file's sections.
+From the 0.20.0 review (66 runs over a work repo, kwenta-web and courtly, 2026-10-21 to 10-29).
+Details and evidence are in that review's sections. It is no longer in the tree; read it with
+`git show a0273a2:docs/reviews/review-0.20.0.md` (on main), its miners beside it in `docs/reviews/mine/`.
 
 - 2026-10-25, a work repo: 8 runs were only a rebase or a branch switch. Each was measured large
   from the commits it brought in, then waived step by step (about 65 waivers). R1 is still the
   most common block. (3.1)
-- 2026-10-22 to 10-29, sibling work repos: all 5 runs opened inside a sibling repo were
-  abandoned, because the session's hook events are filed under the repo the session started in.
-  (3.2)
 - 2026-10-21 to 10-29, a work repo: `gate setup` never ran, so 0.20's test loop never applied there.
   The per-ticket verify list was dropped and re-added in 37 of 39 runs. Its test wrapper with file names
   isn't counted as a test command (5 R18 waivers). (3.3)
-- 2026-10-25, a work repo: `gate open` crashed with EISDIR in `addFiles` (`tree.mjs:238`); a
-  directory listed by git was read as a file. (3.4)
-- 2026-10-26, kwenta-web, run ios-input-zoom: a `node -e` repro was marked readOnly, so `--ran`
-  couldn't close repro or rootcause and both were waived. (3.5)
 - 2026-10-21 to 10-29, all three repos: 28 denials were helpers editing their own findings file
   with a shell command. (3.6)
 - kwenta-web, 5 runs: worker shell edits were credited to the lead (`delegate` waivers). (3.7)
@@ -115,11 +109,6 @@ courtly, 2026-10-21 to 10-29). Details and evidence are in that file's sections.
   (3.8)
 - All repos: `driver` was the most waived step (19). The waived runs used Playwright, couldn't
   reach localhost from Chrome, or had a surface that can't be driven at all. (3.9)
-
-- 2026-10-19, done-gate, run version-0-19-0: a version bump (three manifests, one line each, no
-  source file changed, measured tiny) still needed a reviewer, because the plan's three files
-  predicted "small" and the gate reopened the review step that was marked N/A. A whole helper run
-  to check that 0.18.0 became 0.19.0. Evidence: that run's ledger (predicted small, measured tiny).
 
 - 2026-10-19, done-gate, run search-tools-ask-user: `gate verify > <scratchpad>/v.txt 2>&1; node -e '…read .claude/gate/runs/…/ledger.json…'`
   was refused as an evidence write. A `gate()` wrapper call redirected to scratch is not seen as
@@ -154,6 +143,24 @@ Left out: an interview until every choice is settled (more questions), glossary 
 files (project docs, not the gate's job), issue-tracker and teaching skills (outside the gate).
 
 ## Done (moved here when a release fixes it, with the version)
+
+Fixed in 0.21.0, moved here in 0.22.0:
+
+- 2026-10-22 to 10-29, sibling work repos: all 5 runs opened inside a sibling repo were
+  abandoned, because the session's hook events are filed under the repo the session started in.
+  (3.2) Fixed: `gate open` and `gate attach` refuse there and print the
+  `cd … && gate open … --repo` line that works (48b5699, 91212f3).
+- 2026-10-25, a work repo: `gate open` crashed with EISDIR in `addFiles` (`tree.mjs:238`); a
+  directory listed by git was read as a file. (3.4) Fixed: a git-listed folder no longer crashes
+  the snapshot (04eab49).
+- 2026-10-26, kwenta-web, run ios-input-zoom: a `node -e` repro was marked readOnly, so `--ran`
+  couldn't close repro or rootcause and both were waived. (3.5) Fixed: inline `node -e` and
+  `python -c` code counts as a run (04eab49).
+- 2026-10-19, done-gate, run version-0-19-0: a version bump (three manifests, one line each, no
+  source file changed, measured tiny) still needed a reviewer, because the plan's three files
+  predicted "small" and the gate reopened the review step that was marked N/A. A whole helper run
+  to check that 0.18.0 became 0.19.0. Evidence: that run's ledger (predicted small, measured tiny).
+  Fixed: a plan naming no source file, with none changed, is sized by its measurement (325c607).
 
 Fixed in 0.20.0, from a look at 134 runs in a work repo (2026-10-21; ~38 active hours since 10-06,
 the 12 large runs ~20 of them, median 107 active minutes and 8.5 review rounds each):
