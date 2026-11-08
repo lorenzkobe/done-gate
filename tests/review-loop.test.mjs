@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, doneArgs, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, doneArgs, lookedUp, asOldRun, planChecked } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { pointerResolver } from "../scripts/lib/rules.mjs";
@@ -1600,7 +1600,9 @@ test("C4 happy: the skeptic packet's You-may-write line names <run dir>/skeptic-
     .find((l) => /\bact[- ]on\b/i.test(l) && /\bonly\b/i.test(l) && /\breply\b/i.test(l));
   assert.ok(replyLine, `no line tells the skeptic to reply with the Act-on list only:\n${first.text}`);
 
-  // n is one past the highest existing skeptic file.
+  // n is one past the highest existing skeptic file. A run under the new rules checks the plan
+  // once (tests/plan-hold.test.mjs C12), so the numbering is an old run's.
+  asOldRun(repo);
   writeFileSync(path.join(dir, "skeptic-1.md"), "# Skeptic 1 — skeptic-packet\n");
   const second = packet(repo, "skeptic", ["--round", "2"]);
   const may2 = section(second.text, "You may write");
@@ -1765,6 +1767,8 @@ test("C9 refused: with a ledger open, the skeptic and the reviewer may write the
 
 test("C10 edge: with review-1.md and skeptic-1.md on disk, the round-2 packets name review-2.md and skeptic-2.md", () => {
   const repo = opened("skeptic-round2");
+  // a second plan check is an old run's (tests/plan-hold.test.mjs C12)
+  asOldRun(repo);
   const dir = runDir(repo);
   writeFileSync(path.join(dir, "review-1.md"), "# Review 1\n\n## Act on\n\n_none_\n");
   writeFileSync(path.join(dir, "skeptic-1.md"), "# Skeptic 1 — skeptic-round2\n\n## Act on\n\n_none_\n");
@@ -1785,6 +1789,8 @@ test("C10 edge: with review-1.md and skeptic-1.md on disk, the round-2 packets n
 
 test("C11 refused: a helper's Bash command that writes, deletes or commits source is denied; read-only commands pass, and the main session is untouched", () => {
   const repo = opened("skeptic-bash");
+  // the main session's own writes wait for the plan check like any code write
+  planChecked(repo);
 
   const fence = (command, extra = {}) => {
     const r = spawnSync(process.execPath, [gate, "fence"], {

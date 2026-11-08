@@ -4,7 +4,7 @@ import { execFileSync, spawnSync, execSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, here, doneArgs, lookedUp, readyToEdit, waiveArgs } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, doneArgs, lookedUp, readyToEdit, waiveArgs, planChecked } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
@@ -1981,6 +1981,7 @@ test("C2 refused end to end: after gate check measures 13 changed files on a 3-f
   const run = (verb, args = [], input) => spawnSync(process.execPath, [gate, verb, ...args], { encoding: "utf8", env, input });
   assert.equal(run("open", ["grown", "feature"]).status, 0);
   readyToEdit(repo, { plan: ["--files", "src/m0.ts,src/m1.ts,src/m2.ts"] });
+  planChecked(repo);
   for (let i = 0; i < 13; i++) write(repo, `src/m${i}.ts`, `export const m${i} = 1;\n`);
   run("check");
   const out = run("fence", [], JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: path.join(repo, "src/m13.ts") }, cwd: repo, session_id: "S1" })).stdout;

@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, lookedUp, asOldRun } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 
 function envFor(repo, session = "S1") {
@@ -412,8 +412,10 @@ test("C9 reported-surface: gate huddle add reviewer prints each new id with its 
 });
 
 test("C10 boundary: skeptic and arbiter packets carry the number of the file they name, so the write guard owes the same file the packet names", () => {
-  // two finished skeptic files on disk, one of them recorded: the next file is skeptic-3.md
+  // two finished skeptic files on disk, one of them recorded: the next file is skeptic-3.md. A run
+  // under the new rules checks the plan once (tests/plan-hold.test.mjs C12), so this one is old.
   const repo = standard("hh-c10");
+  asOldRun(repo);
   const dir = runDir(repo);
   helperFile(repo, "skeptic-1.md", skepticFile(1, "hh-c10", { actOn: [] }));
   cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);

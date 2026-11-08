@@ -799,8 +799,13 @@ function notReadyToEdit(ledger) {
   if (has("context") && !ledger.contextSeq) missing.push("Context (`gate note context`)");
   if (has("plan") && !ledger.planSeq) missing.push("Plan (`gate note plan`)");
   if (has("cases") && !ledger.cases?.length) missing.push("a case (`gate case add`)");
+  if (checkOwed(ledger)) missing.push(PLAN_CHECK);
   return missing.length ? `the run still needs ${missing.join(", ")} before code is edited` : null;
 }
+
+// Set by `gate note plan` at a size that needs the plan check, before any code changed.
+const checkOwed = (ledger) => Boolean(ledger?.checkHold) && (ledger.steps ?? []).some((s) => s.key === "skeptic" && s.state === null);
+const PLAN_CHECK = "the plan check (`gate brief skeptic`, spawn done-gate:skeptic, `gate huddle add skeptic --file skeptic-<n>.md`, answer each item; tests wait too)";
 
 // A run that outgrew its plan takes no new code files: past twice the planned count and ten
 // more, or past the split limit (40), the rest is another request and belongs in a new run.
@@ -987,8 +992,10 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
     // a link made earlier hides the gate dir from the text; the real path of each target does not
     const linked = shellWrites(cmd).all.find((t) => IN_GATE_DIR.test(t));
     if (linked) return { deny: true, reason: `done-gate: that command writes ${linked}, which is in the gate's evidence folder. Evidence is written only by \`gate\` verbs.`, paths: [] };
-    // the lead's shell write to code waits for the plan like an Edit does
-    if (!where.unreadable && !HELPER_ROLES.some((r) => agentType === `done-gate:${r}` || agentType === r) && agentType !== "done-gate:worker") {
+    // the lead's shell write to code waits for the plan like an Edit does; a worker's waits only
+    // for the plan check, and the lead alone decides a task outgrew its plan
+    const worker = agentType === "done-gate:worker" || agentType === "worker";
+    if (!where.unreadable && !HELPER_ROLES.some((r) => agentType === `done-gate:${r}` || agentType === r)) {
       const isCode = (p) => p && !isScratch(p) && !config.isDriverFile(p) && (config.isSource(p) || config.isTest(p));
       const code = new Set(shellWrites(cmd).outside.filter((p) => !isScratch(p)).map((p) => toPosixRel(root, p, repos)).filter(isCode));
       const inline = inlineWriteTargets(cmd);
@@ -997,9 +1004,9 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
       if (inline.unknown) for (const m of cmd.replace(SUFFIX_TEST, "").matchAll(/["'`]([^"'`\s]+\.\w+)["'`]/g)) if (isCode(toPosixRel(root, m[1], repos))) code.add(toPosixRel(root, m[1], repos));
       // moved to a folder the gate cannot follow: any relative write there may be code
       const shown = [...code, ...(inline.lost ? [`${inline.lost} (in a folder the gate cannot follow)`] : [])];
-      const why = shown.length ? notReadyToEdit(ledger) : null;
+      const why = !shown.length ? null : worker ? (checkOwed(ledger) ? `the run still needs ${PLAN_CHECK} before code is edited` : null) : notReadyToEdit(ledger);
       if (why) return { deny: true, reason: `done-gate: that command writes ${shown.slice(0, 3).join(", ")} and ${why}.`, paths: [...code] };
-      const tooBig = [...code].map((p) => outgrown(ledger, config, p)).find(Boolean);
+      const tooBig = worker ? null : [...code].map((p) => outgrown(ledger, config, p)).find(Boolean);
       if (tooBig) return { deny: true, reason: `done-gate: ${tooBig}.`, paths: [...code] };
     }
     // Helpers write only through the edit tools, where the role rules apply; a shell write

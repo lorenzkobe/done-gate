@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, planChecked } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { evaluate, sourceHash, writersOf } from "../scripts/lib/rules.mjs";
@@ -287,7 +287,8 @@ test("3.12 C7 the report says the drive came from the e2e run, and R4 and the dr
   cli(repo, "note", ["context", "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: local"]);
   cli(repo, "note", ["plan", "One file.", "--files", "src/app/page.tsx"]);
   cli(repo, "case", ["add", "it renders", "--kind", "happy"]);
-  for (const key of ["skeptic", "tests", "implement", "verify"]) run(repo, "step", [key, "na", "fixture"]);
+  planChecked(repo);
+  for (const key of ["tests", "implement", "verify"]) run(repo, "step", [key, "na", "fixture"]);
   assert.match(cli(repo, "next"), /gate verify --final/);
   cli(repo, "verify");
   assert.match(cli(repo, "report", ["--brief"]), /App driven by the e2e run in verify/);

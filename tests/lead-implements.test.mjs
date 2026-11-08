@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, lookedUp, planChecked } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadPolicy } from "../scripts/lib/size.mjs";
@@ -65,6 +65,8 @@ function opened(name, files) {
   cli(repo, "note", ["context", "Traced: src/a.ts:1 · Related: none: `grep -rn a src` · Research: none needed: a test fixture"]);
   cli(repo, "note", ["plan", "The plan.", "--files", files.join(",")]);
   cli(repo, "case", ["add", "it works", "--kind", "happy"]);
+  // these tests are about who edits once code may be edited, so the plan check is run first
+  if (ledgerOf(repo).checkHold) planChecked(repo);
   return repo;
 }
 
@@ -158,10 +160,11 @@ test("below large a worker takes a piece, answers a finding, and a path outside 
   const text = readFileSync(/packet: (\S+)/.exec(packet)[1], "utf8");
   assert.match(text, /## Tests already written/);
   assert.doesNotMatch(text, /QA wrote/);
-  assert.match(text, /H1\.1/);
-  writeFileSync(path.join(runDir(repo), "worker-1.md"), `# Worker 1\n\n## Replies\n- H1.1 — fixed: ${STANDARD_FILES[0]}:1\n`);
+  // the plan check is H1, so the reviewer's finding is H2.1
+  assert.match(text, /H2\.1/);
+  writeFileSync(path.join(runDir(repo), "worker-1.md"), `# Worker 1\n\n## Replies\n- H2.1 — fixed: ${STANDARD_FILES[0]}:1\n`);
   cli(repo, "huddle", ["reply", "--file", "worker-1.md"]);
-  assert.ok(ledgerOf(repo).huddles[0].actOn[0].closed, "the worker's answer closes the finding");
+  assert.ok(ledgerOf(repo).huddles.find((h) => h.role === "reviewer").actOn[0].closed, "the worker's answer closes the finding");
 });
 
 // ---------------------------------------------------------------------------

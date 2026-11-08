@@ -3,7 +3,7 @@ import path from "node:path";
 import { nextSeq } from "./events.mjs";
 import { currentLedger, findRun, isDone, loadLedger, openRuns, saveLedger } from "./ledger.mjs";
 import { loadConfig } from "./config.mjs";
-import { applyPrediction, policyFor, tierOrder, tiered } from "./size.mjs";
+import { applyPrediction, effectiveTier, policyFor, requiredSteps, tierOf, tierOrder, tiered } from "./size.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
@@ -84,6 +84,38 @@ function refuseSkipped(ctx, dir, ledger, file) {
   const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
   const skipped = skippedLookups({ ledger, dir, root: ctx.root, events }, file);
   if (skipped.length) throw new UsageError(`${file} was written by ${skipped.map(skippedText).join(", ")} without searching first; nothing recorded. Send it back (SendMessage) to search, e.g. ${LOOKUP_KINDS.map((k) => LOOKUP_EXAMPLE[k]).join(" and ")}, and recheck its file.`);
+}
+
+// Why the plan check is not done yet, or null: its newest file is finished and recorded and every
+// finding in it is answered.
+function checkAnswered(ledger, dir) {
+  const last = ledger.huddles.filter((h) => h.role === "skeptic" && h.file).at(-1);
+  if (!last) return "step {skeptic} needs a recorded skeptic huddle: `gate brief skeptic`, spawn done-gate:skeptic, then `gate huddle add skeptic --file skeptic-<n>.md`";
+  const full = path.join(dir, last.file);
+  if (!existsSync(full) || unfinishedFile(full)) return `step {skeptic}: ${last.file} is not finished. Run \`gate brief skeptic\` again and spawn a fresh helper; its packet continues from the file.`;
+  const openItems = ledger.huddles.filter((h) => h.role === "skeptic").flatMap((h) => h.actOn.filter((a) => !a.closed));
+  if (openItems.length) return `step {skeptic}: Act-on item(s) still open: ${openItems.map(openItem).join(", ")}. Answer each, then \`gate huddle resolve <id> --evidence <pointer>\`.`;
+  return null;
+}
+
+// The skeptic's question for the user, or null when its file says none.
+function oneQuestion(text) {
+  const at = text.search(/^## The one question\s*$/m);
+  if (at < 0) return null;
+  const body = text.slice(at).split("\n").slice(1);
+  const end = body.findIndex((l) => /^##\s/.test(l));
+  const words = (end < 0 ? body : body.slice(0, end)).map((l) => l.replace(/^\s*[-*]\s*/, "").trim()).filter(Boolean).join(" ");
+  return !words || /^(?:none|unverified)\.?$/i.test(words) ? null : words;
+}
+
+// On a run under the new rules the plan check closes itself once every finding is answered. A
+// question for the user leaves the close to the lead: the gate cannot tell it was asked.
+function settleCheck(ledger, dir) {
+  const step = ledger.steps.find((s) => s.key === "skeptic");
+  if (!newRules(ledger) || !step || step.state !== null || checkAnswered(ledger, dir)) return;
+  const last = ledger.huddles.filter((h) => h.role === "skeptic" && h.file).at(-1);
+  if (oneQuestion(readFileSync(path.join(dir, last.file), "utf8"))) return;
+  Object.assign(step, { state: "DONE", note: "closed by the gate: every finding answered", evidence: last.file, auto: "fact", seq: nextSeq() });
 }
 
 // A click event as the lead would recognise it: what it did, then its pointer.
@@ -268,6 +300,12 @@ export const verbs = {
           const paths = named.map((f) => toPosixRel(ctx.root, f, ledger.repos)).filter((f) => f);
           predicted = applyPrediction(ledger, policyFor(ledger), loadConfig(ctx.root, ledger.repos), paths, size ?? null);
         }
+        // code and tests wait for an owed check; a run whose code already changed is not stalled
+        // mid-edit by growing into one, and R8 still asks for it
+        if (newRules(ledger) && tiered(ledger)) {
+          const check = ledger.steps.find((s) => s.key === "skeptic");
+          ledger.checkHold = Boolean(check && check.state === null && (!ledger.lastSourceChangeSeq || ledger.checkHold));
+        }
       }
     });
     ctx.out(predicted ? `${section} noted · tier predicted ${predicted.tier} (${predicted.files} file${predicted.files === 1 ? "" : "s"}${predicted.declared ? `, declared ${predicted.declared}` : ""}${predicted.forced.length ? `, forced by ${predicted.forced.join(", ")}` : ""})` : `${section} noted`);
@@ -433,7 +471,9 @@ export const verbs = {
     const states = { done: "DONE", skipped: "SKIPPED", na: "N/A", "n/a": "N/A" };
     const state = states[String(stateWord).toLowerCase()];
     if (!ref || !state) throw new UsageError('usage: gate step <n|key> <done|skipped|na> "<note>" [--evidence <pointer> | --ran "<part of the command or url>"]');
-    const gateState = state === "DONE" ? buildState(ctx, {}) : null;
+    // the check's N/A is judged on the size measured now, not the last one saved
+    const checkNa = state === "N/A" && open(ctx).ledger.steps.find((s) => s.key === ref || String(s.n) === ref)?.key === "skeptic";
+    const gateState = state === "DONE" || checkNa ? buildState(ctx, {}) : null;
     let by = null;
     withLedger(ctx, (ledger, dir) => {
       const step = ledger.steps.find((s) => s.key === ref || String(s.n) === ref);
@@ -445,6 +485,11 @@ export const verbs = {
       if (step.key === "context" && ledger.lookups) throw new UsageError('step {context} is closed by `gate note context "Traced: … · Related: … · Research: …"` after you search the code and memory yourself; run that instead.');
       if (state === "N/A" && (step.key === "repro" || step.key === "rootcause")) {
         throw new UsageError(`step {${step.key}} cannot be N/A: a bug fix with no ${step.key === "repro" ? "reproduction" : "root cause"} is a guess. Do it, or get the user's waiver with \`gate waive ${step.key} "<reason>" --user-ok "<their words>"\``);
+      }
+      if (state === "N/A" && step.key === "skeptic" && newRules(ledger) && tiered(ledger)) {
+        const policy = policyFor(ledger);
+        const size = effectiveTier(policy, ledger, gateState?.tier?.measured ?? tierOf(ledger).measured);
+        if (requiredSteps(policy, size, ledger).includes("skeptic")) throw new UsageError(`step {skeptic} cannot be N/A at size ${size}: the plan check is owed there. Run it (\`gate brief skeptic\`), or get the user's waiver with \`gate waive skeptic "<reason>" --user-ok "<their words>"\``);
       }
       if (state === "N/A" && newRules(ledger) && SURFACE_KEYS.has(step.key)) {
         // the tree alone: a full assess here would reopen the N/A steps it judges as a next check does
@@ -470,15 +515,8 @@ export const verbs = {
       if (state !== "DONE" && !note) throw new UsageError(`${state} needs a reason`);
       // the design huddle is done when its newest file is finished and recorded and every
       // finding in it is answered, not when the lead says so
-      if (state === "DONE" && step.key === "skeptic") {
-        const huddles = ledger.huddles.filter((h) => h.role === "skeptic" && h.file);
-        const last = huddles[huddles.length - 1];
-        if (!last) throw new UsageError("step {skeptic} needs a recorded skeptic huddle: `gate brief skeptic`, spawn done-gate:skeptic, then `gate huddle add skeptic --file skeptic-<n>.md`");
-        const full = path.join(dir, last.file);
-        if (!existsSync(full) || unfinishedFile(full)) throw new UsageError(`step {skeptic}: ${last.file} is not finished. Run \`gate brief skeptic\` again and spawn a fresh helper; its packet continues from the file.`);
-        const openItems = huddles.flatMap((h) => h.actOn.filter((a) => !a.closed));
-        if (openItems.length) throw new UsageError(`step {skeptic}: Act-on item(s) still open: ${openItems.map(openItem).join(", ")}. Answer each, then \`gate huddle resolve <id> --evidence <pointer>\`.`);
-      }
+      const unanswered = state === "DONE" && step.key === "skeptic" ? checkAnswered(ledger, dir) : null;
+      if (unanswered) throw new UsageError(unanswered);
       delete step.auto;
       Object.assign(step, { state, note: note || null, evidence: evidence ?? null, seq: nextSeq() });
     });
@@ -521,7 +559,7 @@ export const verbs = {
         refuseSkipped(ctx, dir, ledger, file);
       }
       const same = (a, b) => String(a).toLowerCase().replace(/\s+/g, " ").trim() === String(b).toLowerCase().replace(/\s+/g, " ").trim();
-      const { id, answered, added } = withLedger(ctx, (ledger, dir) => {
+      const { id, answered, added, question } = withLedger(ctx, (ledger, dir) => {
         // adding the same file again re-reads it into the same huddle instead of a new round
         let huddle = file ? ledger.huddles.find((h) => h.role === role && h.file === file) : null;
         const seen = file ? ledger.seen?.[file] : null;
@@ -589,12 +627,15 @@ export const verbs = {
             }
           }
         }
-        return { id, answered, added };
+        if (role === "skeptic") settleCheck(ledger, dir);
+        const question = role === "skeptic" && text !== null && ledger.steps.find((s) => s.key === "skeptic")?.state === null ? oneQuestion(text) : null;
+        return { id, answered, added, question };
       });
       ctx.out(`${id} added (${role})${added.length ? ` · ${added.length} Act-on item${added.length === 1 ? "" : "s"} recorded` : ""}${answered ? ` · ${answered} dispute${answered === 1 ? "" : "s"} answered` : ""}`);
       // the ids the worker and the reviewer will be asked about, next to what each one says
       for (const a of added) ctx.out(`${a.id} — ${a.text}`);
       for (const a of added.filter((x) => x.unresolved)) ctx.out(`note: ${a.id} cites ${a.unresolved.join(", ")}, which does not resolve: check the claim yourself before acting on it`);
+      if (question) ctx.out(`The one question: ${question} Ask the user with AskUserQuestion before any code; once every item is answered, \`gate step skeptic done "<their answer>" --evidence ${file}\`.`);
       printNext(ctx);
       return;
     }
@@ -638,16 +679,12 @@ export const verbs = {
       const evidence = flag(rest, "--evidence");
       if (!aid || !evidence) throw new UsageError("usage: gate huddle resolve <H#.#> --evidence <pointer>");
       if (!pointerResolver(buildState(ctx, {}))(evidence)) throw new UsageError(`resolve evidence "${evidence}" does not resolve; point at a test (file:name), a file:line, ledger.md#<section>, verify.json, events#<seq> or a helper file`);
-      withLedger(ctx, (ledger) => {
-        for (const h of ledger.huddles) {
-          const item = h.actOn.find((a) => a.id === aid);
-          if (item) {
-            item.closed = evidence;
-            item.closedSeq = nextSeq();
-            return;
-          }
-        }
-        throw new UsageError(`no act-on item ${aid}`);
+      withLedger(ctx, (ledger, dir) => {
+        const item = ledger.huddles.flatMap((h) => h.actOn).find((a) => a.id === aid);
+        if (!item) throw new UsageError(`no act-on item ${aid}`);
+        item.closed = evidence;
+        item.closedSeq = nextSeq();
+        settleCheck(ledger, dir);
       });
       ctx.out(`${aid} resolved`);
       printNext(ctx);
@@ -667,7 +704,7 @@ export const verbs = {
       if (bulletCount > replies.length) throw new UsageError(`${file}: ${bulletCount - replies.length} line(s) under ## Replies do not read ${shape}; every bullet must be a reply`);
       const resolves = pointerResolver(buildState(ctx, {}));
       const lines = [];
-      withLedger(ctx, (ledger) => {
+      withLedger(ctx, (ledger, dir) => {
         const items = ledger.huddles.flatMap((h) => h.actOn);
         // validate every line first, so a bad reply changes nothing
         for (const r of replies) {
@@ -692,6 +729,7 @@ export const verbs = {
             lines.push(`${r.id} disputed — the reviewer's next file answers under ## Disputes`);
           }
         }
+        settleCheck(ledger, dir);
       });
       for (const l of lines) ctx.out(l);
       printNext(ctx);

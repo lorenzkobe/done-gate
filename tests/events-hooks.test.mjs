@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { eventsFromHookInput, readEvents, appendEvents } from "../scripts/lib/events.mjs";
-import { makeRepo, gate, write, here, readyToEdit } from "./helpers.mjs";
+import { makeRepo, gate, write, here, readyToEdit, planChecked } from "./helpers.mjs";
 import { decide } from "../scripts/lib/guard.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
@@ -323,6 +323,8 @@ function openedWith(name, { playbook = "feature", files = null, extra = {} } = {
   const repo = committed(name, extra);
   cli(repo, "open", [name, playbook]);
   readyToEdit(repo, { plan: files ? ["--files", files.join(",")] : [] });
+  // these tests are about who edits once code may be edited, so the plan check is run first
+  if (ledgerOf(repo).checkHold) planChecked(repo);
   return repo;
 }
 
@@ -489,6 +491,7 @@ test("C7 idempotent: the tests/fixtures/stdin edit payloads pass the fence silen
   const repo = committed("fence-c7");
   cli(repo, "open", ["fence-c7", "feature"]);
   readyToEdit(repo);
+  planChecked(repo);
   // the fixtures address /repo; point them at this one, and ask the fence rather than the log
   const asPreToolUse = (name) =>
     JSON.parse(JSON.stringify(stdinFixture(name)).split("/repo").join(repo).split('"PostToolUse"').join('"PreToolUse"'));

@@ -113,14 +113,16 @@ test("C5 re-noting the plan keeps its first timestamp and the report never calls
   assert.match(readFileSync(path.join(runDir(repo), "ledger.md"), "utf8"), /Amended after the skeptic/);
 });
 
-test("C6 the gate skill schedules skeptic with tests, both reviewers together on high-risk, verify in the background; the hints agree; the budget holds", () => {
+// reversed in 0.22: code and tests wait for the skeptic, which used to run beside the tests
+test("C6 the gate skill has tests wait for the skeptic, both reviewers together on high-risk, verify in the background; the hints agree; the budget holds", () => {
   const skill = read("skills/gate/SKILL.md");
   assert.ok(Buffer.byteLength(skill) < 4096, `SKILL.md is ${Buffer.byteLength(skill)} bytes`);
-  assert.match(skill, /skeptic[^.]*same turn|same turn[^.]*skeptic/i);
+  assert.match(skill, /tests wait for the skeptic/i);
+  assert.doesNotMatch(skill, /skeptic[^.]*same turn|same turn[^.]*skeptic/i);
   assert.match(skill, /reviewer-2[^.]*(?:together|at once|same turn)/i);
   assert.match(skill, /verify[^.]*background/i);
   const next = read("scripts/lib/next.mjs");
-  assert.match(next, /skeptic:[^\n]*(?:same turn|while it reads)/);
+  assert.match(next, /skeptic:[^\n]*code and tests wait/);
   assert.match(next, /review:[^\n]*reviewer-2[^\n]*(?:together|at once|same turn)/);
   assert.match(next, /review:[^\n]*verify[^\n]*background/);
 });

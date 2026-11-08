@@ -8,7 +8,7 @@ import { baseCopy, fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs"
 import { ROLES, flag, outsideRepos, positional } from "./verbs.mjs";
 import { repoPath, toPosixRel } from "./paths.mjs";
 import { OWN_FILE } from "./guard.mjs";
-import { LOOKUP_EXAMPLE, REVIEW_CAP, fixCheckDone, capUnitsOf, nextPiece, roundOnDisk, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify, verifyProblem } from "./rules.mjs";
+import { LOOKUP_EXAMPLE, REVIEW_CAP, newRules, fixCheckDone, capUnitsOf, nextPiece, roundOnDisk, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify, verifyProblem } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { nextSeq } from "./events.mjs";
@@ -444,6 +444,13 @@ export const verbs = {
     // consume a round number, so a re-brief reuses it instead of orphaning it
     const unfinished = (f) => unfinishedFile(path.join(state.dir, f));
     const numbers = (prefix) => state.reviews.filter((f) => f.startsWith(prefix)).map(fileNumber);
+    // the plan check is one pass: a finished file is answered, not run again, unless a disputed
+    // finding waits for the skeptic's next file to answer it
+    if (role === "skeptic" && newRules(state.ledger)) {
+      const newest = Math.max(0, ...numbers("skeptic-"));
+      const disputed = state.ledger.huddles.filter((h) => h.role === "skeptic").flatMap((h) => h.actOn).some((a) => a.dispute && !a.dispute.verdict && !a.closed);
+      if (newest && !unfinished(`skeptic-${newest}.md`) && !disputed) throw new UsageError(`the plan check runs once, and skeptic-${newest}.md is finished: record it (\`gate huddle add skeptic --file skeptic-${newest}.md\`) and answer each item with \`gate huddle resolve\`, or \`gate huddle dispute\` one, which brings the skeptic back to answer it`);
+    }
     const sameFiles = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
     // a number is free again only when its round is over (a cut-off helper's file, a packet
     // nobody ran); a round still running keeps it, so a second piece takes the next one

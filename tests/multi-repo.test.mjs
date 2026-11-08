@@ -19,7 +19,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, here, lookedUp, AT_GIT_TOPLEVEL } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, lookedUp, AT_GIT_TOPLEVEL, planChecked } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
@@ -375,6 +375,7 @@ test("C7 happy: at large the lead's and a worker's Edit of ../other/src/a.py are
   const big = pair("mr-c7", { main: Object.fromEntries(LARGE.map((f) => [f, "export const x = 1;\n"])), files: [...LARGE, "../mr-c7-other/src/a.py"].join(",") });
   assert.equal(ledgerOf(big.repo).tier.predicted, "large");
   cli(big.repo, "case", ["add", "the change works", "--kind", "happy"]);
+  planChecked(big.repo);
   const target = { file_path: path.join(big.other, "src/a.py") };
   assert.equal(fence(big.repo, "Edit", target), null, "the lead edits a declared repo's source file at large");
   assert.equal(fence(big.repo, "Write", target), null, "Write too");

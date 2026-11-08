@@ -18,8 +18,8 @@ Every verb prints a `next:` line: follow it. `gate check` lists what is unmet (R
    path"; then per row (R2)
    `gate case add "<case>" --kind <happy|edge|refused|boundary|idempotent|reported-surface|performance|click>`;
    a `click` row per new link, button or tab.
-3. Tests first, from the case table, red before green: spawn the skeptic and write the tests
-   in the same turn; fold its findings into the cases. `gate brief <role>` prints the prompt of
+3. Tests first, from the case table, red before green. Past small, code and
+   tests wait for the skeptic; fold its findings into the cases. `gate brief <role>` prints the prompt of
    each `done-gate:<role>` helper: skeptic (`skeptic-<n>.md`), qa (blind tests, large), worker,
    reviewer, reviewer-2 (high-risk/large), arbiter.
 4. Tiny, small, standard, large: implement yourself; independent pieces may go to workers

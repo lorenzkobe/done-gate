@@ -119,8 +119,11 @@ test("C3 happy: planChecked closes the skeptic step on a standard run, and the o
   planAndEdit(gate, repo, "src/a.ts,src/app/page.tsx");
   assert.equal(ledgerOf(repo).tier.predicted, "standard", "premise: a two-file plan needs the check");
   assert.match(run(old, repo, ["check"]).stdout, /\{skeptic\}/, "premise: the check is open before planChecked");
+  assert.equal(ledgerOf(repo).checkHold, true, "premise: this copy holds code for the check");
   planChecked(repo);
-  assert.equal(ledgerOf(repo).steps.find((s) => s.key === "skeptic").state, "DONE");
+  const step = ledgerOf(repo).steps.find((s) => s.key === "skeptic");
+  assert.equal(step.state, "DONE");
+  assert.equal(step.auto, "fact", "the gate closed the check itself");
   for (const g of [old, gate]) assert.doesNotMatch(run(g, repo, ["check"]).stdout, /\{skeptic\}/);
 });
 

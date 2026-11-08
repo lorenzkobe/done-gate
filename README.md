@@ -371,7 +371,8 @@ plan naming no source file predicts small, except while no source file has chang
 bump), where the measurement decides and the reviewer can be N/A. `gate size` prints the
 numbers. The skeptic step is on the feature, bugfix and refactor playbooks at standard and
 large; it cannot close without a finished, recorded `skeptic-<n>.md` whose Act-on items are
-all closed. The policy is in `models.json`. Aim for at most ten helper invocations per task
+all closed. Until then code and tests wait. It closes itself once the last item is answered,
+unless the file holds a question for the user, and it runs once (again only for a disputed item). The policy is in `models.json`. Aim for at most ten helper invocations per task
 (not enforced); typically two or three. Always-on context cost is about 500 tokens; everything the hooks do
 is off-model.
 

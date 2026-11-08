@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync, execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync, utimesSync, readdirSync, writeFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, gate, write, pluginRoot, doneArgs, lookedUp, waiveArgs } from "./helpers.mjs";
+import { makeRepo, gate, write, pluginRoot, doneArgs, lookedUp, waiveArgs, planChecked } from "./helpers.mjs";
 import { loadSession, ensureSession } from "../scripts/lib/session-state.mjs";
 import { openLedger, attachLedger, currentLedger, loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadConfig, matchGlob, matchAny, DEFAULTS } from "../scripts/lib/config.mjs";
@@ -999,8 +999,10 @@ test("C5 boundary: open cases with every step closed hint `gate case close`, not
   const repo = opened("next-c5", { planFiles: "src/a.ts,src/app/page.tsx" }); // standard: nothing auto-N/A
   cli(repo, "case", ["add", "renders the badge", "--kind", "happy"]);
 
-  // Close every step the playbook has except {close} itself and {context}, which opened() wrote.
-  const keys = playbookKeys("feature").filter((k) => !["context", "plan", "cases", "close"].includes(k));
+  // Close every step the playbook has except {close} itself and {context}, which opened() wrote;
+  // the plan check is owed at standard, so it is run rather than marked N/A.
+  planChecked(repo);
+  const keys = playbookKeys("feature").filter((k) => !["context", "plan", "cases", "close", "skeptic"].includes(k));
   let last = "";
   for (const key of keys) last = hint(repo, "step", [key, "na", "not exercised by this fixture"]);
 
