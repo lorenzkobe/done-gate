@@ -8,7 +8,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, uncovered, afterReview, changedUnitsOf, parseEntry, pathOf, parseReplies, parseRuling, pointerResolver, proofProblem, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
+import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, uncovered, afterReview, changedUnitsOf, parseEntry, pathOf, parseReplies, parseRuling, pointerResolver, proofProblem, wrongProblem, upheldItem, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
 import { assess, broughtSinceOpen, buildState, cleanAtHead, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
@@ -16,6 +16,38 @@ import { weakened } from "./slop.mjs";
 import { pointerFile } from "./verify.mjs";
 import { endStanding, waiveStanding } from "./standing.mjs";
 import { appendEvents, readEvents } from "./events.mjs";
+
+// A reviewer's finding closed unfixed: on a run that shows it wrong, or on the user's words. A
+// dispute still waiting is the reviewer's to answer; an upheld one is the user's call.
+function closeAsWrong(ctx, state, item, aid, evidence, words) {
+  if (!item) throw new UsageError(`no act-on item ${aid}`);
+  const h = state.ledger.huddles.find((x) => x.actOn.some((a) => a.id === aid));
+  if (h.role !== "reviewer" && h.role !== "reviewer-2") throw new UsageError(`--wrong is for a reviewer's finding; ${aid} is the ${h.role}'s: answer it with \`gate huddle resolve\` or \`gate huddle dispute\``);
+  if (item.dispute && !item.dispute.verdict) throw new UsageError(`${aid} is disputed and the ${h.role} has not answered yet: \`gate brief ${h.role}\` sends it to be withdrawn or upheld`);
+  const upheld = upheldItem(item);
+  if (evidence) {
+    if (upheld) throw new UsageError(`${aid}: the ${h.role} upheld it, so it is the user's call: ask them, then \`gate huddle resolve ${aid} --wrong --words "<their words>"\`, or fix it`);
+    const problem = wrongProblem(state, item, evidence);
+    if (problem) throw new UsageError(`${aid}: ${problem}`);
+  } else {
+    const shape = wordsShapeProblem(words);
+    const tell = `ask the user whether to keep it, then \`gate huddle resolve ${aid} --wrong --words "<their words, at least three>"\``;
+    if (shape) throw new UsageError(`${aid}: ${shape}. ${tell}`);
+    const from = upheld ? item.dispute.answeredSeq ?? item.dispute.seq ?? h.seq ?? 0 : h.seq ?? 0;
+    const hit = saidAt(notRecommended(state.events ?? []), from, words);
+    if (!hit) throw new UsageError(`${aid}: the user did not say "${words}" ${upheld ? "since the reviewer upheld it" : "since this finding"}: ${tell}`);
+    if (askedNotSaid(hit.text, words)) throw new UsageError(`${aid}: "${words}" was the user's question, not their decision: ${tell}`);
+  }
+  withLedger(ctx, (ledger, dir) => {
+    const a = ledger.huddles.flatMap((x) => x.actOn).find((x) => x.id === aid);
+    a.closed = `wrong: ${evidence ?? `the user said "${words}"`}`;
+    a.wrong = evidence ? { evidence, seq: nextSeq() } : { words, seq: nextSeq() };
+    a.closedSeq = nextSeq();
+    settleCheck(ledger, dir);
+  });
+  ctx.out(`${aid} closed as wrong (${evidence ?? `the user: "${words}"`}); the report lists it`);
+  printNext(ctx);
+}
 
 // The report of a run that is no longer current: the same renderer `gate report` uses.
 export function writeReport(ctx, dir, ledger) {
@@ -671,6 +703,7 @@ export const verbs = {
             if (!a || !a.dispute) continue;
             a.dispute.verdict = d.verdict;
             a.dispute.reviewerReason = d.reason;
+            a.dispute.answeredSeq = nextSeq();
             if (d.verdict === "withdrawn" && !a.closed) {
               a.closed = `withdrawn (${file})`;
               a.closedSeq = nextSeq();
@@ -745,6 +778,23 @@ export const verbs = {
       printNext(ctx);
       return;
     }
+    if (action === "reopen") {
+      const [aid, ...why] = pos;
+      const reason = why.join(" ").trim();
+      if (!aid || !reason) throw new UsageError('usage: gate huddle reopen <H#.#> "<why the close does not hold>"');
+      withLedger(ctx, (ledger) => {
+        const item = ledger.huddles.flatMap((h) => h.actOn).find((a) => a.id === aid);
+        if (!item) throw new UsageError(`no act-on item ${aid}`);
+        if (!item.closed) throw new UsageError(`${aid} is open: there is no close to take back`);
+        const { closed, wrong, dispute } = item;
+        item.reopened = [...(item.reopened ?? []), { closed, ...(wrong ? { wrong } : {}), ...(dispute ? { dispute } : {}), why: reason, seq: nextSeq() }];
+        item.closed = null;
+        for (const key of ["closedSeq", "closedBy", "wrong", "dispute"]) delete item[key];
+      });
+      ctx.out(`${aid} reopened: ${reason}`);
+      printNext(ctx);
+      return;
+    }
     if (action === "dispute") {
       const [aid, ...words] = pos;
       const why = words.join(" ");
@@ -783,9 +833,17 @@ export const verbs = {
     if (action === "resolve") {
       const [aid] = pos;
       const evidence = flag(rest, "--evidence");
-      if (!aid || !evidence) throw new UsageError("usage: gate huddle resolve <H#.#> --evidence <pointer>");
+      const wrong = rest.includes("--wrong");
+      const words = flag(rest, "--words")?.trim() || null;
+      if (!aid || (!evidence && !(wrong && words))) throw new UsageError('usage: gate huddle resolve <H#.#> --evidence <pointer> | --wrong --evidence events#<seq> | --wrong --words "<the user\'s words>"');
       const state = buildState(ctx, {});
       const found = state.ledger?.huddles.flatMap((h) => h.actOn).find((a) => a.id === aid);
+      if (found?.closed) throw new UsageError(`${aid} is already closed (${found.closed}); \`gate huddle reopen ${aid} "<why>"\` takes the close back first`);
+      if (wrong) {
+        if (evidence && words) throw new UsageError(`${aid}: --wrong takes a run (--evidence events#<seq>) or the user's words (--words), not both`);
+        closeAsWrong(ctx, state, found, aid, evidence, words);
+        return;
+      }
       const proof = found ? proofProblem(state, found, evidence) : undefined;
       if (proof) throw new UsageError(`${aid}: on this run ${proof}`);
       if (proof === undefined && !pointerResolver(state)(evidence)) throw new UsageError(`resolve evidence "${evidence}" does not resolve; point at a test (file:name), a file:line, ledger.md#<section>, verify.json, events#<seq> or a helper file`);
@@ -848,7 +906,7 @@ export const verbs = {
       printNext(ctx);
       return;
     }
-    throw new UsageError("usage: gate huddle add|acton|resolve|dispute|reply|unchanged ...");
+    throw new UsageError("usage: gate huddle add|acton|resolve|reopen|dispute|reply|unchanged ...");
   },
 
   waive(ctx) {

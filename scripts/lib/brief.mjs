@@ -336,10 +336,15 @@ export function renderPacket(state, role, { round, n, item = null, piece = null,
     const cites = (text) => (paths ? [...paths] : reviewScope(state)).some((f) => text.includes(f));
     // on a new run a closed pointer is a run or doc, which no longer names the file the fix landed
     // in, so a fix-check re-checks every closed finding of its role
-    const recheck = state.ledger.huddles.filter((h) => h.role === role).flatMap((h) => h.actOn.filter((a) => a.closed && (cites(a.text) || cites(String(a.closed)) || (fixCheck && newRules(state.ledger)))));
+    const recheck = state.ledger.huddles.filter((h) => h.role === role).flatMap((h) => h.actOn.filter((a) => a.closed && !a.wrong && (cites(a.text) || cites(String(a.closed)) || (fixCheck && newRules(state.ledger)))));
+    const wrongs = state.ledger.huddles.filter((h) => h.role === role).flatMap((h) => h.actOn.filter((a) => a.closed && a.wrong));
     if (recheck.length) {
       out.push("## Findings to re-check", "", "Earlier rounds found these and each was closed as shown. For each, say ADDRESSED or NOT ADDRESSED, and flag anything the fix broke in the lines below.", "");
       out.push(...recheck.map((a) => `- ${a.id} — ${a.text} — closed: ${a.closed}`), "");
+    }
+    if (wrongs.length) {
+      out.push("## Closed as wrong", "", "These were closed unfixed, on the run or the user's words shown. Raise one again only with new evidence.", "");
+      out.push(...wrongs.map((a) => `- ${a.id} — ${a.text} — ${a.closed}`), "");
     }
     if (disputes.length) {
       out.push("## Disputes to answer", "", "The implementer disputed these findings. Answer each in your file's `## Disputes` section: `- H<k>.<i> — withdrawn: <reason>` or `- H<k>.<i> — upheld: <reason and a pointer>`. One you leave out stands as upheld.", "");
@@ -581,7 +586,7 @@ export const verbs = {
       throw new UsageError(`${role} fix-check: ${piece.files.join(",")} holds no unreviewed line. The next piece: \`gate brief ${role} --files ${nextPiece(state, owed).join(",")}\``);
     }
     if (done >= cap && !(legacy && role === "reviewer-2") && !stillOpen && !fixCheck && !answers && !late) {
-      throw new UsageError(`${role} round ${done + 1}: ${NUMBER_WORDS[cap] ?? cap} round${cap === 1 ? "" : "s"} is the cap. What is still disputed goes to the arbiter (\`gate brief arbiter --item H<k>.<i>\`, spawn done-gate:arbiter); what is still open is fixed and closed with \`gate huddle resolve\`.`);
+      throw new UsageError(`${role} round ${done + 1}: ${NUMBER_WORDS[cap] ?? cap} round${cap === 1 ? "" : "s"} is the cap. An upheld dispute is the user's call: ask them, then fix it or close it with their words (\`gate huddle resolve <id> --wrong --words "<their words>"\`); what is still open is fixed and closed with \`gate huddle resolve\`.`);
     }
     let item = null;
     if (role === "arbiter") {

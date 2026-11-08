@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, doneArgs, lookedUp, asOldRun, planChecked, pinnedBefore, redRun } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, doneArgs, lookedUp, asOldRun, planChecked, pinnedBefore, redRun, userSays } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { pointerResolver } from "../scripts/lib/rules.mjs";
@@ -570,7 +570,8 @@ test("C9 happy: the brief's review line reads n problems, k fixed, m overruled b
   const briefOut = cli(three, "report", ["--brief"]).stdout;
   const forYou = lines(briefOut).find((l) => l.startsWith("For you:"));
   assert.ok(forYou, `no "For you:" line in:\n${briefOut}`);
-  for (const phrase of ["sided with me", "sided with the reviewer", "waiting for the arbiter"]) {
+  // 6.7: an upheld dispute waits for the user, not the arbiter
+  for (const phrase of ["sided with me", "sided with the reviewer", "waiting for you"]) {
     assert.ok(forYou.includes(phrase), `the For you line does not say "${phrase}":\n${briefOut}`);
   }
 });
@@ -908,6 +909,132 @@ test("C21 refused: gate huddle resolve --evidence decisions#9999 is refused and 
   });
   assert.equal(resolves("decisions#1"), false, "decisions#1 resolves in a run dir with no decisions.tsv");
 });
+
+// 6.7: a finding closed as wrong, a reopened one, and an upheld dispute that goes to the user
+const logged = (repo, payload) => spawnSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: "S1", cwd: repo, ...payload }), encoding: "utf8", env: envFor(repo) });
+const browsed = (repo) => {
+  logged(repo, { hook_event_name: "PostToolUse", tool_name: "mcp__claude-in-chrome__navigate", tool_input: { url: "http://localhost:3000/venues" }, tool_response: {} });
+  return `events#${readEvents(stateDir(repo), "S1").filter((e) => e.kind === "browser").at(-1).seq}`;
+};
+function twoFindings(name) {
+  const repo = opened(name);
+  cli(repo, "brief", ["reviewer"]);
+  logged(repo, { hook_event_name: "SubagentStop", agent_id: "R1", agent_type: "done-gate:reviewer" });
+  helperFile(repo, "review-1.md", reviewFile(1, name, [FIND_1, FIND_2]));
+  cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
+  return repo;
+}
+
+test("6.7 W1 W2: resolve --wrong refuses a file pointer, closes on a browser call since the round, and shows in the short report", () => {
+  const repo = twoFindings("rl-67-w1");
+  refused(repo, "huddle", ["resolve", "H1.1", "--wrong", "--evidence", "src/a.ts:1"]);
+  assert.equal(itemById(ledgerOf(repo), "H1.1").closed, null);
+  const ptr = browsed(repo);
+  const out = cli(repo, "huddle", ["resolve", "H1.1", "--wrong", "--evidence", ptr]).stdout;
+  assert.match(out, /H1\.1 closed as wrong/);
+  const item = itemById(ledgerOf(repo), "H1.1");
+  assert.equal(item.wrong.evidence, ptr);
+  assert.match(String(item.closed), /^wrong/);
+  const brief = cli(repo, "report", ["--brief"]).stdout;
+  assert.match(brief, /1 closed as wrong/, brief);
+  assert.match(brief, /closed as wrong: "the empty list renders a stray comma/, brief);
+});
+
+test("6.7 W3 edge: reopen refuses an open item; a reopened item blocks R5 again and keeps its old close", () => {
+  const repo = twoFindings("rl-67-w3");
+  refused(repo, "huddle", ["reopen", "H1.2", "it never closed"]);
+  cli(repo, "huddle", ["resolve", "H1.1", "--wrong", "--evidence", browsed(repo)]);
+  cli(repo, "huddle", ["resolve", "H1.2", "--evidence", "doc"]);
+  assert.doesNotMatch(ruleLine(check(repo), "R5") ?? "", /H1\.1/);
+  cli(repo, "huddle", ["reopen", "H1.1", "the page I checked was cached"]);
+  const item = itemById(ledgerOf(repo), "H1.1");
+  assert.equal(item.closed, null);
+  assert.equal(item.wrong, undefined);
+  assert.equal(item.reopened.length, 1);
+  assert.match(item.reopened[0].closed, /^wrong/);
+  assert.match(check(repo), /H1\.1/, "the reopened finding blocks again");
+});
+
+test("6.7 W4 happy: a wrong item leaves a fix-check's re-check list and is listed as closed as wrong", () => {
+  const repo = twoFindings("rl-67-w4");
+  cli(repo, "huddle", ["resolve", "H1.1", "--wrong", "--evidence", browsed(repo)]);
+  write(repo, "src/a.ts", "export const a = 2;\nexport const venue = undefined;\n");
+  logged(repo, { hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: path.join(repo, "src/a.ts") }, tool_response: {} });
+  cli(repo, "huddle", ["resolve", "H1.2", "--evidence", "doc"]);
+  const packet = readFileSync(/packet: (\S+)/.exec(cli(repo, "brief", ["reviewer"]).stdout)[1], "utf8");
+  const recheck = /## Findings to re-check\n([\s\S]*?)(?=\n## |$)/.exec(packet)?.[1] ?? "";
+  assert.match(recheck, /H1\.2/, packet);
+  assert.doesNotMatch(recheck, /H1\.1/);
+  const wrongs = /## Closed as wrong\n([\s\S]*?)(?=\n## |$)/.exec(packet)?.[1] ?? "";
+  assert.match(wrongs, /new evidence/, packet);
+  assert.match(wrongs, /- H1\.1 — /, packet);
+});
+
+test("6.7 W5 reported-surface: an upheld dispute blocks R5 with a line naming the user, and the short report says waiting for you", () => {
+  const repo = upheld("rl-67-w5");
+  const r5 = ruleLine(check(repo), "R5") ?? "";
+  assert.match(r5, /H1\.2[\s\S]*ask the user/, r5);
+  assert.match(r5, /--wrong --words/, r5);
+  assert.match(cli(repo, "report", ["--brief"]).stdout, /the reviewer upheld it, waiting for you/);
+});
+
+test("6.7 W6 refused: --wrong --words the user never said is refused; their words close the item and show in the report", () => {
+  const repo = upheld("rl-67-w6");
+  const words = "the reviewer is wrong, leave the venue check as it is";
+  refused(repo, "huddle", ["resolve", "H1.2", "--wrong", "--words", words]);
+  assert.equal(itemById(ledgerOf(repo), "H1.2").closed, null);
+  userSays(repo, words);
+  cli(repo, "huddle", ["resolve", "H1.2", "--wrong", "--words", words]);
+  assert.equal(itemById(ledgerOf(repo), "H1.2").wrong.words, words);
+  assert.doesNotMatch(ruleLine(check(repo), "R5") ?? "", /H1\.2/, check(repo));
+  assert.match(cli(repo, "report", ["--brief"]).stdout, /leave the venue check as it is/);
+});
+
+test("6.7 W7 happy: an upheld finding fixed and resolved with proof closes as any fix does", () => {
+  const repo = upheld("rl-67-w7");
+  cli(repo, "huddle", ["resolve", "H1.2", "--evidence", "doc"]);
+  assert.ok(itemById(ledgerOf(repo), "H1.2").closed);
+  assert.equal(itemById(ledgerOf(repo), "H1.2").wrong, undefined);
+  assert.doesNotMatch(cli(repo, "report", ["--brief"]).stdout, /waiting for you/, "a fixed upheld item waits for nobody");
+});
+
+test("6.7 W8 refused: --wrong while a dispute waits, --evidence on an upheld item, and any resolve of a closed item", () => {
+  const waiting = twoFindings("rl-67-w8");
+  cli(waiting, "huddle", ["dispute", "H1.2", WHY, "--evidence", EVIDENCE]);
+  assert.match(refused(waiting, "huddle", ["resolve", "H1.2", "--wrong", "--evidence", browsed(waiting)]).stderr, /reviewer/);
+  const up = upheld("rl-67-w8-up");
+  assert.match(refused(up, "huddle", ["resolve", "H1.2", "--wrong", "--evidence", browsed(up)]).stderr, /user/);
+  assert.match(refused(up, "huddle", ["resolve", "H1.2", "--wrong", "--evidence", browsed(up), "--words", "leave it exactly as it is"]).stderr, /not both/);
+  cli(waiting, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
+  assert.match(refused(waiting, "huddle", ["resolve", "H1.1", "--wrong", "--evidence", browsed(waiting)]).stderr, /reopen/);
+});
+
+test("6.7 W9 refused: --words said before the reviewer upheld it, or only as the user's question", () => {
+  const repo = twoFindings("rl-67-w9");
+  cli(repo, "huddle", ["dispute", "H1.2", WHY, "--evidence", EVIDENCE]);
+  const early = "keep the venue check exactly as it is";
+  userSays(repo, early);
+  helperFile(repo, "review-2.md", reviewFile(2, "rl-67-w9", [], `\n## Disputes\n- H1.2 — upheld: ${UPHELD_REASON}\n\n`));
+  cli(repo, "huddle", ["add", "reviewer", "--file", "review-2.md"]);
+  refused(repo, "huddle", ["resolve", "H1.2", "--wrong", "--words", early]);
+  const asked = "should I keep the venue check?";
+  userSays(repo, asked);
+  refused(repo, "huddle", ["resolve", "H1.2", "--wrong", "--words", asked]);
+  assert.equal(itemById(ledgerOf(repo), "H1.2").closed, null);
+});
+
+test("6.7 W10 edge: a reopened withdrawn item counts once in the short report and is not counted as wrong", () => {
+  const repo = twoFindings("rl-67-w10");
+  cli(repo, "huddle", ["dispute", "H1.2", WHY, "--evidence", EVIDENCE]);
+  helperFile(repo, "review-2.md", reviewFile(2, "rl-67-w10", [], `\n## Disputes\n- H1.2 — withdrawn: fair, the caller checks it\n\n`));
+  cli(repo, "huddle", ["add", "reviewer", "--file", "review-2.md"]);
+  cli(repo, "huddle", ["reopen", "H1.2", "the caller's check was removed since"]);
+  const item = itemById(ledgerOf(repo), "H1.2");
+  assert.equal(item.dispute, undefined);
+  const brief = cli(repo, "report", ["--brief"]).stdout;
+  assert.doesNotMatch(brief, /withdrawn by the reviewer/, brief);
+  assert.match(brief, /2 still open/, brief);
+});
 }
 
 // ===== from tests/review-loop.test.mjs =====
@@ -1243,8 +1370,8 @@ test("C6 refused: a fourth round after three reviewer huddles is refused and the
   );
   const fourth = refused(natural, "brief", ["reviewer"]);
   assert.ok(
-    fourth.stderr.includes("gate brief arbiter"),
-    `the natural fourth round's refusal does not name gate brief arbiter: ${fourth.stderr}`,
+    fourth.stderr.includes("--wrong --words"),
+    `the natural fourth round's refusal does not send an upheld dispute to the user: ${fourth.stderr}`,
   );
   assert.ok(!fourth.stdout.includes("packet: "), `a fourth reviewer packet was written:\n${fourth.stdout}`);
 });
@@ -1322,7 +1449,7 @@ test("C8 happy: the next: hint for the {review} step names gate brief reviewer, 
     ["gate brief worker", /gate brief worker/],
     ["SendMessage", /SendMessage/],
     ["gate huddle reply", /gate huddle reply/],
-    ["the arbiter", /arbiter/],
+    ["the user for an upheld dispute", /upheld dispute is the user's/],
   ]) {
     assert.match(h, re, `the {review} hint never names ${what}:\n${h}`);
   }

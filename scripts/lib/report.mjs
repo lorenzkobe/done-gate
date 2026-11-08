@@ -334,12 +334,14 @@ function reviewLine(ledger) {
   const overruled = items.filter((a) => a.dispute?.verdict === "arbiter:implementer").length;
   const withdrawn = items.filter((a) => a.dispute?.verdict === "withdrawn").length;
   const open = items.filter((a) => !a.closed).length;
-  const fixed = items.length - overruled - withdrawn - open;
+  const wrong = items.filter((a) => a.closed && a.wrong).length;
+  const fixed = items.length - overruled - withdrawn - open - wrong;
   const parts = [];
-  if (!open && !overruled && !withdrawn) return `Reviewer found ${plural(items.length, "problem")}, ${items.length === 1 ? "fixed" : "all fixed"}.`;
+  if (!open && !overruled && !withdrawn && !wrong) return `Reviewer found ${plural(items.length, "problem")}, ${items.length === 1 ? "fixed" : "all fixed"}.`;
   if (fixed) parts.push(`${fixed} fixed`);
   if (withdrawn) parts.push(`${withdrawn} withdrawn by the reviewer`);
   if (overruled) parts.push(`${overruled} overruled by the arbiter`);
+  if (wrong) parts.push(`${wrong} closed as wrong`);
   if (open) parts.push(`${open} still open`);
   return `Reviewer found ${plural(items.length, "problem")}, ${parts.join(", ")}.`;
 }
@@ -460,13 +462,16 @@ function forYouLine(state, unmet) {
   }
   for (const a of ledger.planAdds ?? []) items.push(`added to the plan: ${a.files.join(", ")} (${plain(a.why)})`);
   if (ledger.planDrift?.length) items.push(`outside the plan: ${ledger.planDrift.join(", ")}`);
+  for (const a of ledger.huddles.flatMap((h) => h.actOn).filter((x) => x.closed && x.wrong)) {
+    items.push(`closed as wrong: "${plain(a.text)}" (${a.wrong.evidence ? `shown by the run ${a.wrong.evidence}` : `you said: "${a.wrong.words}"`})`);
+  }
   for (const a of ledger.huddles.flatMap((h) => h.actOn)) {
-    if (!a.dispute) continue;
+    if (!a.dispute || a.wrong) continue;
     const v = a.dispute.verdict;
     const text = plain(a.text);
     if (v === "arbiter:implementer") items.push(`"${text}": the arbiter sided with me, not changed`);
     else if (v === "arbiter:reviewer") items.push(`"${text}": the arbiter sided with the reviewer${a.closed ? ", fixed" : ", fix pending"}`);
-    else if (v === "upheld") items.push(`"${text}": the reviewer upheld it, waiting for the arbiter`);
+    else if (v === "upheld" && !a.closed) items.push(`"${text}": the reviewer upheld it, waiting for you`);
     else if (v !== "withdrawn") items.push(`"${text}": disputed, waiting for the reviewer's answer`);
   }
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) items.push(`skipped: ${plain(s.text)} (${plain(s.note)})`);

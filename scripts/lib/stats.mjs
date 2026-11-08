@@ -147,7 +147,7 @@ function minuteLines(closed) {
 
 // Only a lost dispute says a finding was wrong. One dismissed on a decision or a plan note may be
 // wrong or may be handled, and the record cannot tell, so "wrong" is a floor beside that count.
-const wrongVerdict = (item) => item.dispute?.verdict === "withdrawn" || item.dispute?.verdict === "arbiter:implementer";
+const wrongVerdict = (item) => Boolean(item.closed && item.wrong) || item.dispute?.verdict === "withdrawn" || item.dispute?.verdict === "arbiter:implementer";
 const onNote = (closed) => /^(?:decisions#|ledger\.md#)/.test(closed);
 // a pointer is `file:line`, `file:test name` or a run record (events#<seq>, withdrawn (file))
 const pointerPath = (closed) => /^[^\s:]+/.exec(closed)?.[0] ?? "";

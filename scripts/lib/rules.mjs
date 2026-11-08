@@ -414,20 +414,37 @@ export function proofProblem(state, item, ptr) {
   const h = (state.ledger.huddles ?? []).find((x) => x.actOn.some((a) => a.id === item.id));
   if (!h || !newRules(state.ledger) || (h.role !== "reviewer" && h.role !== "reviewer-2")) return undefined;
   if (ptr === "doc") return null;
-  // the lead's runs and a worker's; a reviewer, QA or arbiter run is not the fix's proof
-  const since = (state.events ?? []).filter((e) => e.seq > (h.seq ?? 0) && !e.background && (!e.agentType || isRole(e.agentType, "worker")));
-  const gateCall = (cmd) => GATE_CALL.exec(cmd ?? "")?.[1];
-  const testRun = (e) => runsTests(e.cmd ?? "") || gateCall(e.cmd) === "test";
+  const since = proofEvents(state, h);
   const red = (e) => e.kind === "command" && testRun(e) && (e.exit ?? 0) !== 0;
   const seq = /^events#(\d+)$/.exec(String(ptr ?? ""));
   if (seq) {
     const e = since.find((x) => x.seq === Number(seq[1]));
-    const clean = (x) => x.kind === "command" && !gateCall(x.cmd) && !x.git && !x.scratch && !x.failed && (!x.readOnly || x.runs) && (x.exit ?? 0) === 0;
-    return e && (e.kind === "browser" || red(e) || (clean(e) && !testRun(e))) ? null : PROOF_TEXT;
+    return e && (e.kind === "browser" || red(e) || (ranCleanly(e) && (e.exit ?? 0) === 0 && !testRun(e))) ? null : PROOF_TEXT;
   }
   const file = String(ptr ?? "").replace(/:[^/]*$/, "");
   return state.config.isTest(file) && since.some((e) => red(e) && e.cmd.includes(file)) ? null : PROOF_TEXT;
 }
+
+// The lead's runs and a worker's since the finding's round; a reviewer, QA or arbiter run is not
+// the lead's proof.
+function proofEvents(state, h) {
+  return (state.events ?? []).filter((e) => e.seq > (h.seq ?? 0) && !e.background && (!e.agentType || isRole(e.agentType, "worker")));
+}
+const gateCall = (cmd) => GATE_CALL.exec(cmd ?? "")?.[1];
+const testRun = (e) => runsTests(e.cmd ?? "") || gateCall(e.cmd) === "test";
+const ranCleanly = (e) => e.kind === "command" && !gateCall(e.cmd) && !e.git && !e.scratch && !e.failed && (!e.readOnly || e.runs);
+
+// A run that shows a finding wrong: a browser call or a command that really ran since its round,
+// whatever it exited with. Null when it does.
+export function wrongProblem(state, item, ptr) {
+  const h = (state.ledger.huddles ?? []).find((x) => x.actOn.some((a) => a.id === item.id));
+  const seq = /^events#(\d+)$/.exec(String(ptr ?? ""));
+  const e = h && seq ? proofEvents(state, h).find((x) => x.seq === Number(seq[1])) : null;
+  return e && (e.kind === "browser" || ranCleanly(e)) ? null : "a finding closes as wrong on `events#<seq>` of a browser call or a command run since its round that shows it wrong (not a read, a gate verb, a git command or a scratch write)";
+}
+
+// An open finding the reviewer upheld, or the arbiter gave the reviewer on an older run.
+export const upheldItem = (a) => !a.closed && (a.dispute?.verdict === "upheld" || a.dispute?.verdict === "arbiter:reviewer");
 
 export function ranText(e) {
   return [e.cmd, e.skill, e.kind === "tool" ? e.tool : null, e.input, e.action, e.target, e.url, ...(e.actions ?? []).flatMap((a) => [a.action, a.target, a.url])].filter(Boolean).join(" ");
@@ -1293,7 +1310,12 @@ const disputedText = (role, items) => {
   const waiting = items.filter((a) => a.dispute && !a.dispute.verdict).map((a) => a.id);
   return waiting.length ? ` ${waiting.join(", ")} ${waiting.length === 1 ? "is" : "are"} disputed: \`gate brief ${role}\` sends ${waiting.length === 1 ? "it" : "them"} to the ${role} to answer.` : "";
 };
-const stillOpen = (r) => (r.openItems?.length ? `still open from earlier rounds: ${r.openItems.map(openItem).join(", ")}; ` : "");
+// an upheld dispute is the user's call
+const upheldText = (role, items) => {
+  const ids = items.filter(upheldItem).map((a) => a.id);
+  return ids.length ? ` ${ids.join(", ")} ${ids.length === 1 ? "is" : "are"} upheld by the ${role}: ask the user, then fix ${ids.length === 1 ? "it" : "each"}, or close it with their words (\`gate huddle resolve ${ids[0]} --wrong --words "<their words>"\`).` : "";
+};
+const stillOpen = (r, role) => (r.openItems?.length ? `still open from earlier rounds: ${r.openItems.map(openItem).join(", ")};${upheldText(role, r.openItems)} ` : "");
 
 // Pure: state in, unmet rules out. Every item says what to do next.
 // On a run under the new rules the gate closes these steps from what it recorded. Blank steps
@@ -1432,13 +1454,13 @@ export function evaluate(state) {
   if (src.length && needsReviewer && !waived(ledger, "review")) {
     const r = reviewed(state, "reviewer", after);
     if (r.partOpen) {
-      unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer", r.openItems)}${orWaive("review")}` });
+      unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer", r.openItems)}${upheldText("reviewer", r.openItems)}${orWaive("review")}` });
     } else if (!r.stopped || !r.hasFile) {
-      unmet.push({ rule: "R5", text: stillOpen(r) + (r.pending.length && r.hasFile
+      unmet.push({ rule: "R5", text: stillOpen(r, "reviewer") + (r.pending.length && r.hasFile
         ? `no clean reviewer round yet for ${list(r.pending)}: \`gate brief reviewer --files ${nextPiece(state, r.pending).join(",")}\` (a piece of at most ${policy.reviewMaxLines} source lines), spawn \`done-gate:reviewer\`, then \`gate huddle add reviewer --file review-<n>.md\`.${unchangedRoute(policy, r.pending)}${orWaive("review")}`
         : `no reviewer pass after the last edit. Spawn \`done-gate:reviewer\` (it writes review-<n>.md), then \`gate huddle add reviewer --file review-<n>.md\`.${orWaive("review")}`) });
     } else if (r.openItems.length) {
-      unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer", r.openItems)}${orWaive("review")}` });
+      unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer", r.openItems)}${upheldText("reviewer", r.openItems)}${orWaive("review")}` });
     }
   }
 
@@ -1455,9 +1477,9 @@ export function evaluate(state) {
   if ((highRisk || large) && !waived(ledger, "review-2")) {
     const r = reviewed(state, "reviewer-2", after);
     if (r.partOpen || (r.stopped && r.hasFile && r.openItems.length)) {
-      unmet.push({ rule: "R9", text: `reviewer-2 Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer-2", r.openItems)}${orWaive("review-2")}` });
+      unmet.push({ rule: "R9", text: `reviewer-2 Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer-2", r.openItems)}${upheldText("reviewer-2", r.openItems)}${orWaive("review-2")}` });
     } else if (!r.stopped || !r.hasFile) {
-      unmet.push({ rule: "R9", text: stillOpen(r) + (r.pending.length && r.hasFile
+      unmet.push({ rule: "R9", text: stillOpen(r, "reviewer-2") + (r.pending.length && r.hasFile
         ? `high-risk paths changed: no clean reviewer-2 round yet for ${list(r.pending)}: \`gate brief reviewer-2 --files ${nextPiece(state, r.pending).join(",")}\`, spawn \`done-gate:reviewer-2\`, then \`gate huddle add reviewer-2 --file review2-<n>.md\`.${unchangedRoute(policy, r.pending)}${orWaive("review-2")}`
         : `${highRisk ? `high-risk paths changed (${list(changed.filter((p) => config.isHighRisk(p)))})` : `this run is size ${sizeNow}${grew}`}: a second review by \`done-gate:reviewer-2\` is required after the last edit, with its review2-<n>.md recorded via \`gate huddle add reviewer-2 --file ...\` and every Act-on item closed.${orWaive("review-2")}`) });
     }
@@ -1537,7 +1559,9 @@ export function evaluate(state) {
     .filter((h) => !waivedRole(h.role))
     .flatMap((h) => h.actOn.filter((a) => !a.closed && !named.includes(`${a.id} (`)));
   if (unanswered.length) {
-    unmet.push({ rule: "R15", text: `Act-on item(s) still open: ${unanswered.map(openItem).join(", ")}. Answer each, then \`gate huddle resolve <id> --evidence <pointer>\`.` });
+    const of = (role) => (ledger.huddles ?? []).filter((h) => h.role === role).flatMap((h) => h.actOn);
+    const upheld = ["reviewer", "reviewer-2"].map((role) => upheldText(role, unanswered.filter((a) => of(role).includes(a)))).join("");
+    unmet.push({ rule: "R15", text: `Act-on item(s) still open: ${unanswered.map(openItem).join(", ")}. Answer each, then \`gate huddle resolve <id> --evidence <pointer>\`.${upheld}` });
   }
   const recorded = new Set((ledger.huddles ?? []).map((h) => h.file).filter(Boolean));
   for (const f of state.reviews ?? []) {

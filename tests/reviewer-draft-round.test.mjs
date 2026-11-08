@@ -348,14 +348,14 @@ test("C4 boundary: three finished review files and three recorded rounds still r
 
   const natural = refused(repo, "brief", ["reviewer"]);
   assert.ok(
-    natural.stderr.includes("gate brief arbiter"),
-    `the fourth round's refusal does not point at the arbiter: ${natural.stderr}`,
+    natural.stderr.includes("--wrong --words"),
+    `the fourth round's refusal does not send an upheld dispute to the user: ${natural.stderr}`,
   );
   assert.ok(!natural.stdout.includes("packet: "), `a fourth reviewer packet was written:\n${natural.stdout}`);
 
   const explicit = refused(repo, "brief", ["reviewer", "--round", "4"]);
   assert.ok(
-    explicit.stderr.includes("gate brief arbiter"),
+    explicit.stderr.includes("--wrong --words"),
     `--round 4's refusal does not point at the arbiter: ${explicit.stderr}`,
   );
   assert.ok(!explicit.stdout.includes("packet: "), `--round 4 wrote a packet anyway:\n${explicit.stdout}`);

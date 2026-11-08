@@ -32,8 +32,8 @@ Every verb prints a `next:` line: follow it. `gate check` lists what is unmet (R
    `gate huddle add reviewer --file review-<n>.md`; high-risk/large: reviewer-2 too, both
    at once. Fix and `gate huddle resolve H<k>.<i> --evidence <ptr>`. A worker's: `gate brief
    worker`, SendMessage the worker its packet, then `gate huddle reply --file worker-<n>.md`.
-   Until a round is clean: one round + a fix-check; still disputed: `gate brief arbiter --item
-   H<k>.<i>`. Disagree: `gate huddle dispute`, one round.
+   Until a round is clean: one round + a fix-check. Disagree: `gate huddle dispute`, one
+   round; upheld: ask the user. Wrong: `resolve --wrong`.
 6. `gate verify` after the last edit, Bash timeout 600000 ms or in the background. Drive the
    real UI if it changed (R4); probe the real schema likewise (R6).
 7. Not everything shown? `gate note caveat`. `gate close`, then paste
