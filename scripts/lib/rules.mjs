@@ -578,8 +578,10 @@ export function fixCheckDone(state, round) {
   return run.ran ? run.stopped : (state.events ?? []).some((e) => e.kind === "subagent-stop" && e.seq > since && isRole(e.agentType, round.role));
 }
 
-// Review rounds per reviewer role; past it a round is briefed only for a file no round saw.
-export const REVIEW_CAP = 3;
+// A finding the implementer disputed that the role's reviewer has not answered yet.
+export function waitingDisputes(state, role) {
+  return (state.ledger.huddles ?? []).filter((h) => h.role === role).flatMap((h) => h.actOn).filter((a) => !a.closed && a.dispute && !a.dispute.verdict);
+}
 
 // What a review round is judged against: the implementation files changed (tests excluded).
 export function reviewScope(state) {
@@ -663,7 +665,9 @@ function spans(rel, open, all) {
 export function uncovered(state, role, after = lastEditSeq(state, state.config, state.ledger)) {
   const recorded = (state.ledger.huddles ?? []).filter((h) => h.role === role && h.file && Array.isArray(h.files));
   if (!recorded.length) return null;
-  const rounds = recorded.filter((h) => roundOnDisk(state, h));
+  // a round answering disputes judges them, not lines
+  const rounds = recorded.filter((h) => roundOnDisk(state, h) && !h.answers);
+  const cap = (state.policy ?? policyFor(state.ledger)).reviewRounds;
   const stops = (state.events ?? []).filter((e) => e.kind === "subagent-stop" && isRole(e.agentType, role));
   const stopOf = (round) => stops.find((e) => e.seq > (round.briefSeq ?? Infinity));
   let counts = new Map();
@@ -673,8 +677,8 @@ export function uncovered(state, role, after = lastEditSeq(state, state.config, 
     // the fix-check round after the cap is the last; at the cap an open finding is fixed and
     // resolved (R5/R9 name it), not briefed again
     if (round.fixCheck) return fixCheckDone(state, round);
-    if (!round.actOn.length || seenBy > REVIEW_CAP) return true;
-    if (!round.actOn.every((a) => a.closed)) return seenBy >= REVIEW_CAP;
+    if (!round.actOn.length || seenBy > cap) return true;
+    if (!round.actOn.every((a) => a.closed)) return seenBy >= cap;
     return after < stop.seq || (key !== null && keptLine(round, rel, key, counts));
   };
   const out = [];
@@ -1194,6 +1198,11 @@ function ownChanges(state, paths) {
 // An open finding with enough of its text to act on, so `gate check` is the list of what is open.
 export const openItem = (a) => `${a.id} (${a.text.length > 80 ? `${a.text.slice(0, 80)}…` : a.text})`;
 
+// an open finding still disputed goes back to its reviewer, not to a fix
+const disputedText = (role, items) => {
+  const waiting = items.filter((a) => a.dispute && !a.dispute.verdict).map((a) => a.id);
+  return waiting.length ? ` ${waiting.join(", ")} ${waiting.length === 1 ? "is" : "are"} disputed: \`gate brief ${role}\` sends ${waiting.length === 1 ? "it" : "them"} to the ${role} to answer.` : "";
+};
 const stillOpen = (r) => (r.openItems?.length ? `still open from earlier rounds: ${r.openItems.map(openItem).join(", ")}; ` : "");
 
 // Pure: state in, unmet rules out. Every item says what to do next.
@@ -1333,13 +1342,13 @@ export function evaluate(state) {
   if (src.length && needsReviewer && !waived(ledger, "review")) {
     const r = reviewed(state, "reviewer", after);
     if (r.partOpen) {
-      unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${orWaive("review")}` });
+      unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer", r.openItems)}${orWaive("review")}` });
     } else if (!r.stopped || !r.hasFile) {
       unmet.push({ rule: "R5", text: stillOpen(r) + (r.pending.length && r.hasFile
         ? `no clean reviewer round yet for ${list(r.pending)}: \`gate brief reviewer --files ${nextPiece(state, r.pending).join(",")}\` (a piece of at most ${policy.reviewMaxLines} source lines), spawn \`done-gate:reviewer\`, then \`gate huddle add reviewer --file review-<n>.md\`.${orWaive("review")}`
         : `no reviewer pass after the last edit. Spawn \`done-gate:reviewer\` (it writes review-<n>.md), then \`gate huddle add reviewer --file review-<n>.md\`.${orWaive("review")}`) });
     } else if (r.openItems.length) {
-      unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${orWaive("review")}` });
+      unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer", r.openItems)}${orWaive("review")}` });
     }
   }
 
@@ -1356,7 +1365,7 @@ export function evaluate(state) {
   if ((highRisk || large) && !waived(ledger, "review-2")) {
     const r = reviewed(state, "reviewer-2", after);
     if (r.partOpen || (r.stopped && r.hasFile && r.openItems.length)) {
-      unmet.push({ rule: "R9", text: `reviewer-2 Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${orWaive("review-2")}` });
+      unmet.push({ rule: "R9", text: `reviewer-2 Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer-2", r.openItems)}${orWaive("review-2")}` });
     } else if (!r.stopped || !r.hasFile) {
       unmet.push({ rule: "R9", text: stillOpen(r) + (r.pending.length && r.hasFile
         ? `high-risk paths changed: no clean reviewer-2 round yet for ${list(r.pending)}: \`gate brief reviewer-2 --files ${nextPiece(state, r.pending).join(",")}\`, spawn \`done-gate:reviewer-2\`, then \`gate huddle add reviewer-2 --file review2-<n>.md\`.${orWaive("review-2")}`

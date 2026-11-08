@@ -562,8 +562,9 @@ test("C16 happy: models.json carries the policy object and no escalate/never/cei
   assert.ok(!("roles" in m), "models.json still names models per role");
 
   assert.equal(typeof m.policy, "object");
-  assert.deepEqual(Object.keys(m.policy).sort(), ["delegatesAt", "forceStandard", "guards", "reviewMaxLines", "splitPast", "tiers"]);
+  assert.deepEqual(Object.keys(m.policy).sort(), ["delegatesAt", "forceStandard", "guards", "reviewMaxLines", "reviewRounds", "splitPast", "tiers"]);
   assert.equal(m.policy.reviewMaxLines, 400);
+  assert.equal(m.policy.reviewRounds, 3);
   assert.equal(m.policy.delegatesAt, "large");
   assert.deepEqual(Object.keys(m.policy.tiers), ["tiny", "small", "standard", "large"]);
   assert.deepEqual(m.policy.tiers.tiny, { maxFiles: 1, maxLines: 15, requires: [] });
@@ -1989,4 +1990,18 @@ test("C2 refused end to end: after gate check measures 13 changed files on a 3-f
   assert.match(out, /not in this task's plan/, out);
   const shell = run("fence", [], JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "echo x > src/m13.ts" }, cwd: repo, session_id: "S1" })).stdout;
   assert.match(shell, /outside this task's plan/, shell);
+});
+
+// 6.3: the review round cap is pinned with the rest of the policy; missing or broken reads 3
+test("6.3 C1 idempotent: a pinned policy with no reviewRounds, and a broken models.json, read three rounds", async () => {
+  const { loadPolicy, policyFor, DEFAULT_POLICY } = await import("../scripts/lib/size.mjs");
+  const { reviewRounds: _gone, ...old } = { ...DEFAULT_POLICY };
+  assert.equal(policyFor({ policy: old }).reviewRounds, 3, "an open run's pin from before the field");
+  assert.equal(policyFor({ policy: { ...old, reviewRounds: 1 } }).reviewRounds, 1, "a pinned cap is kept");
+  for (const bad of [0, -2, 1.5, "2", null]) assert.equal(policyFor({ policy: { ...old, reviewRounds: bad } }).reviewRounds, 3, `reviewRounds ${JSON.stringify(bad)}`);
+  const dir = mkdtempSync(path.join(os.tmpdir(), "rr-"));
+  const broken = path.join(dir, "models.json");
+  writeFileSync(broken, "{ not json");
+  assert.equal(loadPolicy(broken).reviewRounds, 3, "a broken models.json");
+  rmSync(dir, { recursive: true, force: true });
 });

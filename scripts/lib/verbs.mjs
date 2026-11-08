@@ -622,11 +622,11 @@ export const verbs = {
         let huddle = file ? ledger.huddles.find((h) => h.role === role && h.file === file) : null;
         const seen = file ? ledger.seen?.[file] : null;
         const seenFacts = () => Array.isArray(seen?.files)
-          ? { files: seen.files, briefSeq: seen.seq, ...(seen.units ? { units: seen.units } : {}), ...(seen.at ? { at: seen.at } : {}), ...(seen.edges ? { edges: seen.edges } : {}), ...(seen.fixCheck ? { fixCheck: true } : {}), ...(seen.part ? { part: true } : {}) }
+          ? { files: seen.files, briefSeq: seen.seq, ...(seen.units ? { units: seen.units } : {}), ...(seen.at ? { at: seen.at } : {}), ...(seen.edges ? { edges: seen.edges } : {}), ...(seen.fixCheck ? { fixCheck: true } : {}), ...(seen.part ? { part: true } : {}), ...(seen.answers ? { answers: true } : {}), ...(seen.disputes ? { disputes: seen.disputes } : {}) }
           : {};
         // a round whose file was lost and briefed again takes what the newer brief showed
         if (huddle && seen?.seq > (huddle.briefSeq ?? Infinity)) {
-          for (const key of ["files", "briefSeq", "units", "at", "edges", "fixCheck", "part"]) delete huddle[key];
+          for (const key of ["files", "briefSeq", "units", "at", "edges", "fixCheck", "part", "answers", "disputes"]) delete huddle[key];
           Object.assign(huddle, seenFacts());
         }
         if (!huddle) {
@@ -675,6 +675,13 @@ export const verbs = {
               a.closedSeq = nextSeq();
             }
             answered += 1;
+          }
+          // a dispute this round's packet listed and its file left out stands as upheld
+          const replied = new Set(parseDisputes(text).map((d) => d.id));
+          for (const aid of huddle.disputes ?? []) {
+            const a = item(aid);
+            if (!a?.dispute || a.dispute.verdict || a.closed || replied.has(aid)) continue;
+            Object.assign(a.dispute, { verdict: "upheld", reviewerReason: `not answered in ${file}` });
           }
           if (role === "arbiter") {
             for (const r of parseRuling(text)) {

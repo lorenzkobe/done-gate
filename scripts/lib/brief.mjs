@@ -8,7 +8,7 @@ import { baseCopy, fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs"
 import { ROLES, flag, outsideRepos, positional } from "./verbs.mjs";
 import { repoPath, toPosixRel } from "./paths.mjs";
 import { OWN_FILE } from "./guard.mjs";
-import { LOOKUP_EXAMPLE, REVIEW_CAP, newRules, fixCheckDone, capUnitsOf, nextPiece, roundOnDisk, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify, verifyProblem } from "./rules.mjs";
+import { LOOKUP_EXAMPLE, newRules, waitingDisputes, fixCheckDone, capUnitsOf, nextPiece, roundOnDisk, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify, verifyProblem } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { nextSeq } from "./events.mjs";
@@ -232,6 +232,7 @@ function testCommands(state) {
   return [state.config.verify.length ? "_no verify command for this run: gate.json's are all dropped_" : "_no verify command in gate.json_"];
 }
 
+const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
 const OWNS_RUN = "`gate verify` owns the full run.";
 
 // Whether verify.json is the gate's own green run on exactly this code. When it is, or on a
@@ -283,7 +284,7 @@ function diffOrFiles(state, heading = "Diff", files = state.changed ?? [], range
 
 // n is the number of the role's own file (skeptic-<n>.md, review-<n>.md, worker-<n>.md);
 // continueFrom is the text an earlier helper left in that file before it stopped.
-export function renderPacket(state, role, { round, n, item = null, piece = null, owned = null, continueFrom = null, fixCheck = false }) {
+export function renderPacket(state, role, { round, n, item = null, piece = null, owned = null, continueFrom = null, fixCheck = false, disputes = [] }) {
   const out = header(state, role, round);
   out.push("## You may write", "", mayWrite(state, role, n), "");
   if (continueFrom !== null) {
@@ -337,6 +338,10 @@ export function renderPacket(state, role, { round, n, item = null, piece = null,
     if (recheck.length) {
       out.push("## Findings to re-check", "", "Earlier rounds found these and each was closed as shown. For each, say ADDRESSED or NOT ADDRESSED, and flag anything the fix broke in the lines below.", "");
       out.push(...recheck.map((a) => `- ${a.id} — ${a.text} — closed: ${a.closed}`), "");
+    }
+    if (disputes.length) {
+      out.push("## Disputes to answer", "", "The implementer disputed these findings. Answer each in your file's `## Disputes` section: `- H<k>.<i> — withdrawn: <reason>` or `- H<k>.<i> — upheld: <reason and a pointer>`. One you leave out stands as upheld.", "");
+      out.push(...disputes.map((a) => `- ${a.id} — ${a.text} — disputed: ${a.dispute.why} [${a.dispute.evidence}]`), "");
     }
     out.push(...diffOrFiles(state, "Diff", shown, ranges, paths ?? new Set()));
     const closers = new Map();
@@ -531,7 +536,13 @@ export const verbs = {
       .map((h) => ({ h, run: helperRun(state, role, h.file, h.briefSeq ?? 0) }));
     const live = fixChecks.find((f) => f.run.running);
     if (reviewing && live) throw new UsageError(`${role}: the fix-check round ${live.h.file} is still running; wait for its helper to stop, then \`gate huddle add ${role} --file ${live.h.file}\``);
-    const fixCheck = reviewing && done >= REVIEW_CAP && (unseen ?? []).some((u) => pieceFiles.includes(pathOf(u)))
+    const cap = state.policy.reviewRounds;
+    // a dispute goes to the piece whose files it cites, or to any piece when it cites none (a
+    // test file, ledger.md#…); at the cap it gets a round of its own, before any fix-check
+    const cites = (a, files) => files.some((f) => `${a.text} ${a.dispute.evidence ?? ""}`.includes(f));
+    const toAnswer = reviewing ? waitingDisputes(state, role).filter((a) => cites(a, pieceFiles) || !cites(a, reviewScope(state))) : [];
+    const answers = reviewing && done >= cap && toAnswer.length > 0;
+    const fixCheck = !answers && reviewing && done >= cap && (unseen ?? []).some((u) => pieceFiles.includes(pathOf(u)))
       && roleRounds.every((h) => h.actOn.every((a) => a.closed))
       && !fixChecks.some((f) => !f.h.part && fixCheckDone(state, f.h));
     // the fix-check is a file's last round, so it takes every unreviewed part of each file at
@@ -545,8 +556,8 @@ export const verbs = {
     if (inParts && !stillOpen && !piece.files.some((entry) => owed.some((u) => overlaps(entry, u)))) {
       throw new UsageError(`${role} fix-check: ${piece.files.join(",")} holds no unreviewed line. The next piece: \`gate brief ${role} --files ${nextPiece(state, owed).join(",")}\``);
     }
-    if (done >= REVIEW_CAP && !(legacy && role === "reviewer-2") && !stillOpen && !fixCheck) {
-      throw new UsageError(`${role} round ${done + 1}: three rounds is the cap. What is still disputed goes to the arbiter (\`gate brief arbiter --item H<k>.<i>\`, spawn done-gate:arbiter); what is still open is fixed and closed with \`gate huddle resolve\`.`);
+    if (done >= cap && !(legacy && role === "reviewer-2") && !stillOpen && !fixCheck && !answers) {
+      throw new UsageError(`${role} round ${done + 1}: ${NUMBER_WORDS[cap] ?? cap} round${cap === 1 ? "" : "s"} is the cap. What is still disputed goes to the arbiter (\`gate brief arbiter --item H<k>.<i>\`, spawn done-gate:arbiter); what is still open is fixed and closed with \`gate huddle resolve\`.`);
     }
     let item = null;
     if (role === "arbiter") {
@@ -560,7 +571,7 @@ export const verbs = {
     // seen is what this round's reviewer is shown (its huddle inherits it); the other roles'
     // briefs are dated under briefed, so a ledger with no seen map stays a legacy one
     if (piece) {
-      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...earlierOf(state.ledger.seen?.[own]), ...(Object.keys(piece.units).length ? { units: piece.units } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true, ...(inParts ? { part: true } : {}) } : {}) } };
+      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...earlierOf(state.ledger.seen?.[own]), ...(Object.keys(piece.units).length ? { units: piece.units } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true, ...(inParts ? { part: true } : {}) } : {}), ...(answers && !stillOpen ? { answers: true } : {}), ...(toAnswer.length ? { disputes: toAnswer.map((a) => a.id) } : {}) } };
       saveLedger(state.dir, state.ledger);
     } else if (own) {
       state.ledger.briefed = { ...(state.ledger.briefed ?? {}), [own]: { seq: nextSeq(), ...earlierOf(state.ledger.briefed?.[own]), ...(owned ? { files: owned } : {}), ...(item ? { item: item.id } : {}) } };
@@ -570,7 +581,7 @@ export const verbs = {
     const left = own && role !== "worker" && existsSync(full) ? readFileSync(full, "utf8") : null;
     const continueFrom = left !== null && isPartial(left) ? left : null;
     const file = path.join(state.dir, `brief-${role}-${round}.md`);
-    writeFileSync(file, renderPacket(state, role, { round, n, item, piece, owned, continueFrom, fixCheck: fixCheck && !stillOpen }));
+    writeFileSync(file, renderPacket(state, role, { round, n, item, piece, owned, continueFrom, fixCheck: fixCheck && !stillOpen, disputes: toAnswer }));
     ctx.out(`packet: ${file}`);
     const yours = !own || role === "worker" ? "" : continueFrom !== null
       ? ` Your file is ${full} and it already exists: keep its finished sections, never reset it to the all-unverified draft, and rewrite it after each finding.`

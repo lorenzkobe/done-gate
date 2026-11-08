@@ -337,3 +337,126 @@ test("a fix inside a part that deletes a line does not reopen lines earlier roun
   const pending = ruleLine(repo, "R9");
   assert.doesNotMatch(pending, /src\/pay\.ts:2-|src\/pay\.ts:1-\d{2,}/, pending);
 });
+
+// 6.3: the cap comes from the pinned policy, and a dispute reaches the last round
+function pinCap(repo, n) {
+  const file = path.join(runDir(repo), "ledger.json");
+  const ledger = JSON.parse(readFileSync(file, "utf8"));
+  ledger.policy = { ...ledger.policy, reviewRounds: n };
+  writeFileSync(file, JSON.stringify(ledger, null, 2));
+}
+const packetOf = (r) => readFileSync(/packet: (\S+)/.exec(r.stdout)[1], "utf8");
+// a stopped helper's file for the round its brief named
+function answer(repo, brief, role, body, n) {
+  const file = /Your file is .*\/((?:review2?)-\d+\.md)/.exec(brief.stdout)[1];
+  const agent = { agent_id: `${role}-d${n}`, agent_type: `done-gate:${role}` };
+  hook(repo, { hook_event_name: "SubagentStart", ...agent });
+  lookedUp(repo, { agent: agent.agent_id, role });
+  writeFileSync(path.join(runDir(repo), file), body);
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: path.join(runDir(repo), file) }, tool_response: {}, ...agent });
+  hook(repo, { hook_event_name: "SubagentStop", ...agent });
+  return run(repo, "huddle", "add", role, "--file", file);
+}
+const disputed = (repo) => {
+  const id = ledgerOf(repo).huddles.at(-1).actOn[0].id;
+  const r = run(repo, "huddle", "dispute", id, "the total already counts the last row", "--evidence", "src/pay.ts:2");
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stderr, /^done-gate: /m, r.stderr);
+  return id;
+};
+
+test("6.3 C3 happy: at a pinned cap of 1, a disputed finding with no edit is briefed, and the packet lists it to answer", () => {
+  const repo = opened("rcf-63-c3");
+  pinCap(repo, 1);
+  round(repo, "reviewer", 1, { fix: false });
+  assert.doesNotMatch(ruleLine(repo, "R5"), /gate brief/, "anchor: before the dispute R5 says fix and resolve");
+  const id = disputed(repo);
+  assert.match(ruleLine(repo, "R5"), new RegExp(`${id.replace(".", "\\.")}[^\\n]*\`gate brief reviewer\``), "6.3 C8: R5 sends the waiting dispute to the reviewer");
+  const brief = run(repo, "brief", "reviewer");
+  assert.equal(brief.status, 0, brief.stderr);
+  assert.doesNotMatch(brief.stderr, /^done-gate: /m, brief.stderr);
+  const packet = packetOf(brief);
+  const section = packet.slice(packet.indexOf("\n## Disputes to answer\n"));
+  assert.ok(packet.includes("\n## Disputes to answer\n"), packet.slice(0, 1500));
+  assert.match(section, new RegExp(`- ${id.replace(".", "\\.")} — off by one at src/pay\\.ts:1.*disputed: the total already counts the last row`));
+});
+
+test("6.3 C4 refused: at a pinned cap of 1, an undisputed open finding is refused, and the refusal names the cap", () => {
+  const repo = opened("rcf-63-c4");
+  pinCap(repo, 1);
+  round(repo, "reviewer", 1, { fix: false });
+  const r = run(repo, "brief", "reviewer");
+  assert.match(r.stderr, /one round is the cap/, r.stderr);
+});
+
+test("6.3 C5 C6: the re-check's withdrawn answer closes the finding and clears R5; a second re-check is refused", () => {
+  const repo = opened("rcf-63-c5");
+  pinCap(repo, 1);
+  round(repo, "reviewer", 1, { fix: false });
+  const id = disputed(repo);
+  const brief = run(repo, "brief", "reviewer");
+  assert.equal(brief.status, 0, brief.stderr);
+  const added = answer(repo, brief, "reviewer", `# Review 2\n\n## Act on\n- none\n## Can't verify\n- none\n## Lessons\n- none\n## Dismissed\n- none\n## Disputes\n- ${id} — withdrawn: the total does count the last row\n`, 2);
+  assert.equal(added.status, 0, added.stderr);
+  const item = ledgerOf(repo).huddles.flatMap((h) => h.actOn).find((a) => a.id === id);
+  assert.match(String(item.closed), /withdrawn/);
+  assert.equal(ruleLine(repo, "R5"), "", "R5 still waits");
+  const again = run(repo, "brief", "reviewer");
+  assert.match(again.stderr, /one round is the cap/, `a second re-check was briefed:\n${again.stdout}${again.stderr}`);
+});
+
+const clean = (disputes = "") => `# Review\n\n## Act on\n- none\n## Can't verify\n- none\n## Lessons\n- none\n## Dismissed\n- none\n${disputes}`;
+const itemOf = (repo, id) => ledgerOf(repo).huddles.flatMap((h) => h.actOn).find((a) => a.id === id);
+
+test("6.3 C9 edge: a dispute the answers round leaves unanswered reads upheld, not answered in its file", () => {
+  const repo = opened("rcf-63-c9");
+  pinCap(repo, 1);
+  round(repo, "reviewer", 1, { fix: false });
+  const id = disputed(repo);
+  const brief = run(repo, "brief", "reviewer");
+  assert.equal(answer(repo, brief, "reviewer", clean(), 2).status, 0);
+  const item = itemOf(repo, id);
+  assert.equal(item.dispute.verdict, "upheld");
+  assert.match(item.dispute.reviewerReason, /not answered in review-2\.md/);
+  assert.equal(item.closed, null, "silence keeps the finding open");
+});
+
+test("6.3 C10 edge: a dispute citing only a test file, and one on the fix-check round's own finding, are briefed at the cap", () => {
+  const onTest = opened("rcf-63-c10a");
+  pinCap(onTest, 1);
+  const first = run(onTest, "brief", "reviewer");
+  answer(onTest, first, "reviewer", `# Review 1\n\n## Act on\n- tests/a.test.ts:1 asserts nothing about the total\n## Dismissed\n- none\n`, 1);
+  const id = ledgerOf(onTest).huddles.at(-1).actOn[0].id;
+  assert.equal(run(onTest, "huddle", "dispute", id, "the total is asserted in the next test", "--evidence", "tests/a.test.ts:1").status, 0);
+  const brief = run(onTest, "brief", "reviewer", "--files", FILE);
+  assert.doesNotMatch(brief.stderr, /^done-gate: /m, brief.stderr);
+  assert.match(packetOf(brief), new RegExp(`## Disputes to answer[\\s\\S]*${id.replace(".", "\\.")}`));
+
+  const own = opened("rcf-63-c10b");
+  pinCap(own, 1);
+  round(own, "reviewer", 1);
+  const check = run(own, "brief", "reviewer");
+  assert.match(packetOf(check), /This is a fix-check/, "anchor: round 2 is the fix-check");
+  answer(own, check, "reviewer", `# Review 2\n\n## Act on\n- the fix at src/pay.ts:1 drops the sign\n## Dismissed\n- none\n`, 2);
+  const fid = ledgerOf(own).huddles.at(-1).actOn[0].id;
+  assert.equal(run(own, "huddle", "dispute", fid, "the sign is kept on the next line", "--evidence", "src/pay.ts:2").status, 0);
+  const again = run(own, "brief", "reviewer");
+  assert.doesNotMatch(again.stderr, /^done-gate: /m, again.stderr);
+  assert.match(packetOf(again), new RegExp(`## Disputes to answer[\\s\\S]*${fid.replace(".", "\\.")}`));
+});
+
+test("6.3 C11 boundary: an upheld finding fixed after its answers round still gets its fix-check", () => {
+  const repo = opened("rcf-63-c11");
+  pinCap(repo, 1);
+  round(repo, "reviewer", 1, { fix: false });
+  const id = disputed(repo);
+  const brief = run(repo, "brief", "reviewer");
+  answer(repo, brief, "reviewer", clean(`## Disputes\n- ${id} — upheld: the last row is still skipped\n`), 2);
+  assert.equal(itemOf(repo, id).dispute.verdict, "upheld");
+  edit(repo, 1);
+  assert.equal(run(repo, "huddle", "resolve", id, "--evidence", "src/pay.ts:1", "fixed").status, 0);
+  assert.match(ruleLine(repo, "R5"), /gate brief reviewer/, "the fix waits for its review");
+  const check = run(repo, "brief", "reviewer");
+  assert.doesNotMatch(check.stderr, /^done-gate: /m, check.stderr);
+  assert.match(packetOf(check), /This is a fix-check/);
+});
