@@ -19,6 +19,8 @@ import { caseTestFile, runsTests, verifyEntries } from "./verify.mjs";
 
 const DIFF_CAP = 300;
 const SAMPLE_LINES = 60;
+// a re-brief of a file keeps the seqs before it: a helper briefed on the first one is still tied to that file
+const earlierOf = (old) => (old?.seq ? { earlier: [...(old.earlier ?? []), old.seq] } : {});
 
 export function detectFramework(root) {
   const pkgPath = path.join(root, "package.json");
@@ -545,10 +547,10 @@ export const verbs = {
     // seen is what this round's reviewer is shown (its huddle inherits it); the other roles'
     // briefs are dated under briefed, so a ledger with no seen map stays a legacy one
     if (piece) {
-      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...(Object.keys(piece.units).length ? { units: piece.units } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true, ...(inParts ? { part: true } : {}) } : {}) } };
+      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...earlierOf(state.ledger.seen?.[own]), ...(Object.keys(piece.units).length ? { units: piece.units } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true, ...(inParts ? { part: true } : {}) } : {}) } };
       saveLedger(state.dir, state.ledger);
     } else if (own) {
-      state.ledger.briefed = { ...(state.ledger.briefed ?? {}), [own]: { seq: nextSeq(), ...(owned ? { files: owned } : {}), ...(item ? { item: item.id } : {}) } };
+      state.ledger.briefed = { ...(state.ledger.briefed ?? {}), [own]: { seq: nextSeq(), ...earlierOf(state.ledger.briefed?.[own]), ...(owned ? { files: owned } : {}), ...(item ? { item: item.id } : {}) } };
       saveLedger(state.dir, state.ledger);
     }
     const full = own ? path.join(state.dir, own) : null;

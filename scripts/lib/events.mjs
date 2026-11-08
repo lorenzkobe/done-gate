@@ -229,7 +229,19 @@ export const verbs = {
         // a stamp is a courtesy; the next assess dates the change itself
       }
     }
-    // additionalContext is the one hook output the model reads after a tool call
-    ctx.out(warning ? { hookSpecificOutput: { hookEventName: ctx.input.hook_event_name, additionalContext: warning } } : SILENT);
+    // a cut helper's notice brings its cause and the next step with it
+    const noticed = events.find((e) => e.notice?.agent)?.notice.agent;
+    let told = null;
+    if (noticed && ctx.session) {
+      try {
+        const { noticeLine } = await import("./diagnose.mjs");
+        told = noticeLine(ctx, noticed);
+      } catch {
+        // advice only: `gate diagnose` reads the same events
+      }
+    }
+    // additionalContext is the one hook output the model reads after a tool call or a prompt
+    const context = [warning, told].filter(Boolean).join("\n");
+    ctx.out(context ? { hookSpecificOutput: { hookEventName: ctx.input.hook_event_name, additionalContext: context } } : SILENT);
   },
 };

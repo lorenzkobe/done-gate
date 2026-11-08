@@ -1363,7 +1363,7 @@ export function evaluate(state) {
     const run = helperRun(state, role, f, brief.seq ?? 0);
     if (!run.ran || run.running) continue;
     const again = role === "arbiter" && brief.item ? ` --item ${brief.item}` : Array.isArray(brief.files) ? ` --files ${brief.files.join(",")}` : "";
-    unmet.push({ rule: "R15", text: `the ${role} stopped before finishing ${f}: \`gate brief ${role}${again}\` and spawn a fresh one, its packet continues from the file.` });
+    unmet.push({ rule: "R15", text: `the ${role} stopped before finishing ${f}: resume it with SendMessage, or \`gate brief ${role}${again}\` and spawn a fresh one, its packet continues from the file; \`gate diagnose\` says which.` });
   }
 
   return unmet;

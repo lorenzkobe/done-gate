@@ -265,6 +265,7 @@ test("C4 edge: a briefed skeptic whose helper stopped with the file missing, dra
     const line = unfinishedLine(stopped, "skeptic-1.md", "skeptic");
     assert.ok(line, `${state}: the stopped helper's unfinished skeptic-1.md is not listed with gate brief skeptic:\n${stopped}`);
     assert.match(line, /\bR15\b/, `${state}: the notice is not an R15 line: ${line}`);
+    assert.match(line, /SendMessage[\s\S]*gate brief skeptic[\s\S]*gate diagnose/, `${state}: the R15 line does not name resume, re-brief and gate diagnose: ${line}`);
   }
 
   // not vacuous the other way: a helper that stopped with a finished file is not unfinished
