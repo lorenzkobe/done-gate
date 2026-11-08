@@ -6,7 +6,7 @@ import { segments, withoutHeredocs } from "./guard.mjs";
 import { buildState } from "./assess.mjs";
 import { currentLedger, isDone, loadLedger, saveLedger } from "./ledger.mjs";
 import { appendEvents, nextSeq, readEvents } from "./events.mjs";
-import { diffTextOf, driverCommand, implementationHash, newRules, surfaceClear, notRecommended, saidSince, sourceHash, verifyKey, verifyWhere, waiverWordsProblem, workOutSteps } from "./rules.mjs";
+import { diffTextOf, driverCommand, implementationHash, newRules, surfaceClear, notRecommended, saidSince, sourceHash, timeoutAdvice, timeoutText, verifyKey, verifyWhere, waiverWordsProblem, workOutSteps } from "./rules.mjs";
 import { repoPath } from "./paths.mjs";
 import { loadSession } from "./session-state.mjs";
 import { diffSnapshots, gitIgnored, parseHunks, snapshot } from "./tree.mjs";
@@ -50,10 +50,13 @@ export function runCommand({ cmd, timeout, onlyNew = false, whole = false }, cwd
     let full = onlyNew || whole ? "" : null;
     let timedOut = false;
     let settled = false;
+    let lastOutputAt = null;
+    let atKill = {};
     const child = spawn(cmd, { cwd, shell: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CI: "1", FORCE_COLOR: "0", ...env } });
     onSpawn(child.pid);
     const collect = (chunk) => {
       const text = chunk.toString("utf8");
+      lastOutputAt = Date.now();
       if (full !== null && full !== false) full = full.length + text.length > ONLY_NEW_MAX ? false : full + text;
       output += text;
       if (output.length > TAIL_BYTES * 4) output = output.slice(-TAIL_BYTES * 2);
@@ -76,12 +79,14 @@ export function runCommand({ cmd, timeout, onlyNew = false, whole = false }, cwd
         if (onlyNew && open > 0) full = false;
         child.stdout.destroy();
         child.stderr.destroy();
-        resolve({ cmd, exit, ms: Date.now() - started, timedOut, tail: tail(output), ...(onlyNew || whole ? { output: full } : {}) });
+        resolve({ cmd, exit, ms: Date.now() - started, timedOut, ...atKill, tail: tail(output), ...(onlyNew || whole ? { output: full } : {}) });
       };
       setTimeout(done, 50);
     };
     const timer = setTimeout(() => {
       timedOut = true;
+      // what it was doing when killed; output landing in the grace after the kill does not count
+      atKill = { timeout: Math.max(1, timeout), printed: lastOutputAt !== null, ...(lastOutputAt === null ? {} : { silentFor: Math.round((Date.now() - lastOutputAt) / 100) / 10 }) };
       killTree(child);
       finish(null);
     }, Math.max(1, timeout) * 1000);
@@ -589,7 +594,7 @@ export async function runVerify(ctx, { stepKey = "verify", final = false, force 
       delete greenSource[key];
       delete greenTree[key];
     }
-    ctx.err(`  → ${result.timedOut ? "TIMED OUT" : `exit ${result.exit}`} in ${(result.ms / 1000).toFixed(1)}s`);
+    ctx.err(`  → ${result.timedOut ? timeoutText(result) : `exit ${result.exit} in ${(result.ms / 1000).toFixed(1)}s`}`);
   }
   // code that moved while the commands ran was not what they judged: none of this counts as green
   const after = stamped ? snapshot(ctx.root, snap, repos) : snap;
@@ -648,8 +653,9 @@ export const verbs = {
         continue;
       }
       const green = c.exit === 0 && !c.timedOut;
-      ctx.out(`${green ? "✓" : "✗"} ${c.cmd}${verifyWhere(c)} — ${c.timedOut ? "timed out" : c.noTests ? `no tests ran: ${c.noTestsWhy}` : `exit ${c.exit}`}${c.oldFindings ? ` (exit ${c.rawExit}: ${c.oldFindings} old finding${c.oldFindings === 1 ? "" : "s"} off this task's lines ignored)` : ""}, ${(c.ms / 1000).toFixed(1)}s`);
+      ctx.out(`${green ? "✓" : "✗"} ${c.cmd}${verifyWhere(c)} — ${c.timedOut ? timeoutText(c) : c.noTests ? `no tests ran: ${c.noTestsWhy}` : `exit ${c.exit}`}${c.oldFindings ? ` (exit ${c.rawExit}: ${c.oldFindings} old finding${c.oldFindings === 1 ? "" : "s"} off this task's lines ignored)` : ""}, ${(c.ms / 1000).toFixed(1)}s`);
       if (!green) ctx.out("```\n" + c.tail.split("\n").slice(-12).join("\n") + "\n```"); // the failing tail: the same 12 lines the report shows
+      if (c.timedOut && timeoutAdvice(c)) ctx.out(timeoutAdvice(c));
       if (!green && c.cmd.trim() === driverCmd && PORT_IN_USE.test(c.tail ?? "")) ctx.out(`hint: \`${c.cmd}\` says its port is in use: a dev server may still be running. Stop it, or have the run reuse it.`);
     }
     if (driveEvent) ctx.out(`drive recorded${driveEvent.reused ? " (the code is as it was at that green run)" : ""}: close the step with \`gate step driver done "<what it showed>" --evidence events#${driveEvent.seq}\``);

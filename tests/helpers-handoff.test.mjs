@@ -451,8 +451,8 @@ test("C10 boundary: skeptic and arbiter packets carry the number of the file the
   assert.equal(a.name, "brief-arbiter-2.md", "the arbiter packet's number is not its file's number");
 });
 
-test("C11 happy: agent files — skeptic maxTurns 40 (stop at 38), reviewer and reviewer-2 60 (58), qa 60 (58), worker 100 (98); skeptic, reviewer and reviewer-2 say to rewrite the file after each finding; reviewer says not to number findings", () => {
-  for (const [role, turns] of [["skeptic", 40], ["reviewer", 60], ["reviewer-2", 60], ["qa", 60], ["worker", 100]]) {
+test("C11 happy: agent files — skeptic maxTurns 40 (stop at 38), reviewer 60 (58), reviewer-2 and qa 90 (88), worker 100 (98); skeptic, reviewer and reviewer-2 say to rewrite the file after each finding; reviewer says not to number findings", () => {
+  for (const [role, turns] of [["skeptic", 40], ["reviewer", 60], ["reviewer-2", 90], ["qa", 90], ["worker", 100]]) {
     const md = agentMd(role);
     assert.equal(maxTurnsOf(md), turns, `agents/${role}.md maxTurns`);
     assert.ok(bodyOf(md).includes(`You have ${turns} turns`), `agents/${role}.md does not say "You have ${turns} turns"`);

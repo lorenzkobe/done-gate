@@ -859,6 +859,30 @@ export function processAlive(pid) {
 export const verifyKey = (c) => (c.repo ? `${c.repo}\n${c.cmd}` : c.cmd);
 export const verifyWhere = (c) => (c.repo ? ` (in ${c.repo})` : "");
 
+// What a timed-out command was doing when it was killed. A record written before these fields
+// were stored has none; "still printing" is silent under 5% of the timeout, at least 1s.
+function timeoutKind(c) {
+  if (c.printed === false) return "nothing";
+  if (c.printed !== true || typeof c.silentFor !== "number") return null;
+  const limit = c.timeout ?? c.ms / 1000;
+  return c.silentFor < Math.max(1, limit * 0.05) ? "printing" : "silent";
+}
+
+export function timeoutText(c) {
+  const kind = timeoutKind(c);
+  if (!kind) return "timed out";
+  const after = `timed out after ${c.timeout ?? Math.floor(c.ms / 1000)}s`;
+  if (kind === "nothing") return `${after}, having printed nothing`;
+  return kind === "printing" ? `${after}, still printing` : `${after}, silent for the last ${Math.round(c.silentFor)}s`;
+}
+
+const TIMEOUT_ADVICE = {
+  nothing: "It may have hung, or be holding its output: run it alone and watch.",
+  silent: "It may have hung where the output stops.",
+  printing: "Probably too slow: run fewer tests with `gate test`.",
+};
+export const timeoutAdvice = (c) => TIMEOUT_ADVICE[timeoutKind(c)] ?? null;
+
 // A verify.started.json with no verify.json after it: the run is still going (its process
 // is alive) or the shell died under it. Null once verify.json landed.
 export function unfinishedVerify(state) {
@@ -882,7 +906,7 @@ export function verifyProblem(state, { source = true, final = true } = {}) {
     if (!verify) return { reason: "no verify.json yet", text: "no verify.json for this run. Run `gate verify` after your last source edit." };
     const red = (verify.commands ?? []).filter((c) => !c.skipped && (c.exit !== 0 || c.timedOut));
     if (red.length) {
-      return { reason: "red", text: `verify is red: ${red.map((c) => `\`${c.cmd}\`${verifyWhere(c)} ${c.timedOut ? "timed out" : c.noTests ? `ran no tests (${c.noTestsWhy})` : `exit ${c.exit}`}`).join("; ")}. Fix, then run \`gate verify\` again.` };
+      return { reason: "red", text: `verify is red: ${red.map((c) => `\`${c.cmd}\`${verifyWhere(c)} ${c.timedOut ? timeoutText(c) : c.noTests ? `ran no tests (${c.noTestsWhy})` : `exit ${c.exit}`}`).join("; ")}. Fix, then run \`gate verify\` again.` };
     }
     if (verify.sourceHash !== sourceHash(now, config)) return { reason: "stale: source changed after it", text: "verify.json is stale: source changed after the last `gate verify`. Run it again." };
     const owed = (verify.commands ?? []).filter((c) => c.owed);

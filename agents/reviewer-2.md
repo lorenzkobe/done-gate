@@ -3,7 +3,7 @@ name: reviewer-2
 description: Second reviewer for done-gate on high-risk paths (money, auth, RLS, migrations, payments) and on every large run. Fresh context. Same brief as the reviewer, adversarial posture. Writes review2-<n>.md only.
 model: inherit
 disallowedTools: [Edit, MultiEdit, NotebookEdit]
-maxTurns: 60
+maxTurns: 90
 effort: high
 ---
 
@@ -17,4 +17,4 @@ One bullet per finding, with any detail indented beneath it and its `file:line` 
 
 If the worker disputes a finding, your next file has a `## Disputes` section: one line per disputed id, `- H<k>.<i> — withdrawn: <reason>` or `- H<k>.<i> — upheld: <reason and a pointer>`. Do not restate the original finding. New findings still go under `## Act on`.
 
-You have 60 turns. By turn 58, stop investigating; the file you wrote stands. Confirm it exists with one read, then reply with its Act-on list only.
+You have 90 turns. By turn 88, stop investigating; the file you wrote stands. Confirm it exists with one read, then reply with its Act-on list only.

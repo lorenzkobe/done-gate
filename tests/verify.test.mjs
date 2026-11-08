@@ -7,8 +7,9 @@ import { makeRepo, write, gate, pluginRoot } from "./helpers.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
-import { sourceHash, evaluate } from "../scripts/lib/rules.mjs";
+import { sourceHash, evaluate, timeoutText, timeoutAdvice, verifyProblem } from "../scripts/lib/rules.mjs";
 import { snapshot } from "../scripts/lib/tree.mjs";
+import { runCommand } from "../scripts/lib/verify.mjs";
 
 // ===== from tests/verify.test.mjs =====
 {
@@ -59,6 +60,68 @@ test("a command past its timeout is killed and recorded as timedOut", () => {
   const v = JSON.parse(readFileSync(path.join(runDir(repo), "verify.json"), "utf8"));
   assert.equal(v.commands[0].timedOut, true);
   assert.notEqual(v.commands[0].exit, 0);
+});
+
+const timedOutLine = (stdout) => stdout.split("\n").find((l) => l.startsWith("✗ "));
+
+test("4.1 C1 a command that never prints says so, with the run-it-alone advice", () => {
+  const repo = repoWithVerify("verify-to-silent", [{ cmd: `${node} -e "setInterval(() => {}, 1000)"`, timeout: 1 }]);
+  const r = cli(repo, "verify");
+  assert.match(timedOutLine(r.stdout), /timed out after 1s, having printed nothing/);
+  assert.match(r.stdout, /It may have hung, or be holding its output: run it alone and watch/);
+  const c = JSON.parse(readFileSync(path.join(runDir(repo), "verify.json"), "utf8")).commands[0];
+  assert.equal(c.printed, false);
+});
+
+test("4.1 C2 a command that printed, then went quiet, says how long it was silent", () => {
+  const repo = repoWithVerify("verify-to-quiet", [{ cmd: `${node} -e "console.log('started'); setInterval(() => {}, 1000)"`, timeout: 2 }]);
+  const r = cli(repo, "verify");
+  assert.match(timedOutLine(r.stdout), /timed out after 2s, silent for the last [12]s/);
+  assert.match(r.stdout, /It may have hung where the output stops/);
+  const c = JSON.parse(readFileSync(path.join(runDir(repo), "verify.json"), "utf8")).commands[0];
+  assert.equal(c.printed, true);
+  assert.ok(c.silentFor >= 1, `silentFor ${c.silentFor}`);
+});
+
+test("4.1 C3 a command printing right to the kill says still printing, with the gate test advice", () => {
+  const repo = repoWithVerify("verify-to-busy", [{ cmd: `${node} -e "setInterval(() => console.log('tick'), 100)"`, timeout: 2 }]);
+  const r = cli(repo, "verify");
+  assert.match(timedOutLine(r.stdout), /timed out after 2s, still printing/);
+  assert.match(r.stdout, /Probably too slow: run fewer tests with `gate test`/);
+});
+
+test("4.1 C4 output on stderr alone counts as printing", () => {
+  const repo = repoWithVerify("verify-to-stderr", [{ cmd: `${node} -e "setInterval(() => console.error('tick'), 100)"`, timeout: 2 }]);
+  assert.match(timedOutLine(cli(repo, "verify").stdout), /still printing/);
+});
+
+test("4.1 C5 an old timed-out record with no printed field reads plain timed out", () => {
+  assert.equal(timeoutText({ cmd: "npm test", exit: null, timedOut: true, ms: 600050 }), "timed out");
+  assert.equal(timeoutAdvice({ cmd: "npm test", exit: null, timedOut: true, ms: 600050 }), null);
+  assert.equal(timeoutText({ cmd: "npm test", exit: null, timedOut: true, ms: 600050, printed: true }), "timed out", "printed with no silentFor reads plain");
+  assert.equal(timeoutText({ cmd: "npm test", exit: null, timedOut: true, ms: 600050, printed: true, silentFor: 119 }), "timed out after 600s, silent for the last 119s");
+  assert.equal(timeoutText({ cmd: "npm test", exit: null, timedOut: true, ms: 600050, printed: true, silentFor: 29 }), "timed out after 600s, still printing");
+  assert.equal(timeoutText({ cmd: "npm test", exit: null, timedOut: true, ms: 1050, printed: true, silentFor: 0.9 }), "timed out after 1s, still printing");
+});
+
+test("4.1 C8 a slow kill still says the configured timeout, not the measured time", () => {
+  assert.equal(timeoutText({ cmd: "x", exit: null, timedOut: true, ms: 1700, timeout: 1, printed: false }), "timed out after 1s, having printed nothing");
+  assert.equal(timeoutText({ cmd: "x", exit: null, timedOut: true, ms: 1700, timeout: 1, printed: true, silentFor: 0.95 }), "timed out after 1s, still printing");
+});
+
+test("4.1 C9 printed and silentFor are taken when the timer fires", async () => {
+  const r = await runCommand({ cmd: `${node} -e "setInterval(() => {}, 1000)"`, timeout: 1 }, process.cwd());
+  assert.deepEqual({ timeout: r.timeout, printed: r.printed, silentFor: r.silentFor }, { timeout: 1, printed: false, silentFor: undefined });
+  const done = await runCommand({ cmd: `${node} -e "console.log('ok')"`, timeout: 5 }, process.cwd());
+  assert.equal("printed" in done, false, "a command that exits on its own carries no timeout fields");
+});
+
+test("4.1 C6 the report and check carry the same timeout wording as gate verify", () => {
+  const repo = repoWithVerify("verify-to-report", [{ cmd: `${node} -e "setInterval(() => {}, 1000)"`, timeout: 1 }]);
+  cli(repo, "verify");
+  assert.match(cli(repo, "report").stdout, /timed out after 1s, having printed nothing/);
+  const verify = JSON.parse(readFileSync(path.join(runDir(repo), "verify.json"), "utf8"));
+  assert.match(verifyProblem({ verify, ledger: {}, now: snapshot(repo), config: loadConfig(repo) }).text, /`.+` timed out after 1s, having printed nothing\./);
 });
 
 test("a command that leaves a background child holding stdout still returns when the command exits", () => {
