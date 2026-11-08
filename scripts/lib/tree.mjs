@@ -429,9 +429,32 @@ export function parseHunks(text) {
 // Every changed line of a diff as a unit: its new-file position and a key made of its text
 // and the line before it, so a unit survives an edit above it (which moves its position) and
 // dies with an edit to it. A deletion is keyed on the text it removed.
+// A line no review needs to read: blank, or a comment that opens and closes on the line, by the
+// file's type. A marker that opens or closes a block can hide or reveal code, and a directive
+// changes what builds or runs, so both stay code.
+const SLASH = new Set(["js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx", "java", "c", "h", "cc", "cpp", "hpp", "cs", "go", "rs", "swift", "kt", "kts", "scala", "php", "dart", "scss", "less"]);
+const BLOCK = new Set([...SLASH, "css"]);
+const HASH = new Set(["py", "rb", "sh", "bash", "zsh", "yaml", "yml", "toml", "r", "pl", "ex", "exs"]);
+const DASH = new Set(["sql", "lua", "hs"]);
+const ANGLE = new Set(["html", "htm", "vue", "svelte", "xml", "md", "mdx"]);
+const SLASH_DIRECTIVE = /^(?:\+build|@|eslint|prettier|istanbul|c8\b|webpack|tslint|biome-ignore|jshint|global\b)|@ts-|webpackChunkName/i;
+const HASH_DIRECTIVE = /^(?:!|-\*-|type:|noqa\b|pylint:|mypy:|pyright:|fmt:|pragma\b|frozen_string_literal|rubocop:|shellcheck|isort:|nosec\b)/i;
+export function noteLine(rel, text) {
+  const t = String(text).trim();
+  if (!t) return true;
+  const ext = path.extname(String(rel)).slice(1).toLowerCase();
+  if (SLASH.has(ext) && t.startsWith("//")) return !/^\/\/[^\s]/.test(t) && !SLASH_DIRECTIVE.test(t.slice(2).trim());
+  if (BLOCK.has(ext) && t.startsWith("/*")) return t.endsWith("*/") && t.indexOf("*/") === t.length - 2 && !SLASH_DIRECTIVE.test(t.slice(2, -2).replace(/^\*/, "").trim());
+  if (HASH.has(ext) && t.startsWith("#") && !t.startsWith("#!")) return !HASH_DIRECTIVE.test(t.slice(1).trim());
+  if (DASH.has(ext) && t.startsWith("--")) return !/^(?:\+|[\w-]+:|\[=*\[)/.test(t.slice(2).trim());
+  if (ANGLE.has(ext) && t.startsWith("<!--")) return t.endsWith("-->") && t.indexOf("-->") === t.length - 3 && !/^[[#]/.test(t.slice(4).trim());
+  return false;
+}
+
 // Repeated line pairs get an occurrence ordinal, so a key is unique within the file. The flat
-// key is the same with all whitespace removed, so a re-indented line keeps it.
-export function changedUnits(text) {
+// key is the code key: its previous line skips note lines, and it drops whitespace except, where
+// indentation matters, the leading indent, so a re-indent or a comment above keeps it.
+export function changedUnits(text, rel = "") {
   const out = [];
   const seen = new Map();
   const ordinal = (base) => {
@@ -440,15 +463,23 @@ export function changedUnits(text) {
     return n === 1 ? base : `${base}#${n}`;
   };
   const hash = (s) => createHash("sha1").update(s).digest("hex").slice(0, 12);
+  const indent = indentMatters(rel);
+  const squash = (s) => (indent ? `${/^\s*/.exec(s)[0]}${s.replace(/\s+/g, "")}` : s.replace(/\s+/g, ""));
   for (const h of parseHunks(text).hunks) {
     let prev = "";
+    let prevCode = "";
     for (const l of h.lines) {
+      const line = l.text.slice(1);
+      const note = rel ? noteLine(rel, line) : false;
       if (l.tag === "+" || l.tag === "-") {
-        const key = ordinal(hash(`${l.tag}${l.text.slice(1)}\u0000${prev}`));
-        const flat = ordinal(`f${hash(`${l.tag}${l.text.slice(1).replace(/\s+/g, "")}\u0000${prev.replace(/\s+/g, "")}`)}`);
-        out.push({ pos: l.pos, key, flat });
+        const key = ordinal(hash(`${l.tag}${line}\u0000${prev}`));
+        const flat = ordinal(`f${hash(`${l.tag}${squash(line)}\u0000${squash(prevCode)}`)}`);
+        out.push({ pos: l.pos, key, flat, ...(note ? { note: true } : {}), ...(l.tag === "-" ? { minus: true } : {}) });
       }
-      if (l.tag !== "-") prev = l.text.slice(1);
+      if (l.tag !== "-") {
+        prev = line;
+        if (!note) prevCode = line;
+      }
     }
   }
   return out;

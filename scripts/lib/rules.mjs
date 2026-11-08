@@ -617,7 +617,7 @@ export function diffTextOf(state, rel) {
 // range round asks for them.
 export function changedUnitsOf(state, rel) {
   state.changedUnits ??= new Map();
-  if (!state.changedUnits.has(rel)) state.changedUnits.set(rel, changedUnits(diffTextOf(state, rel)));
+  if (!state.changedUnits.has(rel)) state.changedUnits.set(rel, changedUnits(diffTextOf(state, rel), rel));
   return state.changedUnits.get(rel);
 }
 
@@ -627,7 +627,7 @@ export function capUnitsOf(state, rel) {
   const full = changedUnitsOf(state, rel);
   if (indentMatters(rel) || state.diff?.deleted?.includes(rel) || !hasReindent(diffTextOf(state, rel))) return full;
   state.capUnits ??= new Map();
-  if (!state.capUnits.has(rel)) state.capUnits.set(rel, changedUnits(taskDiff(state, rel, { ignoreWhitespace: true })));
+  if (!state.capUnits.has(rel)) state.capUnits.set(rel, changedUnits(taskDiff(state, rel, { ignoreWhitespace: true }), rel));
   return state.capUnits.get(rel);
 }
 export const positionsOf = (units) => [...new Set(units.map((u) => u.pos))].sort((a, b) => a - b);
@@ -685,8 +685,8 @@ function coverage(state, role, after) {
   const cap = (state.policy ?? policyFor(state.ledger)).reviewRounds;
   const stops = (state.events ?? []).filter((e) => e.kind === "subagent-stop" && isRole(e.agentType, role));
   const stopOf = (round) => stops.find((e) => e.seq > (round.briefSeq ?? Infinity));
-  let counts = new Map();
-  const covered = (round, seenBy, rel = null, key = null) => {
+  let counts = { keys: new Map(), flats: new Map() };
+  const covered = (round, seenBy, rel = null, unit = null) => {
     const stop = stopOf(round);
     if (!stop) return false;
     // the fix-check round after the cap is the last; at the cap an open finding is fixed and
@@ -694,7 +694,7 @@ function coverage(state, role, after) {
     if (round.fixCheck) return fixCheckDone(state, round);
     if (!round.actOn.length || seenBy > cap) return true;
     if (!round.actOn.every((a) => a.closed)) return seenBy >= cap;
-    return after < stop.seq || (key !== null && keptLine(round, rel, key, counts));
+    return after < stop.seq || (unit !== null && keptLine(round, rel, unit, counts));
   };
   const out = [];
   for (const rel of reviewScope(state)) {
@@ -715,18 +715,39 @@ function coverage(state, role, after) {
     }
     const units = changedUnitsOf(state, rel);
     const all = positionsOf(units);
-    counts = baseCounts(units.map((u) => u.key));
+    counts = { keys: baseCounts(units.map((u) => u.key)), flats: baseCounts(units.map((u) => u.flat)) };
     // rounds with every item closed and an edit since: the fix narrows them to the lines it
     // changed, unless it deleted a line, which keeps the rule from before (the whole file, or
     // slice, waits for a round)
     const fixed = seeing.filter((h) => !h.part && keyed(h) && h.actOn.length && h.actOn.every((a) => a.closed) && stopOf(h) && after > stopOf(h).seq);
-    const narrow = !fixed.some((h) => fixDeleted(h.units[rel], units, whole(h), h.edges?.[rel], h.at?.[rel]));
+    // a round that recorded its comment lines is judged on code: a deleted comment is no
+    // deletion, and a code line whose comment above changed keeps its code key
+    const noted = seeing.some((h) => h.notes);
+    // positions there count code lines only: a comment line added or removed above a line moves
+    // it in the file, not among the code
+    const deletedIn = (h) => {
+      if (!h.notes) return fixDeleted(h.units[rel], units, whole(h), h.edges?.[rel], h.at?.[rel]);
+      const keys = h.units[rel];
+      const notes = new Set(h.notes[rel] ?? []);
+      const recorded = new Set(keys);
+      const was = h.at?.[rel] ?? null;
+      const oldNotes = was ? keys.flatMap((k, i) => (notes.has(k) ? [was[i]] : [])) : [];
+      const added = units.filter((u) => u.note && !u.minus).map((u) => u.pos);
+      const removed = units.filter((u) => u.note && u.minus && !recorded.has(u.key)).map((u) => u.pos);
+      const codeOld = (p) => p - oldNotes.filter((n) => n < p).length;
+      const codeNew = (p) => p - added.filter((n) => n < p).length + removed.filter((n) => n <= p).length;
+      const code = keys.flatMap((k, i) => (notes.has(k) ? [] : [i]));
+      const edges = h.edges?.[rel]?.map((e) => (e ? (e[2] ? [e[2], codeOld(e[1])] : null) : e));
+      const now = units.filter((u) => !u.note).map((u) => ({ key: u.flat, pos: codeNew(u.pos) }));
+      return fixDeleted(code.map((i) => h.flats[rel][i]), now, whole(h), edges, was ? code.map((i) => codeOld(was[i])) : null);
+    };
+    const narrow = !fixed.some(deletedIn);
     // with slices the cap counts the rounds that saw this line, not the file; under "call" a
     // round saw what it recorded, a re-indented line by its flat key where indentation is free
-    const flat = !indentMatters(rel);
+    const flat = (h, u) => (h.flats?.[rel] ?? []).includes(u.flat) && (Boolean(h.notes) || !indentMatters(rel));
     const saw = (h, u) => (calls && keyed(h)
-      ? h.units[rel].includes(u.key) || (flat && (h.flats?.[rel] ?? []).includes(u.flat))
-      : whole(h) || (h.units?.[rel] ?? []).includes(u.key));
+      ? h.units[rel].includes(u.key) || flat(h, u)
+      : whole(h) || (h.units?.[rel] ?? []).includes(u.key) || (Boolean(h.notes) && flat(h, u)));
     const excused = new Set((state.ledger.unchanged ?? []).flatMap((c) => c.keys?.[rel] ?? []));
     // a whitespace-only change to a line the task did not add is not in a whitespace-ignoring diff
     const real = calls ? new Set(capUnitsOf(state, rel).map((u) => u.pos)) : null;
@@ -735,19 +756,20 @@ function coverage(state, role, after) {
     const open = positionsOf(units.filter((u) => {
       const rounds = seeing.filter((h) => saw(h, u));
       const last = rounds[rounds.length - 1];
+      if (!last && u.note && noted) return false;
       if (!last && calls) {
         if (excused.has(u.key) || !real.has(u.pos)) return false;
         if (ended) late.push(u.pos);
         return !ended;
       }
-      return !last || !covered(last, rounds.length, rel, narrow ? u.key : null);
+      return !last || !covered(last, rounds.length, rel, narrow ? u : null);
     }));
     if (late.length) listed.push(...spans(rel, positionsOf(late.map((pos) => ({ pos }))), all));
     // a reviewed line deleted with nothing in its place: the newest round's view of the file is owed
     const newest = calls && narrow ? [...seeing].reverse().find((h) => keyed(h) && stopOf(h)) : null;
     // a call on the whole file excuses the lines gone when it was made, not a later deletion
     const gone = newest ? newest.units[rel].filter((k) => !units.some((u) => u.key === k)) : [];
-    const deleted = newest && fixDeleted(newest.units[rel], units, whole(newest), newest.edges?.[rel], newest.at?.[rel])
+    const deleted = newest && deletedIn(newest)
       && !(state.ledger.unchanged ?? []).some((c) => c.kept?.[rel] && c.seq > stopOf(newest).seq && gone.every((k) => !c.kept[rel].includes(k)));
     const entry = newest && (whole(newest) ? rel : newest.files.find((e) => pathOf(e) === rel));
     if (deleted && ended) listed.push(entry);
@@ -768,15 +790,17 @@ function baseCounts(keys) {
   return out;
 }
 const recordedBy = new WeakMap();
-function keptLine(round, rel, key, now) {
+function keptLine(round, rel, unit, now) {
   let byRel = recordedBy.get(round);
   if (!byRel) recordedBy.set(round, (byRel = new Map()));
   if (!byRel.has(rel)) {
     const keys = round.units?.[rel] ?? [];
-    byRel.set(rel, { keys: new Set(keys), counts: baseCounts(keys) });
+    const flats = round.notes ? round.flats?.[rel] ?? [] : [];
+    byRel.set(rel, { keys: new Set(keys), counts: baseCounts(keys), flats: new Set(flats), flatCounts: baseCounts(flats) });
   }
   const rec = byRel.get(rel);
-  return rec.keys.has(key) && (now.get(baseOf(key)) ?? 0) <= (rec.counts.get(baseOf(key)) ?? 0);
+  const kept = (set, counts, nowCounts, k) => set.has(k) && (nowCounts.get(baseOf(k)) ?? 0) <= (counts.get(baseOf(k)) ?? 0);
+  return kept(rec.keys, rec.counts, now.keys, unit.key) || kept(rec.flats, rec.flatCounts, now.flats, unit.flat);
 }
 
 // Whether the lines a round recorded (its keys, in file order) lost one the fix did not replace.

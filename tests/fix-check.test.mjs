@@ -500,3 +500,96 @@ test("6.4 L11 boundary: a late round in parts ends the file only with the part t
   round(repo, "reviewer", rest);
   assert.ok(!blocks(check(repo), "R5"), `the part that takes the rest ends the file:\n${check(repo)}`);
 });
+
+// 6.5: comment and blank lines need no round: deleting one is no deletion, and adding one is
+// no change a review must see
+const commented = (lines = body(60, "mid")) => lines.split("\n").map((l, i) => (i === 20 ? `// helpers\n${l}` : l)).join("\n");
+const unpin = (repo) => {
+  const file = path.join(runDir(repo), "ledger.json");
+  const ledger = JSON.parse(readFileSync(file, "utf8"));
+  for (const r of [...ledger.huddles, ...Object.values(ledger.seen ?? {})]) { delete r.notes; delete r.flats; }
+  writeFileSync(file, JSON.stringify(ledger, null, 2));
+};
+
+test("6.5 K1 happy: a fix that deletes a comment clears R5 with no re-check", () => {
+  const repo = opened("fc-65-k1");
+  edit(repo, MID, commented());
+  round(repo, "reviewer", null, ["slop comment — src/mid.ts:21 — labels a block — []"]);
+  edit(repo, MID, body(60, "mid"));
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:21"]);
+  assert.ok(!blocks(check(repo), "R5"), check(repo));
+});
+
+test("6.5 K2 edge: a fix that adds a comment and edits code names only the code lines", () => {
+  const repo = opened("fc-65-k2");
+  edit(repo, MID, commented());
+  round(repo, "reviewer", null, [FINDING]);
+  const fixed = commented(body(60, "mid").replace("mid44 = 44", "mid44 = 4400")).split("\n");
+  fixed.splice(40, 0, "// why the total skips the header row");
+  edit(repo, MID, fixed.join("\n"));
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:47"]);
+  const entries = entriesOf(ruleLine(check(repo), "R5"));
+  assert.deepEqual(entries, ["src/mid.ts:47-48"], entries.join(", ")); // the edited line and the one after it; not the comment at 41 or the line below it
+});
+
+test("6.5 K3 happy: a comment-only change after a clean round owes no call", () => {
+  const repo = opened("fc-65-k3");
+  round(repo, "reviewer", null);
+  const lines = body(60, "mid").split("\n");
+  lines.splice(9, 0, "// the first block holds the defaults", "");
+  edit(repo, MID, lines.join("\n"));
+  assert.ok(!blocks(check(repo), "R5"), check(repo));
+});
+
+test("6.5 K4 refused: an unread slice still needs a round even when it holds comments", () => {
+  const repo = opened("fc-65-k4");
+  edit(repo, MID, commented());
+  round(repo, "reviewer", "src/mid.ts:1-30");
+  assert.match(ruleLine(check(repo), "R5"), /src\/mid\.ts:31-61/);
+});
+
+test("6.5 K5 idempotent: an old round with no comment keys keeps the old rule: a deleted comment reopens the file", () => {
+  const repo = opened("fc-65-k5");
+  edit(repo, MID, commented());
+  round(repo, "reviewer", null, ["slop comment — src/mid.ts:21 — labels a block — []"]);
+  unpin(repo);
+  edit(repo, MID, body(60, "mid"));
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/mid.ts:21"]);
+  assert.deepEqual(entriesOf(ruleLine(check(repo), "R5")), [MID]);
+});
+
+test("6.5 K6 boundary: noteLine reads comments by file type", async () => {
+  const { noteLine } = await import("../scripts/lib/tree.mjs");
+  const yes = [["a.ts", "  // x"], ["a.tsx", "/* x */"], ["a.py", "# x"], ["a.yaml", "  # x"], ["a.sql", "-- x"], ["a.css", "/* x */"], ["a.html", "<!-- x -->"], ["a.ts", ""], ["a.go", "   "], ["a.unknown", ""], ["a.go", "// x"]];
+  const no = [["a.ts", "const a = 1; // x"], ["a.css", "#main { color: red; }"], ["a.py", "x = '#'"], ["a.ts", "'// not a comment'"], ["a.sql", "select 1"], ["a.unknown", "# x"], ["a.py", "// x"],
+    // a marker that opens or closes a block can hide or reveal code; * starts code in C-like files
+    ["a.ts", " * x"], ["a.ts", "/*"], ["a.ts", "*/"], ["a.ts", "*[Symbol.iterator]() {"], ["a.html", "<!--"], ["a.css", "/* open"],
+    // directives change what builds or runs
+    ["a.go", "//go:build linux"], ["a.go", "// +build linux"], ["a.go", "//nolint:errcheck"], ["a.rs", "/// assert_eq!(f(), 1);"], ["a.rs", "//! crate docs"],
+    ["a.ts", "// @ts-ignore"], ["a.ts", "/// <reference types=\"node\" />"], ["a.js", "// eslint-disable-next-line no-console"], ["a.ts", "/* webpackChunkName: \"x\" */"],
+    ["a.py", "#!/usr/bin/env python"], ["a.py", "# type: ignore"], ["a.py", "# noqa"], ["a.py", "# -*- coding: utf-8 -*-"], ["a.rb", "# frozen_string_literal: true"],
+    ["a.sql", "-- +goose Up"], ["a.lua", "--[[ opens a block"], ["a.lua", "--[==[ x"], ["a.sql", "-- migrate:up"], ["a.html", "<!--[if IE]> x <![endif]-->"]];
+  for (const [rel, text] of yes) assert.equal(noteLine(rel, text), true, `${rel}: ${JSON.stringify(text)}`);
+  for (const [rel, text] of no) assert.equal(noteLine(rel, text), false, `${rel}: ${JSON.stringify(text)}`);
+});
+
+test("6.5 K7 edge: a .py fix that deletes a comment and re-indents a code line names the re-indented line", () => {
+  const repo = makeRepo("fc-65-k7", { ".claude/gate.json": JSON.stringify({ source: ["src/**", "tests/**"], tests: ["tests/**"], verify: ["true"] }, null, 2), "src/m.py": "x = 0\n" });
+  execFileSync("git", ["add", "-A"], { cwd: repo });
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
+  cli(repo, "open", ["fc-65-k7", "feature"]);
+  lookedUp(repo);
+  cli(repo, "note", ["task", "One module. [inferred]"]);
+  cli(repo, "note", ["context", "Traced: src/m.py:1\nRelated: tests/a.test.ts\nResearch: none needed: local"]);
+  cli(repo, "note", ["plan", "One module.", "--files", "src/m.py"]);
+  cli(repo, "case", ["add", "runs", "--kind", "happy"]);
+  const py = (lines) => lines.join("\n") + "\n";
+  const code = Array.from({ length: 20 }, (_, i) => `    y${i} = ${i}`);
+  edit(repo, "src/m.py", py(["x = 0", "def f():", "    # the loop below", ...code]));
+  round(repo, "reviewer", null, ["slop comment — src/m.py:3 — narrates — []"]);
+  const fixed = [...code];
+  fixed[5] = `        y5 = 5`;
+  edit(repo, "src/m.py", py(["x = 0", "def f():", ...fixed]));
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/m.py:3"]);
+  assert.match(ruleLine(check(repo), "R5"), /src\/m\.py:8-/, `the re-indented line is owed:\n${check(repo)}`);
+});
