@@ -4,7 +4,7 @@ import { UsageError } from "./context.mjs";
 import { readEvents } from "./events.mjs";
 import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
 import { toPosixRel } from "./paths.mjs";
-import { briefOf, fileRole, helperAlive, helpersOut, unfinishedFile } from "./rules.mjs";
+import { briefOf, fileRole, HELPER_MAX_MS, helperAlive, helpersOut, unfinishedFile } from "./rules.mjs";
 
 // What a cut helper's notice means and what the lead does next. Outages, a cause only the user
 // can fix and a stop someone chose are nobody's failure: they never move the ladder.
@@ -160,6 +160,42 @@ export function failedTurnLine(ctx) {
   const still = out.length ? ` Still out: ${out.map((e) => `${e.agentType} (${e.agent})`).join(", ")}.` : "";
   const lost = cut.length ? ` \`gate diagnose\` lists ${cut.length === 1 ? "1 helper" : `${cut.length} helpers`} it cut off.` : "";
   return `done-gate: your last turn ended on an error before it finished: ${failedTurnText(failed)}.${still}${lost}`;
+}
+
+const ago = (ms) => {
+  const m = Math.floor(ms / 60000);
+  if (m < 60) return `${m} minute${m === 1 ? "" : "s"}`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h} hour${h === 1 ? "" : "s"}`;
+  return `${Math.floor(h / 24)} days`;
+};
+// the lead acting again after a failed turn; a helper's records and the Stop hook's do not count
+const LEAD_ACTS = new Set(["prompt", "command", "edit", "tool", "skill", "agent", "answer", "browser"]);
+
+// Why a run nobody is on stopped, read from the sessions it names (never the one asking): its
+// last activity, its steps, the helpers it cut off, and the failed turn nothing followed.
+export function leftBehind(ctx, { dir, ledger }, now = Date.now()) {
+  const events = (ledger.sessions ?? []).flatMap((s) => readEvents(ctx.stateDir, s)).filter((e) => e.seq > (ledger.openedSeq ?? 0)).sort((a, b) => a.seq - b.seq);
+  const steps = ledger.steps ?? [];
+  const done = steps.filter((s) => s.state).length;
+  const next = steps.find((s) => !s.state)?.key ?? null;
+  const last = events.at(-1);
+  const quiet = last ? now - Date.parse(last.ts) : null;
+  const failed = events.filter((e) => e.kind === "turn-failed").pop();
+  const carried = failed && events.some((e) => e.seq > failed.seq && e.session === failed.session && e.agent == null && LEAD_ACTS.has(e.kind));
+  let why = "it stopped with no failure on record";
+  if (!last) why = "no event records are left for it (pruned, or its session ran in another repo): ask the user what became of it";
+  else if (quiet < HELPER_MAX_MS) why = `it was active ${ago(quiet)} ago: ask the user first, another terminal may still be on it`;
+  else if (failed && !carried) why = `its last turn ended on an error and nothing came after: ${failedTurnText(failed)}`;
+  const helpers = last ? helperProblems({ events, ledger, dir, root: ctx.root, now }) : [];
+  const when = last ? `last active ${ago(quiet)} ago` : "no activity on record";
+  const stepText = `${done} of ${steps.length} steps done${next ? `, next {${next}}` : ""}`;
+  const cut = helpers.length ? `; ${helpers.length === 1 ? "1 helper" : `${helpers.length} helpers`} never reported` : "";
+  return {
+    slug: ledger.slug, done, total: steps.length, next, why, helpers,
+    summary: `${when}, ${stepText}; ${why}${cut}`,
+    story: [`run ${ledger.slug}: ${when}${last ? ` (${last.ts})` : ""}`, `steps: ${done} of ${steps.length} done${next ? `; next {${next}}` : ""}`, `why it stopped: ${why}`, ...helpers.map((p) => `helper: ${p.line}`)],
+  };
 }
 
 export const verbs = {

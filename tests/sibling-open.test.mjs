@@ -155,3 +155,36 @@ test("C5 refused: with a newer release known, the wrong folder is refused first 
   const here = spawnSync(process.execPath, [gate, "open", "t", "bugfix", "--repo", "../other"], { cwd: main, encoding: "utf8", env });
   assert.ok(here.stderr.includes("`gate open t bugfix --repo ../other --old-version-ok \"<their words, at least three>\"`"), here.stderr);
 });
+
+// a log a shell verb left behind with no hook's record in it: a rebaseline run from this folder
+function strayLog(repo, id) {
+  const dir = path.join(repo, ".claude", "gate", "sessions", id);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, "events.jsonl"), `${JSON.stringify({ seq: 1, ts: new Date().toISOString(), session: id, agent: null, agentType: null, kind: "rebaseline", why: "x" })}\n`);
+}
+
+test("4.5 C1 refused: a stray rebaseline log here is not home; gate open names the repo holding the real events", () => {
+  const { main, other } = pair("sib-45-c1");
+  const id = session("45c1");
+  prompted(main, id);
+  strayLog(other, id);
+  const r = shellVerb(other, id, "open", "t", "bugfix");
+  assert.notEqual(r.status, 0, r.stdout);
+  assert.ok(r.stderr.includes(`cd ${main} && gate open t bugfix --repo ${other}`), r.stderr);
+  assert.equal(runsIn(other), false);
+});
+
+test("4.5 C2 edge: a stray log in the first sibling is skipped for the second, which holds real events", () => {
+  const top = path.join(here, ".tmp", "sib-45-c2");
+  rmSync(top, { recursive: true, force: true });
+  const first = repoAt(path.join(top, "a-first"));
+  const second = repoAt(path.join(top, "b-second"));
+  const here_ = repoAt(path.join(top, "c-here"));
+  const id = session("45c2");
+  strayLog(first, id);
+  prompted(second, id);
+  const r = shellVerb(here_, id, "open", "t", "bugfix");
+  assert.notEqual(r.status, 0, r.stdout);
+  assert.ok(r.stderr.includes(`cd ${second} && `), r.stderr);
+  assert.ok(!r.stderr.includes(`cd ${first} && `), r.stderr);
+});

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, gate } from "./helpers.mjs";
 import { helperProblems } from "../scripts/lib/diagnose.mjs";
@@ -287,4 +287,162 @@ test("4.3 C11 pieces briefed before either agent starts: a writer ties to its fi
   two.notice("R2", "stalled");
   const keys = two.problems().map((p) => p.key).sort();
   assert.deepEqual(keys, ["R1", "R2"], "two silent agents and two pieces were guessed onto files");
+});
+
+// ---- 4.5: a run left behind says why it stopped ----
+
+import { leftBehind } from "../scripts/lib/diagnose.mjs";
+
+// a run on disk whose session log holds the given events
+function leftRun(name, build) {
+  const root = makeRepo(`dg-left-${name}`);
+  const stateDir = path.join(root, ".claude", "gate");
+  const dir = path.join(stateDir, "runs", `2026-11-01-${name}`);
+  mkdirSync(dir, { recursive: true });
+  const ledger = { slug: name, playbook: "feature", status: "open", openedAt: "2026-11-01T00:00:00.000Z", openedSeq: 10, sessions: ["S0"], steps: [{ key: "context", state: "DONE" }, { key: "plan", state: "DONE" }, { key: "cases" }, { key: "close" }] };
+  let seq = 10;
+  const events = [];
+  const at = (minutes) => new Date(Date.now() - minutes * 60 * 1000).toISOString();
+  const push = (kind, ago, extra = {}) => events.push({ seq: ++seq, ts: at(ago), session: "S0", agent: null, agentType: null, kind, ...extra });
+  build({ push, ledger });
+  if (events.length) {
+    mkdirSync(path.join(stateDir, "sessions", "S0"), { recursive: true });
+    writeFileSync(path.join(stateDir, "sessions", "S0", "events.jsonl"), events.map((e) => `${JSON.stringify(e)}\n`).join(""));
+  }
+  return leftBehind({ stateDir, root, session: "S9" }, { dir, ledger });
+}
+
+test("4.5 C3 with no failure it says exactly that, with last activity, steps done and the next step", () => {
+  const r = leftRun("c3", ({ push }) => {
+    push("prompt", 300, { text: "do it" });
+    push("edit", 290, { path: "src/a.ts" });
+  });
+  assert.equal(r.why, "it stopped with no failure on record");
+  assert.equal(r.done, 2);
+  assert.equal(r.total, 4);
+  assert.equal(r.next, "cases");
+  assert.match(r.summary, /last active 4 hours ago/);
+  assert.match(r.summary, /2 of 4 steps done, next \{cases\}/);
+});
+
+test("4.5 C4 a failed turn carried past is not the reason; one nothing followed is", () => {
+  const past = leftRun("c4-past", ({ push }) => {
+    push("turn-failed", 300, { error: "overloaded", details: "529" });
+    push("prompt", 290, { text: "carry on" });
+  });
+  assert.equal(past.why, "it stopped with no failure on record");
+  const last = leftRun("c4-last", ({ push }) => {
+    push("prompt", 300, { text: "do it" });
+    push("turn-failed", 290, { error: "rate_limit", details: "429", text: "You've hit your session limit · resets 6:40pm" });
+  });
+  assert.match(last.why, /last turn ended on an error[\s\S]*session limit/);
+});
+
+test("4.5 C5 no records left says so and asks; active under 45 minutes says ask first", () => {
+  const none = leftRun("c5-none", () => {});
+  assert.match(none.why, /no event records[\s\S]*ask the user/);
+  const active = leftRun("c5-active", ({ push }) => push("edit", 10, { path: "src/a.ts" }));
+  assert.match(active.why, /active 10 minutes ago[\s\S]*ask the user first/);
+});
+
+const sessionStart = (repo, id, source = "startup") => {
+  const r = spawnSync(process.execPath, [gate, "session-start"], { input: JSON.stringify({ session_id: id, cwd: repo, hook_event_name: "SessionStart", source, session_start_source: source }), encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: id } });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+};
+const as = (repo, id, verb, args = []) => spawnSync(process.execPath, [gate, verb, ...args], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: id } });
+
+test("4.5 C6 session start lists each open run with its reason, at most five, and joins none", () => {
+  const repo = makeRepo("dg-left-c6");
+  for (let i = 1; i <= 6; i++) as(repo, `S${i}`, "open", [`run-${i}`, "feature"]);
+  const ctx = sessionStart(repo, "S9");
+  const lines = ctx.split("\n").filter((l) => l.startsWith("Open run "));
+  assert.equal(lines.length, 5, ctx);
+  assert.match(ctx, /and 1 more open run/);
+  for (const l of lines) {
+    assert.match(l, /another session/);
+    assert.match(l, /steps done/);
+    assert.match(l, /no event records[\s\S]*ask the user/, "a shell-opened run with no records says so");
+    assert.match(l, /gate attach run-\d[\s\S]*gate abandon run-\d/);
+  }
+  assert.equal(loadSession(path.join(repo, ".claude", "gate"), "S9").current, null, "session start joined another session's run");
+});
+
+test("4.5 C7 gate attach prints the full story; gate check's stale line names the reason", () => {
+  const repo = makeRepo("dg-left-c7");
+  as(repo, "S1", "open", ["old", "feature"]);
+  mkdirSync(path.join(repo, ".claude", "gate", "sessions", "S1"), { recursive: true });
+  writeFileSync(path.join(repo, ".claude", "gate", "sessions", "S1", "events.jsonl"), `${JSON.stringify({ seq: 2e15, ts: new Date(Date.now() - 90 * 60 * 1000).toISOString(), session: "S1", agent: null, agentType: null, kind: "prompt", text: "x" })}\n`);
+  const r = as(repo, "S9", "attach", ["old"]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /run old: last active/);
+  assert.match(r.stdout, /steps: \d+ of \d+ done/);
+  assert.match(r.stdout, /why it stopped: /);
+
+  const stale = makeRepo("dg-left-c7-stale");
+  as(stale, "S1", "open", ["gone", "feature"]);
+  const dir = path.join(stale, ".claude", "gate", "runs", loadSession(path.join(stale, ".claude", "gate"), "S1").current);
+  const ledgerFile = path.join(dir, "ledger.json");
+  const ledger = JSON.parse(readFileSync(ledgerFile, "utf8"));
+  writeFileSync(ledgerFile, JSON.stringify({ ...ledger, openedAt: new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString(), sessions: ["S0"] }));
+  const old = new Date(Date.now() - 5 * 24 * 3600 * 1000);
+  utimesSync(ledgerFile, old, old);
+  const check = as(stale, "S2", "check").stdout;
+  assert.match(check, /open run gone[^\n]*5 days[^\n]*no event records[^\n]*gate abandon gone/, check);
+});
+
+test("4.5 C8 six open runs, the newest with a 4 MB log and the sixth unreadable: five are listed, under 2 s", () => {
+  const repo = makeRepo("dg-left-c8");
+  for (let i = 1; i <= 6; i++) as(repo, `S${i}`, "open", [`run-${i}`, "feature"]);
+  const sessions = path.join(repo, ".claude", "gate", "sessions");
+  const line = (n) => `${JSON.stringify({ seq: 1e15 + n, ts: new Date().toISOString(), session: "S6", agent: null, agentType: null, kind: "command", tool: "Bash", cmd: "x".repeat(150), exit: 0 })}\n`;
+  mkdirSync(path.join(sessions, "S6"), { recursive: true });
+  writeFileSync(path.join(sessions, "S6", "events.jsonl"), Array.from({ length: 16000 }, (_, n) => line(n)).join(""));
+  // the oldest run's log is a folder: reading it would throw, so a listing of five proves it was skipped
+  mkdirSync(path.join(sessions, "S1", "events.jsonl"), { recursive: true });
+  const started = Date.now();
+  const ctx = sessionStart(repo, "S9");
+  const ms = Date.now() - started;
+  assert.equal(ctx.split("\n").filter((l) => l.startsWith("Open run ")).length, 5, ctx);
+  assert.doesNotMatch(ctx, /Open run run-1\b/);
+  assert.ok(ms < 2000, `session start took ${ms} ms`);
+});
+
+test("4.5 C9 a helper's records after a failed turn leave the failure as the reason", () => {
+  const r = leftRun("c9", ({ push }) => {
+    push("prompt", 300, { text: "do it" });
+    push("turn-failed", 290, { error: "overloaded", details: "529" });
+    push("subagent-stop", 288, { agent: "A1", agentType: "done-gate:reviewer" });
+    push("edit", 287, { agent: "A1", agentType: "done-gate:reviewer", path: "x/review-1.md" });
+  });
+  assert.match(r.why, /last turn ended on an error/);
+});
+
+test("4.5 C10 only the sessions the run names count: an attaching session is not its last activity", () => {
+  const r = leftRun("c10", ({ push }) => push("edit", 300, { path: "src/a.ts" }));
+  assert.equal(r.why, "it stopped with no failure on record");
+  const repo = makeRepo("dg-left-c10");
+  as(repo, "S1", "open", ["old", "feature"]);
+  const sessions = path.join(repo, ".claude", "gate", "sessions");
+  mkdirSync(path.join(sessions, "S1"), { recursive: true });
+  writeFileSync(path.join(sessions, "S1", "events.jsonl"), `${JSON.stringify({ seq: 2e15, ts: new Date(Date.now() - 300 * 60 * 1000).toISOString(), session: "S1", agent: null, agentType: null, kind: "prompt", text: "x" })}\n`);
+  mkdirSync(path.join(sessions, "S9"), { recursive: true });
+  writeFileSync(path.join(sessions, "S9", "events.jsonl"), `${JSON.stringify({ seq: 3e15, ts: new Date().toISOString(), session: "S9", agent: null, agentType: null, kind: "prompt", text: "y" })}\n`);
+  const out = as(repo, "S9", "attach", ["old"]).stdout;
+  assert.match(out, /last active 5 hours ago/, out);
+});
+
+test("4.5 C11 gate check with a stale run whose log cannot be read still lists it", () => {
+  const repo = makeRepo("dg-left-c11");
+  as(repo, "S1", "open", ["gone", "feature"]);
+  const dir = path.join(repo, ".claude", "gate", "runs", loadSession(path.join(repo, ".claude", "gate"), "S1").current);
+  const ledgerFile = path.join(dir, "ledger.json");
+  const ledger = JSON.parse(readFileSync(ledgerFile, "utf8"));
+  writeFileSync(ledgerFile, JSON.stringify({ ...ledger, openedAt: new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString(), sessions: ["S0"] }));
+  const old = new Date(Date.now() - 5 * 24 * 3600 * 1000);
+  utimesSync(ledgerFile, old, old);
+  mkdirSync(path.join(repo, ".claude", "gate", "sessions", "S0", "events.jsonl"), { recursive: true });
+  const r = as(repo, "S2", "check");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /open run gone[^\n]*5 days[^\n]*gate abandon gone/, r.stdout);
 });

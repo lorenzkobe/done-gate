@@ -4,6 +4,7 @@ import { assess, unmetLines } from "./assess.mjs";
 import { policyFor, splitAdvice } from "./size.mjs";
 import { loadConfig, configPath } from "./config.mjs";
 import { currentLedger, openRuns, staleForeign } from "./ledger.mjs";
+import { leftBehind } from "./diagnose.mjs";
 import { loadSession } from "./session-state.mjs";
 
 // Read-only verbs. `check` prints only what is still unmet; "clean" when nothing is.
@@ -39,10 +40,19 @@ const age = (iso) => {
   return days >= 1 ? `${days} day${days === 1 ? "" : "s"}` : "less than a day";
 };
 
+// the reason is read from the run's logs; one that cannot be read still leaves the line
+function reasonOf(ctx, run) {
+  try {
+    return `, ${leftBehind(ctx, run).why}`;
+  } catch {
+    return "";
+  }
+}
+
 function staleRuns(ctx) {
   return openRuns(ctx.stateDir)
     .filter((run) => staleForeign(run, ctx.session))
-    .map(({ ledger }) => `open run ${ledger.slug}, opened ${age(ledger.openedAt)} ago by another session: if that work is over, \`gate abandon ${ledger.slug} "<reason>"\``);
+    .map((run) => `open run ${run.ledger.slug}, opened ${age(run.ledger.openedAt)} ago by another session${reasonOf(ctx, run)}: if that work is over, \`gate abandon ${run.ledger.slug} "<reason>"\``);
 }
 
 export const verbs = {

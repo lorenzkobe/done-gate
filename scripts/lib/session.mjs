@@ -4,6 +4,7 @@ import { assess, unmetCount } from "./assess.mjs";
 import { ensureSession, loadSession, updateSession } from "./session-state.mjs";
 import { recordGateError, UsageError } from "./context.mjs";
 import { attachLedger, currentLedger, isDone, loadLedger, openRuns, runsDir, saveLedger, staleForeign } from "./ledger.mjs";
+import { leftBehind } from "./diagnose.mjs";
 import { writeReport } from "./verbs.mjs";
 import { checkRelease, UPDATE_COMMANDS } from "./release.mjs";
 import { needsSetup, pendingOffers } from "./setup.mjs";
@@ -75,7 +76,7 @@ export const verbs = {
     // A /clear, resume or compaction must not orphan a task: join the newest open run. A
     // new session is another task until it says otherwise: it is told the run is there.
     const continuing = ["clear", "resume", "compact"].includes(ctx.input?.session_start_source);
-    let foreign = null;
+    let left = [];
     try {
       const runs = openRuns(ctx.stateDir);
       for (const { dir, ledger } of runs.filter((r) => r.ledger.status === "closing")) {
@@ -86,8 +87,9 @@ export const verbs = {
       if (!loadSession(ctx.stateDir, ctx.session)?.current) {
         const [newest] = runs.filter((r) => r.ledger.status !== "closed");
         if (newest && continuing) attachLedger(ctx, newest.ledger.slug);
-        else if (newest) foreign = newest.ledger;
       }
+      const mine = loadSession(ctx.stateDir, ctx.session)?.current;
+      left = runs.filter((r) => r.ledger.status !== "closed" && path.basename(r.dir) !== mine);
       // a cleared, resumed or compacted context no longer holds the step texts it was shown
       const current = continuing ? currentLedger(ctx.stateDir, ctx.session) : null;
       if (current?.ledger.hinted?.[ctx.session]) {
@@ -97,8 +99,22 @@ export const verbs = {
     } catch {
       // attach is a courtesy; the Stop gate will still say R1 if it matters
     }
-    if (foreign) {
-      parts.push(`\n<done-gate-status>\nOpen run ${foreign.slug} (${foreign.playbook}) was left by another session on ${String(foreign.openedAt).slice(0, 10)} and is not joined. To continue it: \`gate attach ${foreign.slug}\`; if that work is over: \`gate abandon ${foreign.slug} "<reason>"\`. A new task opens its own run.\n</done-gate-status>`);
+    // each run nobody here is on, newest first, with why it stopped; past five only a count, so
+    // session start reads at most five runs' logs
+    if (left.length) {
+      const lines = left.slice(0, 5).map((run) => {
+        const { ledger } = run;
+        let why = "";
+        try {
+          why = ` ${leftBehind(ctx, run).summary}.`;
+        } catch {
+          // the reason is a courtesy; the run is still listed
+        }
+        const by = ledger.sessions?.includes(ctx.session) ? "opened by this session" : "left by another session";
+        return `Open run ${ledger.slug} (${ledger.playbook}), ${by} on ${String(ledger.openedAt).slice(0, 10)}, is not joined:${why} To continue it: \`gate attach ${ledger.slug}\`; if that work is over: \`gate abandon ${ledger.slug} "<reason>"\`.`;
+      });
+      const more = left.length > 5 ? [`and ${left.length - 5} more open run${left.length - 5 === 1 ? "" : "s"}: \`gate check\` lists them`] : [];
+      parts.push(`\n<done-gate-status>\n${[...lines, ...more].join("\n")}\nA new task opens its own run.\n</done-gate-status>`);
     }
     try {
       const { state, unmet } = assess(ctx, {});

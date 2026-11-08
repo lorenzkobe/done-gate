@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync, appendFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, statSync, writeFileSync, appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, repoConfig } from "./config.mjs";
@@ -14,6 +14,7 @@ import { emptyTier } from "./size.mjs";
 import { loadPolicy } from "./size.mjs";
 import { helpersOut, implementationHash, saidSince } from "./rules.mjs";
 import { carryStanding, requireLiveBatch } from "./standing.mjs";
+import { leftBehind } from "./diagnose.mjs";
 import { knownNewer, UPDATE_COMMANDS } from "./release.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
@@ -374,7 +375,7 @@ function printRepo(ctx, repo) {
 
 // `open` and `attach` show only the keyed steps (the ones with script or agent evidence);
 // `gate steps` shows all of them.
-function printOpen(ctx, dir, ledger) {
+function printOpen(ctx, dir, ledger, story = []) {
   ctx.out(`ledger: ${dir}`);
   for (const repo of ledger.repos ?? []) printRepo(ctx, repo);
   const config = loadConfig(ctx.root, ledger.repos);
@@ -392,15 +393,42 @@ function printOpen(ctx, dir, ledger) {
   const newer = newerInstalled(ctx.version);
   if (newer) ctx.out(`done-gate ${newer} is installed, but this session runs ${ctx.version}: restart Claude Code to use it`);
   printStepLines(ctx, ledger.steps.filter((s) => s.key), { short: true });
+  for (const line of story) ctx.out(line);
   printNext(ctx);
 }
 
 // A verb from the model's shell has no CLAUDE_PROJECT_DIR and roots itself at its cwd, while the
 // hooks file the session's events under the repo it started in. A run opened in a sibling (or in a
 // repo inside that one) would never see them: the repo that has them, or null.
+// Only the UserPromptSubmit hook writes a prompt record. A shell verb run in a folder (a
+// rebaseline, a verify) can leave a log with none, and that is not where the hooks file events.
+// Read in chunks up to the first one: a home log of megabytes costs one chunk.
+function holdsPrompt(file) {
+  let fd;
+  try {
+    fd = openSync(file, "r");
+  } catch {
+    return false;
+  }
+  try {
+    const buf = Buffer.alloc(64 * 1024);
+    let tail = "";
+    for (let n = readSync(fd, buf, 0, buf.length, null); n > 0; n = readSync(fd, buf, 0, buf.length, null)) {
+      const text = tail + buf.toString("utf8", 0, n);
+      if (text.includes('"kind":"prompt"')) return true;
+      tail = text.slice(-16);
+    }
+    return false;
+  } catch {
+    return false;
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function eventsElsewhere(ctx) {
   if (process.env.CLAUDE_PROJECT_DIR || !ctx.session) return null;
-  const has = (dir) => existsSync(path.join(dir, ".claude", "gate", "sessions", String(ctx.session), "events.jsonl"));
+  const has = (dir) => holdsPrompt(path.join(dir, ".claude", "gate", "sessions", String(ctx.session), "events.jsonl"));
   if (has(ctx.root)) return null;
   const parent = path.dirname(ctx.root);
   let siblings = [];
@@ -519,8 +547,16 @@ export const verbs = {
     if (!slug) throw new UsageError("usage: gate attach <slug>");
     refuseElsewhere(ctx, ["open", slug]);
     refuseWhileHelpersOut(ctx, slug);
+    // read before joining, so this session never counts as the run's last activity
+    const found = findRun(ctx.stateDir, slug);
+    let story = [];
+    try {
+      story = found ? leftBehind(ctx, found).story : [];
+    } catch {
+      // the story is read from the run's logs; one that cannot be read does not stop the attach
+    }
     const { dir, ledger } = attachLedger(ctx, slug);
-    printOpen(ctx, dir, ledger);
+    printOpen(ctx, dir, ledger, story);
   },
   steps(ctx) {
     const current = currentLedger(ctx.stateDir, ctx.session);
