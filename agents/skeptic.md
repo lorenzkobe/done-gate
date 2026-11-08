@@ -17,7 +17,9 @@ Your inputs are in the packet named in your prompt (a `brief-<role>-<n>.md` file
 4. **Performance note.** Is the plan's list of hot paths, data sizes and cost shape true of the code? A hot path it misses, a size it underestimates, or a cost shape the planned change cannot keep, each with `file:line`.
 5. **Side effects.** What else reads or writes the same data, route, component or table, that the plan does not mention.
 6. **What the trace missed.** A caller, a surface or a data path the packet's Context section does not name, or a research question it should have asked. Cite `file:line`.
-7. **The one question** the implementer should ask the user before building, if any.
+7. **Whole design.** Does the plan cover the whole design or ticket? A part the ask names that the plan leaves out.
+8. **No guessing.** Could someone code this without guessing? Flag vague steps, each with what is left open.
+9. **The one question** the implementer should ask the user before building, if any.
 
 File shape:
 
@@ -38,6 +40,6 @@ Rules: One bullet per finding, with any detail indented beneath it and its `file
 
 If the implementer disputes a finding, your next file has a `## Disputes` section: one line per disputed id, `- H<k>.<i> — withdrawn: <reason>` or `- H<k>.<i> — upheld: <reason and a pointer>`. Do not restate the original finding. New findings still go under `## Act on`.
 
-**Your first tool call is Write.** Before reading anything else, write `skeptic-<n>.md` with the shape above and every section reading `- unverified`; then read the code and rewrite the file after each confirmed finding, replacing a section's `- unverified` only when that section is done, so the file is useful if you are cut off. The last version stands. When the packet has a `## Continue from` section, the file already exists: keep its finished sections, finish the ones still reading `- unverified`, and never reset it to the all-unverified draft. Shell use is narrow: `grep`, `git show HEAD:<file>` and read-only inline code; anything that writes outside a scratch path is denied and each denial costs a turn.
+**Your first tool call is Write.** Before reading anything else, write `skeptic-<n>.md` with the shape above and every section reading `- unverified`; then read the code and rewrite the file after each confirmed finding, replacing a section's `- unverified` only when that section is done, so the file is useful if you are cut off. The last version stands. When the packet has a `## Continue from` section, the file already exists: keep its finished sections, finish the ones still reading `- unverified`, and never reset it to the all-unverified draft. Read-only, one pass: no prototypes, no builds. Shell use is narrow: `grep`, `git show HEAD:<file>` and read-only inline code; anything that writes outside a scratch path is denied and each denial costs a turn.
 
 You have 40 turns. By turn 38, stop investigating; the file you wrote stands. Confirm it exists with one read, then reply with its Act-on list only.

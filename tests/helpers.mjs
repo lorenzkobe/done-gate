@@ -99,6 +99,24 @@ export function readyToEdit(repo, { session = "S1", plan = [] } = {}) {
   }
 }
 
+// The plan check, run the way the lead runs it: the real brief, a finished skeptic file with
+// nothing to act on, recorded, and the step closed by hand when the gate has not closed it.
+export function planChecked(repo, { session = "S1" } = {}) {
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: session };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  const run = (args) => {
+    const r = spawnSync(process.execPath, [gate, ...args], { encoding: "utf8", env });
+    if (r.status !== 0) throw new Error(`planChecked: gate ${args.slice(0, 2).join(" ")}: ${r.stderr}`);
+    return r.stdout;
+  };
+  const file = /Your file is (\S+\.md)/.exec(run(["brief", "skeptic"]))?.[1];
+  if (!file) throw new Error("planChecked: gate brief skeptic named no file");
+  writeFileSync(file, "# Skeptic\n\n## Act on\n- none\n## Consider\n- none\n## Noted\n- none\n## The one question\n- none\n");
+  run(["huddle", "add", "skeptic", "--file", path.basename(file)]);
+  const ledger = JSON.parse(readFileSync(path.join(path.dirname(file), "ledger.json"), "utf8"));
+  if (!ledger.steps.find((s) => s.key === "skeptic")?.state) run(["step", "skeptic", "done", "checked", "--evidence", path.basename(file)]);
+}
+
 // A run from before the rules stamp: the marker taken back out of the open ledger.
 export function asOldRun(repo, session = "S1") {
   const stateDir = path.join(repo, ".claude", "gate");

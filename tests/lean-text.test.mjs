@@ -99,3 +99,12 @@ test("C6 boundary: playbooks.md has no paragraph the parser drops, and the dead 
   assert.deepEqual(dropped, [], "every line in playbooks.md is a numbered step that reaches a ledger");
   assert.doesNotMatch(read("scripts/lib/next.mjs"), /^\s*read:/m);
 });
+
+test("C7 reported-surface: the plan check asks whether the plan covers the whole design or ticket and whether it can be coded without guessing, and stays read-only", () => {
+  const body = read("agents/skeptic.md").replace(/^---\n[\s\S]*?\n---\n/, "");
+  const asked = body.split("\n").filter((l) => /^\d+\. \*\*/.test(l));
+  assert.ok(asked.some((l) => /whole design or ticket/.test(l)), asked.join("\n"));
+  assert.ok(asked.some((l) => /without guessing/.test(l) && /vague step/.test(l)), asked.join("\n"));
+  assert.match(asked.at(-1), /The one question/, "the one question stays last, as the file shape ends with it");
+  assert.match(body, /read-only, one pass: no prototypes, no builds/i);
+});
