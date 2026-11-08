@@ -585,11 +585,14 @@ test("C9 edge: a mixed-case harness file is excluded by isSource and by the snap
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const gate = path.join(root, "scripts", "gate.mjs");
 
+// a repo of its own: a verb records its use in the session it resolves, never the developer's
+let bare = null;
 function run(args, input = "", env = {}) {
+  bare ??= makeRepo("stop-bare-cli");
   return spawnSync(process.execPath, [gate, ...args], {
     input,
     encoding: "utf8",
-    env: { ...process.env, ...env },
+    env: { ...process.env, CLAUDE_PROJECT_DIR: bare, DONE_GATE_SESSION: "S1", ...env },
   });
 }
 

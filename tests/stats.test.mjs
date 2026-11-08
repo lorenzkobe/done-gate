@@ -1612,3 +1612,152 @@ test("7.4 C8 edge: a class with no run prints missing, no events prints missing,
   assert.equal(save(repo, file).status, 0);
   assert.match(readFileSync(file, "utf8"), /"workers by run \/ lead only": "1 of 1 runs, 10\.0 min per 100 lines, 0 findings"/);
 });
+
+// 8.2: the gate records each verb it runs, and stats lists what nothing used
+const verbEnv = (repo, session = "S1") => {
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo };
+  delete env.CLAUDE_CODE_SESSION_ID;
+  delete env.DONE_GATE_SESSION;
+  return session ? { ...env, DONE_GATE_SESSION: session } : env;
+};
+const gateRun = (repo, args, session = "S1") => spawnSync(process.execPath, [gate, ...args], { encoding: "utf8", env: verbEnv(repo, session), input: "" });
+const verbEvents = (repo, session = "S1") => {
+  const file = path.join(repo, ".claude", "gate", "sessions", session, "events.jsonl");
+  return existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((e) => e.kind === "verb") : [];
+};
+
+test("8.2 C1 happy: a verb logs its name, a known sub-action and its flag names; open adds the gate.json keys set", () => {
+  const repo = makeRepo("nu-c1", { ".claude/gate.json": JSON.stringify({ testFiles: null, strength: false }) });
+  assert.equal(gateRun(repo, ["open", "nu-slug", "feature"]).status, 0);
+  gateRun(repo, ["note", "task", "the secret words of the ask"]);
+  gateRun(repo, ["plan", "pieces", "src/a.ts", "src/b.ts", "--shared", "src/a.ts"]);
+  gateRun(repo, ["brief", "reviewer", "--files", "src/a.ts"]);
+  const seen = verbEvents(repo).map(({ verb, sub, flags, settings }) => ({ verb, sub, flags, settings }));
+  assert.deepEqual(seen, [
+    { verb: "open", sub: undefined, flags: undefined, settings: ["testFiles", "strength"] },
+    { verb: "note", sub: "task", flags: undefined, settings: undefined },
+    { verb: "plan", sub: "pieces", flags: ["--shared"], settings: undefined },
+    { verb: "brief", sub: "reviewer", flags: ["--files"], settings: undefined },
+  ]);
+});
+
+test("8.2 C2 refused: a verb event holds no value, slug, text or file, and an unknown first word is no sub-action", () => {
+  const repo = makeRepo("nu-c2");
+  gateRun(repo, ["open", "nu-hidden-slug", "feature"]);
+  gateRun(repo, ["note", "context", "Traced: src/a.ts:1 the private words"]);
+  gateRun(repo, ["case", "add", "a private case text", "--kind", "happy"]);
+  gateRun(repo, ["waive", "whatever-key", "a private reason"]);
+  const text = JSON.stringify(verbEvents(repo));
+  for (const word of ["nu-hidden-slug", "private", "src/a.ts", "happy", "whatever-key"]) assert.doesNotMatch(text, new RegExp(word), word);
+  assert.equal(verbEvents(repo).find((e) => e.verb === "waive").sub, undefined);
+  assert.deepEqual(verbEvents(repo).find((e) => e.verb === "case").flags, ["--kind"]);
+});
+
+test("8.2 C3 edge: hooks log no verb event, a verb with no session logs nothing and still runs, and a failed verb is still logged", () => {
+  const repo = makeRepo("nu-c3");
+  spawnSync(process.execPath, [gate, "fence"], { encoding: "utf8", env: verbEnv(repo), input: JSON.stringify({ hook_event_name: "PreToolUse", session_id: "S1", cwd: repo, tool_name: "Read", tool_input: { file_path: path.join(repo, "src/a.ts") } }) });
+  spawnSync(process.execPath, [gate, "log"], { encoding: "utf8", env: verbEnv(repo), input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "S1", cwd: repo, prompt: "hi" }) });
+  assert.deepEqual(verbEvents(repo), []);
+  const lone = makeRepo("nu-c3-lone");
+  assert.equal(gateRun(lone, ["help"], null).status, 0);
+  assert.equal(existsSync(path.join(lone, ".claude", "gate", "sessions")), false);
+  const failed = gateRun(repo, ["case", "close", "C9", "--test", "x"]);
+  assert.notEqual(failed.status, 0);
+  assert.deepEqual(verbEvents(repo).map((e) => [e.verb, e.sub]), [["case", "close"]]);
+});
+
+const verbAt = (minute, verb, over = {}) => ({ seq: seqAt(minute), kind: "verb", verb, ...over });
+
+test("8.2 C4 happy: never used names the commands, settings and rules with no recorded use, and the window", () => {
+  const repo = makeRepo("nu-c4");
+  writeRun(repo, "one", hourRun(["S1"]));
+  writeEvents(repo, "S1", [verbAt(1, "open", { settings: ["testFiles", "verify"] }), verbAt(2, "note", { sub: "task" }), verbAt(3, "check"), block(4, ["R5"])]);
+  const out = ok(repo);
+  assert.match(out, /^never used, this repo's kept records only:$/m);
+  assert.match(line(out, "covers:"), /^\s*covers: the last 30 days of stopped turns, all versions; verbs recorded for the last 1 day$/);
+  const commands = line(out, "commands:");
+  assert.match(commands, /\bsetup\b/);
+  assert.match(commands, /\bdoctor\b/);
+  for (const used of ["open", "note", "check"]) assert.doesNotMatch(commands, new RegExp(`(?:: |, )${used}(?:,|$)`), used);
+  const settings = line(out, "settings:");
+  assert.match(settings, /\bserialTests\b/);
+  assert.doesNotMatch(settings, /\btestFiles\b|\bverify\b|\$schema/);
+  const rules = line(out, "rules that stopped no turn:");
+  assert.match(rules, /\bR19\b/);
+  assert.doesNotMatch(rules, /\bR5\b|\bR16\b/);
+});
+
+test("8.2 C5 edge: before any verb event, commands and settings are not recorded yet; no records at all is missing", () => {
+  const repo = makeRepo("nu-c5");
+  writeRun(repo, "one", hourRun(["S1"]));
+  writeEvents(repo, "S1", [userPrompt(1), block(2, ["R8"])]);
+  const run = gateRun(repo, ["stats"]);
+  assert.equal(run.status, 0, run.stderr);
+  const out = run.stdout;
+  assert.match(line(out, "commands:"), /not recorded yet/);
+  assert.match(line(out, "settings:"), /not recorded yet/);
+  assert.doesNotMatch(line(out, "rules that stopped no turn:"), /\bR8\b|\bR16\b/);
+  const none = makeRepo("nu-c5b");
+  assert.match(ok(none), /^never used, this repo's kept records only: missing$/m);
+});
+
+test("8.2 C6 C11 happy: --save keeps the never-used list as counts under its section's keys, never names", () => {
+  const repo = makeRepo("nu-c6");
+  writeRun(repo, "one", hourRun(["S1"]));
+  writeEvents(repo, "S1", [verbAt(1, "open", { settings: ["testFiles"] })]);
+  const file = saveTarget("nu-c6");
+  assert.equal(save(repo, file).status, 0);
+  const numbers = JSON.parse(readFileSync(file, "utf8")).numbers;
+  assert.match(numbers["never used, this repo's kept records only / commands"], /^\d+ of \d+$/);
+  assert.match(numbers["never used, this repo's kept records only / settings"], /^\d+ of \d+$/);
+  assert.match(numbers["never used, this repo's kept records only / rules that stopped no turn"], /^\d+ of \d+$/);
+  assert.doesNotMatch(readFileSync(file, "utf8"), /serialTests|\bdoctor\b/);
+});
+
+test("8.2 C10 edge: verbs recorded counts days from the oldest verb event in the window", () => {
+  const repo = makeRepo("nu-c10");
+  writeRun(repo, "one", hourRun(["S1"]));
+  const daysAgo = (d) => ({ seq: Math.round((NOW - d * 864e5) * 1000), kind: "verb", verb: "check" });
+  writeEvents(repo, "S1", [daysAgo(5.5), daysAgo(2), daysAgo(40)]);
+  assert.match(line(ok(repo), "covers:"), /verbs recorded for the last 6 days$/);
+  assert.match(line(ok(repo, ["--days", "60"]), "covers:"), /the last 60 days of stopped turns, all versions; verbs recorded for the last 40 days$/);
+});
+
+test("8.2 C7 happy: R18 and R19 have a plain meaning in the turns stopped lines", () => {
+  const repo = makeRepo("nu-c7");
+  writeRun(repo, "one", hourRun(["S1"]));
+  writeEvents(repo, "S1", [userPrompt(1), block(2, ["R18"]), userPrompt(3), block(4, ["R19"])]);
+  const out = ok(repo).split("rule rates:")[0];
+  assert.match(line(out, "R18"), /^\s*R18 \([a-z][^)]+\): 1 turn$/);
+  assert.match(line(out, "R19"), /^\s*R19 \([a-z][^)]+\): 1 turn$/);
+});
+
+test("8.2 C8 happy: helperFiles is gone and the internal-only exports of events, guard and report are not exported", async () => {
+  const assess = await import("../scripts/lib/assess.mjs");
+  assert.equal("helperFiles" in assess, false);
+  assert.equal(typeof assess.reviewFiles, "function");
+  const events = await import("../scripts/lib/events.mjs");
+  assert.equal("helperNotice" in events, false);
+  const guard = await import("../scripts/lib/guard.mjs");
+  for (const name of ["firstNotRead", "inlineWrites", "SUBSTITUTED"]) assert.equal(name in guard, false, name);
+  const report = await import("../scripts/lib/report.mjs");
+  for (const name of ["attentionLines", "plainCommand", "renderBrief", "summaryLine", "tierBlock"]) assert.equal(name in report, false, name);
+});
+
+test("8.2 C9 reported-surface: RELEASING has the never-used step and README's stats row names the list", () => {
+  const releasing = readFileSync(path.join(pluginRoot, "docs", "RELEASING.md"), "utf8");
+  assert.match(releasing, /never used/i);
+  assert.match(releasing, /remove what is useless|say why it stays/i);
+  assert.doesNotMatch(releasing, /A release that adds a rule removes or simplifies one/);
+  assert.match(readFileSync(path.join(pluginRoot, "README.md"), "utf8"), /never used/);
+});
+
+test("8.2 C13 refused: stats, watch and diagnose promise to write nothing: no verb event, and the list leaves them out", () => {
+  const repo = makeRepo("nu-c13");
+  gateRun(repo, ["stats"]);
+  gateRun(repo, ["diagnose"]);
+  gateRun(repo, ["check"]);
+  assert.deepEqual(verbEvents(repo).map((e) => e.verb), ["check"]);
+  const commands = line(ok(repo), "commands:");
+  for (const quiet of ["stats", "watch", "diagnose"]) assert.doesNotMatch(commands, new RegExp(`\\b${quiet}\\b`), quiet);
+});

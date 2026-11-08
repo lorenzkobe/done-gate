@@ -104,6 +104,8 @@ async function main() {
     process.exitCode = 1;
     return;
   }
+  // loaded here, not at the top: hooks run on every tool call and never record a verb
+  if (!entry.hook) (await import("./lib/events.mjs")).recordVerb(ctx, verb, args);
   const mod = await entry.load();
   const fn = mod.verbs?.[verb] ?? mod.default;
   if (typeof fn !== "function") throw new Error(`verb "${verb}" has no implementation`);

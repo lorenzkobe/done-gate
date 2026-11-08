@@ -83,7 +83,7 @@ function heredocBodies(raw) {
 // word where it stood, so `diff <(a) b` keeps `b` as an argument and `> $(echo f)` keeps its target.
 // Segments inside `$((…))` carry `arith`. An unclosed one leaves an UNCLOSED segment, which no rule reads,
 // and so does a `case` inside one, whose pattern's `)` the frames would take for the close.
-export const SUBSTITUTED = "$(…)";
+const SUBSTITUTED = "$(…)";
 const UNCLOSED = "(unclosed";
 export function segments(text) {
   const out = [];
@@ -414,7 +414,7 @@ function definedFunctions(raw) {
 
 // The gate's verbs: a `$G` call is the gate only when its first argument is one, so an unset G
 // leaves a verb name as the program, never a writer.
-const GATE_VERBS = new Set(["open", "attach", "repo", "note", "plan", "case", "step", "huddle", "waive", "decide", "close", "abandon", "rebaseline", "verify", "test", "setup", "check", "report", "stats", "diagnose", "watch", "steps", "next", "size", "brief", "doctor", "help"]);
+export const GATE_VERBS = new Set(["open", "attach", "repo", "note", "plan", "case", "step", "huddle", "waive", "decide", "close", "abandon", "rebaseline", "verify", "test", "setup", "check", "report", "stats", "diagnose", "watch", "steps", "next", "size", "brief", "doctor", "help"]);
 
 // Variables set, once and as a whole top-level command, to the gate's own CLI
 // (`G="node …/gate.mjs"; $G check`): `$G` then runs the gate. Any other use of the name voids it.
@@ -436,7 +436,7 @@ export function readsOnly(raw) {
 }
 
 // The first segment of a command that is not a plain read, or null when every one is.
-export function firstNotRead(raw) {
+function firstNotRead(raw) {
   return notReads(raw)[0] ?? null;
 }
 
@@ -524,7 +524,7 @@ export function gitMoves(raw) {
 
 // Inline code that writes, wherever its target: a heredoc body is text to the shell but code
 // to the interpreter it feeds.
-export function inlineWrites(raw) {
+function inlineWrites(raw) {
   return segments(withoutHeredocs(raw)).some((seg) => {
     const { words } = shift(seg);
     if (!words.length) return false;

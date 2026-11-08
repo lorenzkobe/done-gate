@@ -20,16 +20,20 @@ a change needs an entry there with real evidence.
 
 1. Read `docs/friction.md` and the run records, and propose a short list: each problem in
    plain words, the fix, and what is left out and why.
-2. The owner picks.
-3. Build it, one run per item, with tests first. Try the result in a throwaway copy of a
+2. Read the "never used" list `gate stats` prints, here and in the numbers saved on other
+   laptops. Of the commands, settings and rules on it, remove what is useless, or say why it
+   stays.
+3. The owner picks.
+4. Build it, one run per item, with tests first. Try the result in a throwaway copy of a
    real project (`claude --plugin-dir <this repo>`), never in the real one.
-4. Give the owner the list of problems and what was done.
-5. Push only when the owner says "push".
+5. Give the owner the list of problems and what was done.
+6. Push only when the owner says "push".
 
-## A release does not grow the plugin
+## A release removes what is dead
 
-A release that adds a rule removes or simplifies one. Advice that never blocks is preferred
-over a new rule.
+Growth that makes the plugin better is fine; there is no size limit. What goes is what nothing
+uses: each release reads the never-used list (step 2) and removes what is useless, or says why
+it stays. Advice that never blocks is preferred over a new rule.
 
 ## Proof that a release is safe to install
 

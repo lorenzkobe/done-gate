@@ -3,9 +3,10 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { UsageError } from "./context.mjs";
-import { appendEvents, HANDBACK, nextSeq, noticeCause, readEvents } from "./events.mjs";
+import { appendEvents, HANDBACK, nextSeq, noticeCause, readEvents, UNRECORDED } from "./events.mjs";
 import { loadLedger, runsDir } from "./ledger.mjs";
-import { inRun, PLAIN_RULES } from "./report.mjs";
+import { inRun, PLAIN_RULES, plural, RETIRED_RULES } from "./report.mjs";
+import { GATE_VERBS } from "./guard.mjs";
 import { NOT_THE_USER, saidAt } from "./rules.mjs";
 import { outsidePlan, tierOf } from "./size.mjs";
 import { flag } from "./verbs.mjs";
@@ -390,6 +391,7 @@ function sessionRecords(stateDir, session) {
         ...(e.kind === "block" ? { rules: list(e.rules) } : {}),
         ...(e.kind === "prompt" ? { cause: noticeCause(e.text)?.cause } : {}),
         ...(e.kind === "rule-wrong" ? { rule: e.rule, saidSeq: e.saidSeq, blockSeq: e.blockSeq, blockSession: e.blockSession } : {}),
+        ...(e.kind === "verb" ? { verb: e.verb, settings: e.settings } : {}),
       };
     });
   } catch {
@@ -622,6 +624,37 @@ function rateLines(stateDir, recordsOf) {
   const rows = [...records.turns].map(([rule, keys]) => [rule, keys.size, records.judged.get(rule)?.size ?? 0]);
   rows.sort(([a, m], [b, n]) => n - m || String(a).localeCompare(String(b)));
   return ["rule rates: every record, ignoring --days", ...rows.map(([rule, turns, wrongTurns]) => `  ${rateText(rule, turns, wrongTurns)}`)];
+}
+
+const SETTINGS = Object.keys(JSON.parse(readFileSync(new URL("../../gate.schema.json", import.meta.url), "utf8")).properties).filter((k) => k !== "$schema");
+const byRule = (a, b) => Number(a.slice(1)) - Number(b.slice(1));
+
+// The gate verbs, gate.json settings and rules with no recorded use in the window, over every
+// session this repo kept. Verbs are recorded from this version on, so the days that hold them
+// are named apart from the window. --save writes counts, never the names.
+function neverUsedLines(stateDir, recordsOf, { days, cutoff, forFile }) {
+  const head = "never used, this repo's kept records only";
+  const dir = path.join(stateDir, "sessions");
+  const records = existsSync(dir) ? readdirSync(dir).flatMap((s) => recordsOf(s)).filter((e) => e.seq / 1000 >= cutoff) : [];
+  if (!records.length) return [`${head}: ${MISSING}`];
+  const verbs = records.filter((e) => e.kind === "verb");
+  const opens = verbs.filter((e) => e.verb === "open" && Array.isArray(e.settings));
+  const oldest = verbs.length ? Math.min(...verbs.map((e) => e.seq / 1000)) : null;
+  const recorded = oldest === null ? "no verb recorded yet" : `verbs recorded for the last ${plural(Math.max(1, Math.round((Date.now() - oldest) / DAY_MS)), "day")}`;
+  const list = (unused, all) => (forFile ? `${unused.length} of ${all.length}` : unused.length ? unused.join(", ") : "none");
+  const notYet = "not recorded yet: the gate records each verb it runs from this version on";
+  const used = new Set(verbs.map((e) => e.verb));
+  const set = new Set(opens.flatMap((e) => e.settings));
+  const stopped = new Set(records.filter((e) => e.kind === "block").flatMap((e) => e.rules));
+  const live = Object.keys(PLAIN_RULES).filter((r) => !RETIRED_RULES.has(r)).sort(byRule);
+  const commands = [...GATE_VERBS].filter((v) => !UNRECORDED.has(v)).sort();
+  return [
+    `${head}:`,
+    `  covers: the last ${plural(days, "day")} of stopped turns, all versions; ${recorded}`,
+    `  commands: ${verbs.length ? list(commands.filter((v) => !used.has(v)), commands) : notYet}`,
+    `  settings: ${opens.length ? list(SETTINGS.filter((k) => !set.has(k)), SETTINGS) : notYet}`,
+    `  rules that stopped no turn: ${list(live.filter((r) => !stopped.has(r)), live)}`,
+  ];
 }
 
 function sessionReader(stateDir) {
@@ -864,7 +897,7 @@ async function report(ctx, { days, version, forFile = false }) {
   out.push(`could-not-run waivers: ${countOf("could")}`, `lapsed waivers: ${countOf("lapsed")}`);
   out.push(...reRunLines(closed, ctx.stateDir), ...planLines(closed, configOf), ...largeLines(closed), ...afterCloseLines(closed, read?.ledgers ?? [], configOf, forFile), ...trialLines(closed, read?.ledgers ?? []), ...strengthLines(closed));
   const recordsOf = sessionReader(ctx.stateDir);
-  out.push(...eventLines(recordsOf, closed, read?.ledgers ?? [], { version, cutoff, forFile }), ...rateLines(ctx.stateDir, recordsOf), ...(await tokenLines(closed, forFile)));
+  out.push(...eventLines(recordsOf, closed, read?.ledgers ?? [], { version, cutoff, forFile }), ...rateLines(ctx.stateDir, recordsOf), ...neverUsedLines(ctx.stateDir, recordsOf, { days, cutoff, forFile }), ...(await tokenLines(closed, forFile)));
   return out;
 }
 

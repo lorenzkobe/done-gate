@@ -142,6 +142,15 @@ test("C7 happy: gate stats counts plan drift among the closed runs that recorded
   assert.match(line, /1 later added to the plan/);
 });
 
+test("8.2 C12 reported-surface: a run left open on R19 names its plain meaning in the brief, with no rule number", () => {
+  const repo = planned("pd-82-c12", "active");
+  shellWrite(repo, "src/b.ts");
+  cli(repo, "check");
+  const brief = cli(repo, "report", "--brief");
+  assert.match(brief, /code outside the plan changed and was not added to it/);
+  assert.doesNotMatch(brief, /\bR19\b/);
+});
+
 test("C8 C9 refused then happy: in active mode an unplanned shell edit is R19 at check, at stop and at close; gate plan add clears it", () => {
   const repo = planned("pd-c8", "active");
   shellWrite(repo, "src/b.ts");

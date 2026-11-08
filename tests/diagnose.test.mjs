@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, gate } from "./helpers.mjs";
 import { helperProblems } from "../scripts/lib/diagnose.mjs";
@@ -399,6 +399,8 @@ test("4.5 C8 six open runs, the newest with a 4 MB log and the sixth unreadable:
   mkdirSync(path.join(sessions, "S6"), { recursive: true });
   writeFileSync(path.join(sessions, "S6", "events.jsonl"), Array.from({ length: 16000 }, (_, n) => line(n)).join(""));
   // the oldest run's log is a folder: reading it would throw, so a listing of five proves it was skipped
+  // (gate open logged its verb there first)
+  rmSync(path.join(sessions, "S1", "events.jsonl"), { force: true });
   mkdirSync(path.join(sessions, "S1", "events.jsonl"), { recursive: true });
   const started = Date.now();
   const ctx = sessionStart(repo, "S9");

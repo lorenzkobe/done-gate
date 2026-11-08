@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { toPosixRel } from "./paths.mjs";
+import { configPath } from "./config.mjs";
 import { commandReflog } from "./tree.mjs";
 // guard.mjs imports this module back: both sides only call each other inside functions
 import { gitMoves, gitWrites, ownFileWrites, readsOnly, runsInline, scratchOnly } from "./guard.mjs";
@@ -157,6 +158,40 @@ export function sessionDir(stateDir, session) {
   return path.join(stateDir, "sessions", String(session ?? "no-session"));
 }
 
+// The words after a verb that name what it does, a fixed vocabulary; any other first word (a
+// slug, a text, a waiver key) is the user's and is never kept.
+const SUB_ACTIONS = {
+  note: ["task", "context", "plan", "caveat"],
+  plan: ["add", "pieces"],
+  case: ["add", "amend", "close"],
+  huddle: ["add", "resolve", "reopen", "dispute", "reply", "unchanged"],
+  brief: ["skeptic", "qa", "worker", "reviewer", "reviewer-2"],
+  repo: ["add"],
+};
+
+// Verbs that promise to write nothing (README): their use is not recorded, and the never-used list
+// leaves them out.
+export const UNRECORDED = new Set(["stats", "watch", "diagnose"]);
+
+// One small event per verb run in a session, so a later release can tell a command or a setting
+// nobody uses: the verb, its sub-action, the flag names given, and at open the gate.json keys the
+// repo sets. Never a value or a text. A courtesy: a failed write never stops the verb.
+export function recordVerb(ctx, verb, args) {
+  if (!ctx.session || UNRECORDED.has(verb)) return;
+  try {
+    const sub = SUB_ACTIONS[verb]?.includes(args[0]) ? args[0] : undefined;
+    const flags = [...new Set(args.filter((a) => /^--[a-z][a-z-]*$/.test(a)))];
+    let settings;
+    if (verb === "open" && existsSync(configPath(ctx.root))) {
+      const raw = JSON.parse(readFileSync(configPath(ctx.root), "utf8"));
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) settings = Object.keys(raw).filter((k) => k !== "$schema");
+    }
+    appendEvents(ctx.stateDir, ctx.session, [{ seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, agent: null, kind: "verb", verb, ...(sub ? { sub } : {}), ...(flags.length ? { flags } : {}), ...(settings ? { settings } : {}) }]);
+  } catch {
+    // the record is for counting use later; the verb itself goes on
+  }
+}
+
 export function appendEvents(stateDir, session, events) {
   if (!events.length) return;
   const dir = sessionDir(stateDir, session);
@@ -207,7 +242,7 @@ export function noticeCause(text) {
 }
 
 // A helper's notice with the helper it names: the task id is the id its start and stop carry.
-export function helperNotice(text) {
+function helperNotice(text) {
   const found = noticeCause(text);
   if (!found) return null;
   return { agent: /<task-id>\s*([^<\s]+)\s*<\/task-id>/.exec(text)?.[1] ?? null, ...found };

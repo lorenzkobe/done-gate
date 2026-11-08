@@ -52,7 +52,7 @@ function verifyExclusions(state) {
 
 // ---- pieces of the full report (text unchanged; the brief reuses the same facts) ----
 
-export function summaryLine(ledger, events, unmet, after = 0) {
+function summaryLine(ledger, events, unmet, after = 0) {
   const count = (s) => ledger.steps.filter((x) => x.state === s).length;
   const blank = ledger.steps.filter((x) => !x.state).length;
   const closedCases = ledger.cases.filter((c) => c.status === "closed" && !clickStale(c, after)).length;
@@ -173,7 +173,7 @@ export function stageOutcome(state, step) {
   return "not run";
 }
 
-export function attentionLines(state, unmet) {
+function attentionLines(state, unmet) {
   const { ledger, events } = state;
   const denies = deniesIn(ledger, events).length;
   const handoffs = events.filter((e) => e.kind === "deny" && e.delegate && inRun(ledger)(e)).length;
@@ -206,7 +206,7 @@ export function attentionLines(state, unmet) {
   return out;
 }
 
-export function tierBlock(state) {
+function tierBlock(state) {
   const { ledger, policy, events } = state;
   if (!policy || !tiered(ledger)) return [];
   const measured = state.tier?.measured ?? tierOf(ledger).measured;
@@ -311,11 +311,11 @@ export function renderReport(state, unmet) {
 
 // ---- the brief: what the user reads. Plain words only; the ledger's own names stay inside. ----
 
-const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+export const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 // "npm run lint" → lint; the command itself when nothing recognisable is in it.
-export function plainCommand(cmd) {
+function plainCommand(cmd) {
   const c = String(cmd).toLowerCase();
   const has = (word) => new RegExp(`(?<![\\w-])${word}(?![\\w-])`).test(c); // standalone, not inside a hyphenated name
   if (has("(?:es|ts)?lint")) return "lint";
@@ -382,7 +382,11 @@ export const PLAIN_RULES = {
   R15: "a helper's findings were not all recorded",
   R16: "the lead edited source at a size a worker should handle",
   R17: "a helper worked without searching code and memory first",
+  R18: "verify ran no test that covers a closed case's test file",
+  R19: "code outside the plan changed and was not added to it",
 };
+// Rules no longer raised, kept above so old records still read in plain words.
+export const RETIRED_RULES = new Set(["R16"]);
 
 // The kinds of search the lead declared missing, as "<kind> search not available (<why>)".
 const lookupGaps = (ledger) => Object.entries(ledger.lookupGap ?? {}).filter(([, why]) => why).map(([kind, why]) => `${kind} search not available (${plain(why)})`);
@@ -530,7 +534,7 @@ function gateErrorsIn(state) {
   return errors.filter(([first]) => first.slice(0, 24) >= since && first.slice(0, 24) <= until).map((e) => e.join("\n"));
 }
 
-export function renderBrief(state, unmet) {
+function renderBrief(state, unmet) {
   const { ledger, dir } = state;
   const out = [];
   out.push(unmet.length ? `${ledger.slug}: not finished (${plural(unmetCount(unmet), "thing")} missing)` : `${ledger.slug}: done`);

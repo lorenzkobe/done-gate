@@ -35,7 +35,6 @@ export function reviewFiles(dir) {
   if (!existsSync(dir)) return [];
   return readdirSync(dir).filter((f) => /^(?:review2?|skeptic|arbiter)-\d+\.md$/.test(f)).sort();
 }
-export const helperFiles = reviewFiles;
 
 // Everything the rules need, gathered once. Throws LedgerParseError when our own
 // state is unreadable so the caller can apply the block-once-then-fail-open policy.
