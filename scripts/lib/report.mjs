@@ -81,7 +81,7 @@ export function verifyLines(verify, { tails = true, unfinished = null } = {}) {
       out.push(`- – \`${c.cmd}\`${verifyWhere(c)} — skipped: ${c.skipped}${c.oldFindings ? ` (${plural(c.oldFindings, "old lint finding")} ignored)` : ""}`);
       continue;
     }
-    out.push(`- ${c.exit === 0 && !c.timedOut ? "✓" : "✗"} \`${c.cmd}\`${verifyWhere(c)} — ${c.timedOut ? timeoutText(c) : c.noTests ? `no tests ran: ${c.noTestsWhy}` : `exit ${c.exit}`}${c.oldFindings ? ` (exit ${c.rawExit}: ${plural(c.oldFindings, "old finding")} off this task's lines ignored: ${c.oldList.join(", ")}${c.oldFindings > c.oldList.length ? ", …" : ""})` : ""}, ${(c.ms / 1000).toFixed(1)}s`);
+    out.push(`- ${c.exit === 0 && !c.timedOut ? "✓" : "✗"} \`${c.cmd}\`${verifyWhere(c)} — ${resultText(c)}${c.oldFindings ? ` (exit ${c.rawExit}: ${plural(c.oldFindings, "old finding")} off this task's lines ignored: ${c.oldList.join(", ")}${c.oldFindings > c.oldList.length ? ", …" : ""})` : ""}, ${(c.ms / 1000).toFixed(1)}s`);
     if (tails && (c.exit !== 0 || c.timedOut)) out.push(`\n\`\`\`\n${c.tail.split("\n").slice(-12).join("\n")}\n\`\`\``);
   }
   return out;
@@ -132,6 +132,30 @@ export function actOnRows(ledger, dir, reviews, { embed = true } = {}) {
 // changes carry to the next run, whose report lists them.
 const weakenedIn = (state) => (state.ledger.status === "open" ? weakened(state) : state.ledger.weakened ?? []);
 
+const resultText = (c) => (c.timedOut ? timeoutText(c) : c.noTests ? `no tests ran: ${c.noTestsWhy}` : `exit ${c.exit}`);
+const STAGE_ROLES = { skeptic: ["skeptic"], review: ["reviewer", "reviewer-2"] };
+
+// One outcome per step: ran, skipped: <why>, failed: <why> or not run.
+export function stageOutcome(state, step) {
+  const { ledger } = state;
+  if (step.state === "DONE") return "ran";
+  if (step.state === "N/A" || step.state === "SKIPPED") return `skipped: ${step.note ?? "no reason given"}`;
+  if (step.state === "WAIVED" || step.state === "COULD NOT RUN") {
+    const all = (ledger.waivers ?? []).filter((w) => w.key === step.key);
+    const w = all.filter((x) => !x.lapsed).at(-1) ?? all.at(-1);
+    const why = step.state === "WAIVED" ? (w?.words ? `the user: "${w.words}"` : w?.reason ?? step.note ?? "no reason given") : `${w?.reason ?? step.note ?? "no reason given"}${w?.words ? ` (the user: "${w.words}")` : ""}`;
+    return `skipped: ${step.state === "WAIVED" ? "waived" : "could not run"} — ${why}`;
+  }
+  if (step.key === "verify") {
+    const red = (state.verify?.commands ?? []).find((c) => !c.skipped && (c.exit !== 0 || c.timedOut));
+    if (red) return `failed: \`${red.cmd}\` ${resultText(red)}`;
+  }
+  const roles = STAGE_ROLES[step.key];
+  const open = roles ? ledger.huddles.filter((h) => roles.includes(h.role)).flatMap((h) => h.actOn).filter((a) => !a.closed).length : 0;
+  if (open) return `failed: ${plural(open, "finding")} open`;
+  return "not run";
+}
+
 export function attentionLines(state, unmet) {
   const { ledger, events } = state;
   const denies = deniesIn(ledger, events).length;
@@ -145,6 +169,7 @@ export function attentionLines(state, unmet) {
   for (const a of ledger.planAdds ?? []) out.push(`- added to the plan: ${a.files.join(", ")} — ${a.why}`);
   if (ledger.planDrift?.length) out.push(`- outside the plan: ${ledger.planDrift.join(", ")} (${policyFor(ledger).guards.planDiff === "active" ? "blocks until added or reverted" : "noted, nothing blocked"})`);
   for (const a of ledger.huddles.flatMap((h) => h.actOn).filter((x) => x.dispute)) out.push(`- disputed ${a.id}: ${a.dispute.why} [${a.dispute.evidence}] — ${a.dispute.verdict ?? "unanswered"}${a.dispute.reviewerReason ? `; reviewer: ${a.dispute.reviewerReason}` : ""}${a.dispute.arbiterReason ? `; arbiter: ${a.dispute.arbiterReason}` : ""}`);
+  for (const h of ledger.huddles) for (const c of h.cantVerify ?? []) out.push(`- can't verify (${h.id} ${h.role}): ${c}`);
   if (denies) out.push(`- ${denies} denied write(s) to gate evidence files (see events)`);
   if (handoffs) out.push(`- ${handoffs} lead edit(s) fenced off at this size and handed to a worker`);
   const blocks = events.filter((e) => e.kind === "block" && inRun(ledger)(e)).length;
@@ -203,8 +228,9 @@ export function renderReport(state, unmet) {
 
   out.push("\n## Steps\n");
   for (const s of ledger.steps) {
-    const st = s.state ?? "BLANK";
-    out.push(`${s.n}. ${s.text} — **${st}**${s.note ? ` (${s.note})` : ""}${s.evidence ? ` [${s.evidence}]` : ""}`);
+    const [word, ...why] = stageOutcome(state, s).split(": ");
+    const note = s.note && (word === "ran" || word === "not run") ? ` (${s.note})` : "";
+    out.push(`${s.n}. ${s.text} — **${word}**${why.length ? `: ${why.join(": ")}` : ""}${note}${s.evidence ? ` [${s.evidence}]` : ""}`);
   }
 
   out.push("\n## Huddles\n");

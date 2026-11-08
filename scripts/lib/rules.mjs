@@ -129,9 +129,14 @@ export function isPartial(text) {
   return bullets(String(text ?? "").replace(/\r/g, "").split("\n")).some((b) => /^unverified[\s.,;:!-]*$/i.test(b));
 }
 
-// Every Act-on bullet of a helper file. "none" and a missing section are empty.
+// A section's top-level bullets; "none" and a missing section are empty.
+export function sectionBullets(text, heading) {
+  return bullets(sectionLines(text, heading));
+}
+
+// Every Act-on bullet of a helper file.
 export function parseFindings(text) {
-  return bullets(sectionLines(text, "Act on")).map((t) => ({ text: t }));
+  return sectionBullets(text, "Act on").map((t) => ({ text: t }));
 }
 
 const VERDICT = /^(H\d+\.\d+)\s*[—–-]+\s*(withdrawn|upheld)\s*:\s*(.*)$/i;

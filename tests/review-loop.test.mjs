@@ -1991,3 +1991,102 @@ test("C14 refused: php -r that writes source is denied, while -r on grep, ls and
   }
 });
 }
+
+// ===== 6.2: Can't verify and Lessons are recorded =====
+{
+const env = (repo) => { const e = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" }; delete e.CLAUDE_CODE_SESSION_ID; return e; };
+const gateRun = (repo, verb, args = []) => spawnSync(process.execPath, [gate, verb, ...args], { encoding: "utf8", env: env(repo) });
+const ok = (repo, verb, args = []) => {
+  const r = gateRun(repo, verb, args);
+  assert.ok(!/^done-gate: /m.test(r.stderr), `gate ${verb} ${args.join(" ")} was refused:\n${r.stderr}`);
+  return r.stdout;
+};
+const stateOf = (repo) => path.join(repo, ".claude", "gate");
+const runOf = (repo) => path.join(stateOf(repo), "runs", loadSession(stateOf(repo), "S1").current);
+const ledger = (repo) => JSON.parse(readFileSync(path.join(runOf(repo), "ledger.json"), "utf8"));
+const lessonsFile = (repo) => path.join(stateOf(repo), "lessons.md");
+const lessonLines = (repo) => readFileSync(lessonsFile(repo), "utf8").split("\n").filter((l) => l.startsWith("- "));
+const packetOf = (out) => readFileSync(/packet: (\S+)/.exec(out)[1], "utf8");
+const review = ({ cant = ["none"], lessons = ["none"], act = ["none"] } = {}) =>
+  `# Review — x\n\n## Act on\n${act.map((t) => `- ${t}`).join("\n")}\n## Can't verify\n${cant.map((t) => `- ${t}`).join("\n")}\n## Lessons\n${lessons.map((t) => `- ${t}`).join("\n")}\n## Dismissed\n- none\n`;
+function opened(name) {
+  const repo = makeRepo(name);
+  execFileSync("git", ["add", "-A"], { cwd: repo });
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
+  ok(repo, "open", [name, "feature"]);
+  lookedUp(repo);
+  ok(repo, "note", ["task", "Change a. [inferred]"]);
+  ok(repo, "note", ["context", "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: local"]);
+  ok(repo, "note", ["plan", "One module.", "--files", "src/a.ts"]);
+  ok(repo, "case", ["add", "renders", "--kind", "happy"]);
+  write(repo, "src/a.ts", Array.from({ length: 20 }, (_, i) => `export const a${i} = ${i + 1};`).join("\n") + "\n");
+  return repo;
+}
+function reviewed(repo, role, text) {
+  const out = ok(repo, "brief", [role]);
+  const own = /Your file is .*\/((?:review2?|skeptic)-\d+\.md)/.exec(out)[1];
+  spawnSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: "S1", cwd: repo, hook_event_name: "SubagentStop", agent_id: `A-${role}-${own}`, agent_type: `done-gate:${role}` }), encoding: "utf8", env: env(repo) });
+  writeFileSync(path.join(runOf(repo), own), text);
+  ok(repo, "huddle", ["add", role, "--file", own]);
+  return { out, own };
+}
+
+test("6.2 C1 C2: a reviewer file's Can't verify is stored and reported, its Lessons go to lessons.md, and the next reviewer packet points at it", () => {
+  const repo = opened("rl-62-c1");
+  const first = reviewed(repo, "reviewer", review({ cant: ["the retry path under a real timeout — no network here"], lessons: ["this repo's fixtures commit before they open a run"] }));
+  assert.doesNotMatch(packetOf(first.out), /^## Lessons$/m, "the first packet, before any lesson, has no Lessons section");
+  const huddle = ledger(repo).huddles.find((h) => h.role === "reviewer");
+  assert.deepEqual(huddle.cantVerify, ["the retry path under a real timeout — no network here"]);
+  assert.deepEqual(lessonLines(repo), ["- this repo's fixtures commit before they open a run"]);
+  assert.match(ok(repo, "report"), /can't verify \(H\d+ reviewer\): the retry path under a real timeout/);
+  const next = packetOf(ok(repo, "brief", ["reviewer-2"]));
+  // the header's section, before the embedded review-1.md that has a Lessons heading of its own
+  const head = next.slice(0, next.indexOf("\n## Diff"));
+  assert.match(head, /^## Lessons$/m, "the next reviewer packet has no Lessons section");
+  assert.ok(head.includes(lessonsFile(repo)), "the Lessons section does not name the file");
+  assert.ok(!lessonsFile(repo).startsWith(runOf(repo)), "anchor: the lessons file lives outside the run, so a later run reads it");
+});
+
+test("6.2 C3 idempotent: adding the same file again appends nothing", () => {
+  const repo = opened("rl-62-c3");
+  const { own } = reviewed(repo, "reviewer", review({ lessons: ["one lesson", "two lesson"] }));
+  ok(repo, "huddle", ["add", "reviewer", "--file", own]);
+  assert.deepEqual(lessonLines(repo), ["- one lesson", "- two lesson"]);
+});
+
+test("6.2 C4 edge: Can't verify and Lessons reading none write no lessons file, store no Can't verify, and the packet has no Lessons section", () => {
+  const repo = opened("rl-62-c4");
+  reviewed(repo, "reviewer", review());
+  assert.equal(existsSync(lessonsFile(repo)), false);
+  assert.equal(ledger(repo).huddles.find((h) => h.role === "reviewer").cantVerify, undefined);
+  const next = packetOf(ok(repo, "brief", ["reviewer-2"]));
+  assert.doesNotMatch(next.slice(0, next.indexOf("\n## Diff")), /^## Lessons$/m);
+  assert.ok(!next.includes("lessons.md"));
+});
+
+test("6.2 C5 refused: a skeptic file's Lessons and Can't verify are ignored", () => {
+  const repo = makeRepo("rl-62-c5");
+  execFileSync("git", ["add", "-A"], { cwd: repo });
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
+  ok(repo, "open", ["rl-62-c5", "feature"]);
+  lookedUp(repo);
+  ok(repo, "note", ["task", "Change a. [inferred]"]);
+  ok(repo, "note", ["context", "Traced: src/a.ts:1\nRelated: tests/a.test.ts\nResearch: none needed: local"]);
+  ok(repo, "note", ["plan", "Two modules.", "--files", "src/a.ts,src/app/page.tsx"]);
+  ok(repo, "case", ["add", "renders", "--kind", "happy"]);
+  reviewed(repo, "skeptic", review({ cant: ["a thing"], lessons: ["a skeptic lesson"] }));
+  assert.equal(existsSync(lessonsFile(repo)), false);
+  assert.equal(ledger(repo).huddles.find((h) => h.role === "skeptic").cantVerify, undefined);
+});
+
+test("6.2 C6 boundary: past 50 lessons only the last 50 are kept, in order", () => {
+  const repo = opened("rl-62-c6");
+  reviewed(repo, "reviewer", review({ lessons: Array.from({ length: 30 }, (_, i) => `lesson ${i}`) }));
+  reviewed(repo, "reviewer-2", review({ lessons: [...Array.from({ length: 25 }, (_, i) => `lesson ${i + 30}`), "LESSON  3"] }));
+  const kept = lessonLines(repo);
+  assert.equal(kept.length, 50);
+  assert.equal(kept[0], "- lesson 5");
+  assert.equal(kept[49], "- lesson 54");
+  assert.equal(kept.filter((l) => /lesson\s+3$/i.test(l)).length, 0, "a repeat in other case and spacing is not a new lesson, and lesson 3 fell off the front");
+});
+}

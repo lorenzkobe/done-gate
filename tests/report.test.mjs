@@ -5,7 +5,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync, chmodSync, mkdirS
 import path from "node:path";
 import { makeRepo, write, gate, here, pluginRoot, doneArgs, lookedUp, waiveArgs, asOldRun, naArgs, abandonArgs } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
-import { actOnRows, pauseLines } from "../scripts/lib/report.mjs";
+import { actOnRows, pauseLines, stageOutcome } from "../scripts/lib/report.mjs";
 import { unmetLines } from "../scripts/lib/assess.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { evaluate } from "../scripts/lib/rules.mjs";
@@ -45,7 +45,7 @@ test("report renders every section, the summary counts, and embeds the reviewer'
   assert.match(md, /cases 1\/1 closed/);
   assert.match(md, /## Task\n\nAdd a badge/);
   assert.match(md, /\| C1 \| renders badge \| happy \| tests\/a\.test\.ts:renders \|/);
-  assert.match(md, /1\. Understand first.*DONE.*ledger\.md#context/);
+  assert.match(md, /1\. Understand first.*\*\*ran\*\*.*ledger\.md#context/);
   assert.match(md, /null venue crashes.*OPEN/);
   assert.match(md, /# Review 1/);
   assert.match(md, /## Changed files\n[\s\S]*src\/a\.ts/);
@@ -53,6 +53,37 @@ test("report renders every section, the summary counts, and embeds the reviewer'
   assert.match(md, /## Attention[\s\S]*waived.*driver/i);
   assert.ok(existsSync(path.join(runDir(repo), "report.md")));
   assert.equal(readFileSync(path.join(runDir(repo), "report.md"), "utf8"), md);
+});
+
+// 6.2: each stage gives one outcome: ran, skipped: reason, failed: reason, or not run
+test("6.2 C7 C8 C9: the report's Steps give every stage one outcome: ran, skipped with its note or the user's words, failed with the red command, not run", () => {
+  const repo = makeRepo("report-stages");
+  cli(repo, "open", ["stages", "feature"]);
+  lookedUp(repo);
+  cli(repo, "note", ["task", "Add a badge. [inferred]"]);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1 is the entry.\nRelated: tests/a.test.ts pins it.\nResearch: none needed: a local change."]);
+  cli(repo, "note", ["plan", "One module.", "--files", "src/a.ts"]);
+  cli(repo, "case", ["add", "renders badge", "--kind", "happy"]);
+  cli(repo, "step", ["schema", "na", "no schema files"]);
+  asOldRun(repo);
+  cli(repo, "waive", waiveArgs(repo, "driver", "skip the phone pass"));
+  write(repo, "src/a.ts", Array.from({ length: 20 }, (_, i) => `export const a${i} = ${i + 1};`).join("\n") + "\n");
+  cli(repo, "verify", ["--add", "exit 3"]);
+  cli(repo, "verify");
+  const md = cli(repo, "report").stdout;
+  const steps = md.slice(md.indexOf("\n## Steps\n"), md.indexOf("\n## Huddles\n")).split("\n").filter((l) => /^\d+\. /.test(l));
+  const ledger = loadLedger(runDir(repo));
+  assert.equal(steps.length, ledger.steps.length, steps.join("\n"));
+  for (const line of steps) assert.match(line, / — \*\*(?:ran|skipped|failed|not run)\*\*/, line);
+  const lineOf = (key) => steps[ledger.steps.findIndex((x) => x.key === key)];
+  assert.match(lineOf("context"), /\*\*ran\*\*/);
+  assert.match(lineOf("schema"), /\*\*skipped\*\*: no schema files/);
+  assert.match(lineOf("driver"), /\*\*skipped\*\*: waived.*you may skip the/, lineOf("driver"));
+  assert.match(lineOf("verify"), /\*\*failed\*\*: `exit 3` exit 3/, lineOf("verify"));
+  assert.match(lineOf("review"), /\*\*not run\*\*/);
+  const auto = ledger.steps.find((x) => x.state === "N/A" && x.auto);
+  if (auto) assert.ok(lineOf(auto.key).includes(`**skipped**: ${auto.note}`), lineOf(auto.key));
+  assert.doesNotMatch(md.slice(md.indexOf("\n## Steps\n")), /\*\*(?:DONE|N\/A|BLANK|WAIVED|SKIPPED)\*\*/, "a raw step state is still printed");
 });
 }
 
@@ -1267,3 +1298,31 @@ test("3.10 C7 a test turned into it.skip is one finding; one commented out count
   assert.doesNotMatch(cli(old, "report").stdout, /weakened/);
 });
 }
+
+// 6.2: a stage's outcome from what was recorded, for the cases a fixture cannot reach cheaply
+test("6.2 stage outcomes: a timeout and a no-tests run read as verify prints them, a re-waived step takes its live waiver, and an open finding fails its review stage", () => {
+  const step = (key, state = null, note = null) => ({ n: 1, key, text: key, state, note });
+  const base = { ledger: { steps: [], waivers: [], huddles: [] }, verify: { commands: [] } };
+  const timedOut = { ...base, verify: { commands: [{ cmd: "npm test", exit: null, timedOut: true, timeout: 600, printed: false, ms: 600000 }] } };
+  assert.match(stageOutcome(timedOut, step("verify")), /^failed: `npm test` timed out/);
+  assert.doesNotMatch(stageOutcome(timedOut, step("verify")), /exit null/);
+  const noTests = { ...base, verify: { commands: [{ cmd: "npm test", exit: 1, rawExit: 0, noTests: true, noTestsWhy: "the runner found 0 tests", ms: 10 }] } };
+  assert.equal(stageOutcome(noTests, step("verify")), "failed: `npm test` no tests ran: the runner found 0 tests");
+  const green = { ...base, verify: { commands: [{ cmd: "npm test", exit: 0, ms: 10 }, { cmd: "npm run e2e", skipped: "the final check", exit: null }] } };
+  assert.equal(stageOutcome(green, step("verify")), "not run");
+  const rewaived = { ...base, ledger: { ...base.ledger, waivers: [
+    { key: "driver", reason: "old", words: "skip it the first time", lapsed: true },
+    { key: "driver", reason: "new", words: "skip the phone pass again" },
+    { key: "review", reason: "only a reason" },
+  ] } };
+  assert.equal(stageOutcome(rewaived, step("driver", "WAIVED", "n")), "skipped: waived — the user: \"skip the phone pass again\"");
+  assert.equal(stageOutcome(rewaived, step("review", "WAIVED", "n")), "skipped: waived — only a reason");
+  assert.equal(stageOutcome(base, step("schema", "WAIVED", "the note")), "skipped: waived — the note");
+  assert.equal(stageOutcome(base, step("lint", "COULD NOT RUN", "no linter")), "skipped: could not run — no linter");
+  const could = { ...base, ledger: { ...base.ledger, waivers: [{ key: "driver", could: true, reason: "chrome is down", words: "you may skip it" }] } };
+  assert.equal(stageOutcome(could, step("driver", "COULD NOT RUN", "chrome is down")), "skipped: could not run — chrome is down (the user: \"you may skip it\")");
+  const open = { ...base, ledger: { ...base.ledger, huddles: [{ id: "H1", role: "reviewer", actOn: [{ id: "H1.1", closed: null }, { id: "H1.2", closed: "fixed" }] }] } };
+  assert.equal(stageOutcome(open, step("review")), "failed: 1 finding open");
+  assert.equal(stageOutcome(open, step("skeptic")), "not run");
+  // an old ledger's huddle has no cantVerify: the first report test above renders one
+});

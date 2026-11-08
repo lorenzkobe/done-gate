@@ -1,14 +1,14 @@
 import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { nextSeq } from "./events.mjs";
-import { currentLedger, findRun, isDone, loadLedger, openRuns, saveLedger } from "./ledger.mjs";
+import { addLessons, currentLedger, findRun, isDone, loadLedger, openRuns, saveLedger } from "./ledger.mjs";
 import { loadConfig } from "./config.mjs";
 import { applyPrediction, effectiveTier, inPlan, policyFor, requiredSteps, tierOf, tierOrder, tiered } from "./size.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
+import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, parseReplies, parseRuling, pointerResolver, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
 import { assess, broughtSinceOpen, buildState, cleanAtHead, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
@@ -615,6 +615,7 @@ export const verbs = {
         }
         refuseSkipped(ctx, dir, ledger, file);
       }
+      const reviewing = role === "reviewer" || role === "reviewer-2";
       const same = (a, b) => String(a).toLowerCase().replace(/\s+/g, " ").trim() === String(b).toLowerCase().replace(/\s+/g, " ").trim();
       const { id, answered, added, question } = withLedger(ctx, (ledger, dir) => {
         // adding the same file again re-reads it into the same huddle instead of a new round
@@ -658,6 +659,11 @@ export const verbs = {
             huddle.actOn.push(item);
             added.push(item);
           });
+          if (reviewing) {
+            const cant = sectionBullets(text, "Can't verify");
+            if (cant.length) huddle.cantVerify = cant;
+            else delete huddle.cantVerify;
+          }
           const item = (aid) => ledger.huddles.flatMap((h) => h.actOn).find((a) => a.id === aid);
           for (const d of parseDisputes(text)) {
             const a = item(d.id);
@@ -686,6 +692,8 @@ export const verbs = {
         }
         if (role === "skeptic") settleCheck(ledger, dir);
         const question = role === "skeptic" && text !== null && ledger.steps.find((s) => s.key === "skeptic")?.state === null ? oneQuestion(text) : null;
+        // inside the ledger's lock, so two reviewer adds at once cannot drop a lesson
+        if (text !== null && reviewing) addLessons(ctx.stateDir, sectionBullets(text, "Lessons"));
         return { id, answered, added, question };
       });
       ctx.out(`${id} added (${role})${added.length ? ` · ${added.length} Act-on item${added.length === 1 ? "" : "s"} recorded` : ""}${answered ? ` · ${answered} dispute${answered === 1 ? "" : "s"} answered` : ""}`);

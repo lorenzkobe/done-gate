@@ -557,7 +557,8 @@ test("3.7 C10 the summary, Steps and For you say could not run with the user's w
   couldNotRun(repo, "driver", "chrome is down");
   const full = cli(repo, "report").stdout;
   assert.match(full, /COULD NOT RUN 1/);
-  assert.match(full, /\*\*COULD NOT RUN\*\*/);
+  // 6.2: the Steps line gives the outcome, skipped: could not run, with the user's words
+  assert.match(full, /\*\*skipped\*\*: could not run — chrome is down \(the user: "you may skip the driver check"\)/);
   const brief = cli(repo, "report", ["--brief"]).stdout;
   assert.match(brief, /could not run[^\n]*chrome is down[^\n]*you said: "you may skip the driver check"/);
   assert.doesNotMatch(brief, /skipped with your OK: chrome is down/);

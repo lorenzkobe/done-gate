@@ -52,6 +52,21 @@ export function saveLedger(dir, ledger) {
   return ledger;
 }
 
+// Reviewers' Lessons, one file per repo under the state dir: no repeats, the newest 50 kept.
+export const LESSONS = "lessons.md";
+const LESSONS_KEPT = 50;
+
+export function addLessons(stateDir, lines) {
+  if (!lines.length) return;
+  const file = path.join(stateDir, LESSONS);
+  const fold = (t) => t.toLowerCase().replace(/\s+/g, " ").trim();
+  const kept = existsSync(file) ? readFileSync(file, "utf8").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2)) : [];
+  const known = new Set(kept.map(fold));
+  const fresh = lines.filter((l) => !known.has(fold(l)) && known.add(fold(l)));
+  if (!fresh.length) return;
+  writeFileSync(file, ["# Lessons from reviews of this repo", "", ...[...kept, ...fresh].slice(-LESSONS_KEPT).map((l) => `- ${l}`), ""].join("\n"));
+}
+
 // Playbook steps: the `## <name>` section of playbooks.md, numbered lines, optional
 // trailing {key} naming the evidence kind.
 export function playbookSteps(playbook) {

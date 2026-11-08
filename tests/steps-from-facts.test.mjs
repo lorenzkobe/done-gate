@@ -254,6 +254,6 @@ test("C12 reported-surface: the report marks a step the gate closed", () => {
   edited(repo, "src/a.ts", "export const a = 2;\n");
   edited(repo, "tests/a.test.ts", "test('a is 2', () => {});\n", PAST());
   cli(repo, "verify");
-  const line = cli(repo, "report").split("\n").find((l) => /Implement/.test(l) && /DONE/.test(l));
+  const line = cli(repo, "report").split("\n").find((l) => /Implement/.test(l) && /\*\*ran\*\*/.test(l));
   assert.match(line ?? "", /by the gate/, line);
 });
