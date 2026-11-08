@@ -18,7 +18,7 @@ const HELP = `gate <verb>: node <plugin>/scripts/gate.mjs <verb>
   case add "<case>" --kind <kind> · case add --batch <file> (one <kind><TAB><case> per line) · case amend <id> "<case>" · case close <id> --test <file:name> | --ran "<part of the command>" | --na "<why>"
   step <n|key> done|skipped|na "<note>" [--evidence <ptr>]   close a playbook step (the close step: gate close)
   next                                                      the next step in full (verbs print it short after the first time)
-  brief <skeptic|qa|worker|reviewer|reviewer-2|arbiter> [--files a,b | a.ts:1-400]   write a helper's packet
+  brief <skeptic|qa|worker|reviewer|reviewer-2> [--files a,b | a.ts:1-400]   write a helper's packet
   huddle add <role> --file <file> · huddle resolve <H#.#> --evidence <ptr> | --wrong --evidence events#<seq> | --wrong --words "<theirs>" · huddle reopen <H#.#> "<why>" · huddle dispute · huddle reply --file worker-<n>.md · huddle unchanged <lines> "<why>"
   waive <key> --standing "<batch>" --user-ok "<words>" · waive --end "<batch>" · open <slug> <playbook> --batch <name>   one OK for a batch of runs, 14 days
   verify [--final] [--force] [--step verify-before]         run the verify commands, write verify.json; --final also runs the "when": "final" area suite; --force runs them all, even on a tree they are green on

@@ -95,9 +95,9 @@ test("C5 reported-surface: reviewer-2's sed -i, cat > heredoc, printf >> and pyt
   }
 });
 
-test("C6 happy: skeptic, arbiter, worker and reviewer shell-edit their own files", () => {
+test("C6 happy: skeptic, worker and reviewer shell-edit their own files", () => {
   const repo = runRepo("rsf-c6");
-  for (const [role, file] of [["skeptic", "skeptic-2.md"], ["arbiter", "arbiter-1.md"], ["worker", "worker-3.md"], ["reviewer", "review-1.md"]]) {
+  for (const [role, file] of [["skeptic", "skeptic-2.md"], ["worker", "worker-3.md"], ["reviewer", "review-1.md"]]) {
     assert.equal(denied(repo, `sed -i '' 's/x/y/' ${repo}/${RUN}/${file}`, `done-gate:${role}`), false, role);
   }
 });

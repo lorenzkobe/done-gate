@@ -203,8 +203,8 @@ test("C12 happy: the lead's Grep and Glob pass the fence", () => {
   assert.match(fence({ agent_type: "done-gate:skeptic", agent_id: "sk1" }), /write your draft first/);
 });
 
-test("C13 happy: the reviewer, reviewer-2, skeptic and arbiter prompts say write the draft first, then search before grep", () => {
-  for (const role of ["reviewer", "reviewer-2", "skeptic", "arbiter"]) {
+test("C13 happy: the reviewer, reviewer-2 and skeptic prompts say write the draft first, then search before grep", () => {
+  for (const role of ["reviewer", "reviewer-2", "skeptic"]) {
     const md = readFileSync(path.join(pluginRoot, "agents", `${role}.md`), "utf8");
     assert.doesNotMatch(md, /First, before grep, search/, `${role}.md still says search first`);
     assert.match(md, /[Aa]fter (?:your|the) draft, before grep, search/, `${role}.md does not order draft, then search`);

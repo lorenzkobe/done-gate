@@ -118,8 +118,7 @@ function header(state, role, round) {
   out.push("## Task", "", section(md, "Task") || "_not written_", "");
   out.push("## Plan", "", section(md, "Plan") || "_not written_", "");
   if (ledger.planAdds?.length) out.push("## Plan additions", "", ...ledger.planAdds.map((a) => `- ${a.files.join(", ")} — ${a.why}`), "");
-  // the arbiter rules on one finding from the cited code, the plan and the cases
-  if (role !== "arbiter") out.push("## Context", "", section(md, "Context") || "_not written_", "");
+  out.push("## Context", "", section(md, "Context") || "_not written_", "");
   if (ledger.lookups) out.push("## Lookups", "", ...lookupLines(state, role), "");
   out.push("## Cases", "", ...caseTable(ledger, lastEditSeq(state, state.config, ledger)), "");
   if (role === "worker") out.push("## Tier", "", ...renderTierBlock(ledger, state.policy, state.tier?.measured ?? null), "");
@@ -161,7 +160,6 @@ function testGlobs(state) {
 
 function mayWrite(state, role, n) {
   if (role === "skeptic") return `only ${path.join(state.dir, `skeptic-${n}.md`)}; reply with its Act-on list only.`;
-  if (role === "arbiter") return `only ${path.join(state.dir, `arbiter-${n}.md`)}; reply with the ruling line only.`;
   if (role === "qa") return `only files under the tests globs (${testGlobs(state)}); nothing else.`;
   if (role === "worker") return `the files named in this packet and files under the tests globs (${testGlobs(state)}); on a review round also ${path.join(state.dir, `worker-${n}.md`)}.`;
   return `only ${path.join(state.dir, `${reviewPrefix(role)}-${n}.md`)}.`;
@@ -204,25 +202,6 @@ function fileList(state, files, { blind = false } = {}) {
     const symbols = exportedSymbols(abs);
     return `- ${rel} (${plural(lines, "line")})${symbols.length ? ` exports: ${symbols.join(", ")}` : ""}`;
   });
-}
-
-// The one disagreement an arbiter settles: the finding, both sides' evidence, the cited code.
-function arbiterBody(state, item) {
-  const out = ["## The disagreement", ""];
-  out.push(`Finding ${item.id}: ${item.text}`, "");
-  out.push(`Implementer's dispute: ${item.dispute.why}`, `Implementer's evidence: ${item.dispute.evidence}`, "");
-  out.push(`Reviewer upheld it: ${item.dispute.reviewerReason ?? "(no reason recorded)"}`, "");
-  const cited = /([\w./-]+\.[a-z]+):(\d+)/i.exec(item.text);
-  out.push("## The cited code", "");
-  if (cited) {
-    const rel = cited[1];
-    const full = unifiedDiff(state, { cap: 100000 });
-    const block = full.split("\n\n").find((b) => b.startsWith(`diff --git a/${rel} `));
-    out.push(block ?? `no diff for ${rel} in this task; read the file at ${absolute(state, rel)}`, "");
-  } else out.push("the finding cites no file:line; read the files in the diff below", "", unifiedDiff(state), "");
-  out.push("## Rule", "", "Rule for exactly one side, in writing, from the evidence. If neither side's evidence holds, rule for the reviewer (the safe side) and say why.", "");
-  out.push("## File shape", "", "```", `# Arbiter <n> — ${state.ledger.slug}`, "", "## Ruling", `- ${item.id} — implementer: <reason>   (or)   - ${item.id} — reviewer: <reason>`, "```", "");
-  return out;
 }
 
 // The verify commands a helper may run itself; "when: source" entries are listed too.
@@ -284,16 +263,14 @@ function diffOrFiles(state, heading = "Diff", files = state.changed ?? [], range
 
 // n is the number of the role's own file (skeptic-<n>.md, review-<n>.md, worker-<n>.md);
 // continueFrom is the text an earlier helper left in that file before it stopped.
-export function renderPacket(state, role, { round, n, item = null, piece = null, owned = null, continueFrom = null, fixCheck = false, disputes = [] }) {
+export function renderPacket(state, role, { round, n, piece = null, owned = null, continueFrom = null, fixCheck = false, disputes = [] }) {
   const out = header(state, role, round);
   out.push("## You may write", "", mayWrite(state, role, n), "");
   if (continueFrom !== null) {
     out.push("## Continue from", "", "An earlier helper stopped before finishing your file. It is on disk as shown here: keep its finished sections, never reset it to the all-unverified draft, and finish the sections that still read \"- unverified\", rewriting the file after each finding.", "", ...fence(continueFrom.trimEnd()), "");
   }
   const files = owned ?? planFiles(state.ledger);
-  if (role === "arbiter") {
-    out.push(...arbiterBody(state, item));
-  } else if (role === "skeptic") {
+  if (role === "skeptic") {
     out.push("## Files", "", ...fileList(state, files), "");
   } else if (role === "qa") {
     // never a line starting with +, - or @@: the QA renderer uses numbered lists and indented fences
@@ -390,7 +367,7 @@ function overlaps(a, b) {
 export const verbs = {
   brief(ctx) {
     const [role] = positional(ctx.args);
-    if (!ROLES.includes(role)) throw new UsageError(`usage: gate brief <${ROLES.join("|")}> [--files a,b] [--item H#.#] [--round n, qa only]`);
+    if (!ROLES.includes(role)) throw new UsageError(`usage: gate brief <${ROLES.join("|")}> [--files a,b] [--round n, qa only]`);
     const state = buildState(ctx, {});
     if (!state.ledger) throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
     const reviewing = role === "reviewer" || role === "reviewer-2";
@@ -588,14 +565,6 @@ export const verbs = {
     if (done >= cap && !(legacy && role === "reviewer-2") && !stillOpen && !fixCheck && !answers && !late) {
       throw new UsageError(`${role} round ${done + 1}: ${NUMBER_WORDS[cap] ?? cap} round${cap === 1 ? "" : "s"} is the cap. An upheld dispute is the user's call: ask them, then fix it or close it with their words (\`gate huddle resolve <id> --wrong --words "<their words>"\`); what is still open is fixed and closed with \`gate huddle resolve\`.`);
     }
-    let item = null;
-    if (role === "arbiter") {
-      const aid = flag(ctx.args, "--item");
-      if (!aid) throw new UsageError("usage: gate brief arbiter --item <H#.#> (a disputed item the reviewer upheld)");
-      item = state.ledger.huddles.flatMap((h) => h.actOn).find((a) => a.id === aid);
-      if (!item) throw new UsageError(`no act-on item ${aid}`);
-      if (!item.dispute || item.dispute.verdict !== "upheld") throw new UsageError(`${aid} is not a disputed item the reviewer upheld; the arbiter only settles those`);
-    }
     const own = prefix ? `${prefix}${n}.md` : null;
     // seen is what this round's reviewer is shown (its huddle inherits it); the other roles'
     // briefs are dated under briefed, so a ledger with no seen map stays a legacy one
@@ -603,14 +572,14 @@ export const verbs = {
       state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...earlierOf(state.ledger.seen?.[own]), ...(Object.keys(piece.units).length ? { units: piece.units, flats: piece.flats, notes: piece.notes } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true, ...(inParts ? { part: true } : {}) } : {}), ...(answers && !stillOpen ? { answers: true } : {}), ...(lateFiles.length ? { late: lateFiles } : {}), ...(toAnswer.length ? { disputes: toAnswer.map((a) => a.id) } : {}) } };
       saveLedger(state.dir, state.ledger);
     } else if (own) {
-      state.ledger.briefed = { ...(state.ledger.briefed ?? {}), [own]: { seq: nextSeq(), ...earlierOf(state.ledger.briefed?.[own]), ...(owned ? { files: owned } : {}), ...(item ? { item: item.id } : {}) } };
+      state.ledger.briefed = { ...(state.ledger.briefed ?? {}), [own]: { seq: nextSeq(), ...earlierOf(state.ledger.briefed?.[own]), ...(owned ? { files: owned } : {}) } };
       saveLedger(state.dir, state.ledger);
     }
     const full = own ? path.join(state.dir, own) : null;
     const left = own && role !== "worker" && existsSync(full) ? readFileSync(full, "utf8") : null;
     const continueFrom = left !== null && isPartial(left) ? left : null;
     const file = path.join(state.dir, `brief-${role}-${round}.md`);
-    writeFileSync(file, renderPacket(state, role, { round, n, item, piece, owned, continueFrom, fixCheck: fixCheck && !stillOpen, disputes: toAnswer }));
+    writeFileSync(file, renderPacket(state, role, { round, n, piece, owned, continueFrom, fixCheck: fixCheck && !stillOpen, disputes: toAnswer }));
     ctx.out(`packet: ${file}`);
     const yours = !own || role === "worker" ? "" : continueFrom !== null
       ? ` Your file is ${full} and it already exists: keep its finished sections, never reset it to the all-unverified draft, and rewrite it after each finding.`

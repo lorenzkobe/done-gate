@@ -86,12 +86,12 @@ const AGENTS_DIR = path.join(pluginRoot, "agents");
 
 // the six roles T5 asks for, spelled out rather than read back from the file under test;
 // the worker runs on Sonnet, the rest on the session's own model
-const EXPECTED_ROLES = { skeptic: "inherit", qa: "inherit", reviewer: "inherit", "reviewer-2": "inherit", arbiter: "inherit", worker: "sonnet" };
+const EXPECTED_ROLES = { skeptic: "inherit", qa: "inherit", reviewer: "inherit", "reviewer-2": "inherit", worker: "sonnet" };
 const WORKER_MAX_TURNS = 100;
 
 // roles that must never touch code: they read and write their own findings file only.
 // qa is deliberately absent — it writes tests, so agents/qa.md bans no edit tool.
-const EDIT_BANNED = ["skeptic", "reviewer", "reviewer-2", "arbiter"];
+const EDIT_BANNED = ["skeptic", "reviewer", "reviewer-2"];
 
 const frontmatter = (md) => /^---\n([\s\S]*?)\n---\n/.exec(md);
 const agentFile = (role) => readFileSync(path.join(AGENTS_DIR, `${role}.md`), "utf8");
@@ -152,8 +152,7 @@ test("C1 happy: models.json and DEFAULT_POLICY name no model and no ceiling sett
 test("C2 happy: at size large `gate brief worker` writes brief-worker-1.md, every other role still briefs, and `gate huddle add worker --file worker-1.md` is recorded", () => {
   const repo = largeTier("roles-c2");
 
-  // arbiter is left out: it needs --item <H#.#>, a disputed finding, and tests/review-dispute owns it
-  for (const role of Object.keys(EXPECTED_ROLES).filter((r) => r !== "arbiter")) {
+  for (const role of Object.keys(EXPECTED_ROLES)) {
     const out = withoutHint(cli(repo, "brief", [role]).stdout);
     const abs = path.join(runDir(repo), `brief-${role}-1.md`);
     assert.ok(existsSync(abs), `${role}: ${abs} was not written`);
@@ -405,7 +404,7 @@ function matches(text, re, file, why = "") {
 // C1 — SKILL.md fits the budget and names every verb and agent the team loop needs
 // ---------------------------------------------------------------------------
 
-test("C1 happy: SKILL.md stays under 4096 bytes and names the whole team loop — open/note/case, brief worker, done-gate:worker, SendMessage, huddle reply, huddle dispute, arbiter, one round plus a fix-check, ten helpers, verify, report --brief, and the hand-off to a fresh helper", () => {
+test("C1 happy: SKILL.md stays under 4096 bytes and names the whole team loop — open/note/case, brief worker, done-gate:worker, SendMessage, huddle reply, huddle dispute, the user for an upheld dispute, one round plus a fix-check, ten helpers, verify, report --brief, and the hand-off to a fresh helper", () => {
   const size = statSync(SKILL_MD).size;
   assert.ok(size < 4096, `skills/gate/SKILL.md is ${size} bytes, the budget is 4096`);
 
@@ -430,9 +429,10 @@ test("C1 happy: SKILL.md stays under 4096 bytes and names the whole team loop �
   has(md, "done-gate:worker", file, "the agent the lead spawns per piece");
   has(md, "SendMessage", file, "how the lead relays a review file to a running worker");
 
-  // the review loop's shape: one round and a fix-check, then the arbiter
+  // the review loop's shape: one round and a fix-check; an upheld dispute is the user's
   matches(md, /one round \+ a fix-check/i, file, "the round cap");
-  matches(md, /arbiter/i, file, "what settles a dispute after round three");
+  matches(md, /upheld: ask the user/i, file, "who settles an upheld dispute");
+  assert.doesNotMatch(md, /arbiter/i, "SKILL.md still names the arbiter");
 
   // the helper ceiling — ten per task
   matches(md, /\bten\b[^.]{0,40}helper/i, file, "the ceiling of ten helper invocations");
@@ -553,11 +553,11 @@ test("C5 edge: README's rule table lists exactly R1-R10, R13, R15, R17 and R18 �
 // search-first C18: the lead's understand-first steps and every helper but QA search the code
 // and the memory first, before grep (SocratiCode and MemPalace named as examples), make lookups
 // only, and confirm a hit with grep/Read before citing it; QA searches memory only.
-test("C18 reported-surface: the lead playbook and the skeptic, reviewer, reviewer-2, worker and arbiter search code and memory first, before grep; QA searches memory only; SKILL.md stays under 4096 bytes", () => {
+test("C18 reported-surface: the lead playbook and the skeptic, reviewer, reviewer-2 and worker search code and memory first, before grep; QA searches memory only; SKILL.md stays under 4096 bytes", () => {
   const body = (role) => readFileSync(path.join(pluginRoot, "agents", `${role}.md`), "utf8").replace(/^---\n[\s\S]*?\n---\n/, "");
   const LOOKUPS_ONLY = /lookups only|never add, write, update, delete, mine or re-index/i;
   const CONFIRM = /confirm[^.]*grep[^.]*Read|grep\/Read/i;
-  for (const role of ["skeptic", "reviewer", "reviewer-2", "worker", "arbiter"]) {
+  for (const role of ["skeptic", "reviewer", "reviewer-2", "worker"]) {
     const md = body(role);
     assert.match(md, /SocratiCode/, `agents/${role}.md does not name SocratiCode as the code-search example`);
     assert.match(md, /MemPalace/, `agents/${role}.md does not name MemPalace as the memory example`);

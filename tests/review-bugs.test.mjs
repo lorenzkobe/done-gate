@@ -233,9 +233,12 @@ test("C14 happy: an item closed by resolve, by a withdrawn dispute or by an arbi
 
   const overruled = withSkepticItem("rb-c14-arbiter");
   cli(overruled, "huddle", ["dispute", "H1.1", "the venue is never null here", "--evidence", "src/a.ts:1"]);
-  lookedUp(overruled, { agent: "ar1", role: "arbiter" });
-  writeFileSync(path.join(runDir(overruled), "arbiter-1.md"), "# Arbiter 1\n\n## Ruling\n- H1.1 — implementer: the null check runs first\n");
-  cli(overruled, "huddle", ["add", "arbiter", "--file", "arbiter-1.md"]);
+  // an older run's arbiter ruling for the implementer, as huddle add arbiter wrote it before 6.8
+  const lf = path.join(runDir(overruled), "ledger.json");
+  const led = JSON.parse(readFileSync(lf, "utf8"));
+  Object.assign(led.huddles[0].actOn[0], { closed: "overruled (arbiter-1.md)" });
+  led.huddles[0].actOn[0].dispute = { ...(led.huddles[0].actOn[0].dispute ?? {}), verdict: "arbiter:implementer", arbiterReason: "the null check runs first" };
+  writeFileSync(lf, JSON.stringify(led, null, 2));
   assert.match(ledgerOf(overruled).huddles[0].actOn[0].closed ?? "", /overruled/, "premise: the arbiter ruled for the implementer");
   assert.equal(r15(overruled), "");
 });

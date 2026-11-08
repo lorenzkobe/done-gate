@@ -83,8 +83,8 @@ export function runChecks(state) {
   return out;
 }
 
-// Readers for the files helpers write: a reviewer's or skeptic's findings, a reviewer's
-// answers to disputes, and an arbiter's ruling. Bullets only; prose is ignored.
+// Readers for the files helpers write: a reviewer's or skeptic's findings and a reviewer's
+// answers to disputes. Bullets only; prose is ignored.
 
 function sectionLines(text, heading) {
   const re = new RegExp(`^## ${heading}\\s*:?[ \\t]*$`, "m");
@@ -112,7 +112,7 @@ function bullets(lines) {
 
 // A helper cut off mid-write leaves its draft-first placeholder behind: every section reads
 // "- unverified", or "- <label>: unverified" in a verdict section. Shape-agnostic (no heading
-// lookup), so it also catches an arbiter's Ruling-only stub, which has no "## Act on" section
+// lookup), so it also catches a stub with no "## Act on" section
 // at all. Built on bullets(), so a "- none" placeholder (agents/reviewer.md's Dismissed
 // section) is dropped the same way parseFindings drops it.
 // A Can't verify bullet past the bare placeholder is a finished answer, even "retry: unverified".
@@ -167,18 +167,6 @@ export function parseReplies(text) {
       const pointer = parts.length > 1 ? parts.pop().trim() : null;
       out.push({ id: m[1], kind: "disagree", why: parts.join(" — ").trim(), pointer });
     }
-  }
-  return out;
-}
-
-const RULING = /^(H\d+\.\d+)\s*[—–-]+\s*(implementer|reviewer)\s*:\s*(.*)$/i;
-
-// An arbiter's ruling: `- H1.2 — implementer: reason` / `reviewer: reason`.
-export function parseRuling(text) {
-  const out = [];
-  for (const b of bullets(sectionLines(text, "Ruling"))) {
-    const m = RULING.exec(b);
-    if (m) out.push({ id: m[1], side: m[2].toLowerCase(), reason: m[3].trim() });
   }
   return out;
 }
@@ -358,7 +346,7 @@ export function leadLookups(ledger, events) {
 }
 
 // What each helper role must look up before it works; QA stays blind to the code.
-const LOOKUP_NEEDS = { skeptic: LOOKUP_KINDS, reviewer: LOOKUP_KINDS, "reviewer-2": LOOKUP_KINDS, worker: LOOKUP_KINDS, arbiter: LOOKUP_KINDS, qa: ["memory"] };
+const LOOKUP_NEEDS = { skeptic: LOOKUP_KINDS, reviewer: LOOKUP_KINDS, "reviewer-2": LOOKUP_KINDS, worker: LOOKUP_KINDS, qa: ["memory"] };
 
 // Helpers that wrote any file (or the writers of one run-dir file) and skipped a lookup their
 // role needs since the run opened; a resumed helper keeps its id and its lookups.
@@ -425,7 +413,7 @@ export function proofProblem(state, item, ptr) {
   return state.config.isTest(file) && since.some((e) => red(e) && e.cmd.includes(file)) ? null : PROOF_TEXT;
 }
 
-// The lead's runs and a worker's since the finding's round; a reviewer, QA or arbiter run is not
+// The lead's runs and a worker's since the finding's round; a reviewer's or QA's run is not
 // the lead's proof.
 function proofEvents(state, h) {
   return (state.events ?? []).filter((e) => e.seq > (h.seq ?? 0) && !e.background && (!e.agentType || isRole(e.agentType, "worker")));
@@ -443,7 +431,7 @@ export function wrongProblem(state, item, ptr) {
   return e && (e.kind === "browser" || ranCleanly(e)) ? null : "a finding closes as wrong on `events#<seq>` of a browser call or a command run since its round that shows it wrong (not a read, a gate verb, a git command or a scratch write)";
 }
 
-// An open finding the reviewer upheld, or the arbiter gave the reviewer on an older run.
+// An open finding the reviewer upheld; an older run's arbiter:reviewer verdict reads the same.
 export const upheldItem = (a) => !a.closed && (a.dispute?.verdict === "upheld" || a.dispute?.verdict === "arbiter:reviewer");
 
 export function ranText(e) {
@@ -1569,16 +1557,18 @@ export function evaluate(state) {
     // a draft or partial file left by a cut-off helper is an unfinished round, not a
     // written-but-unrecorded file: brief re-briefs the same round instead
     if (state.dir && unfinishedFile(path.join(state.dir, f))) continue;
+    // an older run's arbiter file has no verb to record it any more
+    if (fileRole(f) === "arbiter") continue;
     unmet.push({ rule: "R15", text: `${f} was written but never recorded. Run \`gate huddle add ${fileRole(f)} --file ${f}\`.` });
   }
   for (const [f, brief] of Object.entries({ ...(ledger.briefed ?? {}), ...(ledger.seen ?? {}) })) {
     const role = fileRole(f);
-    if (role === "worker" || !state.dir) continue;
+    if (role === "worker" || role === "arbiter" || !state.dir) continue;
     const full = path.join(state.dir, f);
     if (existsSync(full) && !unfinishedFile(full)) continue;
     const run = helperRun(state, role, f, brief.seq ?? 0);
     if (!run.ran || run.running) continue;
-    const again = role === "arbiter" && brief.item ? ` --item ${brief.item}` : Array.isArray(brief.files) ? ` --files ${brief.files.join(",")}` : "";
+    const again = Array.isArray(brief.files) ? ` --files ${brief.files.join(",")}` : "";
     unmet.push({ rule: "R15", text: `the ${role} stopped before finishing ${f}: resume it with SendMessage, or \`gate brief ${role}${again}\` and spawn a fresh one, its packet continues from the file; \`gate diagnose\` says which.` });
   }
 

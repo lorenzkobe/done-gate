@@ -23,7 +23,7 @@ const namesGateDir = (text) => {
   return /\.claude["']?\/(?:\.\/)*["']?gate\b/.test(t) || (/(?:^|[\s;&|])(?:cd|pushd)\s+["']?[^\s;&|]*\.claude["']?\/?(?=[\s;&|]|$)/.test(t) && /(?:^|[\s/"'])gate(?=[/\s;&|"']|$)/.test(t));
 };
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
-const HELPER_ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter"];
+const HELPER_ROLES = ["skeptic", "qa", "reviewer", "reviewer-2"];
 // Shell analysis for the Bash fence. Two readers of one parse: `readsOnly` (may a command
 // that names an evidence file run at all) and `shellWrites` (where does a helper's command
 // write). Heredoc bodies are data, never commands; quotes make one token; `$(…)`, backticks,
@@ -725,6 +725,7 @@ function isSkepticFile(rel) {
   return /^\.claude\/gate\/runs\/[^/]+\/skeptic-\d+\.md$/.test(rel);
 }
 
+// an older run's arbiter ruling: evidence nobody writes now
 function isArbiterFile(rel) {
   return /^\.claude\/gate\/runs\/[^/]+\/arbiter-\d+\.md$/.test(rel);
 }
@@ -739,12 +740,12 @@ function inCurrentRun(rel, current) {
   return Boolean(current) && rel.startsWith(`${current}/`);
 }
 
-// A reading helper (skeptic, reviewer, arbiter) owes a draft while a packet for its role has
+// A reading helper (skeptic, reviewer) owes a draft while a packet for its role has
 // no file and it has written none itself (its Write of a draft is an edit event under its
 // agent id). Until then it may only read its packet and write one of the owed files, so a
 // helper that runs out of turns always leaves a file; two reviewers out at once each owe
 // their own number.
-export const OWN_FILE = { skeptic: "skeptic", reviewer: "review", "reviewer-2": "review2", arbiter: "arbiter" };
+export const OWN_FILE = { skeptic: "skeptic", reviewer: "review", "reviewer-2": "review2" };
 function draftOwed(roleName, root, currentRun, { stateDir, session, agentId } = {}) {
   const prefix = OWN_FILE[roleName];
   if (!prefix || !currentRun) return null;
@@ -763,13 +764,14 @@ function draftOwed(roleName, root, currentRun, { stateDir, session, agentId } = 
 
 // The file each caller may write with the edit tools: a helper its own findings file, the lead ledger.md.
 const OWNED_FILE = /(?:^|[/\s'"=])((review2|review|skeptic|arbiter|worker)-\d+\.md|ledger\.md)(?=$|[\s'";|&)<>])/;
-const FILE_OWNER = { review2: "reviewer-2", review: "reviewer", skeptic: "skeptic", arbiter: "arbiter", worker: "worker" };
+// an older run's arbiter file has no owner: nobody writes it now
+const FILE_OWNER = { review2: "reviewer-2", review: "reviewer", skeptic: "skeptic", worker: "worker" };
 const shown = (seg) => {
   const text = seg.map((w) => (w.quoted && (w.text === "" || /\s/.test(w.text)) ? `'${w.text}'` : w.text)).join(" ");
   return text.length > 120 ? `${text.slice(0, 120)}…` : text;
 };
 const LEADS_TO_GATE = /(?:^|[;&|(\s])cd\s+["']?[^\s;&|]*\.claude\/gate|=["']?[^\s;&|]*\.claude\/gate|\bfor\s+\w+\s+in\b[^;]*\.claude\/gate/;
-const NO_EDIT_TOOL = new Set(["reviewer", "reviewer-2", "skeptic", "arbiter"]);
+const NO_EDIT_TOOL = new Set(["reviewer", "reviewer-2", "skeptic"]);
 function evidenceDeny(cmd, agentType) {
   const parts = notReads(cmd);
   const touchesGate = (seg) => {
@@ -1054,15 +1056,10 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
     }
     return { deny: false };
   }
-  if (role("arbiter")) {
-    const outside = paths.filter((p) => !isArbiterFile(p) || !inCurrentRun(p, currentRun));
-    if (outside.length) {
-      return { deny: true, reason: `done-gate: the arbiter writes only its own arbiter-<n>.md in the run dir; ${outside.join(", ")} is not that.`, paths };
-    }
-    return { deny: false };
-  }
   // a helper's file is its evidence: nobody else writes it
-  const foreign = paths.filter((p) => isSkepticFile(p) || isArbiterFile(p) || (isReviewFile(p) && !role("reviewer")) || (isReview2File(p) && !role("reviewer-2")) || (isWorkerFile(p) && !role("worker")));
+  const old = paths.filter(isArbiterFile);
+  if (old.length) return { deny: true, reason: `done-gate: ${old.join(", ")} is an older run's arbiter ruling, a record nobody writes now.`, paths };
+  const foreign = paths.filter((p) => isSkepticFile(p) || (isReviewFile(p) && !role("reviewer")) || (isReview2File(p) && !role("reviewer-2")) || (isWorkerFile(p) && !role("worker")));
   if (foreign.length) {
     return { deny: true, reason: `done-gate: ${foreign.join(", ")} is a helper's own evidence file and is written only by that helper.`, paths };
   }

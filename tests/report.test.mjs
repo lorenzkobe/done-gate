@@ -783,7 +783,6 @@ const EVIDENCE = "src/a.ts:2";
 
 const reviewFile = (n, slug, actOn, extra = "") =>
   `# Review ${n} — ${slug}\n\n## Act on\n${actOn.length ? actOn.map((t) => `- ${t}`).join("\n") : "_none_"}\n${extra}## Consider\n- rename the helper\n`;
-const arbiterFile = (n, slug, ruling) => `# Arbiter ${n} — ${slug}\n\n## Ruling\n- ${ruling}\n`;
 
 // Every step of the open playbook, closed. The keys come from `gate steps`, not from a
 // list copied into this file, so a playbook edit cannot leave R8 quietly unmet here.
@@ -1020,7 +1019,7 @@ test("C6 edge: a driven UI change says driven on line 4; an undriven one says no
 // C7 — withdrawn and overruled are counted, not dropped
 // ---------------------------------------------------------------------------
 
-test("C7 boundary: an arbiter-overruled item and a reviewer-withdrawn item are both counted on line 3", () => {
+test("C7 boundary: an older run's arbiter-overruled item and a reviewer-withdrawn item are both counted on line 3", () => {
   const slug = "settled";
   const repo = opened("brief-t9-c7", slug);
   helperFile(repo, "review-1.md", reviewFile(1, slug, [FIND_1, FIND_2]));
@@ -1036,9 +1035,13 @@ test("C7 boundary: an arbiter-overruled item and a reviewer-withdrawn item are b
   );
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-2.md"]);
 
-  // the arbiter rules for the implementer on the one still standing: overruled
-  helperFile(repo, "arbiter-1.md", arbiterFile(1, slug, "H1.2 — implementer: the caller's null check runs first"));
-  cli(repo, "huddle", ["add", "arbiter", "--file", "arbiter-1.md"]);
+  // an older run's arbiter ruled for the implementer on the one still standing: overruled
+  const file = path.join(runDir(repo), "ledger.json");
+  const ledger = JSON.parse(readFileSync(file, "utf8"));
+  const h12 = ledger.huddles.flatMap((h) => h.actOn).find((a) => a.id === "H1.2");
+  Object.assign(h12.dispute, { verdict: "arbiter:implementer", arbiterReason: "the caller's null check runs first" });
+  h12.closed = "overruled (arbiter-1.md)";
+  writeFileSync(file, JSON.stringify(ledger, null, 2));
 
   const b = parsed(repo);
   assert.match(b.review, /withdrawn/i, `line 3 does not count the withdrawn finding: ${JSON.stringify(b.review)}`);

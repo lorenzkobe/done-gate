@@ -46,7 +46,7 @@ function stepFor(cause, count) {
 }
 
 function nextText(step, p, record, dir) {
-  const again = p.role === "arbiter" && record?.item ? ` --item ${record.item}` : Array.isArray(record?.files) ? ` --files ${record.files.join(",")}` : "";
+  const again = Array.isArray(record?.files) ? ` --files ${record.files.join(",")}` : "";
   const holds = p.file && existsSync(path.join(dir, p.file)) ? `; ${p.file} holds what it wrote so far` : "";
   return {
     resume: `SendMessage ${p.agent} to continue${holds}`,
@@ -64,7 +64,8 @@ export function helperProblems({ events, ledger, dir, root, now = Date.now() }) 
   const runRel = `${toPosixRel(root, dir)}/`;
   const agents = new Map();
   for (const e of events) {
-    if (e.kind !== "subagent-start" || e.seq <= (ledger.openedSeq ?? 0) || !String(e.agentType ?? "").startsWith("done-gate:")) continue;
+    // an older run's arbiter has no brief to send it again
+    if (e.kind !== "subagent-start" || e.seq <= (ledger.openedSeq ?? 0) || !String(e.agentType ?? "").startsWith("done-gate:") || e.agentType === "done-gate:arbiter") continue;
     if (!agents.has(e.agent)) agents.set(e.agent, { id: e.agent, role: e.agentType.slice("done-gate:".length), first: e.seq });
   }
   const writes = new Map();

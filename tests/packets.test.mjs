@@ -1010,19 +1010,19 @@ test("C2 refused: while a reviewer owes review-1.md its Read of source and its B
 // C3 edge — which roles the draft-first rule reaches
 // ---------------------------------------------------------------------------
 
-test("C3 edge: draft-first binds the skeptic, the arbiter and both reviewer roles, and never the worker, QA or the lead", () => {
+test("C3 edge: draft-first binds the skeptic and both reviewer roles, and never the worker, QA or the lead", () => {
   const repo = opened("budget-draft-roles");
   const dir = runDir(repo);
   const src = path.join(repo, "src", "a.ts");
 
   // scripts/lib/verbs.mjs is the source of truth for a role's own-file prefix
-  const prefixOf = (role) => ({ arbiter: "arbiter", skeptic: "skeptic", worker: "worker", "reviewer-2": "review2" }[role] ?? "review");
+  const prefixOf = (role) => ({ skeptic: "skeptic", worker: "worker", "reviewer-2": "review2" }[role] ?? "review");
   const agent = (role, i) => ({ agent_id: `A${i}`, agent_type: `done-gate:${role}` });
 
   // every role in the list gets a packet on disk; none has written its file yet
   for (const role of ROLES) writeFileSync(path.join(dir, `brief-${role}-1.md`), `# Brief: ${role} round 1\n`);
 
-  const BOUND = ["skeptic", "arbiter", "reviewer", "reviewer-2"];
+  const BOUND = ["skeptic", "reviewer", "reviewer-2"];
   const FREE = ["worker", "qa"];
   assert.deepEqual([...BOUND, ...FREE].sort(), [...ROLES].sort(), "the case table covers every role in verbs.mjs ROLES");
 
@@ -1249,7 +1249,7 @@ test("C8 happy: the prompt line gate brief prints names both the packet path and
   const repo = opened("budget-prompt-line");
   const dir = runDir(repo);
   // scripts/lib/verbs.mjs is the source of truth for a role's own-file prefix
-  const prefixOf = (role) => ({ arbiter: "arbiter", skeptic: "skeptic", worker: "worker", "reviewer-2": "review2" }[role] ?? "review");
+  const prefixOf = (role) => ({ skeptic: "skeptic", worker: "worker", "reviewer-2": "review2" }[role] ?? "review");
 
   for (const role of ["skeptic", "reviewer"]) {
     const r = cli(repo, "brief", [role]);

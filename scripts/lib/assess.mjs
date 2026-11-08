@@ -29,7 +29,7 @@ export function readVerifyStarted(dir) {
 }
 
 // The files reading helpers write for themselves: review-<n>.md, review2-<n>.md,
-// skeptic-<n>.md and arbiter-<n>.md.
+// skeptic-<n>.md, and an older run's arbiter-<n>.md.
 export function reviewFiles(dir) {
   if (!existsSync(dir)) return [];
   return readdirSync(dir).filter((f) => /^(?:review2?|skeptic|arbiter)-\d+\.md$/.test(f)).sort();

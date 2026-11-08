@@ -390,8 +390,8 @@ test("C3 globToRegex, matchGlob and matchAny come from config.mjs and match as b
 // C4 — the helper-file readers now live in rules.mjs
 // ---------------------------------------------------------------------------
 
-test("C4 parseFindings, parseDisputes and parseRuling come from rules.mjs and parse the same fixtures", async () => {
-  const { parseFindings, parseDisputes, parseRuling } = await import("../scripts/lib/rules.mjs");
+test("C4 parseFindings and parseDisputes come from rules.mjs and parse the same fixtures", async () => {
+  const { parseFindings, parseDisputes } = await import("../scripts/lib/rules.mjs");
 
   const review = [
     "# review-1",
@@ -430,18 +430,6 @@ test("C4 parseFindings, parseDisputes and parseRuling come from rules.mjs and pa
     { id: "H1.3", verdict: "upheld", reason: "still unhandled" },
   ]);
   assert.deepEqual(parseDisputes("## Ruling\n- H1.2 — withdrawn: elsewhere\n"), []);
-
-  const ruling = [
-    "## Ruling",
-    "- H1.2 — implementer: the test proves it",
-    "- H1.3 — reviewer: the path is still open",
-    "- H1.4 — nobody: not a side",
-  ].join("\n");
-  assert.deepEqual(parseRuling(ruling), [
-    { id: "H1.2", side: "implementer", reason: "the test proves it" },
-    { id: "H1.3", side: "reviewer", reason: "the path is still open" },
-  ]);
-  assert.deepEqual(parseRuling("## Act on\n- H1.2 — implementer: wrong section\n"), []);
 });
 
 // ---------------------------------------------------------------------------
@@ -866,7 +854,7 @@ function playbookKeys(playbook) {
   });
 }
 
-const ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter", "worker"]; // agents/*.md
+const ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "worker"]; // agents/*.md
 
 const SKILL_MD = path.join(pluginRoot, "skills", "gate", "SKILL.md");
 

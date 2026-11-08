@@ -440,7 +440,7 @@ test("C6 edge: a review whose Act-on section holds a real bullet while Consider,
 // C7 — a draft is shape-agnostic: any helper file, any sections
 // ---------------------------------------------------------------------------
 
-test("C7 edge: an unrecorded arbiter-1.md whose only section is '## Ruling' reading '- unverified' is a draft, so gate check does not report it under R15; a real ruling in the same file does", () => {
+test("C7 edge: an unrecorded old arbiter-1.md, draft or finished, raises no R15 (no verb records one since 6.8); an unrecorded skeptic stub is a draft", () => {
   const repo = opened("rdr-c7");
   helperFile(repo, "arbiter-1.md", arbiterDraftFile(1, "rdr-c7"));
   assert.ok(
@@ -454,18 +454,18 @@ test("C7 edge: an unrecorded arbiter-1.md whose only section is '## Ruling' read
     `an unrecorded arbiter draft is reported as written but never recorded: ${draftLine}`,
   );
 
-  // Not vacuous: once the arbiter has actually ruled, the same unrecorded file is R15's business.
+  // a finished ruling is an older run's record: no verb records it now, so R15 names none
   helperFile(
     repo,
     "arbiter-1.md",
     `# Arbiter 1 — rdr-c7\n\n## Ruling\n- H1.2 — reviewer: the card renders before the venue query resolves\n`,
   );
   const ruledLine = ruleLine(check(repo), "R15");
-  assert.ok(ruledLine, `an unrecorded finished arbiter-1.md does not raise R15:\n${check(repo)}`);
-  assert.ok(
-    ruledLine.includes("arbiter-1.md"),
-    `the R15 line does not name the unrecorded ruling: ${ruledLine}`,
-  );
+  assert.ok(!ruledLine || !ruledLine.includes("arbiter-1.md"), `an old arbiter file raised R15: ${ruledLine}`);
+  // Not vacuous: a finished unrecorded skeptic file is R15's business.
+  const finished = opened("rdr-c7-finished");
+  helperFile(finished, "skeptic-1.md", "# Skeptic 1 — rdr-c7-finished\n\n## Act on\n- the plan misses the empty list — src/a.ts:1\n");
+  assert.match(ruleLine(check(finished), "R15") ?? "", /skeptic-1\.md/, check(finished));
 
   // A skeptic stub is a draft by the same predicate, whatever its sections are called.
   const other = opened("rdr-c7-skeptic");

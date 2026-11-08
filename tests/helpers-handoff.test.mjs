@@ -411,7 +411,7 @@ test("C9 reported-surface: gate huddle add reviewer prints each new id with its 
   assert.equal(items.find((a) => a.id === "H1.1").closed, null, "the refused reply closed an item");
 });
 
-test("C10 boundary: skeptic and arbiter packets carry the number of the file they name, so the write guard owes the same file the packet names", () => {
+test("C10 boundary: skeptic packets carry the number of the file they name, so the write guard owes the same file the packet names", () => {
   // two finished skeptic files on disk, one of them recorded: the next file is skeptic-3.md. A run
   // under the new rules checks the plan once (tests/plan-hold.test.mjs C12), so this one is old.
   const repo = standard("hh-c10");
@@ -439,19 +439,6 @@ test("C10 boundary: skeptic and arbiter packets carry the number of the file the
   const denied = fence("Read", path.join(repo, "src/a.ts"));
   assert.ok(denied.includes("deny") && denied.includes("skeptic-3.md"), `the guard does not owe skeptic-3.md before anything else: ${denied || "(allowed)"}`);
   assert.ok(!fence("Write", path.join(dir, "skeptic-3.md")).includes("deny"), "the guard denies the file the packet names");
-
-  // the arbiter: a finished arbiter-1.md is already on disk, so the next ruling is arbiter-2.md
-  const arb = changed("hh-c10-arbiter");
-  const adir = runDir(arb);
-  helperFile(arb, "review-1.md", reviewFile(1, "hh-c10-arbiter"));
-  cli(arb, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
-  cli(arb, "huddle", ["dispute", "H1.1", "there is one caller only", "--evidence", "src/a.ts:1"]);
-  helperFile(arb, "review-2.md", `# Review 2 — hh-c10-arbiter\n\n## Act on\n- none\n## Disputes\n- H1.1 — upheld: a second caller exists — src/app/page.tsx:1\n`);
-  cli(arb, "huddle", ["add", "reviewer", "--file", "review-2.md"]);
-  helperFile(arb, "arbiter-1.md", "# Arbiter 1 — hh-c10-arbiter\n\n## Ruling\n- H7.7 — reviewer: an older ruling\n");
-  const a = brief(arb, "arbiter", ["--item", "H1.1"]);
-  assert.ok(section(a.text, "You may write").includes(path.join(adir, "arbiter-2.md")), `premise: the packet names arbiter-2.md:\n${a.text.slice(0, 800)}`);
-  assert.equal(a.name, "brief-arbiter-2.md", "the arbiter packet's number is not its file's number");
 });
 
 test("C11 happy: agent files — skeptic maxTurns 40 (stop at 38), reviewer 60 (58), reviewer-2 and qa 90 (88), worker 100 (98); skeptic, reviewer and reviewer-2 say to rewrite the file after each finding; reviewer says not to number findings", () => {

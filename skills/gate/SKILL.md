@@ -21,7 +21,7 @@ Every verb prints a `next:` line: follow it. `gate check` lists what is unmet (R
 3. Tests first, from the case table, red before green. Past small, code and
    tests wait for the skeptic; fold its findings into the cases. `gate brief <role>` prints the prompt of
    each `done-gate:<role>` helper: skeptic (`skeptic-<n>.md`), qa (blind tests, large), worker,
-   reviewer, reviewer-2 (high-risk/large), arbiter.
+   reviewer, reviewer-2 (high-risk/large).
 4. Tiny, small, standard, large: implement yourself; independent pieces may go to workers
    (`gate brief worker`, spawn `done-gate:worker`). No slop: no comment that restates code,
    narrates, numbers steps, labels a block, echoes a signature or marks an end; no banner;

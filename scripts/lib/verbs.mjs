@@ -8,7 +8,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, uncovered, afterReview, changedUnitsOf, parseEntry, pathOf, parseReplies, parseRuling, pointerResolver, proofProblem, wrongProblem, upheldItem, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
+import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, uncovered, afterReview, changedUnitsOf, parseEntry, pathOf, parseReplies, pointerResolver, proofProblem, wrongProblem, upheldItem, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
 import { assess, broughtSinceOpen, buildState, cleanAtHead, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
@@ -82,7 +82,7 @@ export const EVIDENCED_KEYS = new Set(["context", "verify", "verify-before", "dr
 // Steps that claim something was run: DONE only on a run the hooks recorded.
 const RUN_KEYS = new Set(["repro", "rootcause", "schema"]);
 export const CASE_KINDS = ["happy", "edge", "refused", "boundary", "idempotent", "reported-surface", "performance", "click"];
-export const ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter", "worker"];
+export const ROLES = ["skeptic", "qa", "reviewer", "reviewer-2", "worker"];
 // Step keys whose rule has no waiver: waiving the step would leave that rule blocking.
 const NO_WAIVER = {
   verify: "Run `gate verify`",
@@ -623,7 +623,7 @@ export const verbs = {
       const file = flag(rest, "--file") ?? null;
       // every role whose evidence is a file must name it, or R15 could never count it, and the
       // file must be that role's own: a reviewer huddle cannot point at a skeptic file
-      const prefix = { arbiter: "arbiter", skeptic: "skeptic", worker: "worker", "reviewer-2": "review2" }[role] ?? "review";
+      const prefix = { skeptic: "skeptic", worker: "worker", "reviewer-2": "review2" }[role] ?? "review";
       if (!file && role !== "qa") throw new UsageError(`gate huddle add ${role} needs --file <${prefix}-<n>.md>: the helper's own file is the evidence`);
       if (file) {
         const { dir, ledger } = open(ctx);
@@ -716,19 +716,6 @@ export const verbs = {
             const a = item(aid);
             if (!a?.dispute || a.dispute.verdict || a.closed || replied.has(aid)) continue;
             Object.assign(a.dispute, { verdict: "upheld", reviewerReason: `not answered in ${file}` });
-          }
-          if (role === "arbiter") {
-            for (const r of parseRuling(text)) {
-              const a = item(r.id);
-              if (!a || !a.dispute) continue;
-              a.dispute.verdict = `arbiter:${r.side}`;
-              a.dispute.arbiterReason = r.reason;
-              if (r.side === "implementer" && !a.closed) {
-                a.closed = `overruled (${file})`;
-                a.closedSeq = nextSeq();
-              }
-              answered += 1;
-            }
           }
         }
         if (role === "skeptic") settleCheck(ledger, dir);

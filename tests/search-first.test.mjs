@@ -149,7 +149,6 @@ const reviewFile = (n, slug, actOn = [FIND_1], extra = "") =>
 const reviewPartial = (n, slug) =>
   `# Review ${n} — ${slug}\n\n## Act on\n- ${FIND_1}\n## Consider\n- unverified\n## Noted\n- unverified\n## Dismissed\n- none\n## Evidence verdict\n- unverified\n`;
 const workerFile = (n, slug, replies) => `# Worker ${n} — ${slug}\n\n## Replies\n${replies.map((t) => `- ${t}`).join("\n")}\n`;
-const arbiterFile = (n, slug, ruling) => `# Arbiter ${n} — ${slug}\n\n## Ruling\n- ${ruling}\n`;
 
 // ---------------------------------------------------------------------------
 // The lead, at gate note context
@@ -406,21 +405,6 @@ function upheld(name) {
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-2.md"]);
   return repo;
 }
-
-test("C11 refused: an arbiter file is checked the same way at huddle add arbiter (code and memory)", () => {
-  const repo = upheld("srch-c11");
-  start(repo, "A7", "arbiter");
-  lookedUp(repo, { agent: "A7", role: "arbiter", tools: [MEMORY_LOOKUP] });
-  helperWrites(repo, "A7", "arbiter", "arbiter-1.md", arbiterFile(1, "srch-c11", "H1.2 — implementer: the caller's null check runs first"));
-  stop(repo, "A7", "arbiter");
-  const err = refused(repo, "huddle", ["add", "arbiter", "--file", "arbiter-1.md"]);
-  assert.match(err, /arbiter/, err);
-  assert.match(err, /code/i, err);
-  assert.deepEqual(huddlesOf(repo, "arbiter"), []);
-  lookedUp(repo, { agent: "A7", role: "arbiter", tools: [CODE_LOOKUP] });
-  cli(repo, "huddle", ["add", "arbiter", "--file", "arbiter-1.md"]);
-  assert.equal(huddlesOf(repo, "arbiter").length, 1);
-});
 
 test("C12 refused: a worker that edited with no lookups shows as R17 in gate check and blocks close; worker-<n>.md is refused at huddle reply", () => {
   const repo = planned("srch-c12", { plan: LARGE });

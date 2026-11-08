@@ -394,7 +394,7 @@ test("C4 edge: the deny names the part that is not a plain read, and points the 
 test("C11 edge: the edit-tool hint goes only to the caller that owns the file", () => {
   const as = (role) => ({ agent_id: "A1", agent_type: `done-gate:${role}` });
   const sedOn = (file) => `cd ${RUN} && sed -i '' 's/a/b/' ${file}`;
-  for (const [role, file] of [["reviewer", "review-6.md"], ["reviewer-2", "review2-2.md"], ["skeptic", "skeptic-1.md"], ["arbiter", "arbiter-1.md"], ["worker", "worker-4.md"]]) {
+  for (const [role, file] of [["reviewer", "review-6.md"], ["reviewer-2", "review2-2.md"], ["skeptic", "skeptic-1.md"], ["worker", "worker-4.md"]]) {
     const v = decide(bash(sedOn(file), as(role)), repo, cfg);
     assert.equal(v.deny, true, `${role} ${file}`);
     assert.match(v.reason, new RegExp(`Use the ${role === "worker" ? "Edit or Write" : "Write"} tool on ${file.replace(".", "\\.")}`), `${role}: ${v.reason}`);

@@ -13,7 +13,7 @@ import { nextHint } from "../scripts/lib/next.mjs";
 
 // ===== from tests/review-dispute.test.mjs =====
 {
-// Task 9 — review completeness (R15), the dispute round and the arbiter.
+// Task 9 — review completeness (R15) and the dispute round (the arbiter went in 6.8).
 // Written from the requirements, blind to the implementation.
 
 // ---------------------------------------------------------------------------
@@ -172,7 +172,7 @@ const reviewFile = (n, slug, actOn, extra = "") =>
 
 const arbiterFile = (n, slug, ruling) => `# Arbiter ${n} — ${slug}\n\n## Ruling\n- ${ruling}\n`;
 
-// An open feature ledger with a real HEAD and one changed source file, so the arbiter
+// An open feature ledger with a real HEAD and one changed source file, so a
 // packet has a diff to quote.
 function opened(name, { slug = name } = {}) {
   const repo = committed(name);
@@ -185,8 +185,19 @@ function opened(name, { slug = name } = {}) {
   return repo;
 }
 
+// an older run's arbiter ruling, as huddle add arbiter wrote it before 6.8
+const oldRuling = (repo, id, side) => {
+  const file = path.join(runDir(repo), "ledger.json");
+  const ledger = JSON.parse(readFileSync(file, "utf8"));
+  const a = ledger.huddles.flatMap((h) => h.actOn).find((x) => x.id === id);
+  a.dispute.verdict = `arbiter:${side}`;
+  a.dispute.arbiterReason = side === "implementer" ? "the caller's null check runs first" : "the second caller passes null straight through";
+  if (side === "implementer") a.closed = "overruled (arbiter-1.md)";
+  writeFileSync(file, JSON.stringify(ledger, null, 2));
+};
+
 // opened() + review-1.md (two findings), H1.2 disputed with evidence, and review-2.md
-// upholding the dispute: the exact state `gate brief arbiter --item H1.2` is for.
+// upholding the dispute: the state that goes to the user.
 function upheld(name, { findings = [FIND_1, FIND_2] } = {}) {
   const repo = opened(name);
   pinnedBefore(repo);
@@ -205,8 +216,8 @@ function upheld(name, { findings = [FIND_1, FIND_2] } = {}) {
 // C1 — the three parsers read their own section and nothing else
 // ---------------------------------------------------------------------------
 
-test("C1 happy: parseFindings returns one entry per Act-on bullet and none for 'none' or a missing section; parseDisputes and parseRuling read their sections with ids and verdicts", async () => {
-  const { parseFindings, parseDisputes, parseRuling } = await import("../scripts/lib/rules.mjs");
+test("C1 happy: parseFindings returns one entry per Act-on bullet and none for 'none' or a missing section; parseDisputes reads its section with ids and verdicts", async () => {
+  const { parseFindings, parseDisputes } = await import("../scripts/lib/rules.mjs");
 
   // The file shape agents/reviewer.md tells the reviewer to write.
   const body = [
@@ -248,19 +259,6 @@ test("C1 happy: parseFindings returns one entry per Act-on bullet and none for '
   ]);
   assert.deepEqual(parseDisputes("# Review 1 — badge\n\n## Act on\n- x\n"), []);
 
-  const ruling = [
-    "# Arbiter 1 — badge",
-    "",
-    "## Ruling",
-    "- H1.2 — implementer: the caller's null check runs first",
-    "- H1.4 — reviewer: the second caller passes null straight through",
-    "",
-  ].join("\n");
-  assert.deepEqual(parseRuling(ruling), [
-    { id: "H1.2", side: "implementer", reason: "the caller's null check runs first" },
-    { id: "H1.4", side: "reviewer", reason: "the second caller passes null straight through" },
-  ]);
-  assert.deepEqual(parseRuling("# Arbiter 1 — badge\n\n## Notes\n- nothing\n"), []);
 });
 
 // ---------------------------------------------------------------------------
@@ -395,189 +393,7 @@ test("C5 happy: a reviewer file with ## Disputes closes a withdrawn item as with
 });
 
 // ---------------------------------------------------------------------------
-// C6 — the arbiter's file: fenced, pointable, embedded
-// ---------------------------------------------------------------------------
-
-test("C6 refused: the fence lets the arbiter write only arbiter-<n>.md in the current run; a [measured] (arbiter-1.md) pointer resolves; the report embeds the file", () => {
-  const repo = upheld("rd-c6");
-  const dir = runDir(repo);
-  const ARBITER = { agent_id: "A7", agent_type: "done-gate:arbiter" };
-  const REVIEWER = { agent_id: "A2", agent_type: "done-gate:reviewer" };
-
-  // permitted: its own file, in the session's own run dir
-  assert.equal(fenceOut(repo, writePayload(path.join(dir, "arbiter-1.md"), ARBITER)), "", "the arbiter's own file was denied");
-
-  // refused: source, another helper's file, its file outside the run dir, another run's dir
-  assert.equal(denied(repo, writePayload(path.join(repo, "src/a.ts"), ARBITER)), true, "the arbiter was allowed to write source");
-  assert.equal(denied(repo, writePayload(path.join(dir, "review-3.md"), ARBITER)), true, "the arbiter was allowed to write a review file");
-  assert.equal(denied(repo, writePayload(path.join(repo, "arbiter-1.md"), ARBITER)), true, "an arbiter file outside the run dir was allowed");
-  const other = path.join(stateDir(repo), "runs", "2020-01-01-other-run");
-  mkdirSync(other, { recursive: true });
-  assert.equal(denied(repo, writePayload(path.join(other, "arbiter-1.md"), ARBITER)), true, "the arbiter wrote into another task's run dir");
-
-  // refused: arbiter files are fenced from everyone else
-  assert.equal(denied(repo, writePayload(path.join(dir, "arbiter-1.md"), REVIEWER)), true, "the reviewer was allowed to write the arbiter's file");
-  assert.equal(denied(repo, writePayload(path.join(dir, "arbiter-1.md"))), true, "the main session was allowed to write the arbiter's file");
-
-  // a [measured] pointer at the arbiter's file resolves once the file exists
-  helperFile(repo, "arbiter-1.md", arbiterFile(1, "rd-c6", "H1.2 — implementer: the caller's null check runs first"));
-  const files = reviewFiles(dir);
-  assert.ok(files.includes("arbiter-1.md"), `assess does not list arbiter-1.md, got ${JSON.stringify(files)}`);
-  const resolves = pointerResolver({
-    config: loadConfig(repo),
-    changed: [],
-    now: { hash: "x", files: {} },
-    verify: null,
-    events: [],
-    reviews: files,
-    root: repo,
-    dir,
-  });
-  assert.equal(resolves("arbiter-1.md"), true, "a pointer at the arbiter's file does not resolve");
-  assert.equal(resolves("arbiter-9.md"), false, "a pointer at a missing arbiter file resolves anyway");
-
-  // the full report embeds it, the way it embeds every other helper file
-  cli(repo, "huddle", ["add", "arbiter", "--file", "arbiter-1.md"]);
-  const md = cli(repo, "report").stdout;
-  assert.ok(md.includes("<summary>arbiter-1.md</summary>"), `the report does not embed arbiter-1.md:\n${md}`);
-  assert.ok(md.includes("the caller's null check runs first"), "the report embeds arbiter-1.md without its text");
-});
-
-// ---------------------------------------------------------------------------
-// C7 — the arbiter packet
-// ---------------------------------------------------------------------------
-
-test("C7 happy: gate brief arbiter --item H1.2 writes a packet with the finding, the dispute why and evidence, the reviewer's upheld reason, the cited file's diff and the output path; without --item or for an undisputed item it is refused", () => {
-  const repo = upheld("rd-c7");
-  const dir = runDir(repo);
-
-  const { text } = packet(repo, "arbiter", ["--item", "H1.2"]);
-  assert.ok(text.includes(FIND_2), `the packet does not carry the finding:\n${text}`);
-  assert.match(text, /^## Task$/m, "the arbiter still reads the Task");
-  for (const h of ["Context", "Tier", "Tests"]) assert.doesNotMatch(text, new RegExp(`^## ${h}$`, "m"), `C4: the arbiter packet carries no ${h}`);
-  for (const h of ["Plan", "Cases"]) assert.match(text, new RegExp(`^## ${h}$`, "m"), `C4: a dispute may cite the ${h}`);
-  const review = packet(repo, "reviewer").text;
-  for (const h of ["Tier", "Tests"]) assert.doesNotMatch(review, new RegExp(`^## ${h}$`, "m"), `C4: the reviewer packet carries no ${h}`);
-  assert.match(review, /^## Cases$/m, "the reviewer still reads the cases");
-  assert.doesNotMatch(review, /^Start with C\d+:/m, "C4: no Start-with line");
-  assert.ok(text.includes(WHY), `the packet does not carry the implementer's why:\n${text}`);
-  assert.ok(text.includes(EVIDENCE), `the packet does not carry the dispute's evidence pointer:\n${text}`);
-  assert.ok(text.includes(UPHELD_REASON), `the packet does not carry the reviewer's upheld reason:\n${text}`);
-
-  // the finding cites src/a.ts, so the packet must show that file's diff
-  assert.ok(text.includes("diff --git"), `the packet carries no diff block:\n${text}`);
-  assert.match(text, /diff --git a\/src\/a\.ts b\/src\/a\.ts/, `the diff is not of the file the finding cites:\n${text}`);
-
-  const may = section(text, "You may write");
-  assert.ok(
-    may.includes(path.join(dir, "arbiter-1.md")),
-    `the arbiter's "You may write" does not name ${path.join(dir, "arbiter-1.md")}:\n${may}`,
-  );
-
-  // refused: no --item
-  const noItem = refused(repo, "brief", ["arbiter"]);
-  assert.match(noItem.stderr, /--item/, `the refusal does not name --item: ${noItem.stderr}`);
-  assert.ok(!noItem.stdout.includes("packet: "), `a packet was written without --item:\n${noItem.stdout}`);
-
-  // refused: an item nobody disputed
-  assert.equal(itemById(ledgerOf(repo), "H1.1").dispute ?? null, null, "premise: H1.1 was never disputed");
-  const undisputed = refused(repo, "brief", ["arbiter", "--item", "H1.1"]);
-  assert.ok(
-    !undisputed.stdout.includes("packet: "),
-    `an arbiter packet was written for an undisputed finding:\n${undisputed.stdout}`,
-  );
-});
-
-// ---------------------------------------------------------------------------
-// C8 — the ruling
-// ---------------------------------------------------------------------------
-
-test("C8 edge: gate huddle add arbiter --file arbiter-1.md with a ruling for the implementer closes the item as overruled; a ruling for the reviewer leaves it open until gate huddle resolve; R5 clears only then", () => {
-  // --- implementer wins: the finding closes as overruled ---
-  const win = upheld("rd-c8-implementer");
-  helperFile(win, "arbiter-1.md", arbiterFile(1, "rd-c8-implementer", "H1.2 — implementer: the caller's null check runs first"));
-  cli(win, "huddle", ["add", "arbiter", "--file", "arbiter-1.md"]);
-  const overruled = itemById(ledgerOf(win), "H1.2");
-  assert.ok(overruled.closed, `the arbiter ruled for the implementer but the finding stayed open: ${JSON.stringify(overruled, null, 2)}`);
-  assert.match(String(overruled.closed), /overruled/i, `the close reason does not say overruled: ${overruled.closed}`);
-  assert.ok(String(overruled.closed).includes("arbiter-1.md"), `the close reason does not name the ruling file: ${overruled.closed}`);
-  assert.equal(overruled.dispute.verdict, "arbiter:implementer");
-
-  // --- reviewer wins: the finding stays open until it is actually fixed ---
-  const lose = upheld("rd-c8-reviewer");
-  // a source edit and a reviewer pass, so R5's only remaining objection is the open finding
-  shellWrite(lose, "src/a.ts", "export const a = 3;\nexport const venue = null;\n");
-  reviewerStop(lose);
-  helperFile(lose, "arbiter-1.md", arbiterFile(1, "rd-c8-reviewer", "H1.2 — reviewer: the second caller passes null straight through"));
-  cli(lose, "huddle", ["add", "arbiter", "--file", "arbiter-1.md"]);
-  const kept = itemById(ledgerOf(lose), "H1.2");
-  assert.equal(kept.closed, null, "a finding the arbiter upheld for the reviewer must stay open");
-  assert.equal(kept.dispute.verdict, "arbiter:reviewer");
-  assert.ok(ruleLine(check(lose), "R5"), `R5 does not block while the arbiter's reviewer-side finding is open:\n${check(lose)}`);
-
-  redRun(lose);
-
-  cli(lose, "huddle", ["resolve", "H1.2", "--evidence", "tests/a.test.ts:null venue"]);
-  assert.ok(itemById(ledgerOf(lose), "H1.2").closed, "resolve did not close the finding");
-  assert.ok(!ruleLine(check(lose), "R5"), `R5 still blocks after the finding was fixed:\n${check(lose)}`);
-});
-
-// ---------------------------------------------------------------------------
-// C9 — both outcomes reach the user
-// ---------------------------------------------------------------------------
-
-test("C9 happy: the brief's review line reads n problems, k fixed, m overruled by the arbiter, and the look-first block names each disputed finding with its outcome or 'waiting for the arbiter'", () => {
-  // three findings: two fixed, one disputed, upheld, then overruled by the arbiter
-  const repo = opened("rd-c9");
-  helperFile(repo, "review-1.md", reviewFile(1, "rd-c9", [FIND_1, FIND_2, FIND_3]));
-  cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
-  redRun(repo);
-  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts:empty list"]);
-  redRun(repo);
-  cli(repo, "huddle", ["resolve", "H1.3", "--evidence", "tests/a.test.ts:unknown role"]);
-  cli(repo, "huddle", ["dispute", "H1.2", WHY, "--evidence", EVIDENCE]);
-  helperFile(repo, "review-2.md", reviewFile(2, "rd-c9", [], `\n## Disputes\n- H1.2 — upheld: ${UPHELD_REASON}\n\n`));
-  cli(repo, "huddle", ["add", "reviewer", "--file", "review-2.md"]);
-  helperFile(repo, "arbiter-1.md", arbiterFile(1, "rd-c9", "H1.2 — implementer: the caller's null check runs first"));
-  cli(repo, "huddle", ["add", "arbiter", "--file", "arbiter-1.md"]);
-
-  const out = cli(repo, "report", ["--brief"]).stdout;
-  assert.ok(
-    out.includes("found 3 problems, 2 fixed, 1 overruled by the arbiter."),
-    `expected "found 3 problems, 2 fixed, 1 overruled by the arbiter." in:\n${out}`,
-  );
-
-  // one ledger carrying all three dispute outcomes at once
-  const three = opened("rd-c9-outcomes");
-  helperFile(three, "review-1.md", reviewFile(1, "rd-c9-outcomes", [FIND_1, FIND_2, FIND_3]));
-  cli(three, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
-  for (const id of ["H1.1", "H1.2", "H1.3"]) {
-    cli(three, "huddle", ["dispute", id, WHY, "--evidence", EVIDENCE]);
-  }
-  helperFile(
-    three,
-    "review-2.md",
-    reviewFile(2, "rd-c9-outcomes", [], `\n## Disputes\n- H1.1 — upheld: ${UPHELD_REASON}\n- H1.2 — upheld: ${UPHELD_REASON}\n- H1.3 — upheld: ${UPHELD_REASON}\n\n`),
-  );
-  cli(three, "huddle", ["add", "reviewer", "--file", "review-2.md"]);
-  helperFile(
-    three,
-    "arbiter-1.md",
-    `# Arbiter 1 — rd-c9-outcomes\n\n## Ruling\n- H1.1 — implementer: the caller's null check runs first\n- H1.2 — reviewer: the second caller passes null straight through\n`,
-  );
-  cli(three, "huddle", ["add", "arbiter", "--file", "arbiter-1.md"]);
-
-  const briefOut = cli(three, "report", ["--brief"]).stdout;
-  const forYou = lines(briefOut).find((l) => l.startsWith("For you:"));
-  assert.ok(forYou, `no "For you:" line in:\n${briefOut}`);
-  // 6.7: an upheld dispute waits for the user, not the arbiter
-  for (const phrase of ["sided with me", "sided with the reviewer", "waiting for you"]) {
-    assert.ok(forYou.includes(phrase), `the For you line does not say "${phrase}":\n${briefOut}`);
-  }
-});
-
-// ---------------------------------------------------------------------------
-// C10 — the policy gains the arbiter and one more helper
+// C10 — the policy names no model
 // ---------------------------------------------------------------------------
 
 test("C10 happy: models.json names no model and no ceiling; the tier block prints none", () => {
@@ -593,34 +409,6 @@ test("C10 happy: models.json names no model and no ceiling; the tier block print
 // ---------------------------------------------------------------------------
 // C11 — the prose that ships with it
 // ---------------------------------------------------------------------------
-
-test("C11 boundary: agents/arbiter.md exists with model inherit, maxTurns 12 and a By turn 10 line; reviewer, reviewer-2 and skeptic files carry the Disputes instruction; SKILL.md mentions gate huddle dispute and stays under 4096 bytes; README lists R15", () => {
-  const file = path.join(AGENTS_DIR, "arbiter.md");
-  assert.ok(existsSync(file), `${file} does not exist`);
-  const md = readFileSync(file, "utf8");
-  const fm = /^---\n([\s\S]*?)\n---\n/.exec(md);
-  assert.ok(fm, "agents/arbiter.md has no frontmatter");
-  assert.match(fm[1], /^name: arbiter$/m, `arbiter frontmatter:\n${fm[1]}`);
-  assert.match(fm[1], /^model: inherit$/m, `arbiter frontmatter:\n${fm[1]}`);
-  assert.match(fm[1], /^maxTurns: 12$/m, `arbiter frontmatter:\n${fm[1]}`);
-  const body = md.replace(/^---\n[\s\S]*?\n---\n/, "");
-  assert.ok(body.includes("By turn 10"), "agents/arbiter.md has maxTurns 12 but no \"By turn 10\" line");
-  assert.ok(body.includes("arbiter-<n>.md"), "agents/arbiter.md never names the file it writes");
-
-  for (const name of ["reviewer", "reviewer-2", "skeptic"]) {
-    const text = readFileSync(path.join(AGENTS_DIR, `${name}.md`), "utf8");
-    assert.ok(text.includes("## Disputes"), `agents/${name}.md carries no "## Disputes" instruction`);
-  }
-
-  const size = statSync(SKILL_MD).size;
-  assert.ok(size < 4096, `skills/gate/SKILL.md is ${size} bytes, the budget is 4096`);
-  assert.ok(
-    readFileSync(SKILL_MD, "utf8").includes("gate huddle dispute"),
-    "skills/gate/SKILL.md never names `gate huddle dispute`",
-  );
-
-  assert.ok(readFileSync(README, "utf8").includes("R15"), "README.md does not list R15");
-});
 
 // ---------------------------------------------------------------------------
 // C12 — the design huddle is covered too
@@ -650,7 +438,7 @@ test("C12 edge: a skeptic file's Act-on bullets are imported too, so R15 covers 
 // C13 — an overruled finding is not an open finding, and the round is capped
 // ---------------------------------------------------------------------------
 
-test("C13 refused: an overruled item does not count as open for R5, and the dispute round is capped: no dispute on an item the arbiter ruled on", () => {
+test("C13 refused: an older run's overruled item does not count as open for R5, and the dispute round is capped: no dispute on an item the arbiter ruled on", () => {
   const repo = upheld("rd-c13");
   // a source edit and a reviewer pass after it, so the only thing R5 can still object to
   // is the open finding
@@ -658,8 +446,7 @@ test("C13 refused: an overruled item does not count as open for R5, and the disp
   reviewerStop(repo);
   assert.ok(ruleLine(check(repo), "R5"), `premise: R5 blocks while H1.2 is open:\n${check(repo)}`);
 
-  helperFile(repo, "arbiter-1.md", arbiterFile(1, "rd-c13", "H1.2 — implementer: the caller's null check runs first"));
-  cli(repo, "huddle", ["add", "arbiter", "--file", "arbiter-1.md"]);
+  oldRuling(repo, "H1.2", "implementer");
   assert.ok(
     !ruleLine(check(repo), "R5"),
     `an overruled finding still counts as open for R5:\n${check(repo)}`,
@@ -671,8 +458,7 @@ test("C13 refused: an overruled item does not count as open for R5, and the disp
 
   // the same when the arbiter ruled for the reviewer and the finding is still open
   const forReviewer = upheld("rd-c13-reviewer");
-  helperFile(forReviewer, "arbiter-1.md", arbiterFile(1, "rd-c13-reviewer", "H1.2 — reviewer: the second caller passes null straight through"));
-  cli(forReviewer, "huddle", ["add", "arbiter", "--file", "arbiter-1.md"]);
+  oldRuling(forReviewer, "H1.2", "reviewer");
   assert.equal(itemById(ledgerOf(forReviewer), "H1.2").closed, null, "premise: the finding is still open");
   refused(forReviewer, "huddle", ["dispute", "H1.2", "one more round", "--evidence", "src/a.ts:1"]);
   assert.equal(
@@ -718,11 +504,11 @@ test("C14 boundary: two identical Act-on bullets are recorded as two items and r
 // C15 — a file-writing helper's huddle needs its file
 // ---------------------------------------------------------------------------
 
-test("C15 refused: gate huddle add reviewer, skeptic and arbiter without --file are refused by name and record no huddle, while gate huddle add qa --summary still works", () => {
+test("C15 refused: gate huddle add reviewer and skeptic without --file are refused by name and record no huddle, while gate huddle add qa --summary still works", () => {
   const repo = opened("rd-c15");
   assert.deepEqual(ledgerOf(repo).huddles, [], "premise: no huddle yet");
 
-  for (const role of ["reviewer", "skeptic", "arbiter"]) {
+  for (const role of ["reviewer", "skeptic"]) {
     const r = refused(repo, "huddle", ["add", role]);
     assert.match(r.stderr, /--file/, `the ${role} refusal does not name --file: ${r.stderr}`);
     assert.deepEqual(
@@ -1034,6 +820,109 @@ test("6.7 W10 edge: a reopened withdrawn item counts once in the short report an
   const brief = cli(repo, "report", ["--brief"]).stdout;
   assert.doesNotMatch(brief, /withdrawn by the reviewer/, brief);
   assert.match(brief, /2 still open/, brief);
+});
+
+// 6.8: the arbiter is gone; an upheld dispute is the user's call. Old runs' arbiter verdicts
+// still read.
+const ledgerFile = (repo) => path.join(runDir(repo), "ledger.json");
+
+test("6.8 A1 refused: gate brief arbiter and gate huddle add arbiter are refused, naming the roles that remain", () => {
+  const repo = upheld("rl-68-a1");
+  for (const args of [["brief", ["arbiter", "--item", "H1.2"]], ["huddle", ["add", "arbiter", "--file", "arbiter-1.md"]]]) {
+    const r = refused(repo, args[0], args[1]);
+    assert.match(r.stderr, /usage/i, r.stderr);
+    assert.match(r.stderr, /reviewer-2/, r.stderr);
+    assert.doesNotMatch(r.stderr, /arbiter\|/, r.stderr);
+  }
+  assert.equal(readdirSync(runDir(repo)).filter((f) => f.startsWith("brief-arbiter")).length, 0);
+});
+
+test("6.8 A2 idempotent: an old ledger's arbiter verdicts still report both outcomes", () => {
+  const repo = opened("rl-68-a2");
+  helperFile(repo, "review-1.md", reviewFile(1, "rl-68-a2", [FIND_1, FIND_2]));
+  cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
+  const ledger = JSON.parse(readFileSync(ledgerFile(repo), "utf8"));
+  const [a, b] = ledger.huddles[0].actOn;
+  a.dispute = { why: WHY, evidence: EVIDENCE, verdict: "arbiter:implementer", arbiterReason: "the caller checks it first" };
+  a.closed = "overruled (arbiter-1.md)";
+  b.dispute = { why: WHY, evidence: EVIDENCE, verdict: "arbiter:reviewer", arbiterReason: "a second caller passes null" };
+  b.closed = "doc";
+  writeFileSync(ledgerFile(repo), JSON.stringify(ledger, null, 2));
+  const brief = cli(repo, "report", ["--brief"]).stdout;
+  assert.match(brief, /1 overruled by the arbiter/, brief);
+  assert.match(brief, /the arbiter sided with me/, brief);
+  assert.match(brief, /the arbiter sided with the reviewer, fixed/, brief);
+});
+
+test("6.8 A3 reported-surface: no agent file, role list or help line names the arbiter", async () => {
+  assert.ok(!existsSync(path.join(pluginRoot, "agents", "arbiter.md")), "agents/arbiter.md is still there");
+  const { ROLES } = await import("../scripts/lib/verbs.mjs");
+  assert.ok(!ROLES.includes("arbiter"), ROLES.join(","));
+  const repo = committed("rl-68-a3");
+  const help = run(repo, "help");
+  assert.doesNotMatch(`${help.stdout}${help.stderr}`, /arbiter/i);
+  for (const rel of ["skills/gate/SKILL.md", "hooks/session-start.md", "agents/reviewer.md", "agents/reviewer-2.md", "agents/worker.md"]) {
+    assert.doesNotMatch(readFileSync(path.join(pluginRoot, rel), "utf8"), /arbiter/i, rel);
+  }
+});
+
+test("6.8 A5 edge: an old run's unrecorded arbiter file raises no R15 naming a refused verb, and gate diagnose never prints gate brief arbiter", () => {
+  const repo = opened("rl-68-a5");
+  helperFile(repo, "arbiter-1.md", arbiterFile(1, "rl-68-a5", "H1.2 — implementer: an old ruling"));
+  const out = check(repo);
+  assert.doesNotMatch(out, /huddle add arbiter|gate brief arbiter/, out);
+  // an older run's arbiter, briefed and cut off three times before its file was finished: the
+  // ladder would reach a fresh brief, which must not be gate brief arbiter
+  const file = path.join(runDir(repo), "ledger.json");
+  const ledger = JSON.parse(readFileSync(file, "utf8"));
+  ledger.briefed = { ...(ledger.briefed ?? {}), "arbiter-1.md": { seq: 1, item: "H1.2" } };
+  writeFileSync(file, JSON.stringify(ledger, null, 2));
+  helperFile(repo, "arbiter-1.md", "# Arbiter 1\n\n## Ruling\n- unverified\n");
+  for (const id of ["ARB1", "ARB2", "ARB3"]) {
+    for (const hook_event_name of ["SubagentStart", "SubagentStop"]) {
+      spawnSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: "S1", cwd: repo, hook_event_name, agent_id: id, agent_type: "done-gate:arbiter" }), encoding: "utf8", env: envFor(repo) });
+    }
+  }
+  const d = run(repo, "diagnose");
+  assert.doesNotMatch(`${d.stdout}${d.stderr}`, /arbiter/, `${d.stdout}${d.stderr}`);
+  assert.doesNotMatch(check(repo), /gate brief arbiter/);
+});
+
+test("6.8 A6 idempotent: kept from the deleted arbiter tests: the reviewer packet's shape, an old arbiter file as a pointer, and the report embedding it", () => {
+  const repo = upheld("rl-68-a6");
+  const review = readFileSync(/packet: (\S+)/.exec(cli(repo, "brief", ["reviewer"]).stdout)[1], "utf8");
+  for (const h of ["Tier", "Tests"]) assert.doesNotMatch(review, new RegExp(`^## ${h}$`, "m"), `the reviewer packet carries no ${h}`);
+  assert.match(review, /^## Cases$/m, "the reviewer still reads the cases");
+  assert.doesNotMatch(review, /^Start with C\d+:/m, "no Start-with line");
+  helperFile(repo, "arbiter-1.md", arbiterFile(1, "rl-68-a6", "H1.2 — implementer: the caller's null check runs first"));
+  const resolves = pointerResolver({ root: repo, repos: [], config: loadConfig(repo), reviews: reviewFiles(runDir(repo)), dir: runDir(repo), ledger: ledgerOf(repo), events: [] });
+  assert.equal(resolves("arbiter-1.md"), true, "a pointer at an old arbiter file does not resolve");
+  assert.equal(resolves("arbiter-9.md"), false, "a pointer at a missing arbiter file resolves anyway");
+  // the round an older run recorded with huddle add arbiter
+  const lf = path.join(runDir(repo), "ledger.json");
+  const led = JSON.parse(readFileSync(lf, "utf8"));
+  led.huddles.push({ id: `H${led.huddles.length + 1}`, role: "arbiter", round: 1, file: "arbiter-1.md", summary: null, actOn: [], seq: 1 });
+  writeFileSync(lf, JSON.stringify(led, null, 2));
+  const md = cli(repo, "report").stdout;
+  assert.ok(md.includes("<summary>arbiter-1.md</summary>"), `the report does not embed an old arbiter file:\n${md.slice(-1500)}`);
+});
+
+test("6.8 A4 edge: an old run's arbiter file stays protected from the lead's writes", async () => {
+  const { decide } = await import("../scripts/lib/guard.mjs");
+  const repo = opened("rl-68-a4");
+  const rel = path.relative(repo, path.join(runDir(repo), "arbiter-1.md"));
+  const current = path.dirname(rel);
+  for (const tool of ["Write", "Edit"]) {
+    const v = decide({ tool_name: tool, tool_input: { file_path: path.join(repo, rel) } }, repo, null, current, ledgerOf(repo));
+    assert.equal(v.deny, true, `${tool}: ${JSON.stringify(v)}`);
+    assert.match(v.reason, /older run's arbiter ruling/, v.reason);
+  }
+  // a stray done-gate:arbiter caller's shell edit is refused with no hint to use an edit tool
+  for (const agent_type of [undefined, "done-gate:arbiter"]) {
+    const v = decide({ tool_name: "Bash", ...(agent_type ? { agent_type, agent_id: "ARB" } : {}), tool_input: { command: `sed -i '' s/a/b/ ${path.join(repo, rel)}` } }, repo, null, current, ledgerOf(repo));
+    assert.equal(v.deny, true, JSON.stringify(v));
+    assert.doesNotMatch(v.reason, /Use the (?:Edit or )?Write tool on arbiter-1\.md/, v.reason);
+  }
 });
 }
 
@@ -1354,10 +1243,10 @@ test("C5 refused: gate huddle reply with no --file, with a worker-<n>.md that is
 });
 
 // ---------------------------------------------------------------------------
-// C6 — three reviewer rounds, then the arbiter
+// C6 — the round cap, then the user for an upheld dispute
 // ---------------------------------------------------------------------------
 
-test("C6 refused: a fourth round after three reviewer huddles is refused and the message names gate brief arbiter", () => {
+test("C6 refused: a fourth round after three reviewer huddles is refused and the message sends an upheld dispute to the user", () => {
   const natural = opened("rl-c6-natural");
   for (const [n, find] of [[1, FIND_1], [2, FIND_2], [3, FIND_3]]) {
     helperFile(natural, `review-${n}.md`, reviewFile(n, "rl-c6-natural", [find]));
@@ -1410,7 +1299,7 @@ test("C7 edge: a reviewer file whose Act-on bullet is '- none.' or '- none found
 // C8 — the review step's hint describes the loop
 // ---------------------------------------------------------------------------
 
-test("C8 happy: the next: hint for the {review} step names gate brief reviewer, gate huddle add, gate brief worker, SendMessage, gate huddle reply and the arbiter after round 3", () => {
+test("C8 happy: the next: hint for the {review} step names gate brief reviewer, gate huddle add, gate brief worker, SendMessage, gate huddle reply and the user for an upheld dispute", () => {
   // step keys and their order come from the playbook, never from the hint renderer
   const playbook = readFileSync(path.join(pluginRoot, "skills", "gate", "playbooks.md"), "utf8");
   const m = /^## feature\s*$/m.exec(playbook);

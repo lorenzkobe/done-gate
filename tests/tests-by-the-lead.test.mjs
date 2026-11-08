@@ -97,7 +97,7 @@ const ON_SONNET = new Set(["worker.md"]);
 
 test("C2 happy: the worker says model: sonnet, the other agents model: inherit; no agent body and no scripts/lib code names a model", () => {
   const agents = readdirSync(path.join(pluginRoot, "agents")).filter((f) => f.endsWith(".md"));
-  assert.equal(agents.length, 6, `six agents expected: ${agents}`);
+  assert.equal(agents.length, 5, `five agents expected (the arbiter went in 6.8): ${agents}`);
   for (const f of agents) {
     const text = readFileSync(path.join(pluginRoot, "agents", f), "utf8");
     const fm = /^---\n([\s\S]*?)\n---/.exec(text);

@@ -49,7 +49,7 @@ judgment out of the model and into hooks that can't be talked out of it.
    ├─ gate verify        ──► verify.json  (exit codes, tails, source hash)
    ├─ drive the real app ──► browser events logged by hooks
    ├─ reviewer ⇄ worker  ──► review-<n>.md / worker-<n>.md, one round + a re-check
-   ├─ arbiter            ──► settles what is still disputed
+   ├─ you                ──► decide a dispute the reviewer upholds
    │
    ▼
  gate close: every rule met? ──yes──► ledger closed, report written
@@ -78,7 +78,7 @@ Three things make this hard to game:
 - **Findings are recorded, not paraphrased, and can be disputed once.** `gate huddle add`
   records every Act-on bullet of the reviewer's file (R15 blocks if one is missing). A
   finding the model believes wrong is disputed with evidence; the reviewer withdraws or
-  upholds it in writing; an upheld one goes to a fresh arbiter that rules for one side. Every outcome is in the short report, and you can overrule.
+  upholds it in writing; an upheld one comes to you, to have it fixed or closed on your words. A finding a run shows wrong closes as wrong, and any close can be reopened. Every outcome is in the short report, and you can overrule.
 - **Helpers can't vouch for themselves.** QA may write only under the tests globs; the
   reviewer may write only `review-<n>.md` (the second reviewer `review2-<n>.md`); the skeptic only `skeptic-<n>.md`. Their replies are
   never evidence; their files and the hook events are.
@@ -158,8 +158,8 @@ attempt to finish, and a plain question gets one line saying how to pause.
 | R9 | high-risk paths changed, or the run is size large, without a clean second-reviewer round (same round rules as R5; an open reviewer-2 item is named) |
 | R10 | a repo check failed: the slop scan found a banner comment, step narration, an empty label, an end marker, an emoji, a bare TODO or a `@param` that echoes its name on an added non-test line (`"slop": false` in gate.json turns it off between tasks; mid-task, `gate waive slop` clears a false positive), or an opted-in check (`claude-md-budget`, `migration-number`) |
 | R13 | `.claude/gate.json` or the plugin's `models.json` changed mid-task |
-| R15 | a helper's file lists more findings than the ledger recorded, a briefed skeptic, reviewer or arbiter stopped before finishing its file, or an Act-on item outside the reviewers' rounds is still open (a skeptic item added after its step closed, one typed by hand) |
-| R17 | a skeptic, reviewer, reviewer-2, worker or arbiter that wrote its file or edited source made no code or no memory lookup since the run opened (QA: no memory lookup), less any kind the lead declared missing; waivable with `gate waive lookups` |
+| R15 | a helper's file lists more findings than the ledger recorded, a briefed skeptic or reviewer stopped before finishing its file, or an Act-on item outside the reviewers' rounds is still open (a skeptic item added after its step closed, one typed by hand) |
+| R17 | a skeptic, reviewer, reviewer-2 or worker that wrote its file or edited source made no code or no memory lookup since the run opened (QA: no memory lookup), less any kind the lead declared missing; waivable with `gate waive lookups` |
 | R18 | verify ran no test command covering a closed case's test file: lint and build never count, a test command that names paths covers only those (a `cd` is followed, `--ignore` and `--deselect file::name` take a file out); waivable with `gate waive coverage` |
 | R19 | in active mode (`guards.planDiff` in `models.json`, pinned per run; the default is shadow, which only records and reports), code outside the plan changed: `gate plan add <files> "<why>"` or revert it; it has no waiver |
 
@@ -232,15 +232,15 @@ checked.
   report embeds helper files up to 40 KB and names the rest.
 - **Zero friction when nothing changed.** Questions, investigations, a second terminal in
   the same repo: the tree hash is unchanged, the gate stays silent.
-- **Helpers write their file first.** A skeptic, reviewer or arbiter may only read its packet
+- **Helpers write their file first.** A skeptic or reviewer may only read its packet
   and write its own findings file until that file exists; every other read or shell call is
   refused with "write your draft first". It then rewrites the file after each confirmed
   finding, so a helper that runs out of turns leaves what it found. A file with a section
   still reading `- unverified` is not a finished round: `gate check` names it once its helper
   has stopped, `gate huddle add` refuses to record it, and `gate brief <role>` briefs the
   same round again with the file in the packet, so a fresh helper continues from it and
-  keeps the finished sections. Turn limits: skeptic 40, reviewers and QA 60, worker 100,
-  arbiter 12. Two reviewers
+  keeps the finished sections. Turn limits: skeptic 40, reviewers and QA 60, worker 100.
+  Two reviewers
   of one role may be out at once, on two pieces: each packet carries its own file number
   (`brief-reviewer-2.md` asks for `review-2.md`), and a reviewer that has written its draft
   is free while the other still owes its own.
@@ -361,7 +361,7 @@ before the code.
 | standard | ≤ 10 files, ≤ 400 lines, or any UI, schema or high-risk file | skeptic, reviewer |
 | large | more than that | skeptic, QA (blind tests), reviewer, a second reviewer; a task that grows here mid-task gets the same from that point (the lead's earlier edits stand, QA writes the missing tests blind) and the report says it grew |
 | any | a round with Act-on items | another round, same reviewer, fresh context, until one comes back clean (three at most) |
-| any | a review finding the model disputes with evidence and the reviewer upholds | arbiter, rules once in writing |
+| any | a review finding the model disputes with evidence and the reviewer upholds | you: fix it or close it on your words |
 
 `gate note plan --files a.ts,b.ts` predicts the tier before the diff exists, so a small
 feature skips the design critique up front and a tiny one skips the reviewer too; if the diff
@@ -397,7 +397,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `setup [--apply [file] \| --decline] --user-ok "<words>"` | propose the faster test loop's gate.json keys; `--apply` writes the proposal (or the edited file) and `--decline` records `"testFiles": null`, each only with the user's words and no run open |
 | `test <test file>...` | run gate.json's `testFiles` on these test files of this repo, output streamed, exit code passed through; with `serialTests` it waits for the repo-wide test lock (exit 75 when busy past five minutes) |
 | `decide <phase> <decision> <why> <evidence> <result>` | append a decision-log row |
-| `brief <skeptic\|qa\|worker\|reviewer\|reviewer-2\|arbiter> [--files a,b \| a.ts:1-400] [--item H#.#]` | write the helper's packet and print its spawn prompt; a packet is numbered like the file it names; a worker's `--files` are the files it owns |
+| `brief <skeptic\|qa\|worker\|reviewer\|reviewer-2> [--files a,b \| a.ts:1-400]` | write the helper's packet and print its spawn prompt; a packet is numbered like the file it names; a worker's `--files` are the files it owns |
 | `abandon <slug> "<reason>" --user-ok "<words>"` | give a run up: marks it abandoned with the reason; it stops attaching to sessions and blocking turns. A run with anything in it takes your words since it opened, at least three, saying to abandon, drop or give up this run (or naming its slug when more than one is open and it is not this session's); a question, a hand-back or a recommended answer does not count |
 | `watch` | wait, reading only, until no helper of the open run is out, then print what became of each helper it saw: finished, or its cause and next step as `gate diagnose` gives them. Run it in the background once per wait, not per helper; its exit wakes the lead even when a helper ends with no notice. It waits 30 seconds for a helper to start, confirms on a second poll that none came back, and after 20 minutes with no new event exits saying so (run it again); a helper silent for 45 minutes counts as gone |
 | `diagnose [--handled <agent id>]` | what became of each helper of the open run that was cut off, read from its notice or its silence, and the next step: resume the same helper twice, then brief a fresh one from its file, then ask you with no option marked Recommended. Attempts count per helper file (per agent for a worker or QA); outages, a cause only you can fix and a stop someone chose never count, and a turn limit after new edits is progress. A notice arriving during a run brings the same line to the lead. It writes nothing, except `--handled`, which hides one helper until a newer notice |

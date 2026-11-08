@@ -219,7 +219,7 @@ test("agent briefs exist with their names, and models.json names no models (test
   const { pluginRoot } = await import("./helpers.mjs");
   const models = JSON.parse(readFileSync(path.join(pluginRoot, "models.json"), "utf8"));
   assert.ok(!("roles" in models), "models.json names no models");
-  for (const name of ["skeptic", "qa", "reviewer", "reviewer-2", "arbiter", "worker"]) {
+  for (const name of ["skeptic", "qa", "reviewer", "reviewer-2", "worker"]) {
     const file = path.join(pluginRoot, "agents", `${name}.md`);
     assert.ok(existsSync(file), file);
     const fm = readFileSync(file, "utf8").split("---")[1];
