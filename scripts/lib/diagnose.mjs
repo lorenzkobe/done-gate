@@ -4,7 +4,7 @@ import { UsageError } from "./context.mjs";
 import { readEvents } from "./events.mjs";
 import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
 import { toPosixRel } from "./paths.mjs";
-import { briefOf, fileRole, helperAlive, unfinishedFile } from "./rules.mjs";
+import { briefOf, fileRole, helperAlive, helpersOut, unfinishedFile } from "./rules.mjs";
 
 // What a cut helper's notice means and what the lead does next. Outages, a cause only the user
 // can fix and a stop someone chose are nobody's failure: they never move the ladder.
@@ -132,6 +132,34 @@ export function noticeLine(ctx, agent) {
   const current = openRun(ctx);
   const p = current ? problemsOf(ctx, current).find((x) => x.agent === agent) : null;
   return p ? `done-gate: ${p.line}` : null;
+}
+
+// What ended the lead's turn, by the error type Claude Code names. The session-limit wording
+// and the refusal types are not seen in a real log yet, so unknown wording is shown as it came.
+const PASSING = new Set(["rate_limit", "overloaded", "server_error"]);
+const ONLY_USER = new Set(["authentication_failed", "oauth_org_not_allowed", "account_on_hold", "billing_error", "cloud_credential_error", "model_not_found"]);
+
+function failedTurnText(e) {
+  const said = [e.details, e.text].filter(Boolean).join(" · ");
+  if (e.error === "rate_limit" && /session limit/i.test(said)) return `it hit the session limit (${said}): tell the user, wait for the reset, then carry on`;
+  if (PASSING.has(e.error)) return `a passing API problem (${e.error}): carry on from where it stopped`;
+  if (ONLY_USER.has(e.error)) return `something only the user can fix (${e.error}: ${said}): tell the user; do not retry`;
+  if (e.error === "max_output_tokens") return "the reply ran past the output limit: carry on in smaller steps";
+  return `${e.error}, "${said}", which the gate does not know: tell the user what it says and ask the user before going on`;
+}
+
+// Told once, on the user's own first message after the failed turn; a hand-back does not use it up.
+export function failedTurnLine(ctx) {
+  const current = openRun(ctx);
+  if (!current) return null;
+  const mine = readEvents(ctx.stateDir, ctx.session);
+  const failed = mine.filter((e) => e.kind === "turn-failed").pop();
+  if (!failed || mine.filter((e) => e.kind === "prompt" && !e.handback && e.seq > failed.seq).length !== 1) return null;
+  const out = helpersOut(mine, ctx.session, current.ledger.openedSeq ?? 0);
+  const cut = problemsOf(ctx, current).filter((p) => !out.some((o) => o.agent === p.agent));
+  const still = out.length ? ` Still out: ${out.map((e) => `${e.agentType} (${e.agent})`).join(", ")}.` : "";
+  const lost = cut.length ? ` \`gate diagnose\` lists ${cut.length === 1 ? "1 helper" : `${cut.length} helpers`} it cut off.` : "";
+  return `done-gate: your last turn ended on an error before it finished: ${failedTurnText(failed)}.${still}${lost}`;
 }
 
 export const verbs = {

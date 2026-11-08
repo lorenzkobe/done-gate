@@ -82,6 +82,12 @@ export function eventsFromHookInput(input, root, repos = []) {
     const notice = handback ? helperNotice(text) : null;
     return [{ ...b(), kind: "prompt", text: text.slice(0, WORDS_LIMIT), ...(handback ? { handback: true } : {}), ...(notice ? { notice } : {}) }];
   }
+  // an API error ended the lead's turn: Claude Code runs this instead of Stop and ignores its output
+  if (event === "StopFailure") {
+    if (input.agent_id) return [];
+    const cut = (v) => String(v ?? "").slice(0, TEXT_LIMIT);
+    return [{ ...b(), kind: "turn-failed", error: String(input.error ?? "") || "unknown", details: cut(input.error_details), text: cut(input.last_assistant_message) }];
+  }
   if (event === "SessionStart") return [{ ...b(), kind: "session-start", source: input.session_start_source ?? null }];
   const tool = input.tool_name ?? "";
   // PostToolUse fires only on success; a failed Bash call (a red test run) arrives here. Only
@@ -209,6 +215,24 @@ export function helperNotice(text) {
 
 export const SILENT = { continue: true, suppressOutput: true };
 
+// The same command failing the same way twice in a row from one agent, with no edit of its
+// own between, gets one note: a third run would fail the same way. Never a block.
+function loopNote(stateDir, session, failed) {
+  const mine = readEvents(stateDir, session).filter((e) => e.agent === failed.agent && e.seq <= failed.seq);
+  const same = (e) => e.cmd === failed.cmd && e.exit === failed.exit;
+  let streak = 0;
+  let after = Infinity;
+  for (let i = mine.length - 1; i >= 0; i--) {
+    const e = mine[i];
+    if (e.kind === "edit" && e.seq < after) break;
+    if (e.kind !== "command") continue;
+    if (!same(e)) break;
+    streak += 1;
+    after = e.seq;
+  }
+  return streak === 2 ? `done-gate: \`${failed.cmd}\` failed the same way twice in a row (exit ${failed.exit}) with no edit between: a third run will fail the same way. Read the error, change something, or ask.` : null;
+}
+
 const WRITING_TOOLS = new Set([...EDIT_TOOLS, "Bash"]);
 
 export const verbs = {
@@ -229,19 +253,23 @@ export const verbs = {
         // a stamp is a courtesy; the next assess dates the change itself
       }
     }
-    // a cut helper's notice brings its cause and the next step with it
+    const failedCmd = failedBash ? events.find((e) => e.kind === "command") : null;
+    const looped = failedCmd && ctx.session ? loopNote(ctx.stateDir, ctx.session, failedCmd) : null;
+    // a cut helper's notice brings its cause and the next step with it; the user's own next
+    // message after a failed turn is told what ended it
     const noticed = events.find((e) => e.notice?.agent)?.notice.agent;
+    const fromUser = events.some((e) => e.kind === "prompt" && !e.handback);
     let told = null;
-    if (noticed && ctx.session) {
+    if ((noticed || fromUser) && ctx.session) {
       try {
-        const { noticeLine } = await import("./diagnose.mjs");
-        told = noticeLine(ctx, noticed);
+        const { failedTurnLine, noticeLine } = await import("./diagnose.mjs");
+        told = noticed ? noticeLine(ctx, noticed) : failedTurnLine(ctx);
       } catch {
         // advice only: `gate diagnose` reads the same events
       }
     }
     // additionalContext is the one hook output the model reads after a tool call or a prompt
-    const context = [warning, told].filter(Boolean).join("\n");
+    const context = [warning, looped, told].filter(Boolean).join("\n");
     ctx.out(context ? { hookSpecificOutput: { hookEventName: ctx.input.hook_event_name, additionalContext: context } } : SILENT);
   },
 };

@@ -1,7 +1,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { eventsFromHookInput, readEvents, appendEvents } from "../scripts/lib/events.mjs";
@@ -519,3 +519,147 @@ test("4.2 C4 a helper's notice rides on its prompt event as agent, status and ca
   assert.equal(ev("fix the badge").notice, undefined);
   assert.equal(ev(`<agent-message from="a1">see ${tn("failed", 'Agent "x" failed: server error')}</agent-message>`).notice, undefined);
 });
+
+// ---- 4.4: the lead's failed turn, and the same failing command twice ----
+{
+const pluginDir = path.resolve(here, "..");
+const envFor = (repo) => {
+  const e = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
+  delete e.CLAUDE_CODE_SESSION_ID;
+  return e;
+};
+const cli = (repo, verb, args = []) => {
+  const r = spawnSync(process.execPath, [gate, verb, ...args], { input: "", encoding: "utf8", env: envFor(repo) });
+  assert.equal(r.status, 0, `gate ${verb} ${args.join(" ")}\n${r.stderr}`);
+  return r;
+};
+const committed = (name) => {
+  const repo = makeRepo(name);
+  execFileSync("git", ["add", "-A"], { cwd: repo });
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
+  return repo;
+};
+
+const log44 = (repo, payload) => {
+  const r = spawnSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: "S1", cwd: repo, ...payload }), encoding: "utf8", env: envFor(repo) });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout).hookSpecificOutput?.additionalContext ?? null;
+};
+const stopFailure = (error, details, extra = {}) => ({ hook_event_name: "StopFailure", error, error_details: details, last_assistant_message: "I was in the middle of it", ...extra });
+const prompt44 = (repo, text = "carry on") => log44(repo, { hook_event_name: "UserPromptSubmit", prompt: text });
+const bashFail = (repo, command, exit = 1, extra = {}) => log44(repo, { hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command }, tool_error: `Exit code ${exit}\nboom`, ...extra });
+const bashOk = (repo, command) => log44(repo, { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command }, tool_response: { stdout: "ok" } });
+function opened44(name) {
+  const repo = committed(name);
+  cli(repo, "open", [name, "feature"]);
+  return repo;
+}
+
+test("4.4 C1 StopFailure is wired to gate log and a lead's failure is logged as turn-failed; a helper's is not", () => {
+  const hooks = JSON.parse(readFileSync(path.join(pluginDir, "hooks", "hooks.json"), "utf8")).hooks;
+  assert.ok((hooks.StopFailure ?? []).some((h) => h.hooks.some((x) => /gate\.mjs" log/.test(x.command))), "hooks.json has no StopFailure entry calling gate log");
+  const [e] = eventsFromHookInput({ session_id: "S1", ...stopFailure("server_error", "API Error: 500") }, "/repo");
+  assert.equal(e.kind, "turn-failed");
+  assert.equal(e.error, "server_error");
+  assert.equal(e.details, "API Error: 500");
+  assert.equal(e.text, "I was in the middle of it");
+  assert.equal(eventsFromHookInput({ session_id: "S1", hook_event_name: "StopFailure" }, "/repo")[0].error, "unknown");
+  assert.deepEqual(eventsFromHookInput({ session_id: "S1", agent_id: "A1", ...stopFailure("server_error", "x") }, "/repo"), []);
+});
+
+test("4.4 C2 each error group gives its sentence", () => {
+  const rows = [
+    ["rate_limit", "429 Too Many Requests", /session limit[\s\S]*resets 6:40pm[\s\S]*wait/i, "You've hit your session limit · resets 6:40pm"],
+    ["rate_limit", "429 rate limited", /passing API problem[\s\S]*carry on/i],
+    ["overloaded", "529 Overloaded", /passing API problem/i],
+    ["server_error", "500", /passing API problem/i],
+    ["billing_error", "Credit balance too low", /only the user can fix[\s\S]*Credit balance too low/i],
+    ["authentication_failed", "Invalid API key", /only the user can fix/i],
+    ["max_output_tokens", "", /output limit[\s\S]*smaller/i],
+    ["invalid_request", "a refusal nobody has seen", /a refusal nobody has seen[\s\S]*ask the user/i],
+    ["something_new", "brand new wording", /brand new wording[\s\S]*ask the user/i],
+  ];
+  for (const [i, [error, details, words, shown]] of rows.entries()) {
+    const repo = opened44(`ev-44-c2-${i}`);
+    log44(repo, stopFailure(error, details, shown ? { last_assistant_message: shown } : {}));
+    const told = prompt44(repo);
+    assert.match(told ?? "", /last turn ended on an error/, `${error}: ${told}`);
+    assert.match(told, words, `${error}: ${told}`);
+  }
+});
+
+test("4.4 C3 the next prompt is told once, naming the helpers still out", () => {
+  const repo = opened44("ev-44-c3");
+  log44(repo, { hook_event_name: "SubagentStart", agent_id: "A1", agent_type: "done-gate:reviewer" });
+  log44(repo, stopFailure("overloaded", "529 Overloaded"));
+  const told = prompt44(repo);
+  assert.match(told, /done-gate:reviewer \(A1\)/);
+  assert.equal(prompt44(repo, "and again"), null, "the failed turn was told twice");
+});
+
+test("4.4 C4 no run open, or no failed turn, says nothing", () => {
+  const none = committed("ev-44-c4-none");
+  log44(none, stopFailure("overloaded", "529"));
+  assert.equal(prompt44(none), null, "no run open still told");
+  const clean = opened44("ev-44-c4-clean");
+  assert.equal(prompt44(clean), null, "a prompt with no failed turn told something");
+});
+
+test("4.4 C5 the same failing command twice in a row gets one note; a third gets none", () => {
+  const repo = opened44("ev-44-c5");
+  assert.equal(bashFail(repo, "npm test"), null, "a first failure got a note");
+  const note = bashFail(repo, "npm test");
+  assert.match(note ?? "", /`npm test` failed the same way twice/);
+  assert.match(note, /exit 1/);
+  assert.equal(bashFail(repo, "npm test"), null, "a third failure in a row got another note");
+});
+
+test("4.4 C6 an edit, a success or another exit between gets no note; lead and helper are counted apart", () => {
+  const edit = opened44("ev-44-c6-edit");
+  bashFail(edit, "npm test");
+  log44(edit, { hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: path.join(edit, "src", "a.ts"), content: "x" }, tool_response: {} });
+  assert.equal(bashFail(edit, "npm test"), null, "an edit between still got a note");
+
+  const ok = opened44("ev-44-c6-ok");
+  bashFail(ok, "npm test");
+  bashOk(ok, "npm test");
+  assert.equal(bashFail(ok, "npm test"), null, "a success between still got a note");
+
+  const exit = opened44("ev-44-c6-exit");
+  bashFail(exit, "npm test", 1);
+  assert.equal(bashFail(exit, "npm test", 2), null, "another exit still got a note");
+
+  const split = opened44("ev-44-c6-split");
+  bashFail(split, "npm test");
+  assert.equal(bashFail(split, "npm test", 1, { agent_id: "W1", agent_type: "done-gate:worker" }), null, "a helper's failure paired with the lead's");
+  assert.match(bashFail(split, "npm test") ?? "", /failed the same way twice/, "the lead's own second failure got no note");
+});
+
+test("4.4 C7 session-limit wording only in the shown message still reads as the session limit", () => {
+  const repo = opened44("ev-44-c7");
+  log44(repo, stopFailure("rate_limit", "429 Too Many Requests", { last_assistant_message: "You've hit your session limit · resets 9:15pm" }));
+  const told = prompt44(repo);
+  assert.match(told, /session limit/i);
+  assert.doesNotMatch(told, /passing API problem/);
+});
+
+test("4.4 C8 a prompt long after the failure still points at gate diagnose for the helper it cut off", () => {
+  const repo = opened44("ev-44-c8");
+  log44(repo, { hook_event_name: "SubagentStart", agent_id: "A1", agent_type: "done-gate:reviewer" });
+  log44(repo, stopFailure("rate_limit", "429", { last_assistant_message: "You've hit your session limit · resets 6:40pm" }));
+  const file = path.join(repo, ".claude", "gate", "sessions", "S1", "events.jsonl");
+  const old = new Date(Date.now() - 50 * 60 * 1000).toISOString();
+  const lines = readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => JSON.stringify({ ...JSON.parse(l), ts: old }));
+  writeFileSync(file, `${lines.join("\n")}\n`);
+  const told = prompt44(repo);
+  assert.match(told, /gate diagnose/);
+  assert.doesNotMatch(told, /still out: done-gate:reviewer/);
+});
+
+test("4.4 C9 a hand-back arriving first does not use up the telling", () => {
+  const repo = opened44("ev-44-c9");
+  log44(repo, stopFailure("overloaded", "529 Overloaded"));
+  assert.equal(prompt44(repo, '<agent-message from="a1">[Subagent hand-back] done</agent-message>'), null, "a hand-back was told the failed turn");
+  assert.match(prompt44(repo) ?? "", /last turn ended on an error/, "the user's own message was not told after a hand-back");
+});
+}
