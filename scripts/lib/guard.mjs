@@ -1005,9 +1005,10 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
     // a link made earlier hides the gate dir from the text; the real path of each target does not
     const linked = shellWrites(cmd).all.find((t) => IN_GATE_DIR.test(t));
     if (linked) return { deny: true, reason: `done-gate: that command writes ${linked}, which is in the gate's evidence folder. Evidence is written only by \`gate\` verbs.`, paths: [] };
+    const worker = agentType === "done-gate:worker" || agentType === "worker";
+    if (worker && gitWrites(cmd)) return { deny: true, reason: "done-gate: a worker runs no git command that moves the tree or the index (stash, checkout, restore, reset, commit, add): other workers share this checkout, and one stash or checkout wipes their work. Read with git diff, git log or git status; commits are the lead's.", paths: [] };
     // the lead's shell write to code waits for the plan like an Edit does; a worker's waits only
     // for the plan check, and the lead alone decides a task outgrew its plan
-    const worker = agentType === "done-gate:worker" || agentType === "worker";
     if (!where.unreadable && !HELPER_ROLES.some((r) => agentType === `done-gate:${r}` || agentType === r)) {
       const isCode = (p) => p && !isScratch(p) && !config.isDriverFile(p) && (config.isSource(p) || config.isTest(p));
       const code = new Set(shellWrites(cmd).outside.filter((p) => !isScratch(p)).map((p) => toPosixRel(root, p, repos)).filter(isCode));
@@ -1116,6 +1117,23 @@ function recordSessionPids(ctx) {
   }
 }
 
+// The packet number a worker's call reads: a Read of brief-worker-<n>.md in the current run, or a
+// read-only command naming one number only, bare or under this run's folder. Null otherwise.
+const WORKER_PACKET = /(?:\.claude\/gate\/runs\/([^/\s'"]+)\/)?brief-worker-(\d+)\.md\b/g;
+function packetRead(input, root, currentRun) {
+  if (!currentRun || !(input?.agent_type === "done-gate:worker" || input?.agent_type === "worker")) return null;
+  if (input.tool_name === "Read") {
+    const m = /^(.*)\/brief-worker-(\d+)\.md$/.exec(toPosixRel(root, String(input.tool_input?.file_path ?? "")) ?? "");
+    return m && m[1] === currentRun ? Number(m[2]) : null;
+  }
+  const cmd = String(input.tool_input?.command ?? "");
+  if (input.tool_name !== "Bash" || !readsOnly(cmd)) return null;
+  const hits = [...cmd.matchAll(WORKER_PACKET)];
+  if (hits.some((m) => m[1] !== undefined && m[1] !== path.posix.basename(currentRun))) return null;
+  const numbers = new Set(hits.map((m) => Number(m[2])));
+  return numbers.size === 1 ? [...numbers][0] : null;
+}
+
 export const verbs = {
   fence(ctx) {
     // only a helper that owes its draft is held on Grep and Glob; the lead's need no ledger read
@@ -1142,6 +1160,9 @@ export const verbs = {
       // a git command's newest reflog entry before it runs: the entries above it at its end are its own
       const top = ctx.input?.tool_name === "Bash" && gitWrites(String(ctx.input?.tool_input?.command ?? "")) ? headReflog(ctx.root, 1) : null;
       if (ctx.session && ctx.input?.tool_name === "Bash" && id.toolUseId) appendEvents(ctx.stateDir, ctx.session, [{ ...stamp(), kind: "command-start", ...id, ...(top ? { reflogTop: top[0] ?? null } : {}) }]);
+      // reads log nothing, but which packet a worker read is which piece it holds
+      const n = ctx.session ? packetRead(ctx.input, ctx.root, currentRun) : null;
+      if (n !== null) appendEvents(ctx.stateDir, ctx.session, [{ ...stamp(), kind: "packet", n }]);
       return;
     }
     appendEvents(ctx.stateDir, ctx.session, [

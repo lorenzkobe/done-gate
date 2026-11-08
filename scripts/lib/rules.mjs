@@ -594,6 +594,20 @@ export function helpersOut(events, session, since, now = Date.now()) {
   return [...starts.values()].filter((e) => helperAlive(mine, e.agent, now));
 }
 
+// Each worker of the run with the packet number it holds and whether it is still out. The number
+// is its first packet read since its newest start: a resume reads its new packet, and a sibling's
+// packet read for context moves nothing.
+export function workerRuns(state, now = Date.now()) {
+  const events = (state.events ?? []).filter((e) => e.seq > (state.ledger?.openedSeq ?? 0) && e.agent && isRole(e.agentType, "worker")).sort((a, b) => a.seq - b.seq);
+  const ids = [...new Set(events.filter((e) => e.kind === "subagent-start" || e.kind === "packet").map((e) => e.agent))];
+  return ids.map((agent) => {
+    const mine = events.filter((e) => e.agent === agent);
+    const start = mine.filter((e) => e.kind === "subagent-start").at(-1)?.seq ?? 0;
+    const read = mine.find((e) => e.kind === "packet" && e.seq > start);
+    return { agent, n: read?.n ?? null, running: helperAlive(state.events ?? [], agent, now) };
+  });
+}
+
 // Who worked on a helper file since its brief, per agent id: the agents that wrote it, or
 // with none, those of the role started since. Silence is measured from an agent's newest event.
 export function helperRun(state, role, file, since, now = Date.now()) {

@@ -215,6 +215,24 @@ const planFree = (config, p) => config.isTest(p) || config.isDoc(p) || PLAIN_TEX
 const fold = (p) => (IGNORE_CASE ? p.toLowerCase() : p);
 export const inPlan = (named, p) => named.some((n) => fold(n) === fold(p));
 
+// At most this many workers run at once: a spawn cannot be fenced, so grouping is what holds it.
+export const PIECES_PER_GROUP = 4;
+
+// Pieces into groups that run one after another, as indexes in listed order. A piece joins the
+// first group with room that comes after every group holding a piece it shares a file with, so
+// overlapping pieces keep the order the lead listed them in; a piece holding a shared file runs alone.
+export function groupPieces(pieces, shared = []) {
+  const groups = [];
+  pieces.forEach((piece, i) => {
+    const alone = piece.some((f) => inPlan(shared, f));
+    const after = Math.max(-1, ...groups.map((g, k) => (g.some((j) => pieces[j].some((f) => inPlan(piece, f))) ? k : -1)));
+    const k = alone ? -1 : groups.findIndex((g, at) => at > after && g.length < PIECES_PER_GROUP && !g.some((j) => pieces[j].some((f) => inPlan(shared, f))));
+    if (k >= 0) groups[k].push(i);
+    else groups.push([i]);
+  });
+  return groups;
+}
+
 // The code a run changed that its plan did not name, spelled as the file system matches names.
 // The fence and gate stats both read it, so they agree.
 export function outsidePlan(named, changed, config) {

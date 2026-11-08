@@ -3,7 +3,7 @@ import path from "node:path";
 import { nextSeq } from "./events.mjs";
 import { addLessons, currentLedger, findRun, isDone, loadLedger, openRuns, saveLedger } from "./ledger.mjs";
 import { loadConfig } from "./config.mjs";
-import { applyPrediction, effectiveTier, inPlan, policyFor, requiredSteps, requires, tierOf, tierOrder, tiered } from "./size.mjs";
+import { applyPrediction, effectiveTier, groupPieces, inPlan, outsidePlan, PIECES_PER_GROUP, policyFor, requiredSteps, requires, tierOf, tierOrder, tiered } from "./size.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
@@ -272,6 +272,64 @@ function checkLookups(ctx, ledger, rest) {
 
 export const outsideRepos = (given) => `"${given}" is outside this repo and every declared repo: declare its repo with \`gate repo add <dir>\`, then name the file again`;
 
+const PIECES_USAGE = 'gate plan pieces "<a.ts,b.ts>" "<c.ts>" ... [--shared <x.ts,y.ts>]';
+
+// The pieces workers may edit at once: each names files, its code inside the plan. The gate
+// groups them (groupPieces) and prints each group's briefs; one piece is the lead's own work.
+function planPieces(ctx, given) {
+  if (!given.length) throw new UsageError(`usage: ${PIECES_USAGE}`);
+  const { ledger } = open(ctx);
+  if (!newRules(ledger)) throw new UsageError(`run ${ledger.slug} opened before gate plan pieces: brief each worker with \`gate brief worker --files a,b\``);
+  if (!tiered(ledger)) throw new UsageError(`a ${ledger.playbook} run has no file plan to split into pieces`);
+  const sharedText = flag(ctx.args, "--shared");
+  if (ctx.args.filter((a) => a === "--shared").length > 1) throw new UsageError("give --shared once, as a comma list: --shared a.ts,b.ts");
+  if (ctx.args.includes("--shared") && (!sharedText || sharedText.startsWith("--"))) throw new UsageError(`--shared names no file: ${PIECES_USAGE}`);
+  const config = loadConfig(ctx.root, ledger.repos);
+  const plan = tierOf(ledger).predictedFiles;
+  const filesOf = (text, what) => {
+    const named = text.split(",").map((f) => f.trim()).filter(Boolean);
+    if (!named.length) throw new UsageError(`${what} "${text}" names no file`);
+    refuseNotFiles(ctx, ledger, text, named);
+    const files = [];
+    for (const f of named) {
+      const rel = toPosixRel(ctx.root, f, ledger.repos);
+      if (rel === null) throw new UsageError(`${what}: ${outsideRepos(f)}`);
+      if (!inPlan(files, rel)) files.push(rel);
+    }
+    const outside = outsidePlan(plan, files, config);
+    if (outside.length) throw new UsageError(`${what}: ${outside.join(", ")} is not in this task's plan: \`gate plan add ${outside.join(",")} "<why>"\` first, asking the user when it changes behaviour they did not ask for`);
+    return files;
+  };
+  const pieces = given.map((text, i) => filesOf(text, `piece ${i + 1}`));
+  const same = (a, b) => a.length === b.length && a.every((f) => inPlan(b, f));
+  pieces.forEach((p, i) => {
+    const j = pieces.findIndex((q, k) => k > i && same(p, q));
+    if (j > i) throw new UsageError(`pieces ${i + 1} and ${j + 1} name the same files, and one worker number would hold both: list each piece once`);
+  });
+  const shared = sharedText === undefined ? [] : filesOf(sharedText, "--shared");
+  const unheld = shared.filter((f) => !pieces.some((p) => inPlan(p, f)));
+  if (unheld.length) throw new UsageError(`--shared ${unheld.join(", ")} is in no piece: a shared file is one a piece edits and the other pieces build on`);
+  if (pieces.length === 1) {
+    withLedger(ctx, (l) => {
+      delete l.pieces;
+    });
+    ctx.out("one piece stays with the lead: edit it yourself, no worker needed");
+    printNext(ctx);
+    return;
+  }
+  const groups = groupPieces(pieces, shared);
+  withLedger(ctx, (l) => {
+    l.pieces = { list: pieces, shared, groups, seq: nextSeq() };
+  });
+  ctx.out(`${pieces.length} pieces in ${groups.length} group${groups.length === 1 ? "" : "s"}, at most ${PIECES_PER_GROUP} workers at once:`);
+  groups.forEach((g, k) => {
+    ctx.out(`group ${k + 1}:`);
+    for (const i of g) ctx.out(`  gate brief worker --files ${pieces[i].join(",")}`);
+  });
+  ctx.out("brief and spawn one group's workers together; once every one has stopped, `gate verify`, then the next group");
+  printNext(ctx);
+}
+
 // Opened and nothing more: no note, case, step, round, waiver, brief, decision, edit or helper.
 function emptyRun(ctx, dir, ledger) {
   const briefs = Object.keys({ ...(ledger.briefed ?? {}), ...(ledger.seen ?? {}) }).length;
@@ -374,8 +432,9 @@ export const verbs = {
 
   plan(ctx) {
     const [action, files, ...words] = positional(ctx.args);
+    if (action === "pieces") return planPieces(ctx, positional(ctx.args).slice(1));
     const why = words.join(" ").trim();
-    if (action !== "add" || !files || !why) throw new UsageError('usage: gate plan add <a.ts,b.ts> "<why the task needs them>"');
+    if (action !== "add" || !files || !why) throw new UsageError(`usage: gate plan add <a.ts,b.ts> "<why the task needs them>" · ${PIECES_USAGE}`);
     const { ledger } = open(ctx);
     if (!newRules(ledger)) throw new UsageError(`run ${ledger.slug} opened before gate plan add: name every file with \`gate note plan "<plan>" --files <every file>\``);
     if (!tiered(ledger)) throw new UsageError(`a ${ledger.playbook} run has no file plan to add to`);
