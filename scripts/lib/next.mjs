@@ -2,7 +2,7 @@ import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
 import { optionalSteps, policyFor, tiered } from "./size.mjs";
 import { loadConfig } from "./config.mjs";
 import { readEvents } from "./events.mjs";
-import { clickStale, driverCommand, lastEditSeq, newRules } from "./rules.mjs";
+import { clickStale, driverCommand, lastEditSeq, newRules, nextGroup } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 
 // One line after every verb: what to do next and the exact verb. The skill no longer has
@@ -35,6 +35,16 @@ const SELF_CLOSE = {
 // A run from before the plan check held code: tests while the skeptic reads, and a hand close.
 const OLD_SKEPTIC = "`gate brief skeptic`, spawn done-gate:skeptic with the prompt it prints (it writes skeptic-<n>.md and replies with its Act-on list) and write the tests from the case table in the same turn while it reads (if it stops before finishing its file, `gate brief skeptic` again and spawn a fresh one, which continues from the file); then `gate huddle add skeptic --file skeptic-<n>.md`, answer each item (a new case gets a new test); a non-empty \"The one question\" in its file is the user's to answer: ask it with AskUserQuestion before any code; then `gate step skeptic done … --evidence skeptic-<n>.md`";
 
+// On a pieces run the implement hint walks the groups: the next group's briefs, or verify once
+// every piece was briefed. Its key names the group, so each new group prints in full.
+function groupsHint(ledger) {
+  const { list, groups } = ledger.pieces;
+  const g = nextGroup(ledger);
+  if (g < 0) return { text: "implement: every piece is briefed; once its workers have stopped, `gate verify`; ", key: "implement:verify" };
+  const briefs = groups[g].map((i) => `\`gate brief worker --files ${list[i].join(",")}\``).join(" · ");
+  return { text: `implement in groups: group ${g + 1} of ${groups.length}: ${briefs}, one done-gate:worker per packet, spawned together; once every one has stopped, \`gate verify\`, then the next group; `, key: `implement:g${g + 1}` };
+}
+
 // `after` is the last implementation edit: a click case clicked before it is open again.
 export function nextHint(ledger, after = 0) {
   return hintOf(ledger, after).text;
@@ -64,6 +74,8 @@ function hintOf(ledger, after, config = null) {
     const e2e = step.key === "driver" && config ? driverCommand(config) : null;
     const inVerify = e2e && config.verify.some((v) => v.cmd.trim() === e2e);
     const how = inVerify ? `\`gate verify --final\`: a green \`${e2e}\` counts as the drive, then \`gate step driver done "<what it showed>" --evidence events#<seq>\` with the pointer it prints` : step.key === "skeptic" && !newRules(ledger) ? OLD_SKEPTIC : step.key && SELF_CLOSE[step.key] && newRules(ledger) ? VERB_FOR[step.key].replace(...SELF_CLOSE[step.key]) : step.key ? VERB_FOR[step.key] : null;
+    const groups = step.key === "implement" && ledger.pieces ? groupsHint(ledger) : null;
+    if (groups) return { text: `next: step ${step.n}: ${groups.text}${how.replace(/^implement, /, "")}`, step, key: groups.key };
     return { text: `next: step ${step.n}: ${how ?? `${step.text} then \`gate step ${step.n} done|skipped|na "…"\``}`, step };
   }
   return only("next: `gate close`");
@@ -77,10 +89,10 @@ export function printNext(ctx, { full = false } = {}) {
     const after = ledger?.cases?.some((c) => c.event)
       ? lastEditSeq({ events: ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq) }, loadConfig(ctx.root, ledger.repos), ledger)
       : 0;
-    const { text, step } = hintOf(ledger, after, ledger ? loadConfig(ctx.root, ledger.repos) : null);
+    const { text, step, key: hintKey } = hintOf(ledger, after, ledger ? loadConfig(ctx.root, ledger.repos) : null);
     if (ledger && !isDone(ledger) && ledger.planDrift?.length && policyFor(ledger).guards.planDiff === "active") ctx.out(`warning: code outside the plan: ${ledger.planDrift.join(", ")}. \`gate plan add <files> "<why>"\` or revert it; the run cannot close until then`);
     if (!text) return;
-    const key = step ? step.key ?? String(step.n) : null;
+    const key = hintKey ?? (step ? step.key ?? String(step.n) : null);
     const shown = ledger.hinted?.[ctx.session] ?? [];
     if (key && !full && shown.includes(key)) {
       ctx.out(`next: step ${step.n}${step.key ? ` {${step.key}}` : ""}, as before; \`gate next\` prints it in full`);

@@ -22,8 +22,9 @@ Every verb prints a `next:` line: follow it. `gate check` lists what is unmet (R
    tests wait for the skeptic; fold its findings into the cases. `gate brief <role>` prints the prompt of
    each `done-gate:<role>` helper: skeptic (`skeptic-<n>.md`), qa (blind tests, large), worker,
    reviewer, reviewer-2 (high-risk/large).
-4. Tiny, small, standard, large: implement yourself; independent pieces may go to workers
-   (`gate brief worker`, spawn `done-gate:worker`). No slop: no comment that restates code,
+4. Tiny, small, standard, large: implement yourself; independent pieces may go to workers:
+   `gate plan pieces` groups them, at most 4 workers at once; each group's `gate brief worker`,
+   spawn `done-gate:worker`. No slop: no comment that restates code,
    narrates, numbers steps, labels a block, echoes a signature or marks an end; no banner;
    no hedging name (helper); no guard with no case behind it; no docstring on a
    trivial function; no TODO without a task, console.log or commented-out code; no emoji.
@@ -36,8 +37,8 @@ Every verb prints a `next:` line: follow it. `gate check` lists what is unmet (R
    round; upheld: ask the user. Wrong: `resolve --wrong`.
 6. `gate verify` after the last edit, Bash timeout 600000 ms or in the background. Drive the
    real UI if it changed (R4); probe the real schema likewise (R6).
-7. Not everything shown? `gate note caveat`. `gate close`, then paste
-   `gate report --brief` as your final message; never "ledger", "huddle" or a rule number.
+7. `gate close`, then paste `gate report --brief` as your final message; never "ledger",
+   "huddle" or a rule number.
 
 ## Common sense
 
@@ -60,7 +61,6 @@ with what you skipped or did not check: `gate note caveat`.
 - Two readings of the ask: `AskUserQuestion` before step 2. New ask mid-run: new run.
 - A helper that stops mid-file: `gate brief <role>` again; a fresh one continues
   from it.
-- At most ten helpers a task.
 - A step you cannot do: ask, then `gate waive <key> "<why>" --user-ok "<words>"`.
 - Never hand-edit `.claude/gate/runs/**` except `ledger.md`. No commits unless asked; the
   repo's CLAUDE.md wins.

@@ -4,12 +4,12 @@ import path from "node:path";
 import { buildState } from "./assess.mjs";
 import { caseTable, verifyLines } from "./report.mjs";
 import { LESSONS, saveLedger, section } from "./ledger.mjs";
-import { leadDelegates, renderTierBlock, samePiece, tierMax, tierOf } from "./size.mjs";
+import { inPlan, leadDelegates, renderTierBlock, samePiece, tierMax, tierOf } from "./size.mjs";
 import { baseCopy, fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs";
 import { ROLES, flag, outsideRepos, positional } from "./verbs.mjs";
 import { repoPath, toPosixRel } from "./paths.mjs";
 import { OWN_FILE } from "./guard.mjs";
-import { LOOKUP_EXAMPLE, newRules, waitingDisputes, fixCheckDone, capUnitsOf, nextPiece, roundOnDisk, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, runningPieces, uncovered, unfinishedFile, unfinishedVerify, verifyProblem, workerRuns } from "./rules.mjs";
+import { LOOKUP_EXAMPLE, newRules, waitingDisputes, fixCheckDone, capUnitsOf, nextPiece, roundOnDisk, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, pieceBriefed, reviewScope, runningPieces, uncovered, unfinishedFile, unfinishedVerify, verifyProblem, workerRuns } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { nextSeq } from "./events.mjs";
@@ -288,8 +288,12 @@ export function renderPacket(state, role, { round, n, piece = null, owned = null
   } else if (role === "worker") {
     out.push("## Files you own", "", ...fileList(state, files), "");
     const qaTests = (state.changed ?? []).filter((p) => state.config.isTest(p));
-    out.push("## Tests already written", "", ...(qaTests.length ? qaTests.map((t) => `- ${t}`) : ["_none yet_"]), "");
-    out.push("## Test command", "", "The lead's `gate verify` runs these. Before you finish, run the tests already written and the tests of the files you own, not the whole command.", "", ...testCommands(state), "");
+    out.push("## Tests so far", "", ...(qaTests.length ? qaTests.map((t) => `- ${t}`) : ["_none yet_"]), "");
+    // workers of one group share the checkout: another piece's half-done file can fail a test
+    const others = [];
+    for (const f of owned && state.ledger.pieces ? state.ledger.pieces.list.flat() : []) if (!inPlan(owned, f) && !inPlan(others, f)) others.push(f);
+    if (others.length) out.push("## Other pieces", "", "Other workers edit these files in this checkout. Do not touch them. A test failing there is not yours: report it, do not fix it.", "", ...others.map((f) => `- ${f}`), "");
+    out.push("## Test command", "", "The lead's `gate verify` runs these. Before you finish, run the tests so far and the tests of the files you own, not the whole command.", "", ...testCommands(state), "");
     // a piece's worker answers the findings that cite its files; the rest go to the packet
     // briefed without --files
     const cites = (text) => owned.some((f) => new RegExp(`(?<![\\w/.-])${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`).test(text));
@@ -440,11 +444,10 @@ function pieceBrief(state, owned) {
   const running = runningPieces(state).filter((r) => r.files);
   const busy = running.find((r) => samePiece(r.files, piece));
   if (busy) throw new UsageError(`${piece.join(", ")}: worker ${busy.n} is still running on this piece; brief it again once it has stopped`);
-  const briefed = Object.entries(state.ledger.briefed ?? {}).filter(([f]) => f.startsWith("worker-")).map(([, v]) => v.files ?? []);
   const group = groups.findIndex((g) => g.includes(i));
-  if (group <= 0 || briefed.some((f) => samePiece(f, piece))) return piece;
+  if (group <= 0 || pieceBriefed(state.ledger, piece)) return piece;
   const groupOf = (j) => groups.findIndex((g) => g.includes(j)) + 1;
-  const never = groups.slice(0, group).flat().find((j) => !briefed.some((f) => samePiece(f, list[j])));
+  const never = groups.slice(0, group).flat().find((j) => !pieceBriefed(state.ledger, list[j]));
   if (never !== undefined) throw new UsageError(`group ${group + 1} waits for group ${groupOf(never)}: ${list[never].join(",")} has not been briefed (\`gate brief worker --files ${list[never].join(",")}\`)`);
   const earlier = running.find((r) => groups.slice(0, group).flat().some((j) => samePiece(list[j], r.files)));
   if (earlier) throw new UsageError(`group ${group + 1} waits for group ${groupOf(list.findIndex((p) => samePiece(p, earlier.files)))}: worker ${earlier.n} is still running`);

@@ -115,7 +115,7 @@ test("C6 reported-surface: the worker packet and the agent docs say the lead's g
   const repo = planned("fv-c6", { large: true });
   const worker = sectionOf(packetOf(repo, "worker"), "Test command");
   assert.match(worker, /`gate verify` runs these/, worker);
-  assert.match(worker, /run the tests already written and the tests of the files you own/, worker);
+  assert.match(worker, /run the tests so far and the tests of the files you own/, worker);
 
   const doc = (name) => readFileSync(path.join(pluginRoot, "agents", `${name}.md`), "utf8");
   for (const name of ["reviewer", "reviewer-2"]) {

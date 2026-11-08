@@ -1005,5 +1005,5 @@ test("C17 edge: a caveat already recorded is not added twice; --files and --size
   assert.equal(line, "Caveats: the phone viewport was not driven; desktop only.");
 
   const skill = readFileSync(path.join(pluginRoot, "skills", "gate", "SKILL.md"), "utf8").replace(/\s+/g, " ");
-  assert.match(skill, /Not everything shown\? `gate note caveat/);
+  assert.match(skill, /what you skipped or did not check: `gate note caveat`/);
 });

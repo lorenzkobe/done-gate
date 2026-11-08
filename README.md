@@ -277,7 +277,11 @@ checked.
 - **The lead may edit at any size.** It holds the context, so handing a piece to a fresh worker
   can lose it. Size large (`policy.delegatesAt` in `models.json`; a plan naming more than ten
   files) brings blind QA and the second reviewer, whoever edits. Any helper the lead spawns
-  may edit too (a worker, or an implementer of its own).
+  may edit too (a worker, or an implementer of its own). Pieces that can be edited at once go
+  to workers: `gate plan pieces "a,b" "c" [--shared x]` groups them, at most 4 workers at once,
+  a group at a time, and `gate next` prints each group's briefs. While a worker runs, its files are
+  refused to the lead and the other workers, a worker runs no git write, and each packet lists the
+  other pieces' files as not its own.
 - **A new control is clicked, not just loaded.** A case of kind `click` (one per new or
   changed link, button or tab; the skeptic and the reviewer ask for them) cannot be closed
   with a test. `gate case close <id> --click events#<seq>` takes that click when it came after
@@ -385,6 +389,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `open <slug> <feature\|bugfix\|refactor\|plan\|investigation> [--repo <path>]` | start a ledger with the playbook's steps; `--repo` (repeatable, anywhere among the arguments) adds a further git repo to the run; on a slug whose run is open it joins that run and declares the repo late |
 | `repo add <path>` | add a further git repo to the open run, measured from its HEAD |
 | `note task\|context\|plan "…"` · `note context "…" [--no-code "<why>"] [--no-memory "<why>"] [--user-ok "<your words>"]` · `note plan "…" --files a,b` · `note caveat "…"` | write the prose sections (stamps the order for R2); Context is Traced (file:line pointers), Related, Research, and is refused until the lead made a code and a memory lookup, unless `--no-code`/`--no-memory` declares that kind missing with a reason and `--user-ok` quotes your OK (see Search first); `--files` predicts the size; a caveat is something the run could not show, printed in both reports |
+| `plan pieces "a,b" "c" [--shared x,y]` | split the plan into pieces for workers at once: prints the groups (at most 4 a group; a piece runs after any it shares a file with; a piece holding a shared file runs alone) and their brief lines. `gate brief worker --files` must then name a piece, a later group waits until the earlier one stopped and verify is green, and review waits for every worker; one piece stays with the lead |
 | `plan add a,b "<why>"` | on a run opened under 0.22, add files to the plan's list: the edit tools refuse code the plan does not name (tests, docs and plain text are free), and once code has changed `note plan` keeps the list fixed; it re-sizes the task, and the reviewer's packet and both reports show each addition with its reason |
 | `case add "…" --kind <kind>` · `case add --batch <file>` · `case amend C1 "…"` · `case close C1 --test file:name \| --click [events#<seq>] \| --na "…"` | the case table; kinds: happy, edge, refused, boundary, idempotent, reported-surface, performance, click; `--batch` reads one case per line as `<kind><TAB><text>`, adds all or none and prints one `next:` line; `amend` replaces a case's text and reopens it; `--click` closes a click case with the named click, or with the only unclaimed click, or with the newest one while only one click case is open, and prints it |
 | `step <key\|n> done\|skipped\|na "…" [--evidence ptr \| --ran "<text>"]` | close a playbook step (not the close step: `gate close` does that); the pointer must resolve; `repro`, `rootcause` and `schema` close only on a recorded run (`--ran` picks the newest command, browser call or skill after the run opened whose text contains it), and `rootcause` names the line at fault as `file:line` in its note; on a run opened since 0.16.0, `context` closes only through `gate note context` |

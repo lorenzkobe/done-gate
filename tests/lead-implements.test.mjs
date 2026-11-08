@@ -158,7 +158,7 @@ test("below large a worker takes a piece, answers a finding, and a path outside 
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
   const packet = cli(repo, "brief", ["worker", "--files", STANDARD_FILES[0]]).stdout;
   const text = readFileSync(/packet: (\S+)/.exec(packet)[1], "utf8");
-  assert.match(text, /## Tests already written/);
+  assert.match(text, /## Tests so far/);
   assert.doesNotMatch(text, /QA wrote/);
   // the plan check is H1, so the reviewer's finding is H2.1
   assert.match(text, /H2\.1/);

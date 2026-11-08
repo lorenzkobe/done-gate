@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { nextSeq } from "./events.mjs";
-import { blank, delegatedTier, effectiveTier, outsidePlan, policyFor, requires, tierOf, tiered, trialHolds } from "./size.mjs";
+import { blank, delegatedTier, effectiveTier, outsidePlan, policyFor, requires, samePiece, tierOf, tiered, trialHolds } from "./size.mjs";
 import { baseCopy, changedUnits, fileDiff, gitTracked, hasReindent, indentMatters, sliceEnd } from "./tree.mjs";
 import { scanDiff } from "./slop.mjs";
 import { coverageGaps, runsTests } from "./verify.mjs";
@@ -609,6 +609,11 @@ export function workerRuns(state, now = Date.now()) {
     return { agent, n: read?.n ?? null, running: helperAlive(state.events ?? [], agent, now) };
   });
 }
+
+// Whether a worker brief gave a piece's files, and the first group holding a piece none gave
+// (-1 once every piece was briefed).
+export const pieceBriefed = (ledger, piece) => Object.entries(ledger.briefed ?? {}).some(([f, v]) => f.startsWith("worker-") && samePiece(v.files ?? [], piece));
+export const nextGroup = (ledger) => ledger.pieces.groups.findIndex((g) => g.some((i) => !pieceBriefed(ledger, ledger.pieces.list[i])));
 
 // The workers still out that hold a packet, each with the files its brief gave it.
 export function runningPieces(state, now = Date.now()) {
@@ -1370,7 +1375,9 @@ export function settleSteps(state) {
     else if (codeAt === Infinity && verify && Date.parse(verify.finishedAt) > since && (verify.commands ?? []).some((c) => !c.skipped && runsTests(c.cmd, config.testFiles))) close("tests", `gate verify ran the tests after ${list(tests)}`, "verify.json");
   }
 
-  if (changed.some(isCode) && verify && !verifyProblem(state, { final: false })) close("implement", "a green `gate verify` ran on this code", "verify.json");
+  // on a pieces run the code is whole once every group was briefed and no worker is still out
+  const piecesOut = ledger.pieces && (nextGroup(ledger) >= 0 || workerRuns(state).some((r) => r.running));
+  if (changed.some(isCode) && verify && !piecesOut && !verifyProblem(state, { final: false })) close("implement", "a green `gate verify` ran on this code", "verify.json");
 
   const last = lastEditSeq(state, config, ledger);
   // an API change closes on a recorded call (gate step driver done --ran)

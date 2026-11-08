@@ -429,3 +429,151 @@ test("7.2 C15 edge: decide with no state dir, or on a run with no pieces, reads 
     assert.doesNotThrow(() => decide(input, repo, null, null, null));
   }
 });
+
+// 7.3: the packet explains sharing a checkout, and the hints walk the groups
+
+const packetText = (out) => readFileSync(/packet: (\S+)/.exec(out)[1], "utf8");
+const sectionOf = (text, name) => {
+  const at = text.indexOf(`## ${name}\n`);
+  if (at < 0) return null;
+  const rest = text.slice(at + name.length + 4);
+  const end = rest.search(/^## /m);
+  return end < 0 ? rest : rest.slice(0, end);
+};
+// a pieces run at its implement step
+function atImplement(repo) {
+  cli(repo, "step", "tests", "done", "wrote the tests, red first", "--evidence", "tests/a.test.ts");
+  assert.match(cli(repo, "next"), /^next: step \d+: implement/m);
+}
+
+test("7.3 C1 happy: each worker's packet lists the other pieces' files as not its own", () => {
+  const repo = pieced("pp3-c1");
+  const one = packetText(cli(repo, "brief", "worker", "--files", "src/a.ts"));
+  const others = sectionOf(one, "Other pieces");
+  assert.ok(others, one);
+  assert.match(others, /src\/b\.ts/);
+  assert.match(others, /src\/c\.ts/);
+  assert.doesNotMatch(others, /src\/a\.ts/);
+  assert.match(others, /do not touch/i);
+  assert.match(others, /not yours[^.]*report it/i);
+  assert.doesNotMatch(sectionOf(one, "Files you own"), /src\/b\.ts/);
+  const two = sectionOf(packetText(cli(repo, "brief", "worker", "--files", "src/b.ts")), "Other pieces");
+  assert.match(two, /src\/a\.ts/);
+  assert.doesNotMatch(two, /src\/b\.ts/);
+});
+
+test("7.3 C2 edge: a file the packet owns is never listed as another piece's; no pieces, or no --files, has no such section", () => {
+  const repo = pieced("pp3-c2");
+  cli(repo, "brief", "worker", "--files", "src/a.ts");
+  cli(repo, "brief", "worker", "--files", "src/b.ts");
+  cli(repo, "verify");
+  const late = sectionOf(packetText(cli(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts")), "Other pieces");
+  assert.match(late, /src\/b\.ts/);
+  assert.doesNotMatch(late, /src\/a\.ts|src\/c\.ts/);
+  assert.equal(sectionOf(packetText(cli(repo, "brief", "worker")), "Other pieces"), null);
+  const plain = planned("pp3-c2-plain", { extra: VERIFY });
+  assert.equal(sectionOf(packetText(cli(plain, "brief", "worker", "--files", "src/a.ts")), "Other pieces"), null);
+});
+
+test("7.3 C3 happy: the worker packet's tests section is Tests so far", () => {
+  const repo = pieced("pp3-c3");
+  editedBy(repo, "tests/a.test.ts", null);
+  const text = packetText(cli(repo, "brief", "worker", "--files", "src/a.ts"));
+  assert.match(sectionOf(text, "Tests so far") ?? "", /tests\/a\.test\.ts/);
+  assert.doesNotMatch(text, /Tests already written/);
+});
+
+test("7.3 C4 happy: gate next walks the groups: group 1's briefs, then group 2's in full, then verify", () => {
+  const repo = pieced("pp3-c4");
+  atImplement(repo);
+  const first = cli(repo, "next");
+  assert.match(first, /group 1 of 2/);
+  assert.match(first, /`gate brief worker --files src\/a\.ts`/);
+  assert.match(first, /`gate brief worker --files src\/b\.ts`/);
+  assert.doesNotMatch(first, /--files src\/a\.ts,src\/c\.ts/);
+  assert.match(first, /`gate verify`/);
+  cli(repo, "brief", "worker", "--files", "src/a.ts");
+  const second = cli(repo, "brief", "worker", "--files", "src/b.ts");
+  assert.match(second, /group 2 of 2[\s\S]*`gate brief worker --files src\/a\.ts,src\/c\.ts`/, second);
+  cli(repo, "verify");
+  const last = cli(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts");
+  assert.match(last, /every piece is briefed/, last);
+  assert.doesNotMatch(last, /group \d of 2/);
+});
+
+test("7.3 C5 edge: a run with no pieces keeps the old implement hint", () => {
+  const repo = planned("pp3-c5", { extra: VERIFY });
+  atImplement(repo);
+  const hint = cli(repo, "next");
+  assert.doesNotMatch(hint, /group \d|gate brief worker --files|every piece/);
+  assert.match(hint, /implement, keeping the diff to the plan/);
+});
+
+test("7.3 C6 refused: implement stays open on a green verify while a group is unbriefed", () => {
+  const stepOf = (repo) => ledgerOf(repo).steps.find((s) => s.key === "implement").state;
+  const repo = pieced("pp3-c6");
+  atImplement(repo);
+  cli(repo, "brief", "worker", "--files", "src/a.ts");
+  cli(repo, "brief", "worker", "--files", "src/b.ts");
+  editedBy(repo, "src/a.ts", null);
+  cli(repo, "verify");
+  cli(repo, "check");
+  assert.equal(stepOf(repo), null);
+  cli(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts");
+  cli(repo, "check");
+  assert.equal(stepOf(repo), "DONE");
+});
+
+test("7.3 C7 reported-surface: the skill, session start, README and worker role name pieces and the 4-at-once groups", async () => {
+  const { pluginRoot } = await import("./helpers.mjs");
+  const { statSync } = await import("node:fs");
+  const doc = (rel) => readFileSync(path.join(pluginRoot, rel), "utf8");
+  assert.ok(statSync(path.join(pluginRoot, "skills/gate/SKILL.md")).size < 4096);
+  const skill = doc("skills/gate/SKILL.md");
+  assert.match(skill, /gate plan pieces/);
+  assert.match(skill, /at most 4 workers at once/i);
+  assert.doesNotMatch(skill, /ten helpers/i);
+  for (const rel of ["hooks/session-start.md", "README.md"]) {
+    assert.match(doc(rel), /gate plan pieces/, rel);
+    assert.match(doc(rel), /4 workers at once|4 at once/, rel);
+  }
+  assert.match(doc("agents/worker.md"), /Other pieces/);
+  assert.match(doc("agents/worker.md"), /report it/i);
+});
+
+test("7.3 C8 refused: implement stays open on a green verify while a worker runs, with every piece briefed", () => {
+  const stepOf = (repo) => ledgerOf(repo).steps.find((s) => s.key === "implement").state;
+  const repo = pieced("pp3-c8");
+  atImplement(repo);
+  cli(repo, "brief", "worker", "--files", "src/a.ts");
+  cli(repo, "brief", "worker", "--files", "src/b.ts");
+  cli(repo, "verify");
+  spawned(repo, "W1", "src/a.ts,src/c.ts");
+  editedBy(repo, "src/b.ts", null);
+  cli(repo, "verify");
+  cli(repo, "check");
+  assert.equal(stepOf(repo), null);
+  stopped(repo, "W1");
+  cli(repo, "check");
+  assert.equal(stepOf(repo), "DONE");
+});
+
+test("7.3 C9 edge: each group's hint and the last one print in full after the plain implement hint was shown", () => {
+  const repo = planned("pp3-c9", { extra: VERIFY });
+  const plain = cli(repo, "step", "tests", "done", "wrote the tests, red first", "--evidence", "tests/a.test.ts");
+  assert.match(plain, /^next: step \d+: implement, keeping/m);
+  assert.match(cli(repo, "plan", "pieces", "src/a.ts", "src/b.ts", "src/a.ts,src/c.ts"), /^next: step \d+: implement in groups: group 1 of 2/m);
+  cli(repo, "brief", "worker", "--files", "src/a.ts");
+  assert.match(cli(repo, "brief", "worker", "--files", "src/b.ts"), /group 2 of 2/);
+  cli(repo, "verify");
+  assert.match(cli(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts"), /every piece is briefed/);
+});
+
+test("7.3 C10 reported-surface: the Test command line and the worker role say tests so far", async () => {
+  const { pluginRoot } = await import("./helpers.mjs");
+  const repo = pieced("pp3-c10");
+  const command = sectionOf(packetText(cli(repo, "brief", "worker", "--files", "src/a.ts")), "Test command");
+  assert.match(command, /run the tests so far and the tests of the files you own/);
+  const role = readFileSync(path.join(pluginRoot, "agents/worker.md"), "utf8");
+  assert.doesNotMatch(role, /tests already written/i);
+});

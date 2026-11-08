@@ -404,7 +404,7 @@ function matches(text, re, file, why = "") {
 // C1 — SKILL.md fits the budget and names every verb and agent the team loop needs
 // ---------------------------------------------------------------------------
 
-test("C1 happy: SKILL.md stays under 4096 bytes and names the whole team loop — open/note/case, brief worker, done-gate:worker, SendMessage, huddle reply, huddle dispute, the user for an upheld dispute, one round plus a fix-check, ten helpers, verify, report --brief, and the hand-off to a fresh helper", () => {
+test("C1 happy: SKILL.md stays under 4096 bytes and names the whole team loop — open/note/case, brief worker, done-gate:worker, SendMessage, huddle reply, huddle dispute, the user for an upheld dispute, one round plus a fix-check, at most 4 workers at once, verify, report --brief, and the hand-off to a fresh helper", () => {
   const size = statSync(SKILL_MD).size;
   assert.ok(size < 4096, `skills/gate/SKILL.md is ${size} bytes, the budget is 4096`);
 
@@ -434,8 +434,8 @@ test("C1 happy: SKILL.md stays under 4096 bytes and names the whole team loop �
   matches(md, /upheld: ask the user/i, file, "who settles an upheld dispute");
   assert.doesNotMatch(md, /arbiter/i, "SKILL.md still names the arbiter");
 
-  // the helper ceiling — ten per task
-  matches(md, /\bten\b[^.]{0,40}helper/i, file, "the ceiling of ten helper invocations");
+  // the ceiling: at most 4 workers at once, held by grouping the pieces
+  matches(md, /at most 4 workers at once/i, file, "the ceiling of four workers at once");
 
   // A helper that stops with its file missing or unfinished is handed off: the role is briefed
   // again and a fresh helper continues from the file. The "write <file> now" nudge is gone.
