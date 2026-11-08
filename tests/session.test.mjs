@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp, pluginRoot, AT_GIT_TOPLEVEL } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, pluginRoot, AT_GIT_TOPLEVEL, clearedFrom } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
@@ -32,11 +32,12 @@ test("a fresh session with no ledgers gets the mandate only", () => {
   assert.ok(!/done-gate-status/.test(ledgerStatus));
 });
 
-test("after /clear, the new session auto-attaches to the open ledger and is told what is unmet", () => {
+test("after /clear, the new session auto-attaches to the run the cleared session was on and is told what is unmet", () => {
   const repo = makeRepo("session-clear");
   start(repo, "S1");
   run(repo, "open", "S1", {}, ["badge", "feature"]);
   write(repo, "src/a.ts", "changed\n");
+  clearedFrom(repo, "S1");
   const out = JSON.parse(start(repo, "S2", "clear").stdout);
   const ctx = out.hookSpecificOutput.additionalContext;
   assert.match(ctx, /<done-gate-status>/);
@@ -411,3 +412,94 @@ test("C3 refused: --old-version-ok with no words is a usage error", () => {
   assert.equal(r.status, 1);
   assert.match(r.stderr, /needs the user's words/);
 });
+
+// ---- 4.8: /clear reconnects to its own task ----
+{
+const hookStart = (repo, session, payload) => {
+  const r = spawnSync(process.execPath, [gate, "session-start"], { input: JSON.stringify({ session_id: session, cwd: repo, hook_event_name: "SessionStart", ...payload }), encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: session } });
+  assert.equal(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+};
+const opens = (repo, session, slug) => {
+  const r = spawnSync(process.execPath, [gate, "open", slug, "feature"], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: session } });
+  assert.equal(r.status, 0, r.stderr);
+};
+const stateDir = (repo) => path.join(repo, ".claude", "gate");
+const currentOf = (repo, session) => loadSession(stateDir(repo), session)?.current ?? null;
+
+test("4.8 C1 a real-shaped /clear payload rejoins the run the earlier session was on", () => {
+  const repo = makeRepo("s48-c1");
+  opens(repo, "OLD", "mine");
+  opens(repo, "OTHER", "newer");
+  clearedFrom(repo, "OLD");
+  hookStart(repo, "NEW", { source: "clear", transcript_path: "/tmp/x.jsonl" });
+  assert.match(currentOf(repo, "NEW") ?? "", /-mine$/, "the cleared session did not rejoin its own run");
+});
+
+test("4.8 C2 /clear with no pid match is told about another session's run, not joined", () => {
+  const repo = makeRepo("s48-c2");
+  opens(repo, "OLD", "theirs");
+  const ctx = hookStart(repo, "NEW", { source: "clear" });
+  assert.equal(currentOf(repo, "NEW"), null, "a /clear with no pid match joined a run");
+  assert.match(ctx, /Open run theirs/);
+});
+
+test("4.8 C3 two terminals: the other terminal's session further up the tree is never joined", () => {
+  const repo = makeRepo("s48-c3");
+  opens(repo, "MINE", "mine");
+  opens(repo, "THEIRS", "theirs");
+  clearedFrom(repo, "MINE");
+  clearedFrom(repo, "THEIRS", process.ppid);
+  hookStart(repo, "NEW", { source: "clear" });
+  assert.match(currentOf(repo, "NEW") ?? "", /-mine$/);
+  const lone = makeRepo("s48-c3-lone");
+  opens(lone, "THEIRS", "theirs");
+  clearedFrom(lone, "THEIRS", process.ppid);
+  clearedFrom(lone, "MINE");
+  hookStart(lone, "NEW", { source: "clear" });
+  assert.equal(currentOf(lone, "NEW"), null, "joined the other terminal's run though this terminal's session had none");
+});
+
+test("4.8 C4 resume and compact join nothing: only clear attaches", () => {
+  const repo = makeRepo("s48-c4");
+  opens(repo, "OLD", "mine");
+  clearedFrom(repo, "OLD");
+  for (const source of ["resume", "compact"]) {
+    hookStart(repo, `NEW-${source}`, { source });
+    assert.equal(currentOf(repo, `NEW-${source}`), null, `${source} under a new id joined a run`);
+  }
+});
+
+test("4.8 C7 no file at the hook's own parent, and a shared ancestor's file names another session: /clear joins nothing", () => {
+  const repo = makeRepo("s48-c7");
+  opens(repo, "THEIRS", "theirs");
+  clearedFrom(repo, "THEIRS", process.ppid);
+  const ctx = hookStart(repo, "NEW", { source: "clear" });
+  assert.equal(currentOf(repo, "NEW"), null);
+  assert.match(ctx, /Open run theirs/);
+});
+
+test("4.8 C5 fork and startup never join; the old session_start_source still reads", () => {
+  const repo = makeRepo("s48-c5");
+  opens(repo, "OLD", "mine");
+  clearedFrom(repo, "OLD");
+  for (const source of ["fork", "startup"]) {
+    hookStart(repo, `NEW-${source}`, { source });
+    assert.equal(currentOf(repo, `NEW-${source}`), null, source);
+  }
+  hookStart(repo, "NEW-old-name", { session_start_source: "clear" });
+  assert.match(currentOf(repo, "NEW-old-name") ?? "", /-mine$/, "the old field name no longer reads");
+});
+
+test("4.8 C6 the earlier session's run is closed or abandoned: /clear joins nothing", () => {
+  const repo = makeRepo("s48-c6");
+  opens(repo, "OLD", "mine");
+  const dir = path.join(stateDir(repo), "runs", currentOf(repo, "OLD"));
+  const ledger = loadLedger(dir);
+  writeFileSync(path.join(dir, "ledger.json"), JSON.stringify({ ...ledger, status: "abandoned" }));
+  opens(repo, "OTHER", "newer");
+  clearedFrom(repo, "OLD");
+  hookStart(repo, "NEW", { source: "clear" });
+  assert.equal(currentOf(repo, "NEW"), null);
+});
+}

@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate } from "./helpers.mjs";
+import { makeRepo, write, gate, clearedFrom } from "./helpers.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { needsSetup, pendingOffers } from "../scripts/lib/setup.mjs";
 
@@ -278,6 +278,11 @@ test("apply beside a stale run re-stamps it: no R13 on attach or a cleared sessi
     said(repo, "yes add the keys please");
     assert.equal(run(repo, "setup", ["--apply", "--user-ok", "yes add the keys"]).status, 0);
     rmSync(path.join(repo, ".claude/gate/sessions/S1"), { recursive: true, force: true });
+    if (join === "clear") {
+      // the session S1 cleared was on the run; the claude process kept its pid
+      assert.equal(spawnSync(process.execPath, [gate, "attach", "old-task"], { encoding: "utf8", env: { ...envFor(repo), DONE_GATE_SESSION: "S0" }, cwd: repo }).status, 0);
+      clearedFrom(repo, "S0");
+    }
     const started = run(repo, "session-start", [], JSON.stringify({ session_id: "S1", cwd: repo, hook_event_name: "SessionStart", session_start_source: join === "clear" ? "clear" : "startup" }));
     assert.equal(started.status, 0, started.stderr);
     if (join === "attach") assert.equal(run(repo, "attach", ["old-task"]).status, 0);

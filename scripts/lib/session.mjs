@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import path from "node:path";
 import { assess, unmetCount } from "./assess.mjs";
 import { ensureSession, loadSession, updateSession } from "./session-state.mjs";
-import { recordGateError, UsageError } from "./context.mjs";
+import { recordGateError, sessionUnderParent, UsageError } from "./context.mjs";
 import { attachLedger, currentLedger, isDone, loadLedger, openRuns, runsDir, saveLedger, staleForeign } from "./ledger.mjs";
 import { leftBehind } from "./diagnose.mjs";
 import { writeReport } from "./verbs.mjs";
@@ -73,9 +73,10 @@ export const verbs = {
     const parts = [mandate(ctx)];
     // A run a plugin before 0.10 left "closing" (its lead ran `gate close`, and no stop came
     // before the next task opened) is closed late here, never joined as if it were open.
-    // A /clear, resume or compaction must not orphan a task: join the newest open run. A
-    // new session is another task until it says otherwise: it is told the run is there.
-    const continuing = ["clear", "resume", "compact"].includes(ctx.input?.session_start_source);
+    // A /clear must not orphan a task: it joins the run the session it cleared was on, never
+    // another terminal's. Any other new session is told the runs are there.
+    const source = ctx.input?.source ?? ctx.input?.session_start_source;
+    const continuing = ["clear", "resume", "compact"].includes(source);
     let left = [];
     try {
       const runs = openRuns(ctx.stateDir);
@@ -84,9 +85,11 @@ export const verbs = {
         saveLedger(dir, ledger);
         writeReport(ctx, dir, ledger);
       }
-      if (!loadSession(ctx.stateDir, ctx.session)?.current) {
-        const [newest] = runs.filter((r) => r.ledger.status !== "closed");
-        if (newest && continuing) attachLedger(ctx, newest.ledger.slug);
+      if (source === "clear" && !loadSession(ctx.stateDir, ctx.session)?.current) {
+        const earlier = sessionUnderParent(ctx.stateDir);
+        const was = earlier && earlier !== ctx.session ? loadSession(ctx.stateDir, earlier)?.current : null;
+        const run = was ? runs.find((r) => path.basename(r.dir) === was && !isDone(r.ledger)) : null;
+        if (run) attachLedger(ctx, path.basename(run.dir));
       }
       const mine = loadSession(ctx.stateDir, ctx.session)?.current;
       left = runs.filter((r) => r.ledger.status !== "closed" && path.basename(r.dir) !== mine);

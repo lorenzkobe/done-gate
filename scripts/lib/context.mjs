@@ -57,6 +57,17 @@ export function pidsDir(stateDir) {
   return path.join(stateDir, "pids");
 }
 
+// The session a hook's own Claude process last ran: the claude process keeps its pid across a
+// /clear, and the fence left that session's id under it. Only the direct parent: the ancestors
+// above it (the shell, the terminal app) are shared by every terminal in it.
+export function sessionUnderParent(stateDir) {
+  try {
+    return readFileSync(path.join(pidsDir(stateDir), String(process.ppid)), "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 // The fence leaves its session id under the pids of its own ancestors; a verb started by the
 // same Claude process shares one of them, and a second session in the repo does not.
 function readSessionPid(stateDir) {

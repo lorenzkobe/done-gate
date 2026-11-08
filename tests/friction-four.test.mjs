@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate } from "./helpers.mjs";
+import { makeRepo, write, gate, clearedFrom } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { decide } from "../scripts/lib/guard.mjs";
@@ -92,15 +92,17 @@ test("C4 reported-surface: a fresh session does not join another session's open 
   assert.equal(stop(repo, "S2").stdout.trim(), "", "S2 is not blocked for S1's diff");
 });
 
-test("C5 happy: a session started by clear, resume or compact still joins the open run", () => {
+test("C5 happy: a session started by /clear joins the run the cleared session was on; resume and compact under a new id join nothing", () => {
   const repo = makeRepo("ff-continue");
   start(repo, "S1", "startup");
   run(repo, "open", "S1", {}, ["badge", "feature"]);
-  for (const source of ["clear", "resume", "compact"]) {
-    const session = `S-${source}`;
-    const ctx = startContext(repo, session, source);
-    assert.match(ctx, /<done-gate-status>/, source);
-    assert.match(loadSession(stateDir(repo), session).current, /badge/, source);
+  clearedFrom(repo, "S1");
+  const ctx = startContext(repo, "S-clear", "clear");
+  assert.match(ctx, /<done-gate-status>/);
+  assert.match(loadSession(stateDir(repo), "S-clear").current, /badge/);
+  for (const source of ["resume", "compact"]) {
+    startContext(repo, `S-${source}`, source);
+    assert.equal(loadSession(stateDir(repo), `S-${source}`)?.current ?? null, null, source);
   }
 });
 

@@ -264,8 +264,10 @@ checked.
 - **Every block is logged.** When the Stop hook refuses to end the turn, a `block` event with
   the unmet rule ids lands in the session's events, and the report counts them, so a turn
   that could not end can be diagnosed afterwards.
-- **A stale ledger can be let go.** A ledger left open by an earlier session is joined again
-  after a /clear, resume or compaction; a new session is only told it is there, with
+- **A stale ledger can be let go.** After a /clear the new session joins the run the cleared
+  session was on (found through the pid of the Claude process, which a /clear keeps), never
+  another terminal's; a resume or compaction keeps its own run; any other new session is only
+  told the run is there, with
   `gate attach <slug>` to continue it, and to ask you before giving it up: `gate abandon <slug>
   "<reason>" --user-ok "<your words>"` takes your own words, said since the run opened, saying to
   abandon, drop or give up this run (a run with nothing in it needs none), and marks it abandoned

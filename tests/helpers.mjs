@@ -133,6 +133,14 @@ export function abandonArgs(repo, slug, reason, { session = "S1" } = {}) {
   return [slug, reason, "--user-ok", words];
 }
 
+// The lead's process keeps its pid across /clear, and the fence left the earlier session's id
+// under it. A hook spawned by this test process has this pid as its parent.
+export function clearedFrom(repo, session, pid = process.pid) {
+  const dir = path.join(repo, ".claude", "gate", "pids");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, String(pid)), session);
+}
+
 // The args that close a planned case N/A, on words the user just said.
 export function naArgs(repo, id, reason, { session = "S1" } = {}) {
   const words = "no test for this case";

@@ -88,7 +88,7 @@ export function eventsFromHookInput(input, root, repos = []) {
     const cut = (v) => String(v ?? "").slice(0, TEXT_LIMIT);
     return [{ ...b(), kind: "turn-failed", error: String(input.error ?? "") || "unknown", details: cut(input.error_details), text: cut(input.last_assistant_message) }];
   }
-  if (event === "SessionStart") return [{ ...b(), kind: "session-start", source: input.session_start_source ?? null }];
+  if (event === "SessionStart") return [{ ...b(), kind: "session-start", source: input.source ?? input.session_start_source ?? null }];
   const tool = input.tool_name ?? "";
   // PostToolUse fires only on success; a failed Bash call (a red test run) arrives here. Only
   // one that ran and exited non-zero counts: a denied or interrupted call ran nothing.

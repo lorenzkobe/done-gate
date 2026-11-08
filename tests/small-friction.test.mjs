@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, here, pluginRoot, lookedUp, waiveArgs } from "./helpers.mjs";
+import { makeRepo, write, gate, here, pluginRoot, lookedUp, waiveArgs, clearedFrom } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
@@ -767,8 +767,9 @@ test("C25 edge: after a session joins the run again (clear, resume, compact or g
   const FULL = "Traced: <file:line pointers>";
   assert.ok(lastLine(cli(repo, "decide", DECIDE).stdout).length < 200, "premise: the second hint is short");
 
-  for (const source of ["clear", "resume", "compact"]) {
+  for (const source of ["clear"]) {
     const session = `S-${source}`;
+    clearedFrom(repo, "S1");
     sessionStart(repo, session, source);
     assert.match(loadSession(stateDir(repo), session).current ?? "", /-t$/, `premise: ${source} joined the run`);
     const first = lastLine(cli(repo, "decide", DECIDE, { session }).stdout);
