@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, gate, pluginRoot, doneArgs, lookedUp } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
@@ -107,4 +107,16 @@ test("C7 reported-surface: the plan check asks whether the plan covers the whole
   assert.ok(asked.some((l) => /without guessing/.test(l) && /vague step/.test(l)), asked.join("\n"));
   assert.match(asked.at(-1), /The one question/, "the one question stays last, as the file shape ends with it");
   assert.match(body, /read-only, one pass: no prototypes, no builds/i);
+});
+
+// Test files run in parallel and a fixture rebuilds tests/.tmp/<name> by name, so two files that
+// pick one name break each other (steps-from-facts and small-friction did, 2026-11-08).
+test("C8 refused: no two test files name the same scratch repo", () => {
+  const BUILDER = /\b(?:makeRepo|committed|committedRepo|opened|openedWith|openedLarge|planned|standard|standardFixture|cleanClosingFixture|changed|large|pair|withE2e)\(\s*["'`]([\w.-]+)["'`]/g;
+  const owners = new Map();
+  for (const file of readdirSync(path.join(pluginRoot, "tests")).filter((f) => f.endsWith(".test.mjs"))) {
+    for (const [, name] of read(`tests/${file}`).matchAll(BUILDER)) owners.set(name, new Set([...(owners.get(name) ?? []), file]));
+  }
+  const shared = [...owners].filter(([, files]) => files.size > 1).map(([name, files]) => `${name}: ${[...files].sort().join(", ")}`);
+  assert.deepEqual(shared, []);
 });
