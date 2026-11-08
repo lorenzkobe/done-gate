@@ -1985,5 +1985,8 @@ test("C2 refused end to end: after gate check measures 13 changed files on a 3-f
   for (let i = 0; i < 13; i++) write(repo, `src/m${i}.ts`, `export const m${i} = 1;\n`);
   run("check");
   const out = run("fence", [], JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: path.join(repo, "src/m13.ts") }, cwd: repo, session_id: "S1" })).stdout;
-  assert.match(out, /outside this task's plan/, out);
+  // a run under the new rules refuses any unplanned code file, grown or not (tests/plan-binds.test.mjs C1)
+  assert.match(out, /not in this task's plan/, out);
+  const shell = run("fence", [], JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "echo x > src/m13.ts" }, cwd: repo, session_id: "S1" })).stdout;
+  assert.match(shell, /outside this task's plan/, shell);
 });

@@ -22,6 +22,7 @@ const VERBS = {
   attach: { hook: false, load: () => import("./lib/ledger.mjs") },
   repo: { hook: false, load: () => import("./lib/ledger.mjs") },
   note: { hook: false, load: () => import("./lib/verbs.mjs") },
+  plan: { hook: false, load: () => import("./lib/verbs.mjs") },
   case: { hook: false, load: () => import("./lib/verbs.mjs") },
   step: { hook: false, load: () => import("./lib/verbs.mjs") },
   huddle: { hook: false, load: () => import("./lib/verbs.mjs") },

@@ -155,7 +155,7 @@ test("C4 a new untracked 1000-line file: its changed lines are 1-1000, ranges sl
   const repo = opened("rr-c4");
   edit(repo, "src/fresh.ts", body(1000, "f"));
   edit(repo, "tests/a.test.ts", "test('f', () => {});\n");
-  cli(repo, "note", ["plan", "A fresh module.", "--files", "src/fresh.ts"]);
+  cli(repo, "plan", ["add", "src/fresh.ts", "a fresh module"]);
   assert.match(run(repo, "brief", ["reviewer", "--files", "src/fresh.ts"]).stderr, /src\/fresh\.ts:1-\d+/);
   round(repo, "reviewer", "src/fresh.ts:1-400");
   round(repo, "reviewer", "src/fresh.ts:401-800");
@@ -177,7 +177,7 @@ test("C6 the round cap counts the rounds that saw a line: whole-file and slice r
   const repo = opened("rr-c6", { "src/other.ts": "export const o = 0;\n" });
   bigEdit(repo, 300);
   edit(repo, "src/other.ts", body(30, "o"));
-  cli(repo, "note", ["plan", "Two modules.", "--files", `${BIG},src/other.ts`]);
+  cli(repo, "plan", ["add", "src/other.ts", "the second module"]);
   round(repo, "reviewer", BIG, ["a — src/big.ts:1 — x — []"]);
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/big.ts:1"]);
   round(repo, "reviewer", BIG, ["b — src/big.ts:200 — x — []"]);
@@ -248,7 +248,7 @@ test("C10 a block of 900 deleted lines sits at one position: that one-position r
   const repo = opened("rr-c10", { "src/old.ts": body(900, "o") });
   edit(repo, "src/old.ts", "export const o0 = 0;\n");
   edit(repo, "tests/a.test.ts", "test('o', () => {});\n");
-  cli(repo, "note", ["plan", "Shrink old.", "--files", "src/old.ts"]);
+  cli(repo, "plan", ["add", "src/old.ts", "the old module shrinks"]);
   const r = run(repo, "brief", ["reviewer", "--files", "src/old.ts"]);
   assert.match(r.stderr, /src\/old\.ts:(\d+)-\1\b/);
   const slice = /--files (src\/old\.ts:\d+-\d+)/.exec(r.stderr)[1];

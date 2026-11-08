@@ -139,6 +139,18 @@ test("C4 edge: without the plugin's own git history the old-version tests skip i
   const { NODE_TEST_CONTEXT: _parent, ...env } = process.env;
   const r = spawnSync(process.execPath, ["--test", "--test-reporter=tap", "tests/old-version.test.mjs"], { cwd: copy, encoding: "utf8", env });
   assert.equal(r.status, 0, `${r.stdout}${r.stderr}`);
-  assert.match(r.stdout, /# skipped 4/, r.stdout);
+  const total = /# tests (\d+)/.exec(r.stdout)?.[1];
+  assert.ok(Number(total) > 1, r.stdout);
+  assert.match(r.stdout, new RegExp(`# skipped ${total}\\b`), r.stdout);
   assert.match(r.stdout, /# fail 0/, r.stdout);
+});
+
+test("C5 happy: the old copy reads a run with a plan addition and lists the same rules", { skip }, () => {
+  const old = oldGate();
+  const repo = committed("ov-c5");
+  opened(gate, repo, "ov-c5");
+  planAndEdit(gate, repo);
+  ok(gate, repo, ["plan", "add", "src/app/page.tsx", "the badge renders there"]);
+  assert.equal(ledgerOf(repo).planAdds.length, 1, "premise: the addition is recorded");
+  assert.deepEqual(ruleIds(run(old, repo, ["check"]).stdout), ruleIds(run(gate, repo, ["check"]).stdout));
 });

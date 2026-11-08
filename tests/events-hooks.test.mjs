@@ -338,9 +338,11 @@ const stdinFixture = (name) =>
 // eleven files: one more than models.json tiers.standard.maxFiles
 const LARGE = Array.from({ length: 11 }, (_, i) => `src/f${i + 1}.ts`);
 const LARGE_EXTRA = Object.fromEntries(LARGE.map((f) => [f, "export const x = 1;\n"]));
+// on a run under the new rules the edit tools take only planned code, so the files edited are planned
+const LARGE_PLAN = [...LARGE, "src/a.ts", "src/b.ts", "src/nb.ipynb"];
 
 test("C1 happy: at predicted large the lead's Edit/Write/MultiEdit/NotebookEdit on source is allowed", () => {
-  const repo = openedWith("fence-c1", { files: LARGE, extra: LARGE_EXTRA });
+  const repo = openedWith("fence-c1", { files: LARGE_PLAN, extra: LARGE_EXTRA });
   assert.equal(ledgerOf(repo).tier.predicted, "large");
   assert.equal(fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts"))), null, "Edit");
   assert.equal(fence(repo, pre(repo, "Write", path.join(repo, "src/b.ts"))), null, "Write");
@@ -369,14 +371,15 @@ test("C1 happy: a plan naming two files predicts standard and the lead still edi
 // C2 — everything the fence must leave alone
 // ---------------------------------------------------------------------------
 
-test("C2 happy: the lead still edits source when the prediction is small, when the plan named no files, and on the un-tiered plan playbook; with no run open it is refused", () => {
+// reversed in 0.22: a plan that named no files is asked to name them (tests/plan-binds.test.mjs C6)
+test("C2 happy: the lead still edits source when the prediction is small and on the un-tiered plan playbook; a plan that named no files is asked to name them; with no run open it is refused", () => {
   const small = openedWith("fence-c2-small", { files: ["src/a.ts"] });
   assert.equal(ledgerOf(small).tier.predicted, "tiny");
   assert.equal(fence(small, pre(small, "Edit", path.join(small, "src/a.ts"))), null, "tier tiny");
 
   const noFiles = openedWith("fence-c2-nofiles");
   assert.equal(ledgerOf(noFiles).tier.predicted, null, "no --files means no prediction");
-  assert.equal(fence(noFiles, pre(noFiles, "Edit", path.join(noFiles, "src/a.ts"))), null, "no prediction");
+  assert.match(fence(noFiles, pre(noFiles, "Edit", path.join(noFiles, "src/a.ts"))) ?? "", /names no files/, "no prediction");
 
   // no ledger at all: `gate open` was never run here, so code waits for one
   const none = committed("fence-c2-none");
@@ -390,7 +393,7 @@ test("C2 happy: the lead still edits source when the prediction is small, when t
 
 test("C2 happy: bugfix and refactor are tiered too, and the lead edits at large there as well", () => {
   for (const playbook of ["bugfix", "refactor"]) {
-    const repo = openedWith(`fence-c2-${playbook}`, { playbook, files: LARGE, extra: LARGE_EXTRA });
+    const repo = openedWith(`fence-c2-${playbook}`, { playbook, files: LARGE_PLAN, extra: LARGE_EXTRA });
     assert.equal(ledgerOf(repo).tier.predicted, "large", playbook);
     assert.equal(fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts"))), null, playbook);
   }
@@ -475,12 +478,13 @@ test("C8 boundary: a plan that predicted small and grew to a measured large leav
   assert.equal(fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts"))), null);
 });
 
-test("C8 boundary: with no prediction and nothing measured yet the lead may still edit", () => {
+// reversed in 0.22, as C2's plan with no files
+test("C8 boundary: with no prediction and nothing measured yet the lead is asked to name the files, not fenced by size", () => {
   const repo = openedWith("fence-c8-unmeasured"); // no --files
   assert.equal(ledgerOf(repo).tier.predicted, null);
   cli(repo, "check"); // nothing has changed, so there is no standard measurement to fence on
   assert.notEqual(ledgerOf(repo).tier.measured?.tier ?? null, "standard");
-  assert.equal(fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts"))), null);
+  assert.match(fence(repo, pre(repo, "Edit", path.join(repo, "src/a.ts"))) ?? "", /names no files/);
 });
 
 // ---------------------------------------------------------------------------
@@ -490,7 +494,7 @@ test("C8 boundary: with no prediction and nothing measured yet the lead may stil
 test("C7 idempotent: the tests/fixtures/stdin edit payloads pass the fence silently once a run is planned", () => {
   const repo = committed("fence-c7");
   cli(repo, "open", ["fence-c7", "feature"]);
-  readyToEdit(repo);
+  readyToEdit(repo, { plan: ["--files", "src/app/page.tsx,src/a.ts,src/b.ts"] });
   planChecked(repo);
   // the fixtures address /repo; point them at this one, and ask the fence rather than the log
   const asPreToolUse = (name) =>

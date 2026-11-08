@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { currentLedger, isDone } from "./ledger.mjs";
-import { policyFor } from "./size.mjs";
+import { outsidePlan, policyFor, tierOf, tiered } from "./size.mjs";
 import { appendEvents, nextSeq, readEvents, toolUse } from "./events.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { ancestorPids, pidsDir } from "./context.mjs";
@@ -414,7 +414,7 @@ function definedFunctions(raw) {
 
 // The gate's verbs: a `$G` call is the gate only when its first argument is one, so an unset G
 // leaves a verb name as the program, never a writer.
-const GATE_VERBS = new Set(["open", "attach", "repo", "note", "case", "step", "huddle", "waive", "decide", "close", "abandon", "rebaseline", "verify", "test", "setup", "check", "report", "stats", "diagnose", "watch", "steps", "next", "size", "brief", "doctor", "help"]);
+const GATE_VERBS = new Set(["open", "attach", "repo", "note", "plan", "case", "step", "huddle", "waive", "decide", "close", "abandon", "rebaseline", "verify", "test", "setup", "check", "report", "stats", "diagnose", "watch", "steps", "next", "size", "brief", "doctor", "help"]);
 
 // Variables set, once and as a whole top-level command, to the gate's own CLI
 // (`G="node …/gate.mjs"; $G check`): `$G` then runs the gate. Any other use of the name voids it.
@@ -819,7 +819,18 @@ function outgrown(ledger, config, rel) {
   const now = ledger.tier.measured?.files ?? 0;
   const limit = policyFor(ledger).splitPast.files;
   if (now <= limit && !(planned.length && now >= Math.max(2 * planned.length, planned.length + 10))) return null;
-  return `${rel} is outside this task's plan, and the task has grown to ${now} changed files (planned ${planned.length}). Finish and \`gate close\` this task and \`gate open\` a new run for the rest; if it is truly the same request, add the file with \`gate note plan "<plan>" --files <every file>\` (at most ${limit} files)`;
+  const add = newRules(ledger) ? `\`gate plan add ${rel} "<why>"\`` : `\`gate note plan "<plan>" --files <every file>\``;
+  return `${rel} is outside this task's plan, and the task has grown to ${now} changed files (planned ${planned.length}). Finish and \`gate close\` this task and \`gate open\` a new run for the rest; if it is truly the same request, add the file with ${add} (at most ${limit} files)`;
+}
+
+// On a run under the new rules the lead's edit tools take only planned code; a file outside the
+// plan comes in through `gate plan add`, which the reviewer and the user see.
+function unplanned(ledger, config, rel) {
+  if (!newRules(ledger) || !tiered(ledger)) return null;
+  const named = tierOf(ledger).predictedFiles;
+  if (!outsidePlan(named, [rel], config).length) return null;
+  if (!named.length) return `the plan names no files: name the code this task changes with \`gate plan add <a,b> "<why>"\``;
+  return `${rel} is not in this task's plan: if the task needs it, \`gate plan add ${rel} "<why>"\`; a change of behaviour the user did not ask for is theirs to approve first`;
 }
 
 // Where inline code writes: a literal (or a name given one) as open(…, "w"/"a"/"x") or as the
@@ -1033,7 +1044,7 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
   const notReady = code.length && !where.unreadable ? notReadyToEdit(ledger) : null;
   if (notReady) return { deny: true, reason: `done-gate: ${code.join(", ")} is code, and ${notReady}.`, paths };
   // the lead decides a task is done; a helper edits the files its packet names
-  const tooBig = where.unreadable || input.agent_id ? null : code.map((p) => outgrown(ledger, config, p)).find(Boolean);
+  const tooBig = where.unreadable || input.agent_id ? null : code.map((p) => unplanned(ledger, config, p) ?? outgrown(ledger, config, p)).find(Boolean);
   if (tooBig) return { deny: true, reason: `done-gate: ${tooBig}.`, paths };
   const role = (r) => agentType === `done-gate:${r}` || agentType === r;
   if (role("skeptic")) {

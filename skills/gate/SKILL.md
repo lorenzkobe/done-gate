@@ -14,7 +14,7 @@ Every verb prints a `next:` line: follow it. `gate check` lists what is unmet (R
 2. Before any edit: `gate note task "<the ask, quoted, then your words>"`; search code and
    memory before grep (missing: ask the user), trace, then `gate note context "Traced: … Related:
    … Research: …"`; `gate note plan "<approach>" --files a.ts,b.ts [--size large]` (the files
-   predict the size; tiny: no reviewer), naming hot paths, data sizes and cost shape or "no hot
+   predict the size, tiny: no reviewer, and bind edits; add one: `gate plan add`), naming hot paths, data sizes and cost shape or "no hot
    path"; then per row (R2)
    `gate case add "<case>" --kind <happy|edge|refused|boundary|idempotent|reported-surface|performance|click>`;
    a `click` row per new link, button or tab.

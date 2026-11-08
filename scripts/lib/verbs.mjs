@@ -1,9 +1,9 @@
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { nextSeq } from "./events.mjs";
 import { currentLedger, findRun, isDone, loadLedger, openRuns, saveLedger } from "./ledger.mjs";
 import { loadConfig } from "./config.mjs";
-import { applyPrediction, effectiveTier, policyFor, requiredSteps, tierOf, tierOrder, tiered } from "./size.mjs";
+import { applyPrediction, effectiveTier, inPlan, policyFor, requiredSteps, tierOf, tierOrder, tiered } from "./size.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
@@ -117,6 +117,29 @@ function settleCheck(ledger, dir) {
   if (oneQuestion(readFileSync(path.join(dir, last.file), "utf8"))) return;
   Object.assign(step, { state: "DONE", note: "closed by the gate: every finding answered", evidence: last.file, auto: "fact", seq: nextSeq() });
 }
+
+// Code and tests wait for an owed plan check; a run whose code already changed is not stalled
+// mid-edit by growing into one, and R8 still asks for it.
+function holdForCheck(ledger) {
+  if (!newRules(ledger) || !tiered(ledger)) return;
+  const check = ledger.steps.find((s) => s.key === "skeptic");
+  ledger.checkHold = Boolean(check && check.state === null && (!ledger.lastSourceChangeSeq || ledger.checkHold));
+}
+
+// On a run under the new rules a plan names files: a folder or a pattern would let any file in.
+function refuseNotFiles(ctx, ledger, given, named) {
+  if (!newRules(ledger)) return;
+  if (!named.length) throw new UsageError(`--files "${given}" names no file; leave --files out to keep the plan's list`);
+  const loose = named.find((f) => /\/$|[*?[\]{}]/.test(f) || (existsSync(path.resolve(ctx.root, f)) && statSync(path.resolve(ctx.root, f)).isDirectory()));
+  if (loose) throw new UsageError(`"${loose}" is a folder or a pattern: a plan names each file it changes (a new file is fine)`);
+}
+
+const codeLimit = (ctx, ledger, paths) => {
+  const limit = policyFor(ledger).splitPast.files;
+  const config = loadConfig(ctx.root, ledger.repos);
+  const code = paths.filter((f) => f && config.isSource(f) && !config.isTest(f));
+  if (code.length > limit) throw new UsageError(`the plan names ${code.length} code files, past the ${limit} one task can be reviewed well at: split the work into separate tasks, each its own run, and plan only this one's part`);
+};
 
 // A click event as the lead would recognise it: what it did, then its pointer.
 function clickLine(e) {
@@ -267,13 +290,19 @@ export const verbs = {
     const named = section === "plan" ? (files ?? "").split(",").map((f) => f.trim()).filter(Boolean) : [];
     const outside = named.filter((f) => toPosixRel(ctx.root, f, ctx.repos) === null);
     if (outside.length && outside.length === named.length) throw new UsageError(`--files: ${outsideRepos(outside.join(", "))}`);
+    if (section === "plan" && files !== undefined) {
+      const { ledger } = open(ctx);
+      refuseNotFiles(ctx, ledger, files, named);
+      // once code changed a list the plan named is what it promised: it grows only by gate plan add
+      const paths = named.map((f) => toPosixRel(ctx.root, f, ledger.repos)).filter(Boolean);
+      const now = tierOf(ledger).predictedFiles;
+      const same = paths.every((p) => inPlan(now, p)) && now.every((p) => inPlan(paths, p));
+      if (newRules(ledger) && tiered(ledger) && ledger.lastSourceChangeSeq && now.length && !same) throw new UsageError('the code has changed, so the plan\'s files are fixed: add one with `gate plan add <file> "<why>"`; the list no longer drops a file');
+    }
     // a plan past the split limit is several tasks: one review cannot cover it well
     if (named.length) {
       const { ledger } = open(ctx);
-      const limit = policyFor(ledger).splitPast.files;
-      const config = loadConfig(ctx.root, ledger.repos);
-      const code = named.map((f) => toPosixRel(ctx.root, f, ledger.repos)).filter((f) => f && config.isSource(f) && !config.isTest(f));
-      if (code.length > limit) throw new UsageError(`the plan names ${code.length} code files, past the ${limit} one task can be reviewed well at: split the work into separate tasks, each its own run, and plan only this one's part`);
+      codeLimit(ctx, ledger, named.map((f) => toPosixRel(ctx.root, f, ledger.repos)));
     }
     if (size !== undefined) {
       const sizes = tierOrder(policyFor(open(ctx).ledger));
@@ -297,19 +326,46 @@ export const verbs = {
         if (ledger.taskSeq) markStep(ledger, "plan", { state: "DONE", evidence: "ledger.md#plan", note: "Task and Plan written" });
         if ((files !== undefined || size !== undefined) && tiered(ledger)) {
           // a path outside the main root and every declared repo cannot be part of this task's diff
-          const paths = named.map((f) => toPosixRel(ctx.root, f, ledger.repos)).filter((f) => f);
+          // --size alone keeps the files the plan already named
+          const paths = files === undefined ? tierOf(ledger).predictedFiles : named.map((f) => toPosixRel(ctx.root, f, ledger.repos)).filter((f) => f);
           predicted = applyPrediction(ledger, policyFor(ledger), loadConfig(ctx.root, ledger.repos), paths, size ?? null);
         }
-        // code and tests wait for an owed check; a run whose code already changed is not stalled
-        // mid-edit by growing into one, and R8 still asks for it
-        if (newRules(ledger) && tiered(ledger)) {
-          const check = ledger.steps.find((s) => s.key === "skeptic");
-          ledger.checkHold = Boolean(check && check.state === null && (!ledger.lastSourceChangeSeq || ledger.checkHold));
-        }
+        holdForCheck(ledger);
       }
     });
     ctx.out(predicted ? `${section} noted · tier predicted ${predicted.tier} (${predicted.files} file${predicted.files === 1 ? "" : "s"}${predicted.declared ? `, declared ${predicted.declared}` : ""}${predicted.forced.length ? `, forced by ${predicted.forced.join(", ")}` : ""})` : `${section} noted`);
     if (outside.length) ctx.out(`not counted: ${outsideRepos(outside.join(", "))}`);
+    printNext(ctx);
+  },
+
+  plan(ctx) {
+    const [action, files, ...words] = positional(ctx.args);
+    const why = words.join(" ").trim();
+    if (action !== "add" || !files || !why) throw new UsageError('usage: gate plan add <a.ts,b.ts> "<why the task needs them>"');
+    const { ledger } = open(ctx);
+    if (!newRules(ledger)) throw new UsageError(`run ${ledger.slug} opened before gate plan add: name every file with \`gate note plan "<plan>" --files <every file>\``);
+    if (!tiered(ledger)) throw new UsageError(`a ${ledger.playbook} run has no file plan to add to`);
+    const named = files.split(",").map((f) => f.trim()).filter(Boolean);
+    if (!named.length) throw new UsageError(`gate plan add: "${files}" names no file`);
+    refuseNotFiles(ctx, ledger, files, named);
+    const outside = named.filter((f) => toPosixRel(ctx.root, f, ledger.repos) === null);
+    if (outside.length) throw new UsageError(`gate plan add: ${outsideRepos(outside.join(", "))}`);
+    const now = tierOf(ledger).predictedFiles;
+    const fresh = [];
+    for (const p of named.map((f) => toPosixRel(ctx.root, f, ledger.repos))) if (!inPlan([...now, ...fresh], p)) fresh.push(p);
+    if (!fresh.length) {
+      ctx.out("already in the plan: nothing added");
+      printNext(ctx);
+      return;
+    }
+    codeLimit(ctx, ledger, [...now, ...fresh]);
+    let predicted = null;
+    withLedger(ctx, (l) => {
+      predicted = applyPrediction(l, policyFor(l), loadConfig(ctx.root, l.repos), [...tierOf(l).predictedFiles, ...fresh], null);
+      l.planAdds = [...(l.planAdds ?? []), { files: fresh, why, seq: nextSeq() }];
+      holdForCheck(l);
+    });
+    ctx.out(`added to the plan: ${fresh.join(", ")} · tier predicted ${predicted.tier} (${predicted.files} file${predicted.files === 1 ? "" : "s"})`);
     printNext(ctx);
   },
 

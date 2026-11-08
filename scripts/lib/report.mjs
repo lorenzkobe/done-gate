@@ -142,6 +142,7 @@ export function attentionLines(state, unmet) {
   if (advice) out.push(`- ${advice}`);
   for (const w of ledger.waivers) out.push(`- ${w.could ? "could not run" : "waived"} ${w.key}: ${w.reason ?? w.quote}${w.words ? ` (the user: "${w.words}")` : ""}${w.batch ? ` — standing, batch ${w.batch}` : ""}${w.lapsed ? (w.ended ? " — ended with gate waive --end" : " — lapsed: the code changed after it") : ""}`);
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) out.push(`- skipped: ${s.text} — ${s.note}`);
+  for (const a of ledger.planAdds ?? []) out.push(`- added to the plan: ${a.files.join(", ")} — ${a.why}`);
   for (const a of ledger.huddles.flatMap((h) => h.actOn).filter((x) => x.dispute)) out.push(`- disputed ${a.id}: ${a.dispute.why} [${a.dispute.evidence}] — ${a.dispute.verdict ?? "unanswered"}${a.dispute.reviewerReason ? `; reviewer: ${a.dispute.reviewerReason}` : ""}${a.dispute.arbiterReason ? `; arbiter: ${a.dispute.arbiterReason}` : ""}`);
   if (denies) out.push(`- ${denies} denied write(s) to gate evidence files (see events)`);
   if (handoffs) out.push(`- ${handoffs} lead edit(s) fenced off at this size and handed to a worker`);
@@ -427,6 +428,7 @@ function forYouLine(state, unmet) {
     else if (w.could) items.push(`could not run ${w.key === "schema" ? "the real schema" : "the app"}: ${plain(w.reason)}${said(w)}`);
     else items.push(`skipped with your OK${w.batch ? ` for batch ${w.batch}` : ""}: ${plain(w.reason ?? w.quote)}${said(w)}`);
   }
+  for (const a of ledger.planAdds ?? []) items.push(`added to the plan: ${a.files.join(", ")} (${plain(a.why)})`);
   for (const a of ledger.huddles.flatMap((h) => h.actOn)) {
     if (!a.dispute) continue;
     const v = a.dispute.verdict;

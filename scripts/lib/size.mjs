@@ -6,7 +6,7 @@ import { nextSeq } from "./events.mjs";
 import { baseCopy, copyNumstat, gitNumstat, gitTracked, indentMatters } from "./tree.mjs";
 import { buildState } from "./assess.mjs";
 import { UsageError } from "./context.mjs";
-import { repoPath } from "./paths.mjs";
+import { IGNORE_CASE, repoPath } from "./paths.mjs";
 import { printNext } from "./next.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -195,9 +195,17 @@ export function tierOf(ledger) {
   };
 }
 
-// The code a run changed that its plan did not name: tests and docs are free to grow.
+// Files a plan never has to name: tests, docs and plain text. Config files stay code.
+const PLAIN_TEXT = /\.(?:md|mdx|txt|rst)$/i;
+const planFree = (config, p) => config.isTest(p) || config.isDoc(p) || PLAIN_TEXT.test(p);
+const fold = (p) => (IGNORE_CASE ? p.toLowerCase() : p);
+export const inPlan = (named, p) => named.some((n) => fold(n) === fold(p));
+
+// The code a run changed that its plan did not name, spelled as the file system matches names.
+// The fence and gate stats both read it, so they agree.
 export function outsidePlan(named, changed, config) {
-  return changed.filter((p) => config.isSource(p) && !config.isTest(p) && !named.includes(p));
+  const planned = new Set(named.map(fold));
+  return changed.filter((p) => config.isSource(p) && !planFree(config, p) && !planned.has(fold(p)));
 }
 
 const CATEGORY_PRED = { ui: "isUi", schema: "isSchema", highRisk: "isHighRisk" };

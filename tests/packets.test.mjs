@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, AT_GIT_TOPLEVEL, lookedUp } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, AT_GIT_TOPLEVEL, lookedUp, asOldRun } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { DEFAULTS } from "../scripts/lib/config.mjs";
 import { detectFramework } from "../scripts/lib/brief.mjs";
@@ -696,7 +696,7 @@ test("C17 refused: the fence denies Edit/Write to a packet file and Bash command
   assert.equal(bashOut.hookSpecificOutput?.permissionDecision, "deny", `a Bash command naming the packet was not denied:\n${bash.stdout}`);
 
   // The fence still lets ordinary source edits through.
-  const allowed = fence({ tool_name: "Write", tool_input: { file_path: path.join(repo, "src/a.ts") } });
+  const allowed = fence({ tool_name: "Write", tool_input: { file_path: path.join(repo, PLAN_FILE) } });
   assert.equal(allowed.stdout.trim(), "", `an ordinary source write was not allowed:\n${allowed.stdout}`);
 });
 
@@ -1273,10 +1273,11 @@ test("C5 reported-surface: a directory in the plan's --files is listed as a dire
   const run = (verb, args) => spawnSync(process.execPath, [gate, verb, ...args], { encoding: "utf8", env });
   execFileSync("git", ["add", "."], { cwd: repo });
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: repo });
-  for (const [verb, args] of [["open", ["dirs", "feature"]], ["note", ["plan", "touch the widgets", "--files", "src/widgets,src/a.ts", "--size", "large"]]]) {
-    const r = run(verb, args);
-    assert.equal(r.status, 0, r.stderr);
-  }
+  assert.equal(run("open", ["dirs", "feature"]).status, 0);
+  // a run under the new rules refuses a folder in --files (tests/plan-binds.test.mjs C13); an old one lists it
+  asOldRun(repo);
+  const r = run("note", ["plan", "touch the widgets", "--files", "src/widgets,src/a.ts", "--size", "large"]);
+  assert.equal(r.status, 0, r.stderr);
   for (const role of ["skeptic", "qa"]) {
     const r = run("brief", [role]);
     assert.equal(r.status, 0, `${role}: ${r.stderr}`);

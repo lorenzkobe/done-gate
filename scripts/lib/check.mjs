@@ -14,6 +14,7 @@ const HELP = `gate <verb>: node <plugin>/scripts/gate.mjs <verb>
   repo add <path>                                           add a further git repo to the open run, measured from its HEAD
   attach <slug>                                             join an open run from another session
   note task|context|plan "<text>" [--files a,b] [--size t]  write the ledger sections
+  plan add <a,b> "<why>"                                    add files to the plan once code may change; re-sizes the task, and reviewers and the report show why
   case add "<case>" --kind <kind> · case add --batch <file> (one <kind><TAB><case> per line) · case amend <id> "<case>" · case close <id> --test <file:name> | --ran "<part of the command>" | --na "<why>"
   step <n|key> done|skipped|na "<note>" [--evidence <ptr>]   close a playbook step (the close step: gate close)
   next                                                      the next step in full (verbs print it short after the first time)

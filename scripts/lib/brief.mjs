@@ -117,6 +117,7 @@ function header(state, role, round) {
   const out = [`# Brief: ${role} round ${round} — ${ledger.slug}`, ""];
   out.push("## Task", "", section(md, "Task") || "_not written_", "");
   out.push("## Plan", "", section(md, "Plan") || "_not written_", "");
+  if (ledger.planAdds?.length) out.push("## Plan additions", "", ...ledger.planAdds.map((a) => `- ${a.files.join(", ")} — ${a.why}`), "");
   // the arbiter rules on one finding from the cited code, the plan and the cases
   if (role !== "arbiter") out.push("## Context", "", section(md, "Context") || "_not written_", "");
   if (ledger.lookups) out.push("## Lookups", "", ...lookupLines(state, role), "");

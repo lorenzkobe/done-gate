@@ -188,7 +188,7 @@ test("C4 three pieces, each with one fixed finding, never deadlock: the cap coun
   edit(repo, "src/b.ts", lines(300, "b"));
   edit(repo, "src/c.ts", lines(300, "c"));
   edit(repo, "tests/a.test.ts", "test('a', () => {});\n");
-  cli(repo, "note", ["plan", "Three modules.", "--files", "src/a.ts,src/b.ts,src/c.ts"]);
+  cli(repo, "plan", ["add", "src/c.ts", "the third module"]);
   let n = 0;
   for (const f of ["src/a.ts", "src/b.ts", "src/c.ts"]) {
     round(repo, "reviewer", f, [`finding — ${f}:1 — x — []`]);

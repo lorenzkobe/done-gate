@@ -129,7 +129,7 @@ test("C6 edge: a plan that grows from tiny to standard before any code holds cod
 test("C7 edge: a run that grows to standard after code changed is not stalled mid-edit, and gate check still asks for the check", () => {
   const repo = planned("ph-c7", "src/a.ts");
   edited(repo, "src/a.ts");
-  cli(repo, "note", "plan", "Two files now.", "--files", TWO);
+  cli(repo, "plan", "add", "src/app/page.tsx", "the badge renders there");
   assert.equal(stepOf(repo, "skeptic").state, null, "premise: the check is owed now");
   assert.equal(edit(repo, "src/app/page.tsx"), null);
   assert.match(cli(repo, "check"), /step\(s\) blank:[^\n]*\{skeptic\}/);
