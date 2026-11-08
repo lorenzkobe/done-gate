@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { asOldRun, gate, makeRepo, planChecked, readyToEdit } from "./helpers.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
@@ -47,8 +47,8 @@ const packets = (repo) => readEvents(stateDir(repo), "S1").filter((e) => e.kind 
 const runsOf = (repo) => workerRuns({ ledger: ledgerOf(repo), events: readEvents(stateDir(repo), "S1") });
 
 const FILES = ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts", "src/types.ts"];
-function planned(name, { files = FILES.join(","), playbook = "feature" } = {}) {
-  const repo = makeRepo(name, Object.fromEntries(FILES.map((f) => [f, "export const x = 1;\n"])));
+function planned(name, { files = FILES.join(","), playbook = "feature", extra = {} } = {}) {
+  const repo = makeRepo(name, { ...Object.fromEntries(FILES.map((f) => [f, "export const x = 1;\n"])), ...extra });
   execFileSync("git", ["add", "-A"], { cwd: repo });
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
   cli(repo, "open", name, playbook);
@@ -222,4 +222,210 @@ test("C15 edge: a worker reading a sibling's packet keeps its own number; its ne
   bash(repo, `cat ${packet(1)}`, W2);
   const byAgent = Object.fromEntries(runsOf(repo).map((r) => [r.agent, r.n]));
   assert.deepEqual(byAgent, { W1: 1, W2: 2 });
+});
+
+// 7.2: on a pieces run a worker keeps to its piece and the briefs follow the groups
+
+// verify reads red.flag: present, it fails
+const VERIFY = {
+  ".claude/gate.json": JSON.stringify({ testFiles: null, strength: false, verify: [{ cmd: "node check.mjs" }] }),
+  "check.mjs": 'import { existsSync } from "node:fs";\nprocess.exit(existsSync("red.flag") ? 1 : 0);\n',
+};
+const started = (repo, id) => hook(repo, { hook_event_name: "SubagentStart", agent_id: id, agent_type: "done-gate:worker" });
+const stopped = (repo, id) => hook(repo, { hook_event_name: "SubagentStop", agent_id: id, agent_type: "done-gate:worker" });
+const packetPath = (repo, n) => path.join(repo, runRel(repo), `brief-worker-${n}.md`);
+// a worker briefed on files, spawned and reading its packet: its number
+function spawned(repo, id, files) {
+  const n = Number(/brief-worker-(\d+)\.md/.exec(cli(repo, "brief", "worker", ...(files ? ["--files", files] : [])))[1]);
+  started(repo, id);
+  assert.equal(fence(repo, "Read", { file_path: packetPath(repo, n) }, [id, "worker"]), null);
+  return n;
+}
+const editAs = (repo, rel, who = null) => fence(repo, "Edit", { file_path: path.join(repo, rel), old_string: "x", new_string: "y" }, who);
+const writeAs = (repo, rel, who = null) => fence(repo, "Write", { file_path: path.join(repo, rel), content: "x" }, who);
+function editedBy(repo, rel, id) {
+  writeFileSync(path.join(repo, rel), "export const y = 2;\n");
+  hook(repo, { hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: path.join(repo, rel) }, tool_response: {}, ...(id ? { agent_id: id, agent_type: "done-gate:worker" } : {}) });
+}
+// pieces a | b | a,c: group 1 holds a and b, group 2 holds a,c
+function pieced(name, pieces = ["src/a.ts", "src/b.ts", "src/a.ts,src/c.ts"]) {
+  const repo = planned(name, { extra: VERIFY });
+  cli(repo, "plan", "pieces", ...pieces);
+  return repo;
+}
+const W3 = ["W3", "worker"];
+
+test("7.2 C1 refused: a worker's Edit of code in another piece or outside its own is refused", () => {
+  const repo = pieced("pp2-c1");
+  spawned(repo, "W1", "src/a.ts");
+  spawned(repo, "W2", "src/b.ts");
+  for (const rel of ["src/b.ts", "src/d.ts"]) {
+    const why = editAs(repo, rel, W1);
+    assert.match(why ?? "", new RegExp(`${rel.replace(".", "\\.")} is outside your piece`), why);
+    assert.match(why, /stop and tell the lead/);
+  }
+});
+
+test("7.2 C2 happy: a bound worker edits its own piece and a new test no other piece lists", () => {
+  const repo = pieced("pp2-c2");
+  spawned(repo, "W1", "src/a.ts");
+  assert.equal(editAs(repo, "src/a.ts", W1), null);
+  assert.equal(writeAs(repo, "tests/new.test.ts", W1), null);
+  assert.equal(writeAs(repo, "docs/notes.md", W1), null);
+});
+
+test("7.2 C3 refused: a worker that has not read its packet edits nothing until it does", () => {
+  const repo = pieced("pp2-c3");
+  cli(repo, "brief", "worker", "--files", "src/a.ts");
+  started(repo, "W3");
+  assert.match(editAs(repo, "src/a.ts", W3) ?? "", /read your packet first/);
+  assert.match(writeAs(repo, "tests/new.test.ts", W3) ?? "", /read your packet first/);
+  fence(repo, "Read", { file_path: packetPath(repo, 1) }, W3);
+  assert.equal(editAs(repo, "src/a.ts", W3), null);
+});
+
+test("7.2 C4 refused: a test or doc another piece lists, or another running worker edited, is not a worker's", () => {
+  const repo = pieced("pp2-c4", ["src/a.ts,tests/a.test.ts,docs/notes.md", "src/b.ts", "src/c.ts"]);
+  spawned(repo, "W1", "src/a.ts,tests/a.test.ts,docs/notes.md");
+  spawned(repo, "W2", "src/b.ts");
+  assert.match(editAs(repo, "tests/a.test.ts", W2) ?? "", /tests\/a\.test\.ts is in another piece/);
+  assert.match(editAs(repo, "docs/notes.md", W2) ?? "", /docs\/notes\.md is in another piece/);
+  assert.equal(writeAs(repo, "tests/new.test.ts", W1), null);
+  editedBy(repo, "tests/new.test.ts", "W1");
+  assert.match(editAs(repo, "tests/new.test.ts", W2) ?? "", /another worker .*still running/);
+  stopped(repo, "W1");
+  assert.equal(editAs(repo, "tests/new.test.ts", W2), null);
+});
+
+test("7.2 C5 edge: no pieces, or a worker briefed without --files, keeps the old reach", () => {
+  const plain = planned("pp2-c5-plain", { extra: VERIFY });
+  started(plain, "W1");
+  assert.equal(editAs(plain, "src/b.ts", W1), null);
+  const repo = pieced("pp2-c5");
+  spawned(repo, "W1", null);
+  assert.equal(editAs(repo, "src/b.ts", W1), null);
+  assert.equal(editAs(repo, "src/d.ts", W1), null);
+});
+
+test("7.2 C6 refused: a running worker's file is refused to the lead's shell and Edit and to another worker's shell", () => {
+  const repo = pieced("pp2-c6");
+  const n = spawned(repo, "W1", "src/a.ts");
+  spawned(repo, "W2", "src/b.ts");
+  for (const why of [bash(repo, "echo x > src/a.ts"), editAs(repo, "src/a.ts"), bash(repo, "sed -i '' s/x/y/ src/a.ts", W2), bash(repo, `node -e "require('fs').writeFileSync('src/a.ts','x')"`)]) {
+    assert.match(why ?? "", new RegExp(`src/a\\.ts is in worker ${n}'s piece, and that worker is still running`), why);
+  }
+  assert.equal(bash(repo, "sed -i '' s/x/y/ src/a.ts", W1), null);
+  assert.equal(bash(repo, "echo x > src/d.ts"), null);
+  stopped(repo, "W1");
+  assert.equal(bash(repo, "echo x > src/a.ts"), null);
+  assert.equal(editAs(repo, "src/a.ts"), null);
+});
+
+test("7.2 C7 refused: a worker brief must name a piece, and a bare one waits while a worker runs", () => {
+  const repo = pieced("pp2-c7");
+  const why = refused(repo, "brief", "worker", "--files", "src/d.ts");
+  assert.match(why, /src\/d\.ts is not one of this run's pieces/);
+  assert.match(why, /gate brief worker --files src\/a\.ts,src\/c\.ts/);
+  assert.match(refused(repo, "brief", "worker", "--files", "src/a.ts,src/b.ts"), /not one of this run's pieces/);
+  spawned(repo, "W1", "src/a.ts");
+  assert.match(refused(repo, "brief", "worker"), /worker 1 is still running/);
+  stopped(repo, "W1");
+  cli(repo, "brief", "worker");
+});
+
+test("7.2 C8 refused: a piece whose worker still runs is not briefed again", () => {
+  const repo = pieced("pp2-c8");
+  const n = spawned(repo, "W1", "src/a.ts");
+  assert.match(refused(repo, "brief", "worker", "--files", "src/a.ts"), new RegExp(`worker ${n} is still running`));
+  stopped(repo, "W1");
+  assert.match(cli(repo, "brief", "worker", "--files", "src/a.ts"), new RegExp(`brief-worker-${n}\\.md`));
+});
+
+test("7.2 C9 refused: group 2's first brief waits for group 1's workers and a green verify", () => {
+  const repo = pieced("pp2-c9");
+  spawned(repo, "W1", "src/a.ts");
+  spawned(repo, "W2", "src/b.ts");
+  stopped(repo, "W2");
+  assert.match(refused(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts"), /group 2 waits for group 1: worker 1 is still running/);
+  stopped(repo, "W1");
+  assert.match(refused(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts"), /group 2 starts once `gate verify` is green[\s\S]*no verify\.json/);
+  writeFileSync(path.join(repo, "red.flag"), "");
+  run(repo, ["verify"]);
+  assert.match(refused(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts"), /group 2 starts once `gate verify` is green[\s\S]*red/);
+  rmSync(path.join(repo, "red.flag"));
+  cli(repo, "verify");
+  editedBy(repo, "src/b.ts", null);
+  assert.match(refused(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts"), /stale/);
+  cli(repo, "verify");
+  cli(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts");
+});
+
+test("7.2 C10 happy: a review round's re-brief of a group 2 piece is not held by the group order", () => {
+  const repo = pieced("pp2-c10");
+  cli(repo, "brief", "worker", "--files", "src/a.ts");
+  cli(repo, "brief", "worker", "--files", "src/b.ts");
+  cli(repo, "verify");
+  cli(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts");
+  writeFileSync(path.join(repo, "red.flag"), "");
+  run(repo, ["verify"]);
+  cli(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts");
+});
+
+test("7.2 C11 refused: a reviewer brief and gate plan pieces wait while a worker runs", () => {
+  const repo = pieced("pp2-c11");
+  spawned(repo, "W1", "src/a.ts");
+  editedBy(repo, "src/a.ts", "W1");
+  assert.match(refused(repo, "brief", "reviewer"), /worker 1 is still running/);
+  assert.match(refused(repo, "brief", "reviewer-2"), /worker 1 is still running/);
+  assert.match(refused(repo, "plan", "pieces", "src/a.ts", "src/b.ts"), /worker 1 is still running/);
+  stopped(repo, "W1");
+  cli(repo, "plan", "pieces", "src/a.ts", "src/b.ts");
+  cli(repo, "brief", "reviewer");
+});
+
+test("7.2 C12 edge: --files spelled in another case takes the piece's own spelling and number where the file system folds case", async () => {
+  const { IGNORE_CASE } = await import("../scripts/lib/paths.mjs");
+  const repo = pieced("pp2-c12");
+  const n = Number(/brief-worker-(\d+)\.md/.exec(cli(repo, "brief", "worker", "--files", "src/a.ts"))[1]);
+  if (!IGNORE_CASE) {
+    assert.match(refused(repo, "brief", "worker", "--files", "SRC/A.ts"), /not one of this run's pieces/);
+    return;
+  }
+  assert.match(cli(repo, "brief", "worker", "--files", "SRC/A.ts"), new RegExp(`brief-worker-${n}\\.md`));
+  assert.deepEqual(ledgerOf(repo).briefed[`worker-${n}.md`].files, ["src/a.ts"]);
+});
+
+test("7.2 C13 refused: group 2's first brief waits while a group 1 piece was never briefed", () => {
+  const repo = pieced("pp2-c13");
+  cli(repo, "brief", "worker", "--files", "src/a.ts");
+  cli(repo, "verify");
+  assert.match(refused(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts"), /group 2 waits for group 1: src\/b\.ts has not been briefed/);
+  cli(repo, "brief", "worker", "--files", "src/b.ts");
+  cli(repo, "brief", "worker", "--files", "src/a.ts,src/c.ts");
+});
+
+test("7.2 C14 edge: a worker resumed for a review round keeps its number; an unbound one is told where its packet is", () => {
+  const repo = pieced("pp2-c14");
+  const n = spawned(repo, "W1", "src/a.ts");
+  stopped(repo, "W1");
+  started(repo, "W1");
+  assert.deepEqual(runsOf(repo), [{ agent: "W1", n, running: true }]);
+  assert.equal(editAs(repo, "src/a.ts", W1), null);
+  started(repo, "W3");
+  assert.match(editAs(repo, "src/a.ts", W3) ?? "", new RegExp(`read your packet first: the brief-worker-<n>\\.md in ${runRel(repo).replace(/[.]/g, "\\.")} that your prompt names`));
+});
+
+test("7.2 C15 edge: decide with no state dir, or on a run with no pieces, reads no events and never throws", async () => {
+  const { decide } = await import("../scripts/lib/guard.mjs");
+  const repo = pieced("pp2-c15");
+  started(repo, "W1");
+  const ledger = ledgerOf(repo);
+  const worker = { agent_id: "W1", agent_type: "done-gate:worker" };
+  const edit = { tool_name: "Edit", tool_input: { file_path: path.join(repo, "src/b.ts"), old_string: "x", new_string: "y" }, ...worker };
+  const shell = { tool_name: "Bash", tool_input: { command: "echo x > src/a.ts" } };
+  for (const input of [edit, shell]) {
+    assert.equal(decide(input, repo, null, runRel(repo), ledger).deny, false);
+    assert.equal(decide(input, repo, null, runRel(repo), ledger, { stateDir: stateDir(repo), session: "S1", unreadable: true }).deny, false);
+    assert.doesNotThrow(() => decide(input, repo, null, null, null));
+  }
 });

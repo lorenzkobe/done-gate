@@ -4,12 +4,12 @@ import path from "node:path";
 import { buildState } from "./assess.mjs";
 import { caseTable, verifyLines } from "./report.mjs";
 import { LESSONS, saveLedger, section } from "./ledger.mjs";
-import { leadDelegates, renderTierBlock, tierMax, tierOf } from "./size.mjs";
+import { leadDelegates, renderTierBlock, samePiece, tierMax, tierOf } from "./size.mjs";
 import { baseCopy, fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs";
 import { ROLES, flag, outsideRepos, positional } from "./verbs.mjs";
 import { repoPath, toPosixRel } from "./paths.mjs";
 import { OWN_FILE } from "./guard.mjs";
-import { LOOKUP_EXAMPLE, newRules, waitingDisputes, fixCheckDone, capUnitsOf, nextPiece, roundOnDisk, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, uncovered, unfinishedFile, unfinishedVerify, verifyProblem } from "./rules.mjs";
+import { LOOKUP_EXAMPLE, newRules, waitingDisputes, fixCheckDone, capUnitsOf, nextPiece, roundOnDisk, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, reviewScope, runningPieces, uncovered, unfinishedFile, unfinishedVerify, verifyProblem, workerRuns } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { nextSeq } from "./events.mjs";
@@ -422,6 +422,37 @@ async function strengthFor(state, piece) {
   return breaks.map(id).filter((k) => k in saved.results).map((k) => saved.results[k]);
 }
 
+const workerName = (r) => (r.n === null ? "a worker" : `worker ${r.n}`);
+
+// On a pieces run a worker brief names one piece, in the piece's own spelling, and the groups run
+// in order: a group's first briefs wait until every earlier piece was briefed, their workers
+// stopped and verify is green. A re-brief (a review round) waits only for its own worker.
+function pieceBrief(state, owned) {
+  const { list, groups } = state.ledger.pieces;
+  if (owned === null) {
+    const out = workerRuns(state).find((r) => r.running);
+    if (out) throw new UsageError(`a worker brief without --files answers findings across the whole change, and ${workerName(out)} is still running: wait for it to stop`);
+    return null;
+  }
+  const i = list.findIndex((p) => samePiece(p, owned));
+  if (i < 0) throw new UsageError(`--files ${owned.join(",")} is not one of this run's pieces; brief one of them:\n${list.map((p) => `  gate brief worker --files ${p.join(",")}`).join("\n")}\nor declare them again with \`gate plan pieces\``);
+  const piece = list[i];
+  const running = runningPieces(state).filter((r) => r.files);
+  const busy = running.find((r) => samePiece(r.files, piece));
+  if (busy) throw new UsageError(`${piece.join(", ")}: worker ${busy.n} is still running on this piece; brief it again once it has stopped`);
+  const briefed = Object.entries(state.ledger.briefed ?? {}).filter(([f]) => f.startsWith("worker-")).map(([, v]) => v.files ?? []);
+  const group = groups.findIndex((g) => g.includes(i));
+  if (group <= 0 || briefed.some((f) => samePiece(f, piece))) return piece;
+  const groupOf = (j) => groups.findIndex((g) => g.includes(j)) + 1;
+  const never = groups.slice(0, group).flat().find((j) => !briefed.some((f) => samePiece(f, list[j])));
+  if (never !== undefined) throw new UsageError(`group ${group + 1} waits for group ${groupOf(never)}: ${list[never].join(",")} has not been briefed (\`gate brief worker --files ${list[never].join(",")}\`)`);
+  const earlier = running.find((r) => groups.slice(0, group).flat().some((j) => samePiece(list[j], r.files)));
+  if (earlier) throw new UsageError(`group ${group + 1} waits for group ${groupOf(list.findIndex((p) => samePiece(p, earlier.files)))}: worker ${earlier.n} is still running`);
+  const red = verifyProblem(state, { final: false });
+  if (red) throw new UsageError(`group ${group + 1} starts once \`gate verify\` is green on the earlier groups' work: ${red.text}`);
+  return piece;
+}
+
 export const verbs = {
   async brief(ctx) {
     const [role] = positional(ctx.args);
@@ -432,6 +463,8 @@ export const verbs = {
     // a review round covers a piece: --files names it, or the whole change when that fits
     // the cap; past the cap the lead splits by file
     let piece = null;
+    const out = reviewing && state.ledger.pieces ? workerRuns(state).find((r) => r.running) : null;
+    if (out) throw new UsageError(`a review round waits while ${workerName(out)} is still running: its packet would show half-done work`);
     if (reviewing) {
       const scope = reviewScope(state);
       const named = flag(ctx.args, "--files");
@@ -534,11 +567,12 @@ export const verbs = {
     // a worker's packet and reply file follow its piece: the same --files gets the same
     // number back, another piece the next one, so two workers out at once never share a file
     const named = role === "worker" ? flag(ctx.args, "--files") : undefined;
-    const owned = named === undefined ? null : [...new Set(named.split(",").map((f) => {
+    let owned = named === undefined ? null : [...new Set(named.split(",").map((f) => {
       const rel = toPosixRel(ctx.root, f.trim(), state.repos);
       if (!rel) throw new UsageError(`--files: "${f.trim()}" is not a file inside the repo; name the worker's files as a,b`);
       return rel;
     }))];
+    if (role === "worker" && state.ledger.pieces) owned = pieceBrief(state, owned);
     const workerNumber = () => {
       const mine = Object.entries(state.ledger.briefed ?? {}).filter(([f]) => f.startsWith("worker-"));
       const again = mine.find(([, v]) => sameFiles(v.files ?? [], owned ?? []));

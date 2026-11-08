@@ -3,12 +3,12 @@ import path from "node:path";
 import { nextSeq } from "./events.mjs";
 import { addLessons, currentLedger, findRun, isDone, loadLedger, openRuns, saveLedger } from "./ledger.mjs";
 import { loadConfig } from "./config.mjs";
-import { applyPrediction, effectiveTier, groupPieces, inPlan, outsidePlan, PIECES_PER_GROUP, policyFor, requiredSteps, requires, tierOf, tierOrder, tiered } from "./size.mjs";
+import { applyPrediction, effectiveTier, groupPieces, inPlan, outsidePlan, PIECES_PER_GROUP, policyFor, samePiece, requiredSteps, requires, tierOf, tierOrder, tiered } from "./size.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, uncovered, afterReview, changedUnitsOf, parseEntry, pathOf, parseReplies, pointerResolver, proofProblem, wrongProblem, upheldItem, uiTrial, reviewTrialed, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid } from "./rules.mjs";
+import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, uncovered, afterReview, changedUnitsOf, parseEntry, pathOf, parseReplies, pointerResolver, proofProblem, wrongProblem, upheldItem, uiTrial, reviewTrialed, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid, workerRuns } from "./rules.mjs";
 import { assess, broughtSinceOpen, buildState, cleanAtHead, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
@@ -281,6 +281,8 @@ function planPieces(ctx, given) {
   const { ledger } = open(ctx);
   if (!newRules(ledger)) throw new UsageError(`run ${ledger.slug} opened before gate plan pieces: brief each worker with \`gate brief worker --files a,b\``);
   if (!tiered(ledger)) throw new UsageError(`a ${ledger.playbook} run has no file plan to split into pieces`);
+  const out = workerRuns({ ledger, events: ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)) }).find((r) => r.running);
+  if (out) throw new UsageError(`${out.n === null ? "a worker" : `worker ${out.n}`} is still running: the pieces change once it has stopped`);
   const sharedText = flag(ctx.args, "--shared");
   if (ctx.args.filter((a) => a === "--shared").length > 1) throw new UsageError("give --shared once, as a comma list: --shared a.ts,b.ts");
   if (ctx.args.includes("--shared") && (!sharedText || sharedText.startsWith("--"))) throw new UsageError(`--shared names no file: ${PIECES_USAGE}`);
@@ -301,9 +303,8 @@ function planPieces(ctx, given) {
     return files;
   };
   const pieces = given.map((text, i) => filesOf(text, `piece ${i + 1}`));
-  const same = (a, b) => a.length === b.length && a.every((f) => inPlan(b, f));
   pieces.forEach((p, i) => {
-    const j = pieces.findIndex((q, k) => k > i && same(p, q));
+    const j = pieces.findIndex((q, k) => k > i && samePiece(p, q));
     if (j > i) throw new UsageError(`pieces ${i + 1} and ${j + 1} name the same files, and one worker number would hold both: list each piece once`);
   });
   const shared = sharedText === undefined ? [] : filesOf(sharedText, "--shared");

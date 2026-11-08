@@ -595,17 +595,24 @@ export function helpersOut(events, session, since, now = Date.now()) {
 }
 
 // Each worker of the run with the packet number it holds and whether it is still out. The number
-// is its first packet read since its newest start: a resume reads its new packet, and a sibling's
-// packet read for context moves nothing.
+// is its first packet read since its newest start that has one: a resume that reads a new packet
+// takes it, a resume that reads none keeps the last, and a sibling's packet read for context
+// moves nothing.
 export function workerRuns(state, now = Date.now()) {
   const events = (state.events ?? []).filter((e) => e.seq > (state.ledger?.openedSeq ?? 0) && e.agent && isRole(e.agentType, "worker")).sort((a, b) => a.seq - b.seq);
   const ids = [...new Set(events.filter((e) => e.kind === "subagent-start" || e.kind === "packet").map((e) => e.agent))];
   return ids.map((agent) => {
     const mine = events.filter((e) => e.agent === agent);
-    const start = mine.filter((e) => e.kind === "subagent-start").at(-1)?.seq ?? 0;
-    const read = mine.find((e) => e.kind === "packet" && e.seq > start);
+    const starts = [0, ...mine.filter((e) => e.kind === "subagent-start").map((e) => e.seq)].reverse();
+    let read = null;
+    for (const start of starts) if ((read = mine.find((e) => e.kind === "packet" && e.seq > start))) break;
     return { agent, n: read?.n ?? null, running: helperAlive(state.events ?? [], agent, now) };
   });
+}
+
+// The workers still out that hold a packet, each with the files its brief gave it.
+export function runningPieces(state, now = Date.now()) {
+  return workerRuns(state, now).filter((r) => r.running && r.n !== null).map((r) => ({ ...r, files: state.ledger?.briefed?.[`worker-${r.n}.md`]?.files ?? null }));
 }
 
 // Who worked on a helper file since its brief, per agent id: the agents that wrote it, or

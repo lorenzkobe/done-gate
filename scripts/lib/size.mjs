@@ -214,6 +214,8 @@ const PLAIN_TEXT = /\.(?:md|mdx|txt|rst)$/i;
 const planFree = (config, p) => config.isTest(p) || config.isDoc(p) || PLAIN_TEXT.test(p);
 const fold = (p) => (IGNORE_CASE ? p.toLowerCase() : p);
 export const inPlan = (named, p) => named.some((n) => fold(n) === fold(p));
+// Two file lists naming the same files, spelled as the file system matches names.
+export const samePiece = (a, b) => a.length === b.length && a.every((f) => inPlan(b, f));
 
 // At most this many workers run at once: a spawn cannot be fenced, so grouping is what holds it.
 export const PIECES_PER_GROUP = 4;

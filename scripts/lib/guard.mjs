@@ -3,13 +3,13 @@ import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync
 import path from "node:path";
 import { loadConfig } from "./config.mjs";
 import { currentLedger, isDone } from "./ledger.mjs";
-import { outsidePlan, policyFor, tierOf, tiered } from "./size.mjs";
+import { inPlan, outsidePlan, policyFor, samePiece, tierOf, tiered } from "./size.mjs";
 import { appendEvents, nextSeq, readEvents, toolUse } from "./events.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { ancestorPids, pidsDir } from "./context.mjs";
 import { headReflog } from "./tree.mjs";
 import { runsTests } from "./verify.mjs";
-import { newRules } from "./rules.mjs";
+import { newRules, runningPieces, workerRuns } from "./rules.mjs";
 
 // Files only the gate's own verbs may write. A model that could edit these could
 // forge its evidence, so the deny is unconditional and every attempt is logged.
@@ -969,6 +969,37 @@ function recommendsGivingUp(input) {
   }));
 }
 
+// The run's events when it declared pieces and the fence can read them; null otherwise, so a
+// caller with no state dir, or a state it cannot read, keeps the old reach.
+const piecesEvents = (ledger, where) => (ledger?.pieces && where.stateDir && where.session && !where.unreadable ? readEvents(where.stateDir, where.session) : null);
+
+// A file in the piece of a worker still out that is not the caller's own: two writers in one file.
+function heldBy(running, paths, agent) {
+  for (const r of running) {
+    const p = r.agent !== agent && r.files ? paths.find((f) => inPlan(r.files, f)) : null;
+    if (p) return `${p} is in worker ${r.n}'s piece, and that worker is still running: wait for it to stop, or for a change it needs, tell it through the lead`;
+  }
+  return null;
+}
+
+// A worker edits its own piece: the code its brief named, and tests or docs no other piece lists
+// and no other running worker edited. Early warning only, as shell edits name no worker.
+function outsidePiece(agent, paths, ledger, events, config, currentRun) {
+  const runs = workerRuns({ ledger, events });
+  const me = runs.find((r) => r.agent === agent);
+  if (!me || me.n === null) return `read your packet first: the brief-worker-<n>.md in ${currentRun} that your prompt names; until then the gate cannot tell which piece is yours`;
+  const own = ledger.briefed?.[`worker-${me.n}.md`]?.files;
+  if (!own) return null;
+  const code = outsidePlan(own, paths, config);
+  if (code.length) return `${code[0]} is outside your piece (${own.join(", ")}): stop and tell the lead what the piece needs there; the lead decides`;
+  const busy = new Set(runs.filter((r) => r.running && r.agent !== agent).map((r) => r.agent));
+  for (const p of paths.filter((f) => !inPlan(own, f))) {
+    if (ledger.pieces.list.some((q) => !samePiece(q, own) && inPlan(q, p))) return `${p} is in another piece: stop and tell the lead what your piece needs there`;
+    if (events.some((e) => e.kind === "edit" && busy.has(e.agent) && inPlan([e.path ?? ""], p))) return `${p} was edited by another worker that is still running: stop and tell the lead what your piece needs there`;
+  }
+  return null;
+}
+
 export function decide(input, root, config = null, currentRun = null, ledger = null, where = {}) {
   const repos = ledger?.repos ?? [];
   config ??= loadConfig(root, repos);
@@ -1007,6 +1038,12 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
     if (linked) return { deny: true, reason: `done-gate: that command writes ${linked}, which is in the gate's evidence folder. Evidence is written only by \`gate\` verbs.`, paths: [] };
     const worker = agentType === "done-gate:worker" || agentType === "worker";
     if (worker && gitWrites(cmd)) return { deny: true, reason: "done-gate: a worker runs no git command that moves the tree or the index (stash, checkout, restore, reset, commit, add): other workers share this checkout, and one stash or checkout wipes their work. Read with git diff, git log or git status; commits are the lead's.", paths: [] };
+    if (ledger?.pieces) {
+      const targets = [...shellWrites(cmd).outside, ...inlineWriteTargets(cmd).targets].filter((t) => !isScratch(t)).map((t) => toPosixRel(root, t, repos)).filter(Boolean);
+      const events = targets.length ? piecesEvents(ledger, where) : null;
+      const held = events && heldBy(runningPieces({ ledger, events }), targets, input.agent_id ?? null);
+      if (held) return { deny: true, reason: `done-gate: that command writes ${held}.`, paths: targets };
+    }
     // the lead's shell write to code waits for the plan like an Edit does; a worker's waits only
     // for the plan check, and the lead alone decides a task outgrew its plan
     if (!where.unreadable && !HELPER_ROLES.some((r) => agentType === `done-gate:${r}` || agentType === r)) {
@@ -1075,6 +1112,13 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
     if (outside.length) {
       return { deny: true, reason: `done-gate: the worker writes its worker-<n>.md only in the current run dir; ${outside.join(", ")} is not that.`, paths };
     }
+  }
+  const checked = paths.filter((p) => !isScratch(p) && !IN_GATE_DIR.test(p));
+  const events = checked.length ? piecesEvents(ledger, where) : null;
+  if (events) {
+    const agent = input.agent_id ?? null;
+    const why = (role("worker") ? outsidePiece(agent, checked, ledger, events, config, currentRun) : null) ?? heldBy(runningPieces({ ledger, events }), checked, agent);
+    if (why) return { deny: true, reason: `done-gate: ${why}.`, paths };
   }
   if (role("reviewer") || role("reviewer-2")) {
     const own = role("reviewer") ? isReviewFile : isReview2File;
