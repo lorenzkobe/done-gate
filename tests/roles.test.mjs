@@ -617,3 +617,12 @@ test("C4 reported-surface: across `gate open` and the hint after `gate note task
   assert.match(hinted, /`--no-code "<tool>: not installed\|not indexed"`/, hinted);
   assert.match(hinted, /`--no-memory "<tool>: not installed\|not indexed"`/, hinted);
 });
+
+// From the D1 review: a reviewer's background timing probe ran on for hours after its hand-back
+test("C26 both reviewer role files run a probe that may not finish under timeout and stop their background commands before the hand-back", () => {
+  for (const role of ["reviewer", "reviewer-2"]) {
+    const text = readFileSync(path.join(pluginRoot, "agents", `${role}.md`), "utf8").replace(/\s+/g, " ");
+    assert.match(text, /may not finish[^.]*`timeout 60`/, `${role}.md`);
+    assert.match(text, /stop every background command you started before you hand back/, `${role}.md`);
+  }
+});

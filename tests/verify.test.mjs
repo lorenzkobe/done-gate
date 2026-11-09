@@ -126,14 +126,18 @@ test("4.1 C6 the report and check carry the same timeout wording as gate verify"
 
 test("a command that leaves a background child holding stdout still returns when the command exits", () => {
   const repo = repoWithVerify("verify-bg", [
-    `${node} -e "require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'inherit'}).unref(); console.log('parent done'); process.exit(0)"`,
+    `${node} -e "const c = require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'inherit'}); c.unref(); console.log('child ' + c.pid); console.log('parent done'); process.exit(0)"`,
   ]);
   const started = Date.now();
   cli(repo, "verify");
-  assert.ok(Date.now() - started < 8000, "did not wait for the orphaned child");
   const v = JSON.parse(readFileSync(path.join(runDir(repo), "verify.json"), "utf8"));
+  // the child outlives the command by design: stop it, or every suite run leaves one behind
+  const child = Number(/child (\d+)/.exec(v.commands[0].tail)?.[1]);
+  if (child) process.kill(child);
+  assert.ok(Date.now() - started < 8000, "did not wait for the orphaned child");
   assert.equal(v.commands[0].exit, 0);
   assert.match(v.commands[0].tail, /parent done/);
+  assert.ok(child > 0, "the child's pid was printed");
 });
 
 test("a green verify closes the {verify} step with script evidence; a red one leaves it open", () => {

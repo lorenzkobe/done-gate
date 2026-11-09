@@ -273,13 +273,49 @@ const systemProgram = (text) => {
   const name = text.replace(/^\/(?:usr\/)?bin\/(?=[^/]+$)/, "");
   return name === "cd" ? text : name;
 };
+// Programs that run the words after them as the command (`timeout 60 node -e …`): the fence
+// reads that command. A flag that takes a value drops it too; timeout's duration is one word.
+const TIMEOUT = { value: /^(?:-[sk]|--signal|--kill-after)$/, operands: 1 };
+const WRAPPERS = {
+  timeout: TIMEOUT,
+  gtimeout: TIMEOUT,
+  nice: { value: /^-n$/, operands: 0 },
+  nohup: { value: null, operands: 0 },
+  stdbuf: { value: /^-[ioe]$/, operands: 0 },
+  // env's NAME=value words may sit between its flags
+  env: { value: /^(?:-[uC]|--unset|--chdir)$/, operands: 0, assigns: true },
+  command: { value: null, operands: 0 },
+  exec: { value: /^-a$/, operands: 0 },
+  setsid: { value: null, operands: 0 },
+  ionice: { value: /^-[cnp]$/, operands: 0 },
+  caffeinate: { value: /^-[tw]$/, operands: 0 },
+};
+function dropWrapper(words, assigned = () => {}) {
+  const wrapper = !words[0]?.quoted && WRAPPERS[systemProgram(words[0]?.text ?? "")];
+  // env -S splits one string into the command: nothing here can read it; command -v only looks a name up
+  if (!wrapper || (words[0].text.endsWith("env") && words.some((w) => /^(?:-S|--split-string)/.test(w.text))) || (words[0].text === "command" && /^-[a-zA-Z]*[vV]/.test(words[1]?.text ?? ""))) return false;
+  words.shift();
+  while (words.length && !words[0].quoted && (words[0].text.startsWith("-") || (wrapper.assigns && words[0].assign))) {
+    const word = words.shift();
+    if (word.assign) assigned(word);
+    else if (wrapper.value?.test(word.text)) words.shift();
+  }
+  words.splice(0, wrapper.operands);
+  return true;
+}
 function shift(seg) {
   const words = seg.filter((w, i) => w.text !== "" || seg.slice(0, i).some((x) => x.text !== ""));
   let envChanged = false;
   let rtkRead = false;
-  while (words.length && (words[0].assign || (!words[0].quoted && (words[0].text === "rtk" || KEYWORDS.has(words[0].text))))) {
-    if (/^PATH=/.test(words[0].text)) envChanged = true; // a planted binary could stand in for cat
-    if (words[0].assign && RUNS_COMMAND.test(words[0].text) && !PAGER_OFF.test(words[0].text)) envChanged = true; // as a prefix or exported already, it makes a reader run a command
+  const changes = (w) => {
+    if (/^PATH=/.test(w.text)) envChanged = true; // a planted binary could stand in for cat
+    if (w.assign && RUNS_COMMAND.test(w.text) && !PAGER_OFF.test(w.text)) envChanged = true; // as a prefix or exported already, it makes a reader run a command
+  };
+  for (;;) {
+    // env's own NAME=value words count as a prefix's do
+    if (dropWrapper(words, changes)) continue;
+    if (!words.length || !(words[0].assign || (!words[0].quoted && (words[0].text === "rtk" || KEYWORDS.has(words[0].text))))) break;
+    changes(words[0]);
     // `rtk proxy <cmd>` runs the command unfiltered
     if (words.shift().text !== "rtk" || words[0]?.quoted) continue;
     if (words[0]?.text === "proxy") words.shift();
@@ -636,6 +672,7 @@ export function shellWrites(raw) {
         if (!words.length && !w.quoted && HEADERS.has(w.text)) break;
         words.push(w);
       }
+      while (dropWrapper(words)) while (words[0]?.assign) words.shift();
       const rest = [];
       for (let i = 0; i < words.length; i++) {
         const t = redirect(words[i]);

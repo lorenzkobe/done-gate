@@ -10,6 +10,7 @@ import { pointerResolver } from "../scripts/lib/rules.mjs";
 import { reviewFiles } from "../scripts/lib/assess.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
 import { nextHint } from "../scripts/lib/next.mjs";
+import { readsOnly } from "../scripts/lib/guard.mjs";
 
 // ===== from tests/review-dispute.test.mjs =====
 {
@@ -2039,6 +2040,37 @@ test("C13 refused: a helper cannot move source into scratch or write it through 
   for (const cmd of allowed) {
     assert.equal(fence(cmd, RV), false, `the reviewer was denied a harmless command: ${cmd}`);
   }
+});
+
+// The reviewer's own instructions put `timeout 60` in front of a probe: a wrapper that runs the
+// next words as a command is no cover for a write
+test("C13b refused: timeout, gtimeout, nohup, nice, env and stdbuf in front of a writing interpreter are still writes; in front of a read they pass", () => {
+  const repo = opened("skeptic-bash-wrapper");
+  const fence = (command) => {
+    const r = spawnSync(process.execPath, [gate, "fence"], {
+      input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: repo, session_id: "S1", agent_id: "A2", agent_type: "done-gate:reviewer" }),
+      encoding: "utf8",
+      env: envFor(repo, "S1"),
+      // a wrapper flag the fence cannot step past must fail here, not hang the hook
+      timeout: 10000,
+    });
+    assert.equal(r.error, undefined, `the fence hung on: ${command}`);
+    assert.equal(r.status, 0, r.stderr);
+    const out = r.stdout.trim();
+    return out === "" ? false : JSON.parse(out).hookSpecificOutput.permissionDecision === "deny";
+  };
+  const write = `node -e "require('fs').writeFileSync('src/a.ts',1)"`;
+  for (const lead of ["timeout 60", "timeout -s KILL -k 5 60", "timeout --signal=TERM 10s", "timeout --signal KILL 60", "timeout --kill-after 5 60", "gtimeout 60", "nohup", "nice -n 5", "nice", "env FOO=1", "env -i", "env -i A=1 -u B", "stdbuf -oL", "timeout 60 nice -n 5", "command", "exec", "setsid", "ionice -c 3", "caffeinate -t 60"]) {
+    assert.equal(fence(`${lead} ${write}`), true, `the reviewer was allowed to write source behind: ${lead}`);
+  }
+  for (const cmd of [`timeout 60 node -e "console.log(1)"`, "timeout 60 node --test tests/x.test.mjs", "nohup grep -n a src/a.ts", "command -v node", "command -p cat src/a.ts", "setsid -w cat src/a.ts", "nohup -x cat src/a.ts"]) {
+    assert.equal(fence(cmd), false, `the reviewer was denied a harmless command: ${cmd}`);
+  }
+  // env's assignments change what a reader runs, as they do without env in front
+  for (const cmd of ["env PATH=/tmp/evil cat src/a.ts", "env GIT_PAGER=vim git log", "env -i PAGER=sh git log"]) {
+    assert.equal(readsOnly(cmd), false, `read as a plain read: ${cmd}`);
+  }
+  assert.equal(readsOnly("env -i A=1 cat src/a.ts"), true);
 });
 
 // ---------------------------------------------------------------------------
