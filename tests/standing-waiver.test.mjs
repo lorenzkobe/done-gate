@@ -212,3 +212,36 @@ test("C12 gate waive --standing from a sibling folder is refused the same way, w
   assert.match(r.stderr, /--standing rollout/);
   assert.equal(existsSync(path.join(path.dirname(home), "sw-c12-sibling", ".claude", "gate", "standing.json")), false);
 });
+
+const setCopyUntil = (repo, until) => {
+  const file = path.join(stateDir(repo), "runs", loadSession(stateDir(repo), "S1").current, "ledger.json");
+  const ledger = JSON.parse(readFileSync(file, "utf8"));
+  for (const w of ledger.waivers) if (w.batch) w.until = until;
+  writeFileSync(file, JSON.stringify(ledger, null, 2));
+};
+
+test("F10 C4 happy: a copy lapses when its 14 days pass inside an open run; the report and For you say they ran out", () => {
+  const repo = makeRepo("sw-f10c4");
+  assert.equal(standing(repo).status, 0);
+  cli(repo, "open", ["t", "feature", "--batch", "rollout"]);
+  assert.equal(ledgerOf(repo).waivers[0].until, JSON.parse(readFileSync(standingFile(repo), "utf8")).entries[0].until, "the copy keeps the entry's end");
+  uiEdit(repo);
+  assert.equal(r4(repo), false);
+  setCopyUntil(repo, new Date(Date.now() - 1000).toISOString());
+  assert.equal(r4(repo), true, "the copy still holds past its 14 days");
+  assert.equal(stepState(repo, "driver"), null);
+  assert.match(cli(repo, "report"), /standing, batch rollout — ended: its 14 days ran out/);
+  assert.match(cli(repo, "report", ["--brief"]), /standing OK for batch rollout ran out after its 14 days/);
+});
+
+test("F10 C5 edge: before its 14 days the copy holds, even with its entry gone; a copy with no end date keeps holding", () => {
+  const repo = makeRepo("sw-f10c5");
+  assert.equal(standing(repo).status, 0);
+  cli(repo, "open", ["t", "feature", "--batch", "rollout"]);
+  writeFileSync(standingFile(repo), JSON.stringify({ entries: [] }));
+  setCopyUntil(repo, new Date(Date.now() + DAY_MS).toISOString());
+  uiEdit(repo);
+  assert.equal(r4(repo), false);
+  setCopyUntil(repo, undefined);
+  assert.equal(r4(repo), false, "a copy from before kept no end date");
+});

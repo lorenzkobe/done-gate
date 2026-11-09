@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, statSync, writeFileSync, appendFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, repoConfig } from "./config.mjs";
@@ -52,19 +52,46 @@ export function saveLedger(dir, ledger) {
   return ledger;
 }
 
-// Reviewers' Lessons, one file per repo under the state dir: no repeats, the newest 50 kept.
+// Reviewers' Lessons, one file per repo under the state dir: no repeats, each dated, the newest 50
+// kept and none older than 90 days. A line from before dates were kept takes today's.
 export const LESSONS = "lessons.md";
 const LESSONS_KEPT = 50;
+const LESSON_DAYS = 90;
+const DATED = /^(.*?) \((\d{4}-\d{2}-\d{2})\)$/;
+const lessonOf = (line) => {
+  const m = DATED.exec(line);
+  return m ? { text: m[1], added: m[2] } : { text: line, added: null };
+};
+const fold = (t) => t.toLowerCase().replace(/\s+/g, " ").trim();
+
+function readLessons(file) {
+  return existsSync(file) ? readFileSync(file, "utf8").split("\n").filter((l) => l.startsWith("- ")).map((l) => lessonOf(l.slice(2))) : [];
+}
+
+function writeLessons(stateDir, lines) {
+  const today = new Date().toISOString().slice(0, 10);
+  const cut = new Date(Date.now() - LESSON_DAYS * 864e5).toISOString().slice(0, 10);
+  const file = path.join(stateDir, LESSONS);
+  const kept = lines.map((l) => ({ ...l, added: l.added ?? today })).filter((l) => l.added >= cut).slice(-LESSONS_KEPT);
+  if (!kept.length) rmSync(file, { force: true });
+  else writeFileSync(file, ["# Lessons from reviews of this repo", "", ...kept.map((l) => `- ${l.text} (${l.added})`), ""].join("\n"));
+  return kept.length;
+}
 
 export function addLessons(stateDir, lines) {
   if (!lines.length) return;
-  const file = path.join(stateDir, LESSONS);
-  const fold = (t) => t.toLowerCase().replace(/\s+/g, " ").trim();
-  const kept = existsSync(file) ? readFileSync(file, "utf8").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2)) : [];
-  const known = new Set(kept.map(fold));
-  const fresh = lines.filter((l) => !known.has(fold(l)) && known.add(fold(l)));
+  const kept = readLessons(path.join(stateDir, LESSONS));
+  const known = new Set(kept.map((l) => fold(l.text)));
+  const fresh = lines.map(lessonOf).filter((l) => !known.has(fold(l.text)) && known.add(fold(l.text))).map((l) => ({ text: l.text, added: null }));
   if (!fresh.length) return;
-  writeFileSync(file, ["# Lessons from reviews of this repo", "", ...[...kept, ...fresh].slice(-LESSONS_KEPT).map((l) => `- ${l}`), ""].join("\n"));
+  writeLessons(stateDir, [...kept, ...fresh]);
+}
+
+// Drops lessons past their 90 days before a reviewer is pointed at the file; true while any is left.
+export function pruneLessons(stateDir) {
+  const file = path.join(stateDir, LESSONS);
+  if (!existsSync(file)) return false;
+  return writeLessons(stateDir, readLessons(file)) > 0;
 }
 
 // Playbook steps: the `## <name>` section of playbooks.md, numbered lines, optional

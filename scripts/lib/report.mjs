@@ -182,7 +182,7 @@ function attentionLines(state, unmet) {
   for (const line of weakenedIn(state)) out.push(`- weakened: ${line}`);
   const advice = splitAdvice(policyFor(ledger), ledger.tier?.measured);
   if (advice) out.push(`- ${advice}`);
-  for (const w of ledger.waivers) out.push(`- ${w.could ? "could not run" : "waived"} ${w.key}: ${w.reason ?? w.quote}${w.words ? ` (the user: "${w.words}")` : ""}${w.batch ? ` — standing, batch ${w.batch}` : ""}${w.lapsed ? (w.ended ? " — ended with gate waive --end" : " — lapsed: the code changed after it") : ""}`);
+  for (const w of ledger.waivers) out.push(`- ${w.could ? "could not run" : "waived"} ${w.key}: ${w.reason ?? w.quote}${w.words ? ` (the user: "${w.words}")` : ""}${w.batch ? ` — standing, batch ${w.batch}` : ""}${w.lapsed ? (w.expired ? " — ended: its 14 days ran out" : w.ended ? " — ended with gate waive --end" : " — lapsed: the code changed after it") : ""}`);
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) out.push(`- skipped: ${s.text} — ${s.note}`);
   for (const a of ledger.planAdds ?? []) out.push(`- added to the plan: ${a.files.join(", ")} — ${a.why}`);
   if (ledger.planDrift?.length) out.push(`- outside the plan: ${ledger.planDrift.join(", ")} (${policyFor(ledger).guards.planDiff === "active" ? "blocks until added or reverted" : "noted, nothing blocked"})`);
@@ -481,7 +481,8 @@ function forYouLine(state, unmet) {
   if (thinner.length) items.push(`tests weakened: ${thinner.slice(0, 3).map(plain).join(", ")}${thinner.length > 3 ? `, and ${thinner.length - 3} more` : ""}`);
   const said = (w) => (w.words ? ` (you said: "${w.words}")` : "");
   for (const w of ledger.waivers) {
-    if (w.ended) items.push(`your standing OK for batch ${w.batch} was ended: ${plain(w.reason ?? w.quote)}${said(w)}`);
+    if (w.expired) items.push(`your standing OK for batch ${w.batch} ran out after its 14 days: ${plain(w.reason ?? w.quote)}${said(w)}`);
+    else if (w.ended) items.push(`your standing OK for batch ${w.batch} was ended: ${plain(w.reason ?? w.quote)}${said(w)}`);
     else if (w.lapsed) items.push(`your OK no longer holds, the code changed after it: ${plain(w.reason ?? w.quote)}${said(w)}`);
     else if (w.could) items.push(`could not run ${w.key === "schema" ? "the real schema" : "the app"}: ${plain(w.reason)}${said(w)}`);
     else items.push(`skipped with your OK${w.batch ? ` for batch ${w.batch}` : ""}: ${plain(w.reason ?? w.quote)}${said(w)}`);

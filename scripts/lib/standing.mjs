@@ -59,13 +59,13 @@ export function requireLiveBatch(stateDir, batch) {
   throw new UsageError(`no live standing waiver for batch ${batch}${others.length ? ` (live: ${others.join(", ")})` : ""}. Open it with no --batch, or ask the user for one with \`gate waive <key> --standing "<batch>" --user-ok "<their words>"\`.`);
 }
 
-// A copy holds for the run it went into: it names no code, so an edit does not lapse it, and only
-// `gate waive --end` takes it back. The 14 days decide which runs may join.
+// A copy holds for the run it went into until the entry's 14 days end: it names no code, so an edit
+// does not lapse it; `gate waive --end` takes it back sooner.
 export function carryStanding(ctx, dir, ledger, batch) {
   const taken = liveEntries(ctx.stateDir).filter((e) => e.batch === batch);
   ledger.batch = batch;
   for (const e of taken) {
-    ledger.waivers.push({ key: e.key, reason: e.reason, words: e.words, batch, seq: nextSeq() });
+    ledger.waivers.push({ key: e.key, reason: e.reason, words: e.words, batch, until: e.until, seq: nextSeq() });
     const step = ledger.steps.find((s) => s.key === e.key);
     if (step) Object.assign(step, { state: "WAIVED", note: e.reason, evidence: null, seq: nextSeq() });
   }

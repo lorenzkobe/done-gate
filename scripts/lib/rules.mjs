@@ -1231,10 +1231,17 @@ function waived(ledger, key) {
 // A waiver of a check on this code holds for this code: the hash it was given on, kept by a waive in
 // a new run. Moving past it takes the waiver back and reopens its step; the record stays, marked.
 export const LAPSING = new Set(["driver", "review", "review-2", "schema", "qa-pass"]);
-export function lapseWaivers(ledger, hash) {
+export function lapseWaivers(ledger, hash, now = Date.now()) {
   let moved = false;
   for (const w of ledger.waivers ?? []) {
-    if (w.lapsed || !w.code || w.code === hash) continue;
+    if (w.lapsed) continue;
+    // a standing waiver's copy ends with its 14 days, inside an open run too
+    if (w.batch && w.until && Date.parse(w.until) <= now) {
+      lapseWaiver(ledger, w, { expired: true });
+      moved = true;
+      continue;
+    }
+    if (!w.code || w.code === hash) continue;
     lapseWaiver(ledger, w);
     moved = true;
   }

@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "
 import path from "node:path";
 import { buildState } from "./assess.mjs";
 import { caseTable, verifyLines } from "./report.mjs";
-import { LESSONS, saveLedger, section } from "./ledger.mjs";
+import { LESSONS, pruneLessons, saveLedger, section } from "./ledger.mjs";
 import { inPlan, leadDelegates, renderTierBlock, samePiece, tierMax, tierOf } from "./size.mjs";
 import { baseCopy, fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs";
 import { ROLES, flag, outsideRepos, positional } from "./verbs.mjs";
@@ -127,7 +127,7 @@ function header(state, role, round) {
   if (role === "worker") out.push("## Tier", "", ...renderTierBlock(ledger, state.policy, state.tier?.measured ?? null), "");
   if (role === "qa" || role === "worker") out.push("## Tests", "", `globs: ${testGlobs(state)}`, `framework: ${detectFramework(state.root)}`, "");
   if (role === "qa" && ledger.tier?.grewAt) out.push("## Grown", "", "This task grew to large mid-task: the code and some tests exist already. Stay blind to the code; write the tests the case table still lacks, from the requirements.", "");
-  if ((role === "reviewer" || role === "reviewer-2") && state.stateDir && existsSync(path.join(state.stateDir, LESSONS))) {
+  if ((role === "reviewer" || role === "reviewer-2") && state.stateDir && pruneLessons(state.stateDir)) {
     out.push("## Lessons", "", `Earlier reviews of this repo left lessons in ${path.join(state.stateDir, LESSONS)}. Read it once your draft exists.`, "");
   }
   if (state.config.helperNote) out.push("## Standing note", "", state.config.helperNote, "");

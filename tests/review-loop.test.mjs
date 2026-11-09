@@ -2100,6 +2100,7 @@ const stateOf = (repo) => path.join(repo, ".claude", "gate");
 const runOf = (repo) => path.join(stateOf(repo), "runs", loadSession(stateOf(repo), "S1").current);
 const ledger = (repo) => JSON.parse(readFileSync(path.join(runOf(repo), "ledger.json"), "utf8"));
 const lessonsFile = (repo) => path.join(stateOf(repo), "lessons.md");
+const TODAY = () => new Date().toISOString().slice(0, 10);
 const lessonLines = (repo) => readFileSync(lessonsFile(repo), "utf8").split("\n").filter((l) => l.startsWith("- "));
 const packetOf = (out) => readFileSync(/packet: (\S+)/.exec(out)[1], "utf8");
 const review = ({ cant = ["none"], lessons = ["none"], act = ["none"] } = {}) =>
@@ -2132,7 +2133,7 @@ test("6.2 C1 C2: a reviewer file's Can't verify is stored and reported, its Less
   assert.doesNotMatch(packetOf(first.out), /^## Lessons$/m, "the first packet, before any lesson, has no Lessons section");
   const huddle = ledger(repo).huddles.find((h) => h.role === "reviewer");
   assert.deepEqual(huddle.cantVerify, ["the retry path under a real timeout — no network here"]);
-  assert.deepEqual(lessonLines(repo), ["- this repo's fixtures commit before they open a run"]);
+  assert.deepEqual(lessonLines(repo), [`- this repo's fixtures commit before they open a run (${TODAY()})`]);
   assert.match(ok(repo, "report"), /can't verify \(H\d+ reviewer\): the retry path under a real timeout/);
   const next = packetOf(ok(repo, "brief", ["reviewer-2"]));
   // the header's section, before the embedded review-1.md that has a Lessons heading of its own
@@ -2146,7 +2147,7 @@ test("6.2 C3 idempotent: adding the same file again appends nothing", () => {
   const repo = opened("rl-62-c3");
   const { own } = reviewed(repo, "reviewer", review({ lessons: ["one lesson", "two lesson"] }));
   ok(repo, "huddle", ["add", "reviewer", "--file", own]);
-  assert.deepEqual(lessonLines(repo), ["- one lesson", "- two lesson"]);
+  assert.deepEqual(lessonLines(repo), [`- one lesson (${TODAY()})`, `- two lesson (${TODAY()})`]);
 });
 
 test("6.2 C4 edge: Can't verify and Lessons reading none write no lessons file, store no Can't verify, and the packet has no Lessons section", () => {
@@ -2180,8 +2181,41 @@ test("6.2 C6 boundary: past 50 lessons only the last 50 are kept, in order", () 
   reviewed(repo, "reviewer-2", review({ lessons: [...Array.from({ length: 25 }, (_, i) => `lesson ${i + 30}`), "LESSON  3"] }));
   const kept = lessonLines(repo);
   assert.equal(kept.length, 50);
-  assert.equal(kept[0], "- lesson 5");
-  assert.equal(kept[49], "- lesson 54");
-  assert.equal(kept.filter((l) => /lesson\s+3$/i.test(l)).length, 0, "a repeat in other case and spacing is not a new lesson, and lesson 3 fell off the front");
+  assert.equal(kept[0], `- lesson 5 (${TODAY()})`);
+  assert.equal(kept[49], `- lesson 54 (${TODAY()})`);
+  assert.equal(kept.filter((l) => /lesson\s+3 \(\d{4}-\d{2}-\d{2}\)$/i.test(l)).length, 0, "a repeat in other case and spacing is not a new lesson, and lesson 3 fell off the front");
+});
+
+const TODAY_F10 = () => new Date().toISOString().slice(0, 10);
+
+test("F10 C1 idempotent: a lesson is dated today; the same text again, dated or not, adds nothing", async () => {
+  const { addLessons } = await import("../scripts/lib/ledger.mjs");
+  const dir = makeRepo("rl-f10c1");
+  addLessons(dir, ["run the seed first"]);
+  addLessons(dir, ["run the seed first", `run the seed first (${TODAY_F10()})`, "Run  the seed first"]);
+  assert.deepEqual(readFileSync(path.join(dir, "lessons.md"), "utf8").split("\n").filter((l) => l.startsWith("- ")), [`- run the seed first (${TODAY_F10()})`]);
+});
+
+test("F10 C2 boundary: a lesson past 90 days drops on the next write and at a reviewer brief; 89 days stays; an empty file goes", async () => {
+  const { addLessons } = await import("../scripts/lib/ledger.mjs");
+  const day = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+  const dir = makeRepo("rl-f10c2");
+  writeFileSync(path.join(dir, "lessons.md"), `# Lessons from reviews of this repo\n\n- old one (${day(91)})\n- recent one (${day(89)})\n`);
+  addLessons(dir, ["new one"]);
+  assert.deepEqual(readFileSync(path.join(dir, "lessons.md"), "utf8").split("\n").filter((l) => l.startsWith("- ")), [`- recent one (${day(89)})`, `- new one (${TODAY_F10()})`]);
+
+  const repo = opened("rl-f10c2b");
+  writeFileSync(lessonsFile(repo), `# Lessons from reviews of this repo\n\n- stale (${day(120)})\n`);
+  const packet = packetOf(ok(repo, "brief", ["reviewer"]));
+  assert.doesNotMatch(packet.slice(0, packet.indexOf("\n## Diff")), /^## Lessons$/m);
+  assert.equal(existsSync(lessonsFile(repo)), false);
+});
+
+test("F10 C3 edge: an undated lesson from before is kept and dated today on the next write", async () => {
+  const { addLessons } = await import("../scripts/lib/ledger.mjs");
+  const dir = makeRepo("rl-f10c3");
+  writeFileSync(path.join(dir, "lessons.md"), "# Lessons from reviews of this repo\n\n- from before dates\n");
+  addLessons(dir, ["a fresh one"]);
+  assert.deepEqual(readFileSync(path.join(dir, "lessons.md"), "utf8").split("\n").filter((l) => l.startsWith("- ")), [`- from before dates (${TODAY_F10()})`, `- a fresh one (${TODAY_F10()})`]);
 });
 }
