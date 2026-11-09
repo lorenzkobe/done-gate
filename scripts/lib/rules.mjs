@@ -404,7 +404,9 @@ export function proofProblem(state, item, ptr) {
   if (!h || !newRules(state.ledger) || (h.role !== "reviewer" && h.role !== "reviewer-2")) return undefined;
   if (ptr === "doc") return null;
   const since = proofEvents(state, h);
-  const red = (e) => e.kind === "command" && testRun(e) && (e.exit ?? 0) !== 0 && !(onReadings(state.ledger) && ranNothing(e));
+  // after the readings, what the runner printed decides: a piped run's exit is the pipe's
+  const failed = (e) => (onReadings(state.ledger) && e.tests ? e.tests.ran && (e.tests.failed > 0 || (e.exit ?? 0) !== 0) : (e.exit ?? 0) !== 0);
+  const red = (e) => e.kind === "command" && testRun(e) && failed(e);
   const seq = /^events#(\d+)$/.exec(String(ptr ?? ""));
   if (seq) {
     const e = since.find((x) => x.seq === Number(seq[1]));
@@ -475,6 +477,7 @@ export function proofReading(e) {
 export function runProblem(ledger, e, { config, root } = {}) {
   if (!onReadings(ledger) || e.kind !== "command" || !testRun(e)) return null;
   if (ranNothing(e)) return NOTHING_TEXT(e);
+  if (config && e.tests?.failed > 0) return `\`${shortRun(e)}\` ran red (${proofReading(e)}): a failing run does not show the case working`;
   if (config && !testFilesNamed(e, config, root).length) return `\`${shortRun(e)}\` names no test file, so nothing ties it to this case: close on the case's test (\`--test <file:name>\`), or run its test file and close on that run`;
   return null;
 }

@@ -390,3 +390,26 @@ test("C19 a 2 MB test output is read from its last 256 KB only, quickly", () => 
   assert.equal(e.tests.tests, 3, "the summary at the start lies outside the read");
   assert.ok(ms < 200, `reading took ${ms} ms`);
 });
+
+// From the re-trial: the lead ran the test red through a pipe, so the exit was the pipe's
+const PIPED = "npx vitest run tests/a.test.ts 2>&1 | grep -E \"Tests \"";
+const VITEST_RED = "      Tests  4 failed | 34 passed (38)\n";
+
+test("P1 a piped red test run, read as failed, closes a finding on its test file; before rules 2 it does not", () => {
+  const repo = reviewed("pr-p1");
+  shell(repo, PIPED, VITEST_RED);
+  assert.equal(lastEvent(repo).exit, null, "premise: the pipe hid the exit");
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts"]);
+
+  const old = reviewed("pr-p1b");
+  stampedOne(old);
+  shell(old, PIPED, VITEST_RED);
+  refused(old, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts"]);
+});
+
+test("P2 a case --ran on a piped test run read as failed is refused", () => {
+  const repo = feature("pr-p2");
+  cli(repo, "case", ["add", "the badge renders", "--kind", "happy"]);
+  shell(repo, PIPED, VITEST_RED);
+  assert.match(refused(repo, "case", ["close", "C1", "--ran", "vitest run tests/a.test.ts"]), /4 failed/);
+});
