@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, doneArgs, lookedUp, planChecked, pinnedBefore, redRun, userSays } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, doneArgs, lookedUp, planChecked, redRun, userSays, capRounds } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { pointerResolver } from "../scripts/lib/rules.mjs";
@@ -201,7 +201,6 @@ const oldRuling = (repo, id, side) => {
 // upholding the dispute: the state that goes to the user.
 function upheld(name, { findings = [FIND_1, FIND_2] } = {}) {
   const repo = opened(name);
-  pinnedBefore(repo);
   helperFile(repo, "review-1.md", reviewFile(1, name, findings));
   cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
   // H1.1 is fixed the ordinary way, so H1.2 is the only thing R5 can still be waiting on
@@ -891,6 +890,8 @@ test("6.8 A5 edge: an old run's unrecorded arbiter file raises no R15 naming a r
 
 test("6.8 A6 idempotent: kept from the deleted arbiter tests: the reviewer packet's shape, an old arbiter file as a pointer, and the report embedding it", () => {
   const repo = upheld("rl-68-a6");
+  // a third reviewer round after the dispute's answer: a cap past one
+  capRounds(repo, 3);
   const review = readFileSync(/packet: (\S+)/.exec(cli(repo, "brief", ["reviewer"]).stdout)[1], "utf8");
   for (const h of ["Tier", "Tests"]) assert.doesNotMatch(review, new RegExp(`^## ${h}$`, "m"), `the reviewer packet carries no ${h}`);
   assert.match(review, /^## Cases$/m, "the reviewer still reads the cases");
@@ -1859,7 +1860,8 @@ test("C9 refused: with a ledger open, the skeptic and the reviewer may write the
 
 test("C10 edge: with review-1.md and skeptic-1.md on disk, the round-2 packets name review-2.md and skeptic-2.md", () => {
   const repo = opened("skeptic-round2");
-  pinnedBefore(repo);
+  // a second reviewer round with the first one's file unrecorded: a cap past one
+  capRounds(repo, 2);
   const dir = runDir(repo);
   writeFileSync(path.join(dir, "review-1.md"), "# Review 1\n\n## Act on\n\n_none_\n");
   // a second plan check answers a disputed finding (tests/plan-hold.test.mjs C12)

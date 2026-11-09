@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pinnedBefore } from "./helpers.mjs";
+import { makeRepo, write, gate, noLateCalls } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { decide } from "../scripts/lib/guard.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
@@ -156,7 +156,9 @@ test("C5 an unrecorded review2-1.md raises R15 naming reviewer-2, and the file r
 
 test("C6 three reviewer rounds are still the cap; review2 files do not count toward it", () => {
   const repo = opened("r2s-c6");
-  pinnedBefore(repo);
+  // the cap itself, at three: with late-line calls on, the fourth brief would be a late round for
+  // the lines edited between rounds instead of a refusal
+  noLateCalls(repo, { rounds: 3 });
   for (const n of [1, 2]) {
     packet(repo, "reviewer");
     helperFile(repo, `review-${n}.md`, reviewFile(n, [FIND(n)]));

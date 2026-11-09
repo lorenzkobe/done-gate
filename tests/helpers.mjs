@@ -131,15 +131,26 @@ export function redRun(repo, file = "tests/a.test.ts", session = "S1") {
   spawnSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: session, cwd: repo, hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command: `node --test ${file}` }, tool_error: "Exit code 1\nnot ok 1" }), encoding: "utf8", env });
 }
 
-// The run's pinned policy as a run pinned before 0.22 holds it: three rounds before the fix-check,
-// and no call owed for lines changed after review; for the mechanics those runs keep.
-export function pinnedBefore(repo, session = "S1") {
+// The run's pinned policy with no call owed for lines changed after review (lateLines "off", a
+// models.json option), for the tests of what that policy keeps. The round cap stays as shipped
+// unless `rounds` sets it, for a test that needs a round after the first.
+export function noLateCalls(repo, { rounds = null, session = "S1" } = {}) {
+  repin(repo, session, ({ lateLines: _calls, ...policy }) => (rounds ? { ...policy, reviewRounds: rounds } : policy));
+}
+
+// The run's pinned round cap raised to `rounds`, late-line calls kept as shipped, for a test
+// whose setup needs a round after the first.
+export function capRounds(repo, rounds, session = "S1") {
+  repin(repo, session, (policy) => ({ ...policy, reviewRounds: rounds }));
+}
+
+// The open run's pinned policy rewritten by `change`, and the ledger sealed again.
+function repin(repo, session, change) {
   const stateDir = path.join(repo, ".claude", "gate");
   const { current } = JSON.parse(readFileSync(path.join(stateDir, "sessions", session, "state.json"), "utf8"));
   const ledgerFile = path.join(stateDir, "runs", current, "ledger.json");
   const ledger = JSON.parse(readFileSync(ledgerFile, "utf8"));
-  const { lateLines: _new, ...policy } = ledger.policy;
-  ledger.policy = { ...policy, reviewRounds: 3 };
+  ledger.policy = change(ledger.policy);
   writeFileSync(ledgerFile, JSON.stringify(ledger, null, 2));
   resealRun(repo, session);
 }

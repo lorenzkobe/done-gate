@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, here, asOldRun, pinnedBefore, waiveArgs, resealRun } from "./helpers.mjs";
+import { makeRepo, write, gate, here, asOldRun, waiveArgs, resealRun, noLateCalls } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { appendEvents, nextSeq } from "../scripts/lib/events.mjs";
 import { sealProblems } from "../scripts/lib/seal.mjs";
@@ -175,7 +175,7 @@ test("C11 two hooks appending events at once both seal, and the check stays clea
 test("C12 tests keep their seals under tests/.tmp, and resealRun lets a fixture's hand-written ledger pass", () => {
   assert.equal(process.env.DONE_GATE_SEALS, path.join(here, ".tmp", "seals"));
   const repo = opened("seal-c12");
-  pinnedBefore(repo);
+  noLateCalls(repo);
   assert.equal(r20(repo), "");
   assert.ok(existsSync(process.env.DONE_GATE_SEALS));
 });

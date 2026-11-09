@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp, pinnedBefore } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, noLateCalls } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 
@@ -82,7 +82,7 @@ const closeAll = (repo) => {
 
 test("C1 happy: a clean reviewer round, then an edit to a file the reviewer saw: R5 asks for no new round", () => {
   const repo = opened("fl-c1");
-  pinnedBefore(repo); // the rule a run pinned before keeps; tests/fix-check.test.mjs 6.4 L1 is the new one
+  noLateCalls(repo); // the no-calls policy's rule; tests/fix-check.test.mjs 6.4 L1 is the shipped one
   edit(repo, "src/a.ts", "export const a = 2;\n");
   round(repo, "reviewer", 1);
   assert.ok(!blocks(check(repo), "R5"), check(repo));
@@ -107,25 +107,23 @@ test("C3 refused: a round with Act-on items, fixed and closed below the cap: R5 
   assert.ok(blocks(check(repo), "R5"), `a fix below the cap is verified by another round:\n${check(repo)}`);
 });
 
-test("C4 boundary: round three has items, fixed and closed: R5 asks one fix-check round, and after it closed items are enough", () => {
+test("C4 boundary: the round at the cap has items, fixed and closed: R5 asks one fix-check round, and after it closed items are enough", () => {
   const repo = opened("fl-c4");
-  pinnedBefore(repo);
+  noLateCalls(repo);
   edit(repo, "src/a.ts", "export const a = 2;\n");
-  for (const n of [1, 2, 3]) {
-    round(repo, "reviewer", n, [`finding ${n} — src/a.ts:1`]);
-    edit(repo, "src/a.ts", `export const a = ${10 + n};\n`);
-    closeAll(repo);
-  }
-  assert.ok(blocks(check(repo), "R5"), `the third round's fix gets a fix-check round:\n${check(repo)}`);
-  round(repo, "reviewer", 4, ["finding 4 — src/a.ts:1"]);
+  round(repo, "reviewer", 1, ["finding 1 — src/a.ts:1"]);
+  edit(repo, "src/a.ts", "export const a = 11;\n");
+  closeAll(repo);
+  assert.ok(blocks(check(repo), "R5"), `the round's fix gets a fix-check round:\n${check(repo)}`);
+  round(repo, "reviewer", 2, ["finding 2 — src/a.ts:1"]);
   edit(repo, "src/a.ts", "export const a = 20;\n");
   closeAll(repo);
   assert.ok(!blocks(check(repo), "R5"), `after the fix-check round, closed items are enough:\n${check(repo)}`);
 });
 
-test("C5 edge: reviewer-2 on a high-risk path: a clean round then an edit in a seen file passes R9; a fourth reviewer-2 round is refused", () => {
+test("C5 edge: reviewer-2 on a high-risk path: a clean round then an edit in a seen file passes R9; a second reviewer-2 round is refused", () => {
   const repo = opened("fl-c5", { files: { "src/lib/auth/x.ts": "export const x = 1;\n" }, planFiles: "src/lib/auth/x.ts" });
-  pinnedBefore(repo);
+  noLateCalls(repo);
   edit(repo, "src/lib/auth/x.ts", "export const x = 2;\n");
   round(repo, "reviewer", 1);
   round(repo, "reviewer-2", 2);
@@ -135,14 +133,11 @@ test("C5 edge: reviewer-2 on a high-risk path: a clean round then an edit in a s
   assert.ok(!blocks(out, "R5"), out);
 
   const capped = opened("fl-c5b", { files: { "src/lib/auth/x.ts": "export const x = 1;\n" }, planFiles: "src/lib/auth/x.ts" });
-  pinnedBefore(capped);
   edit(capped, "src/lib/auth/x.ts", "export const x = 2;\n");
-  for (const n of [1, 2, 3]) {
-    round(capped, "reviewer-2", n, [`finding ${n} — src/lib/auth/x.ts:1`]);
-    closeAll(capped);
-  }
+  round(capped, "reviewer-2", 1, ["finding 1 — src/lib/auth/x.ts:1"]);
+  closeAll(capped);
   const r = run(capped, "brief", ["reviewer-2"]);
-  assert.match(r.stderr, REFUSAL, `a fourth reviewer-2 round should be refused:\n${r.stdout}${r.stderr}`);
+  assert.match(r.stderr, REFUSAL, `a second reviewer-2 round should be refused:\n${r.stdout}${r.stderr}`);
 });
 
 test("C6 idempotent: a huddle recorded before this change (no files) keeps the old rule: an edit after it needs a fresh round", () => {
@@ -159,9 +154,9 @@ test("C6 idempotent: a huddle recorded before this change (no files) keeps the o
 
 test("C16 boundary: past the cap and its fix-check round, a round is briefed only when a file no round saw exists", () => {
   const repo = opened("fl-c16");
-  pinnedBefore(repo);
+  noLateCalls(repo);
   edit(repo, "src/a.ts", "export const a = 2;\n");
-  for (const n of [1, 2, 3, 4]) {
+  for (const n of [1, 2]) {
     round(repo, "reviewer", n, [`finding ${n} — src/a.ts:1`]);
     edit(repo, "src/a.ts", `export const a = ${10 + n};\n`);
     closeAll(repo);

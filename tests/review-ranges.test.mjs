@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp, pinnedBefore } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, noLateCalls, capRounds } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { sliceEnd } from "../scripts/lib/tree.mjs";
 
@@ -135,7 +135,6 @@ test("C2 three clean range rounds covering every changed line pass R5; with 801-
 
 test("C3 a range round with a finding, fixed by an edit inside the range, leaves only the edited lines uncovered", () => {
   const repo = opened("rr-c3");
-  pinnedBefore(repo);
   bigEdit(repo);
   round(repo, "reviewer", `${BIG}:1-400`);
   round(repo, "reviewer", `${BIG}:401-800`, ["off by one — src/big.ts:500 — x — []"]);
@@ -143,12 +142,13 @@ test("C3 a range round with a finding, fixed by an edit inside the range, leaves
   edit(repo, BIG, body(1200, "big").replace("big500 = 500", "big500 = 501"));
   cli(repo, "huddle", ["resolve", "H2.1", "--evidence", "doc"]);
   const line = ruleLine(check(repo), "R5");
-  // the edited line and the next one (its key holds the line above): not the whole slice
-  assert.match(line, /big\.ts:501-502/);
+  // the edited line alone: not the next one, whose text did not change, nor the whole slice
+  assert.match(line, /big\.ts:501-501\b/);
   assert.doesNotMatch(line, /big\.ts:401-800/);
   assert.doesNotMatch(line, /big\.ts:1-400/);
   assert.doesNotMatch(line, /big\.ts:801-1200/);
-  round(repo, "reviewer", `${BIG}:401-800`);
+  // past the cap the fix-check takes the fixed line
+  round(repo, "reviewer", `${BIG}:501-501`);
   assert.ok(!blocks(check(repo), "R5"), check(repo));
 });
 
@@ -176,7 +176,8 @@ test("C5 a malformed range is refused and changes nothing", () => {
 
 test("C6 the round cap counts the rounds that saw a line: whole-file and slice rounds together, per line", () => {
   const repo = opened("rr-c6", { "src/other.ts": "export const o = 0;\n" });
-  pinnedBefore(repo);
+  // the cap counts rounds per line, so this needs a cap past one
+  capRounds(repo, 3);
   bigEdit(repo, 300);
   edit(repo, "src/other.ts", body(30, "o"));
   cli(repo, "plan", ["add", "src/other.ts", "the second module"]);
@@ -194,7 +195,7 @@ test("C6 the round cap counts the rounds that saw a line: whole-file and slice r
 
 test("C7 a whole-file round still covers the file, and a file under the cap is briefed whole as before", () => {
   const repo = opened("rr-c7");
-  pinnedBefore(repo); // a run pinned before; tests/fix-check.test.mjs 6.4 L1 holds the new rule
+  noLateCalls(repo); // the no-calls policy's rule; tests/fix-check.test.mjs 6.4 L1 holds the shipped one
   bigEdit(repo, 200);
   const out = round(repo, "reviewer", null);
   assert.match(out, /^packet: /m);

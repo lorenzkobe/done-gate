@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp, waiveArgs, pinnedBefore } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, waiveArgs, capRounds } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 
@@ -47,7 +47,6 @@ function planned(name, planArgs = ["--files", "src/a.ts"]) {
 // a lead edit past 400 lines: the measurement crosses into large
 function grown(name) {
   const repo = planned(name);
-  pinnedBefore(repo);
   leadEdit(repo, "src/a.ts", lines(440, "a"));
   cli(repo, "check");
   return repo;
@@ -64,6 +63,8 @@ test("C1 reported-surface: a run predicted standard whose edits measure large is
 
 test("C2 happy: after a QA helper stops and a clean reviewer-2 round, the grown run has no R7 or R9 for them", () => {
   const repo = grown("ll-c2");
+  // reviewer-2 reads the grown change in pieces, a round each: a cap past one
+  capRounds(repo, 3);
   write(repo, "tests/a.test.ts", "test('a', () => { expect(1).toBe(1); });\n");
   started(repo, "qa");
   lookedUp(repo, { agent: "A-qa", role: "qa" });

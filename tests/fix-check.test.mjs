@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp, pinnedBefore, resealRun } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, noLateCalls, resealRun } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { sliceEnd } from "../scripts/lib/tree.mjs";
 
@@ -86,13 +86,13 @@ test("C1 happy: a whole-file round's fixed finding re-opens only the edited line
 
 test("C3 refused: an open finding keeps the whole file uncovered; closed items with no edit after the round cover it, as today", () => {
   const repo = opened("fc-c3");
-  pinnedBefore(repo);
+  noLateCalls(repo);
   round(repo, "reviewer", null, [FINDING]);
   fixLine30(repo);
   assert.deepEqual(entriesOf(ruleLine(check(repo), "R5")), [MID], "an open finding: the whole file");
 
   const quiet = opened("fc-c3-quiet");
-  pinnedBefore(quiet);
+  noLateCalls(quiet);
   round(quiet, "reviewer", null, [FINDING]);
   cli(quiet, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   assert.ok(!blocks(check(quiet), "R5"), check(quiet));
@@ -110,13 +110,13 @@ test("C4 edge: a fix that only deletes lines re-opens the whole file", () => {
 
 test("C5 idempotent: a clean round still covers the file after an edit; a ledger with no recorded line keys keeps the whole-file rule", () => {
   const repo = opened("fc-c5");
-  pinnedBefore(repo); // the rule a run pinned before keeps; 6.4 L1 below is the new one
+  noLateCalls(repo); // the no-calls policy's rule; 6.4 L1 below is the shipped one
   round(repo, "reviewer", null);
   fixLine30(repo);
   assert.ok(!blocks(check(repo), "R5"), check(repo));
 
   const legacy = opened("fc-c5-legacy");
-  pinnedBefore(legacy);
+  noLateCalls(legacy);
   round(legacy, "reviewer", null, [FINDING]);
   const file = path.join(runDir(legacy), "ledger.json");
   const ledger = JSON.parse(readFileSync(file, "utf8"));
@@ -143,25 +143,23 @@ test("C6 reported-surface: the fix-check packet lists the findings to re-check w
   assert.match(section, /ADDRESSED or NOT ADDRESSED/);
 });
 
-test("C7 boundary: three whole-file rounds, each with a fixed finding, leave only the fixed lines for one fix-check round, which ends the review", () => {
+test("C7 boundary: a whole-file round at the cap with a fixed finding leaves only the fixed lines for one fix-check round, which ends the review", () => {
   const repo = opened("fc-c7");
-  pinnedBefore(repo);
-  for (let i = 1; i <= 3; i++) {
-    round(repo, "reviewer", null, [FINDING]);
-    fixLine30(repo, 1000 + i);
-    cli(repo, "huddle", ["resolve", `H${i}.1`, "--evidence", "doc"]);
-  }
+  noLateCalls(repo);
+  round(repo, "reviewer", null, [FINDING]);
+  fixLine30(repo, 1001);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   const entries = entriesOf(ruleLine(check(repo), "R5"));
   assert.ok(entries.length > 0 && entries.every((e) => /^src\/mid\.ts:\d+-\d+$/.test(e)), entries.join(", "));
   round(repo, "reviewer", null, [FINDING]);
   fixLine30(repo, 2000);
-  cli(repo, "huddle", ["resolve", "H4.1", "--evidence", "doc"]);
+  cli(repo, "huddle", ["resolve", "H2.1", "--evidence", "doc"]);
   assert.ok(!blocks(check(repo), "R5"), check(repo));
 });
 
 test("C8 edge: a clean round then a round with a fixed finding: only the fixed lines re-open", () => {
   const repo = opened("fc-c8");
-  pinnedBefore(repo);
+  noLateCalls(repo, { rounds: 2 });
   round(repo, "reviewer", null);
   round(repo, "reviewer", null, [FINDING]);
   fixLine30(repo);
@@ -213,7 +211,7 @@ test("C12 reported-surface: a finding whose fix landed in the piece's file is re
 
 test("C13 happy: a fix-check slice round with a finding, fixed again, re-opens only the lines edited the second time", () => {
   const repo = opened("fc-c13");
-  pinnedBefore(repo);
+  noLateCalls(repo, { rounds: 2 });
   round(repo, "reviewer", null, [FINDING]);
   fixLine30(repo, 999);
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
