@@ -921,7 +921,7 @@ test("6.8 A4 edge: an old run's arbiter file stays protected from the lead's wri
   for (const agent_type of [undefined, "done-gate:arbiter"]) {
     const v = decide({ tool_name: "Bash", ...(agent_type ? { agent_type, agent_id: "ARB" } : {}), tool_input: { command: `sed -i '' s/a/b/ ${path.join(repo, rel)}` } }, repo, null, current, ledgerOf(repo));
     assert.equal(v.deny, true, JSON.stringify(v));
-    assert.doesNotMatch(v.reason, /Use the (?:Edit or )?Write tool on arbiter-1\.md/, v.reason);
+    assert.doesNotMatch(v.reason, /Use the (?:Edit or )?Write tool, or sed -i with plain s or d commands, on arbiter-1\.md/, v.reason);
   }
 });
 }

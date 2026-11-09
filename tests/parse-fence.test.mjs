@@ -383,7 +383,7 @@ test("C4 edge: the deny names the part that is not a plain read, and points the 
   const ledger = decide(bash(`ls ${RUN}; cat >> ${RUN}/ledger.md <<'EOF'\nx\nEOF`), repo, cfg);
   assert.equal(ledger.deny, true);
   assert.match(ledger.reason, /`cat >> \S*ledger\.md/, ledger.reason);
-  assert.match(ledger.reason, /Edit or Write tool on ledger\.md/, ledger.reason);
+  assert.match(ledger.reason, /Edit or Write tool, or sed -i with plain s or d commands, on ledger\.md/, ledger.reason);
   const other = decide(bash(`npx vitest run >/dev/null 2>&1; ls ${RUN}`), repo, cfg);
   assert.match(other.reason, /`npx vitest run/, other.reason);
   assert.doesNotMatch(other.reason, /Edit or Write tool/, other.reason);
@@ -397,7 +397,7 @@ test("C11 edge: the edit-tool hint goes only to the caller that owns the file", 
   for (const [role, file] of [["reviewer", "review-6.md"], ["reviewer-2", "review2-2.md"], ["skeptic", "skeptic-1.md"], ["worker", "worker-4.md"]]) {
     const v = decide(bash(sedOn(file), as(role)), repo, cfg);
     assert.equal(v.deny, true, `${role} ${file}`);
-    assert.match(v.reason, new RegExp(`Use the ${role === "worker" ? "Edit or Write" : "Write"} tool on ${file.replace(".", "\\.")}`), `${role}: ${v.reason}`);
+    assert.match(v.reason, new RegExp(`Use the ${role === "worker" ? "Edit or Write" : "Write"} tool, or sed -i with plain s or d commands, on ${file.replace(".", "\\.")}`), `${role}: ${v.reason}`);
   }
   for (const [who, file] of [[{}, "review-6.md"], [as("reviewer"), "review2-2.md"], [as("worker"), "review-6.md"]]) {
     const v = decide(bash(sedOn(file), who), repo, cfg);
@@ -406,7 +406,7 @@ test("C11 edge: the edit-tool hint goes only to the caller that owns the file", 
   }
   const helperLedger = decide(bash(`cat >> ${RUN}/ledger.md <<'EOF'\nx\nEOF`, as("worker")), repo, cfg);
   assert.equal(helperLedger.deny, true);
-  assert.doesNotMatch(helperLedger.reason, /Edit or Write tool on ledger/, helperLedger.reason);
+  assert.doesNotMatch(helperLedger.reason, /Edit or Write tool, or sed -i with plain s or d commands, on ledger/, helperLedger.reason);
 });
 
 test("C9 refused: xargs takes its arguments from stdin, so only plain readers run under it", () => {
@@ -526,7 +526,7 @@ test("C4 edge: the deny names the segment that touches the gate dir and the owne
   const v = decide(bash(`sed -n 1p a > /tmp/x/qa.txt; cat review-1.md; sed -i '' s/a/b/ ${RUN}/worker-4.md`, { agent_id: "A1", agent_type: "done-gate:worker" }), repo, cfg);
   assert.equal(v.deny, true);
   assert.match(v.reason, /`sed -i '' s\/a\/b\/ \S*worker-4\.md`/, v.reason);
-  assert.match(v.reason, /Edit or Write tool on worker-4\.md/, v.reason);
+  assert.match(v.reason, /Edit or Write tool, or sed -i with plain s or d commands, on worker-4\.md/, v.reason);
 });
 
 test("C15 refused: a # comment ends at its line, so a quote inside it hides nothing", () => {
@@ -821,7 +821,6 @@ test("the cd form stays refused when it reaches anything but the helper's own fi
     `cd ${RUN_DIR} && echo x > worker-2.md; tee "ledger.json"`,
     `cd ${RUN_DIR} && f=ledger.json; echo x > worker-2.md; echo y > $f`,
     `cd ${RUN_DIR} && sed -i '' --file=x.sed worker-2.md`,
-    `cd ${RUN_DIR} && sed -i '' -e 's/a/b/' worker-2.md`,
     `cd ${RUN_DIR} && sed -i '' 's/a/b/' worker-2.md --file=x.sed`,
     `cd ${RUN_DIR} && sed -i '' 's/a/b/w ledger.json' worker-2.md`,
     `cd ${RUN_DIR} && cat > worker-2.md; rm ledger.json`,
@@ -849,10 +848,10 @@ test("a read beside another command names the part to run alone, and a real writ
 
 test("a role with no Edit tool is told Write only, and one with it hears both", () => {
   const told = (role, file) => verdict(`sed -i '' s/a/b/ ${RUN_DIR}/${file}; cat ${RUN_DIR}/ledger.json`, role).reason;
-  assert.match(told("done-gate:reviewer", "review-1.md"), /Use the Write tool on/);
+  assert.match(told("done-gate:reviewer", "review-1.md"), /Use the Write tool, or sed -i with plain s or d commands, on/);
   assert.doesNotMatch(told("done-gate:reviewer", "review-1.md"), /Edit/);
-  assert.match(told("done-gate:skeptic", "skeptic-1.md"), /Use the Write tool on/);
-  assert.match(told("done-gate:worker", "worker-1.md"), /Use the Edit or Write tool on/);
+  assert.match(told("done-gate:skeptic", "skeptic-1.md"), /Use the Write tool, or sed -i with plain s or d commands, on/);
+  assert.match(told("done-gate:worker", "worker-1.md"), /Use the Edit or Write tool, or sed -i with plain s or d commands, on/);
 });
 }
 
@@ -943,5 +942,102 @@ test("another skill's folder, a look-alike path and a repo naming another skill 
     const other = makeRepo("fence-driver-cmd", { ".claude/gate.json": JSON.stringify({ source: ["src/**", ".claude/skills/**"], driver }) });
     assert.equal(fence(other, loadConfig(other), ".claude/skills/verify/x.mjs").deny, true, driver);
   }
+});
+}
+
+// F4: harmless refusals from the trials. A helper edits its own findings file with sed -i, the lead
+// appends to its run's ledger.md, pgrep reads, a worktree outside the repo is no gate write, and a
+// gate call through a variable is told what to do.
+{
+const repo = makeRepo("fence-f4");
+const cfg = loadConfig(repo);
+const RUN_DIR = ".claude/gate/runs/2026-11-09-x";
+const asked = (command, agent_type) => ({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: repo, session_id: "S1", ...(agent_type ? { agent_id: "A1", agent_type } : {}) });
+const verdict = (command, agent_type) => decide(asked(command, agent_type), repo, cfg, RUN_DIR);
+
+test("F4 C1 happy: a helper's sed -i on its own file passes with -e pairs, joined commands, a | delimiter and regex characters in quotes", () => {
+  for (const [cmd, role] of [
+    [`cd ${repo}/${RUN_DIR} && sed -i '' -e 's/a:110 —/a:111 —/' -e 's/b/c/' review-2.md`, "done-gate:reviewer"],
+    [`cd ${repo}/${RUN_DIR}; sed -i '' 's/x:341$/x:140/; s/Manila date/y/' review2-1.md`, "done-gate:reviewer-2"],
+    [`cd ${repo}/${RUN_DIR}; sed -i '' 's|Book.tsx:198 |Book.tsx:200 |' review-15.md`, "done-gate:reviewer"],
+    [`cd ${RUN_DIR} && sed -i '' 's/[0-9]*x/y/g' review-1.md`, "done-gate:reviewer"],
+    [`sed -i '' -e 's/a/b/' -e '/^- old/d' ${RUN_DIR}/review-1.md`, "done-gate:reviewer"],
+    [`sed -i -E 's#a+#b#2' ${RUN_DIR}/skeptic-1.md`, "done-gate:skeptic"],
+    [`cd ${RUN_DIR} && sed -i '' -e 's/a/b/' worker-2.md`, "done-gate:worker"],
+  ]) assert.equal(verdict(cmd, role).deny, false, cmd);
+});
+
+test("F4 C2 refused: a sed that can write or read elsewhere, or reaches another file, stays refused", () => {
+  for (const [cmd, role] of [
+    [`cd ${RUN_DIR} && sed -i '' -e 's/a/b/' -e 'w ledger.json' review-1.md`, "done-gate:reviewer"],
+    [`cd ${RUN_DIR} && sed -i '' 's|a|b|w ledger.json' review-1.md`, "done-gate:reviewer"],
+    [`cd ${RUN_DIR} && sed -i '' 's/a/b/e' review-1.md`, "done-gate:reviewer"],
+    [`cd ${RUN_DIR} && sed -i '' 's/a/b/; e rm x' review-1.md`, "done-gate:reviewer"],
+    [`cd ${RUN_DIR} && sed -i '' 's/a/b/; r ledger.json' review-1.md`, "done-gate:reviewer"],
+    [`cd ${RUN_DIR} && sed -i.bak 's/a/b/' review-1.md`, "done-gate:reviewer"],
+    [`sed -i.bak 's/a/b/' ${RUN_DIR}/review-1.md`, "done-gate:reviewer"],
+    [`cd ${RUN_DIR} && sed -i '' -e 's/a/b/' review-1.md ledger.json`, "done-gate:reviewer"],
+    [`cd ${RUN_DIR} && sed -i '' -e 's/a/b/' review-1.md`, "done-gate:skeptic"],
+    [`sed -i '' 's/a/b/' .claude/gate/runs/2026-11-08-other/review-1.md`, "done-gate:reviewer"],
+  ]) assert.equal(verdict(cmd, role).deny, true, cmd);
+});
+
+test("F4 C3 refused: a helper's python write to its own file stays refused and is told Write or sed -i", () => {
+  const v = verdict(`cd ${repo}/${RUN_DIR} && python3 - <<'EOF'\nopen('review-2.md','w').write('x')\nEOF`, "done-gate:reviewer");
+  assert.equal(v.deny, true);
+  assert.match(v.reason, /Use the Write tool, or sed -i with plain s or d commands, on review-2\.md/);
+  assert.doesNotMatch(v.reason, /Edit/);
+  assert.match(verdict(`node -e "require('fs').writeFileSync('${RUN_DIR}/worker-1.md','x')"; cat ${RUN_DIR}/ledger.json`, "done-gate:worker").reason, /Use the Edit or Write tool, or sed -i/);
+});
+
+test("F4 C4 reported-surface: a gate call through a variable set elsewhere is refused with the gate() line to use", () => {
+  for (const cmd of [`node $G huddle resolve H1.2 --evidence events#4; cat ${RUN_DIR}/ledger.md`, `$G help; ls ${RUN_DIR}`, `node "$G" step tests done x --evidence a; ls ${RUN_DIR}`]) {
+    const v = verdict(cmd);
+    assert.equal(v.deny, true, cmd);
+    assert.match(v.reason, /cannot see through `\$G`/, cmd);
+    assert.match(v.reason, /gate\(\) \{ node "[^"]*gate\.mjs" "\$@"; \}/, cmd);
+  }
+  assert.equal(verdict(`G="node /x/scripts/gate.mjs"; $G next; ls ${RUN_DIR}`).deny, false, "set in the same command, the gate sees it");
+});
+
+test("F4 C5 boundary: pgrep beside a gate path reads; pkill does not", () => {
+  assert.equal(verdict(`pgrep -f vitest; cat ${RUN_DIR}/verify.json`).deny, false);
+  assert.equal(readsOnly("pgrep -fl 'next dev'"), true);
+  assert.equal(verdict(`pkill -f vitest; cat ${RUN_DIR}/verify.json`).deny, true);
+});
+
+test("F4 C6 boundary: git worktree remove outside the repo, prune and list pass beside a gate path; inside the repo or add stays refused", () => {
+  for (const cmd of [`git worktree remove --force /tmp/uitrial-head && grep T16 ${RUN_DIR}/ledger.md`, `git worktree prune; ls ${RUN_DIR}`, `git worktree list; ls ${RUN_DIR}`]) assert.equal(verdict(cmd).deny, false, cmd);
+  for (const cmd of [`git worktree remove --force ${repo}/wt; ls ${RUN_DIR}`, `git worktree remove wt; ls ${RUN_DIR}`, `git worktree add /tmp/x HEAD; ls ${RUN_DIR}`]) assert.equal(verdict(cmd).deny, true, cmd);
+});
+
+test("F4 C7 refused: the lead appends to its current run's ledger.md from the shell; another run's, ledger.json and a helper's append stay refused", () => {
+  for (const cmd of [`cat >> ${RUN_DIR}/ledger.md <<'EOF'\n\n## Decisions\n\n- keep it\nEOF`, `echo "- one more" >> ${RUN_DIR}/ledger.md`, `cd ${RUN_DIR} && cat >> ledger.md <<'EOF'\nx\nEOF`]) assert.equal(verdict(cmd).deny, false, cmd);
+  for (const [cmd, role] of [
+    [`echo x >> .claude/gate/runs/2026-11-08-other/ledger.md`, undefined],
+    [`echo x >> ${RUN_DIR}/ledger.json`, undefined],
+    [`echo x >> ${RUN_DIR}/ledger.md; echo y > ${RUN_DIR}/verify.json`, undefined],
+    [`echo x >> ${RUN_DIR}/ledger.md`, "done-gate:worker"],
+  ]) assert.equal(verdict(cmd, role).deny, true, cmd);
+});
+}
+
+{
+const repo = makeRepo("fence-f4-w");
+const cfg = loadConfig(repo);
+const RUN_DIR = ".claude/gate/runs/2026-11-09-x";
+const asked = (command, agent_type) => ({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: repo, session_id: "S1", ...(agent_type ? { agent_id: "A1", agent_type } : {}) });
+const verdict = (command, agent_type) => decide(asked(command, agent_type), repo, cfg, RUN_DIR);
+
+test("F4 C8 refused: an s command's w or e flag after any delimiter, or a delimiter inside brackets, is a write", () => {
+  for (const script of ["s|a|b|w out", "s,a,b,w out", "s#a#b#gw out", "s|a|b|e", "s|[|]| s|w out||", "s/[/]/x/w out"]) {
+    assert.equal(readsOnly(`sed '${script}' x.txt`), false, script);
+    assert.equal(verdict(`sed '${script}' ${RUN_DIR}/ledger.md`, "done-gate:reviewer").deny, true, script);
+    assert.equal(verdict(`sed -i '' '${script}' ${RUN_DIR}/review-1.md`, "done-gate:reviewer").deny, true, `-i ${script}`);
+  }
+  assert.equal(verdict(`sed -i '' 's/[0-9]*x/y/g' ${RUN_DIR}/review-1.md`, "done-gate:reviewer").deny, false, "brackets without the delimiter stay plain");
+  assert.equal(readsOnly("sed -n '/^## Work/,/^## Why/p' x.md"), true);
+  for (const cmd of [`cd /tmp && git worktree remove x; ls ${RUN_DIR}`, `git -C /tmp worktree remove x; ls ${RUN_DIR}`]) assert.equal(verdict(cmd).deny, true, cmd);
+  assert.doesNotMatch(verdict(`$EDITOR notes.txt; ls ${RUN_DIR}`).reason, /gate\(\)/, "no gate verb: no gate() advice");
 });
 }

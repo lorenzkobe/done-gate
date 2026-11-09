@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.mjs";
 import { currentLedger, isDone } from "./ledger.mjs";
 import { inPlan, outsidePlan, policyFor, samePiece, tierOf, tiered } from "./size.mjs";
@@ -45,7 +46,7 @@ const isScratch = (p) => {
   return !n.startsWith("..") && (SCRATCH_ROOT.test(n) || /(?:^|\/)tests\/\.tmp(?:\/|$)/.test(n));
 };
 // Programs that only read their arguments; the flags that turn one into a writer.
-const READ_ONLY = new Set(["sleep", ":", "false", "ps", "awk", "cat", "ls", "head", "tail", "grep", "egrep", "fgrep", "rg", "sed", "wc", "find", "diff", "stat", "file", "jq", "less", "more", "sort", "uniq", "cut", "tr", "column", "paste", "echo", "printf", "cd", "pwd", "test", "[", "true", "continue", "break", "tree", "du", "date", "which", "type", "basename", "dirname", "realpath", "readlink", "md5", "md5sum", "shasum", "sha1sum", "sha256sum", "cmp", "comm", "nl", "seq", "lsof"]);
+const READ_ONLY = new Set(["sleep", ":", "false", "ps", "awk", "cat", "ls", "head", "tail", "grep", "egrep", "fgrep", "rg", "sed", "wc", "find", "diff", "stat", "file", "jq", "less", "more", "sort", "uniq", "cut", "tr", "column", "paste", "echo", "printf", "cd", "pwd", "test", "[", "true", "continue", "break", "tree", "du", "date", "which", "type", "basename", "dirname", "realpath", "readlink", "md5", "md5sum", "shasum", "sha1sum", "sha256sum", "cmp", "comm", "nl", "seq", "lsof", "pgrep"]);
 // xargs takes its arguments from stdin, which can hand a program -i, -o, -delete or --pre: only
 // readers with no writing flag at all run under it
 const XARGS_READERS = new Set(["cat", "head", "tail", "grep", "egrep", "fgrep", "wc", "ls", "stat", "basename", "dirname", "md5", "md5sum", "shasum", "sha1sum", "sha256sum", "cmp", "diff", "echo", "printf"]);
@@ -304,6 +305,11 @@ function inlineCode(program, args, raw) {
 // a w command sits at the start of a sed script or after an address (`/x/w f`, `1w f`, `$w f`)
 // or as an s flag, or as a later command after `;`, `{`, `!`, a newline or a space
 const SED_W = /(?:^|[/\d$};{!\n])[wW]\s*\S|\s[wW]\s+\S/;
+// an s command with a w or e flag, whatever its delimiter
+const SED_S_FLAG = /s([^\s\\\n])(?:(?!\1)[^\\\n]|\\.)*\1(?:(?!\1)[^\\\n]|\\.)*\1[gIipM\d]*[wWe]/;
+// BSD sed skips a bracket expression when it looks for the delimiter, GNU sed does not
+const BRACKETS = /\[\^?\]?[^\]\n]*\]/g;
+const sedWritesIn = (script) => [script, script.replace(BRACKETS, "x")].some((t) => SED_W.test(t) || SED_S_FLAG.test(t));
 
 // The scripts a sed call runs: its -e values, else its first operand. Only these can hold a
 // w command; the file operands are paths, where `/w` is a folder or file name.
@@ -320,7 +326,7 @@ function sedScripts(args) {
 
 // a sed script is usually quoted, so quoting does not hide a flag here
 const writingFlag = (program, args) =>
-  (Boolean(WRITING_FLAG[program]) && args.some((a) => WRITING_FLAG[program].test(a.text))) || (program === "sed" && sedScripts(args).some((t) => SED_W.test(t)));
+  (Boolean(WRITING_FLAG[program]) && args.some((a) => WRITING_FLAG[program].test(a.text))) || (program === "sed" && sedScripts(args).some(sedWritesIn));
 
 // What `$(($(cmd) - 1))` leaves once the substitution is cut out: `- 1`. Numbers and + - %
 // only: a name could be a program (`$X - *`) and * is a glob.
@@ -376,7 +382,7 @@ function gitVerb(args) {
   return undefined;
 }
 
-function gitReads(args) {
+function gitReads(args, root = null) {
   const words = args.map((a) => a.text);
   for (;;) {
     if (words[0] === "-C") words.splice(0, 2);
@@ -388,6 +394,11 @@ function gitReads(args) {
   if (verb === "tag") return listsOnly(rest, TAG_WRITE);
   if (verb === "branch") return listsOnly(rest, BRANCH_WRITE);
   if (verb === "reflog") return sub === undefined || sub === "show" || sub === "exists" || sub.startsWith("-");
+  // a worktree outside the repo holds none of its files; prune and list touch only git's own records
+  if (verb === "worktree") {
+    const where = words.slice(2).filter((w) => !w.startsWith("-")).pop();
+    return sub === "list" || sub === "prune" || (sub === "remove" && Boolean(root) && path.isAbsolute(where ?? "") && path.relative(root, where).startsWith(".."));
+  }
   return GIT_READ.has(verb) || (verb === "stash" && (sub === "list" || sub === "show"));
 }
 
@@ -431,22 +442,22 @@ function gateVariables(raw) {
 
 // Every segment starts with a read-only program, nothing is redirected to a file, and inline
 // code names no write. `node …/gate.mjs` is the gate's own CLI; `sh -c` is read as a command.
-export function readsOnly(raw) {
-  return firstNotRead(raw) === null;
+export function readsOnly(raw, root = null) {
+  return firstNotRead(raw, root) === null;
 }
 
 // The first segment of a command that is not a plain read, or null when every one is.
-function firstNotRead(raw) {
-  return notReads(raw)[0] ?? null;
+function firstNotRead(raw, root = null) {
+  return notReads(raw, root)[0] ?? null;
 }
 
-function notReads(raw) {
+function notReads(raw, root = null) {
   const functions = definedFunctions(raw);
   const gateVars = gateVariables(raw);
-  return segments(withoutHeredocs(raw)).filter((seg) => !segmentReads(seg, raw, functions, gateVars));
+  return segments(withoutHeredocs(raw)).filter((seg) => !segmentReads(seg, raw, functions, gateVars, root));
 }
 
-function segmentReads(seg, raw, functions, gateVars) {
+function segmentReads(seg, raw, functions, gateVars, root) {
   const { words: shifted, envChanged } = shift(seg);
   // a `function name {` header defines; its body segments are checked as they stand
   const words = shifted[0]?.text === "function" ? shifted.slice(shifted[2]?.text === "{" ? 3 : 2) : shifted;
@@ -472,7 +483,7 @@ function segmentReads(seg, raw, functions, gateVars) {
   const code = inlineCode(program, args, raw);
   if (code !== null) return !INLINE_WRITE.test(code) && !writingFlag(program, args);
   if (writingFlag(program, args)) return false;
-  if (program === "git") return gitReads(args);
+  if (program === "git") return gitReads(args, root);
   if (program === "xargs") return xargsReads(args);
   if (program === "read") return readSetsPlainNames(args);
   return READ_ONLY.has(program);
@@ -665,7 +676,7 @@ export function shellWrites(raw) {
         const files = pathArgs(args, ["-e", "-f", "--expression", "--file"]);
         for (const a of flag(/^-[ef]$|^--expression|^--file/) ? files : files.slice(1)) target(a.text, "sed -i on");
       }
-      if (program === "sed" && sedScripts(args).some((t) => SED_W.test(t))) blind.push("sed w writes a file named in its script");
+      if (program === "sed" && sedScripts(args).some(sedWritesIn)) blind.push("sed w writes a file named in its script");
       if (program === "dd") for (const a of args) if (/^of=/.test(a.text)) target(a.text.slice(3), "dd of=");
       if (program === "tar" && (flag(/^-[a-zA-Z]*x|^--extract/) || /^[a-z]*x/.test(args[0]?.text ?? ""))) {
         const c = args.findIndex((a) => a.text === "-C");
@@ -772,14 +783,23 @@ const shown = (seg) => {
 };
 const LEADS_TO_GATE = /(?:^|[;&|(\s])cd\s+["']?[^\s;&|]*\.claude\/gate|=["']?[^\s;&|]*\.claude\/gate|\bfor\s+\w+\s+in\b[^;]*\.claude\/gate/;
 const NO_EDIT_TOOL = new Set(["reviewer", "reviewer-2", "skeptic"]);
-function evidenceDeny(cmd, agentType) {
-  const parts = notReads(cmd);
+const GATE_LINE = `gate() { node "${path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "gate.mjs")}" "$@"; }`;
+const VARIABLE = /^\$\{?(\w+)\}?$/;
+function evidenceDeny(cmd, agentType, root = null) {
+  const parts = notReads(cmd, root);
+  // a gate call through a variable set in an earlier command: the fence cannot tell it is the gate
+  const through = parts.map((seg) => shift(seg).words).find((w) => (VARIABLE.test(w[0]?.text ?? "") && GATE_VERBS.has(w[1]?.text)) || (w[0]?.text === "node" && VARIABLE.test(w[1]?.text ?? "") && GATE_VERBS.has(w[2]?.text)));
+  if (through) {
+    const variable = VARIABLE.test(through[0].text) ? through[0].text : through[1].text;
+    return `done-gate: the fence cannot see through \`${variable}\`: it cannot tell the variable holds the gate, so this reads as a write. Start the command with the gate() line instead: \`${GATE_LINE}; gate <verb> …\`.`;
+  }
   const touchesGate = (seg) => {
     const t = seg.map((w) => w.text).join(" ");
     return EVIDENCE_IN_COMMAND.test(t) || namesGateDir(t) || OWNED_FILE.test(t);
   };
   const part = parts.find(touchesGate) ?? parts[0] ?? null;
-  const named = (part && OWNED_FILE.exec(part.map((w) => w.text).join(" "))) ?? OWNED_FILE.exec(withoutHeredocs(cmd));
+  // a script fed through a heredoc names its file only inside the body
+  const named = (part && OWNED_FILE.exec(part.map((w) => w.text).join(" "))) ?? OWNED_FILE.exec(withoutHeredocs(cmd)) ?? OWNED_FILE.exec(cmd);
   const owner = named && (named[2] ? FILE_OWNER[named[2]] : null);
   const caller = agentType?.replace(/^done-gate:/, "") ?? null;
   const owns = named && (named[2] ? owner === caller : agentType === null);
@@ -788,7 +808,7 @@ function evidenceDeny(cmd, agentType) {
   return [
     `done-gate: that command writes gate evidence files (.claude/gate/...)${part ? `: \`${shown(part)}\` is not a plain read` : ""}.`,
     "Evidence is written only by `gate` verbs; read it with cat, grep or `gate report`.",
-    owns ? `Use the ${NO_EDIT_TOOL.has(caller) ? "Write" : "Edit or Write"} tool on ${named[1]} instead.` : "",
+    owns ? `Use the ${NO_EDIT_TOOL.has(caller) ? "Write" : "Edit or Write"} tool, or sed -i with plain s or d commands, on ${named[1]} instead; a python or node write stays refused.` : "",
   ].filter(Boolean).join(" ");
 }
 
@@ -910,20 +930,75 @@ const OWN_PREFIX = { ...OWN_FILE, worker: "worker" };
 // those paths are taken out. Anything else is [] and the evidence fence decides as before.
 const CD_FORM_OBSCURES = /[$`*?[]|>&|&>|[\w.-]+\.(?:jsonl?|md|tsv)\b|current-session/;
 const CD_FORM_PROGRAMS = new Set(["cd", "cat", "tee", "sed", "echo", "printf"]);
-// A sed script could write any file in the folder, so only a plain substitution or delete passes,
-// with no option but -i or an extended-regex flag.
-const PLAIN_SED_SCRIPT = /^(?:s\/(?:[^/\\\n]|\\.)*\/(?:[^/\\\n]|\\.)*\/[gIi\d]*|\/(?:[^/\\\n]|\\.)*\/d|\d+(?:,\d+)?d)$/;
+// A sed script could write, read or run anything, so only s commands (any delimiter; flags g, I,
+// i or a count) and d commands pass, joined by ; or newlines. A w, e or r command or flag does not.
+// Read both ways a sed may read it, with and without skipping bracket expressions.
+const plainSedScript = (script) => plainSedRead(script) && plainSedRead(script.replace(BRACKETS, "x"));
+function plainSedRead(script) {
+  let i = 0;
+  let commands = 0;
+  const end = () => i >= script.length || /[\s;]/.test(script[i]);
+  while (i < script.length) {
+    while (i < script.length && /[\s;]/.test(script[i])) i++;
+    if (i >= script.length) break;
+    commands += 1;
+    if (script[i] === "s") {
+      const d = script[i + 1];
+      if (!d || /[\s\\]/.test(d)) return false;
+      i += 2;
+      for (let part = 0; part < 2; part++) {
+        while (i < script.length && script[i] !== d) {
+          if (script[i] === "\n") return false;
+          i += script[i] === "\\" ? 2 : 1;
+        }
+        if (script[i] !== d) return false;
+        i += 1;
+      }
+      while (i < script.length && /[gIi\d]/.test(script[i])) i++;
+    } else {
+      const del = /^(?:\/(?:[^/\\\n]|\\.)*\/|\d+(?:,\d+)?)d/.exec(script.slice(i));
+      if (!del) return false;
+      i += del[0].length;
+    }
+    if (!end()) return false;
+  }
+  return commands > 0;
+}
+
+// A sed that edits only the files it names: -i with no backup suffix (BSD's -i '' included), -E or
+// -r, plain scripts from -e or the first operand, and at least one file.
+function plainSed(args) {
+  const scripts = [];
+  const operands = [];
+  for (let i = 0; i < args.length; i++) {
+    const t = args[i].text;
+    if (t === "" && args[i - 1]?.text === "-i") continue;
+    if (/^-(?:i|E|r|iE|Ei|ir|ri)$/.test(t)) continue;
+    if (t === "-e") {
+      if (!args[i + 1]) return false;
+      scripts.push(args[++i].text);
+      continue;
+    }
+    if (t.startsWith("-")) return false;
+    operands.push(t);
+  }
+  if (!scripts.length) scripts.push(operands.shift() ?? "");
+  return operands.length > 0 && scripts.every(plainSedScript);
+}
+const sedSegment = (seg) => shift(seg).words[0]?.text === "sed";
+
 function cdFormWriter(seg) {
   const [first, ...args] = shift(seg).words;
   if (!CD_FORM_PROGRAMS.has(first?.text)) return false;
-  if (first.text !== "sed") return true;
-  const operands = args.filter((a) => a.text !== "" && !/^-(?:i|E|r|iE|Ei)$/.test(a.text));
-  return PLAIN_SED_SCRIPT.test(operands[0]?.text ?? "") && operands.slice(1).every((a) => !a.text.startsWith("-"));
+  return first.text !== "sed" || plainSed(args);
 }
 export function ownFileWrites(raw, agentType, root) {
   const prefix = OWN_PREFIX[String(agentType ?? "").replace(/^done-gate:/, "")];
-  if (!prefix || gitWrites(raw)) return [];
-  const own = new RegExp(`^\\.claude/gate/runs/[^/]+/${prefix}-\\d+\\.md$`);
+  // the lead's own file is its run's ledger.md, the one it may edit by hand
+  const name = prefix ? `${prefix}-\\d+\\.md` : agentType === null ? "ledger\\.md" : null;
+  if (!name || gitWrites(raw)) return [];
+  if (notReads(raw).some((seg) => sedSegment(seg) && !plainSed(shift(seg).words.slice(1)))) return [];
+  const own = new RegExp(`^\\.claude/gate/runs/[^/]+/${name}$`);
   const { all, blind } = shellWrites(raw);
   const inline = inlineWriteTargets(raw);
   // shellWrites cannot see where inline code writes; inlineWriteTargets reads its literal targets
@@ -933,12 +1008,13 @@ export function ownFileWrites(raw, agentType, root) {
   if (!written.every((t) => own.test(rel(t) ?? "") || isScratch(t))) return [];
   const targets = [...new Set(written.map(rel).filter((t) => own.test(t ?? "")))];
   if (!targets.length) return [];
-  const named = String(raw).replace(new RegExp(`[^\\s'"=]*\\.claude/gate/runs/[^/\\s'"]+/${prefix}-\\d+\\.md`, "g"), "OWN");
+  const named = String(raw).replace(new RegExp(`[^\\s'"=]*\\.claude/gate/runs/[^/\\s'"]+/${name}`, "g"), "OWN");
   const rest = named.replace(/\bcd\s+(["']?)[^\s'";&|]*\.claude\/gate\/runs\/[^/\s'";&|]+\/?\1(?=\s|;|&|\||$)/g, "cd OWN");
   // Inside the run folder a bare ledger.json names nothing the check below can see. So the cd form
   // takes only writers whose targets are read, spells every name out, and names no other file there.
   if (rest !== named) {
-    const spelled = withoutHeredocs(rest).replace(new RegExp(`\\b${prefix}-\\d+\\.md\\b`, "g"), "OWN");
+    // a single-quoted word is text to the shell: a sed regex's $ or [ hides no name
+    const spelled = withoutHeredocs(rest).replace(new RegExp(`\\b${name}\\b`, "g"), "OWN").replace(/'[^']*'/g, "''");
     if (CD_FORM_OBSCURES.test(spelled) || !notReads(raw).every(cdFormWriter)) return [];
   }
   return EVIDENCE_IN_COMMAND.test(rest) || namesGateDir(withoutHeredocs(rest)) ? [] : targets;
@@ -1030,8 +1106,8 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
     // a heredoc that quotes an evidence path is text; the command around it is what runs,
     // unless the heredoc feeds an interpreter whose code writes
     // a write only under scratch paths cannot reach evidence, whatever it read
-    if (((EVIDENCE_IN_COMMAND.test(withoutHeredocs(cmd)) || namesGateDir(withoutHeredocs(cmd))) && !readsOnly(cmd) && !scratchOnly(cmd)) || (EVIDENCE_IN_COMMAND.test(cmd) && inlineWrites(cmd))) {
-      return { deny: true, reason: evidenceDeny(cmd, agentType), paths: [] };
+    if (((EVIDENCE_IN_COMMAND.test(withoutHeredocs(cmd)) || namesGateDir(withoutHeredocs(cmd))) && !readsOnly(cmd, root) && !scratchOnly(cmd)) || (EVIDENCE_IN_COMMAND.test(cmd) && inlineWrites(cmd))) {
+      return { deny: true, reason: evidenceDeny(cmd, agentType, root), paths: [] };
     }
     // a link made earlier hides the gate dir from the text; the real path of each target does not
     const linked = shellWrites(cmd).all.find((t) => IN_GATE_DIR.test(t));
