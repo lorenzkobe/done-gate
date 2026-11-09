@@ -7,6 +7,18 @@ evidence is (a run folder, a session, a command and its output).
 
 ## Open
 
+To check when they first appear in a real run (0.22.0, decided 2026-11-09): the zero-test wording
+of jest, pytest and cargo (`ranNoTests` in scripts/lib/verify.mjs is from memory, not from their
+output), and the fields of Claude Code's StopFailure payload (`turn-failed` in
+scripts/lib/events.mjs reads `error`, `error_details` and `last_assistant_message`, from the plan
+notes). The first run that shows either: compare, and fix the pattern if it differs.
+
+Helper tool check, 2026-11-09 (claude 2.1.319, a throwaway repo, this branch with `--plugin-dir`,
+`--model claude-haiku-5-5`, $0.09). A `done-gate:worker` and a `done-gate:reviewer` were each told
+to start an agent. Neither had an Agent or Task tool, and `ToolSearch select:Agent,Task` found none,
+so `disallowedTools` in the plugin's agent frontmatter holds. Both still had SendMessage, ListAgents
+and TaskStop among their deferred tools.
+
 Sandbox trial, batch 3.11, 2026-11-08 (claude 2.1.319, macOS, a throwaway git repo, the plugin from
 this branch with `--plugin-dir`, `--model claude-haiku-5-5`, 5 turns). Can a sandbox keep evidence out
 of the shell's reach? It blocks the agent's writes and the gate's verbs alike; hooks still write.
