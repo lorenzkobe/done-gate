@@ -540,10 +540,11 @@ test("C15 refused: a # comment ends at its line, so a quote inside it hides noth
 test("C14 edge: removing a link in scratch is judged by the link, not by where it points", () => {
   const link = path.join(os.tmpdir(), `dg-rmlink-${process.pid}`);
   try { unlinkSync(link); } catch {}
-  symlinkSync(path.dirname(gate), link);
+  // a folder outside every scratch root wherever this repo lives (a clone in /tmp is scratch)
+  symlinkSync("/usr/bin", link);
   try {
     assert.equal(scratchOnly(`rm ${link}`), true, "the link itself is in scratch");
-    assert.equal(scratchOnly(`rm ${link}/gate.mjs`), false, "a file through the link is outside scratch");
+    assert.equal(scratchOnly(`rm ${link}/env`), false, "a file through the link is outside scratch");
   } finally {
     try { unlinkSync(link); } catch {}
   }

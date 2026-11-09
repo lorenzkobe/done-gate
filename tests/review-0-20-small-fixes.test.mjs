@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, symlinkSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, gate, lookedUp, pluginRoot, write } from "./helpers.mjs";
+import { makeRepo, gate, lookedUp, write } from "./helpers.mjs";
 import { snapshot } from "../scripts/lib/tree.mjs";
 import { decide } from "../scripts/lib/guard.mjs";
 import { eventsFromHookInput } from "../scripts/lib/events.mjs";
@@ -111,8 +111,9 @@ test("C7 refused: a helper's shell write to another role's file, another run, ev
     `sed -i '' s/a/b/ ${repo}/.claude/gate/runs/other/review-1.md`,
     `sed -i '' s/a/b/ ${repo}/${RUN}/verify.json`,
     `printf x > ${repo}/${RUN}/ledger.json`,
-    // test repos sit under tests/.tmp, which is scratch: the code target is the plugin's own file
-    `sed -i '' s/a/b/ ${repo}/${RUN}/review-1.md ${pluginRoot}/README.md`,
+    // test repos sit under tests/.tmp, which is scratch: the code target is a path outside every
+    // scratch root, since the plugin itself may sit in one
+    `sed -i '' s/a/b/ ${repo}/${RUN}/review-1.md /usr/share/dg-code.md`,
     `sed -i '' s/a/b/ ${repo}/${RUN}/review-1.md && echo x > ${repo}/${RUN}/verify.json`,
   ]) assert.equal(denied(repo, command, rv), true, command);
   // the worker's own file never covers the worker's other evidence
