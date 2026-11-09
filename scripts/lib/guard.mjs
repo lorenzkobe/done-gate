@@ -1280,6 +1280,8 @@ export const verbs = {
       // a git command's newest reflog entry before it runs: the entries above it at its end are its own
       const top = ctx.input?.tool_name === "Bash" && gitWrites(String(ctx.input?.tool_input?.command ?? "")) ? headReflog(ctx.root, 1) : null;
       if (ctx.session && ctx.input?.tool_name === "Bash" && id.toolUseId) appendEvents(ctx.stateDir, ctx.session, [{ ...stamp(), kind: "command-start", ...id, ...(top ? { reflogTop: top[0] ?? null } : {}) }]);
+      // a helper reading or searching logs nothing else: this is how the gate tells it is working
+      else if (ctx.session && ctx.input?.agent_id) appendEvents(ctx.stateDir, ctx.session, [{ ...stamp(), kind: "helper-tool", tool: ctx.input?.tool_name ?? null }]);
       // reads log nothing, but which packet a worker read is which piece it holds
       const n = ctx.session ? packetRead(ctx.input, ctx.root, currentRun) : null;
       if (n !== null) appendEvents(ctx.stateDir, ctx.session, [{ ...stamp(), kind: "packet", n }]);

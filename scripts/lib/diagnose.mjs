@@ -212,10 +212,36 @@ export function leftBehind(ctx, { dir, ledger }, now = Date.now()) {
   };
 }
 
-const envMs = (name, fallback) => {
+const envMs = (name, fallback, { zero = true } = {}) => {
   const v = Number(process.env[name]);
-  return process.env[name] !== undefined && Number.isFinite(v) && v >= 0 ? v : fallback;
+  return process.env[name] !== undefined && Number.isFinite(v) && (zero ? v >= 0 : v > 0) ? v : fallback;
 };
+
+const HELPER_IDLE_MS = 10 * 60 * 1000;
+// This session's helpers out now that have done nothing for idleMs, counted from `from` at the
+// earliest: no event of their own, no notice. One inside a Bash call, or waiting on its own
+// background work, is busy.
+function idleHelpers(events, out, session, now, { from = 0, idleMs = HELPER_IDLE_MS } = {}) {
+  return out.filter((start) => start.session === session).flatMap((start) => {
+    const own = events.filter((e) => e.agent === start.agent || e.notice?.agent === start.agent);
+    const ended = new Set(own.filter((e) => e.kind === "command" && e.toolUseId).map((e) => e.toolUseId));
+    if (own.some((e) => e.kind === "command-start" && e.toolUseId && !ended.has(e.toolUseId))) return [];
+    if (own.filter((e) => e.notice).at(-1)?.notice.cause === "waiting") return [];
+    const last = Math.max(...own.map((e) => Date.parse(e.ts) || 0));
+    return now - Math.max(from, last) >= idleMs ? [{ agent: start.agent, agentType: start.agentType, idle: now - last }] : [];
+  });
+}
+const idleLine = (h) => `done-gate: ${h.agentType.replace(/^done-gate:/, "")} ${h.agent} has done nothing for ${ago(h.idle)}: SendMessage it to ask where it stands, or run \`gate diagnose\`. Advice only; the gate stops waiting for it at 45 minutes.`;
+
+// The idle lines for a prompt that reaches the lead, or null.
+export function idleLines(ctx) {
+  const current = openRun(ctx);
+  if (!current) return null;
+  const events = runEvents(ctx, current.ledger);
+  const now = Date.now();
+  const idle = idleHelpers(events, outNow(events, current.ledger, now), ctx.session, now);
+  return idle.length ? idle.map(idleLine).join("\n") : null;
+}
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // The done-gate helpers of the run still out now, one start each.
@@ -237,6 +263,7 @@ export const verbs = {
     const poll = envMs("DONE_GATE_WATCH_POLL_MS", 5000);
     const grace = envMs("DONE_GATE_WATCH_GRACE_MS", 30 * 1000);
     const quiet = envMs("DONE_GATE_WATCH_QUIET_MS", 20 * 60 * 1000);
+    const idleMs = envMs("DONE_GATE_WATCH_IDLE_MS", HELPER_IDLE_MS, { zero: false });
     const started = Date.now();
     const seen = new Map();
     let emptyPolls = 0;
@@ -248,6 +275,12 @@ export const verbs = {
       for (const e of out) seen.set(e.agent, e.agentType);
       emptyPolls = out.length ? 0 : emptyPolls + 1;
       const newest = events.length ? Date.parse(events.at(-1).ts) : 0;
+      const idle = idleHelpers(events, out, ctx.session, now, { from: started, idleMs });
+      if (idle.length) {
+        for (const h of idle) ctx.out(idleLine(h));
+        return;
+      }
+      // the backstop when every helper out waits on its own background work
       if (out.length && now - Math.max(started, newest) >= quiet) {
         ctx.out(`quiet: no new event for ${ago(quiet)} with ${out.map((e) => `${e.agentType} (${e.agent})`).join(", ")} still out: run \`gate watch\` again to keep waiting; this is not a failure`);
         return;

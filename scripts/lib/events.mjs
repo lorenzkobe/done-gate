@@ -344,8 +344,17 @@ export const verbs = {
         // advice only: `gate diagnose` reads the same events
       }
     }
+    // a helper of the run quiet for ten minutes is named on any prompt that reaches the lead
+    let idle = null;
+    if (events.some((e) => e.kind === "prompt") && ctx.session && !ctx.input?.agent_id) {
+      try {
+        idle = (await import("./diagnose.mjs")).idleLines(ctx);
+      } catch {
+        // advice only
+      }
+    }
     // additionalContext is the one hook output the model reads after a tool call or a prompt
-    const context = [warning, looped, told].filter(Boolean).join("\n");
+    const context = [warning, looped, told, idle].filter(Boolean).join("\n");
     ctx.out(context ? { hookSpecificOutput: { hookEventName: ctx.input.hook_event_name, additionalContext: context } } : SILENT);
   },
 };

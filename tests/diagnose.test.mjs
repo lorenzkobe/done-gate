@@ -624,3 +624,122 @@ test("4.7 C9 a poll over a 4 MB session log stays well under the 5 s poll", asyn
   assert.equal(r.code, 0, r.out);
   assert.ok(r.at - started < 2000, `one poll took ${r.at - started} ms`);
 });
+
+// ---- F9: a helper quiet for the idle time ----
+
+const ageEvents = (repo, minutes, keep = () => false) => {
+  const file = path.join(repo, ".claude", "gate", "sessions", "S1", "events.jsonl");
+  const old = new Date(Date.now() - minutes * 60 * 1000).toISOString();
+  writeFileSync(file, readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).map((e) => `${JSON.stringify(keep(e) ? e : { ...e, ts: old })}\n`).join(""));
+};
+// a helper's Read reaches the gate through the fence, which logs it
+const helperRead = (repo, id) => assert.equal(spawnSync(process.execPath, [gate, "fence"], { input: JSON.stringify({ session_id: "S1", cwd: repo, hook_event_name: "PreToolUse", agent_id: id, agent_type: "done-gate:reviewer", tool_name: "Read", tool_input: { file_path: path.join(repo, "src/a.ts") } }), encoding: "utf8", env: envFor(repo) }).status, 0);
+
+test("F9 C1 happy: a helper with no event of its own for the idle time ends the watch with its idle line", async () => {
+  const repo = opened("w-f9c1");
+  startHelper(repo, "A1");
+  const r = await watch(repo, { DONE_GATE_WATCH_IDLE_MS: "500" });
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /reviewer A1 has done nothing for [^\n]*: SendMessage it to ask where it stands, or run `gate diagnose`\. Advice only; the gate stops waiting for it at 45 minutes\./);
+  assert.doesNotMatch(r.out, /quiet: no new event/);
+});
+
+test("F9 C2 refused: a helper that keeps acting does not end the watch idle; its stop ends it as finished", async () => {
+  const repo = opened("w-f9c2");
+  startHelper(repo, "A1");
+  const done = watch(repo, { DONE_GATE_WATCH_IDLE_MS: "900" });
+  for (let i = 0; i < 4; i++) {
+    await pause(400);
+    helperRead(repo, "A1");
+  }
+  stopHelper(repo, "A1");
+  const r = await done;
+  assert.match(r.out, /reviewer A1[^\n]*finished/);
+  assert.doesNotMatch(r.out, /has done nothing/);
+});
+
+test("F9 C3 boundary: a helper quiet before the watch is named only after the idle time of watching", async () => {
+  const repo = opened("w-f9c3");
+  startHelper(repo, "A1");
+  ageEvents(repo, 12);
+  const started = Date.now();
+  const r = await watch(repo, { DONE_GATE_WATCH_IDLE_MS: "800" });
+  assert.ok(r.at - started >= 800, `named after ${r.at - started} ms`);
+  assert.match(r.out, /reviewer A1 has done nothing for 12 min/);
+});
+
+test("F9 C4 happy: a prompt to the lead carries the idle line for a helper quiet 10 minutes; a fresh helper or no run adds nothing", () => {
+  const repo = opened("w-f9c4");
+  startHelper(repo, "A1");
+  startHelper(repo, "A2", "reviewer-2");
+  ageEvents(repo, 11, (e) => e.agent === "A2");
+  const told = hook(repo, { hook_event_name: "UserPromptSubmit", prompt: tn("A3", 'Background command "npm test" completed (exit code 0)') });
+  const line = told.hookSpecificOutput?.additionalContext ?? "";
+  assert.match(line, /reviewer A1 has done nothing for 11 min/);
+  assert.doesNotMatch(line, /A2/);
+  const none = makeRepo("dg-cli-w-f9c4-none");
+  assert.equal(hook(none, { hook_event_name: "UserPromptSubmit", prompt: "go on" }).hookSpecificOutput, undefined);
+});
+
+test("F9 C5 edge: a helper silent past 45 minutes still counts as gone, with no idle line", async () => {
+  const repo = opened("w-f9c5");
+  startHelper(repo, "A1");
+  ageEvents(repo, 46);
+  const r = await watch(repo, { DONE_GATE_WATCH_IDLE_MS: "200" });
+  assert.match(r.out, /no helper is out/);
+  assert.doesNotMatch(r.out, /has done nothing/);
+  const told = hook(repo, { hook_event_name: "UserPromptSubmit", prompt: "go on" });
+  assert.doesNotMatch(told.hookSpecificOutput?.additionalContext ?? "", /has done nothing/);
+});
+
+const eventsOf = (repo) => readFileSync(path.join(repo, ".claude", "gate", "sessions", "S1", "events.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+const fenceAs = (repo, id, tool, tool_input) => spawnSync(process.execPath, [gate, "fence"], { input: JSON.stringify({ session_id: "S1", cwd: repo, hook_event_name: "PreToolUse", agent_id: id, agent_type: "done-gate:reviewer", tool_name: tool, tool_input }), encoding: "utf8", env: envFor(repo) });
+
+test("F9 C6 edge: a helper that only reads keeps the watch from naming it idle, since the fence logs each call", async () => {
+  const repo = opened("w-f9c6");
+  startHelper(repo, "A1");
+  const done = watch(repo, { DONE_GATE_WATCH_IDLE_MS: "900" });
+  for (const [tool, input] of [["Read", { file_path: path.join(repo, "src/a.ts") }], ["Grep", { pattern: "a", path: repo }], ["Glob", { pattern: "**/*.ts" }]]) {
+    await pause(450);
+    assert.equal(fenceAs(repo, "A1", tool, input).status, 0);
+  }
+  stopHelper(repo, "A1");
+  const r = await done;
+  assert.doesNotMatch(r.out, /has done nothing/);
+  assert.ok(eventsOf(repo).some((e) => e.kind === "helper-tool" && e.agent === "A1" && e.tool === "Grep"));
+});
+
+test("F9 C7 edge: a helper inside a long Bash call is busy, not idle", async () => {
+  const repo = opened("w-f9c7");
+  startHelper(repo, "A1");
+  const r = spawnSync(process.execPath, [gate, "fence"], { input: JSON.stringify({ session_id: "S1", cwd: repo, hook_event_name: "PreToolUse", agent_id: "A1", agent_type: "done-gate:reviewer", tool_name: "Bash", tool_use_id: "toolu_long", tool_input: { command: "npm test" } }), encoding: "utf8", env: envFor(repo) });
+  assert.equal(r.status, 0);
+  const done = watch(repo, { DONE_GATE_WATCH_IDLE_MS: "300", DONE_GATE_WATCH_QUIET_MS: "1500" });
+  const out = (await done).out;
+  assert.doesNotMatch(out, /has done nothing/);
+  assert.match(out, /quiet/);
+});
+
+test("F9 C8 edge: a helper waiting on its own background work is not named idle; the quiet still ends the watch", async () => {
+  const repo = opened("w-f9c8");
+  startHelper(repo, "A1");
+  stopHelper(repo, "A1");
+  hook(repo, { hook_event_name: "UserPromptSubmit", prompt: tn("A1", 'Agent "Review" is waiting on its own background work') });
+  const r = await watch(repo, { DONE_GATE_WATCH_IDLE_MS: "300", DONE_GATE_WATCH_QUIET_MS: "1200" });
+  assert.doesNotMatch(r.out, /has done nothing/);
+  assert.match(r.out, /quiet[\s\S]*A1/);
+});
+
+test("F9 C9 boundary: an idle time of 0 is the default, and a helper of another session is never named", async () => {
+  const repo = opened("w-f9c9");
+  startHelper(repo, "A1");
+  const zero = await watch(repo, { DONE_GATE_WATCH_IDLE_MS: "0", DONE_GATE_WATCH_QUIET_MS: "700" });
+  assert.doesNotMatch(zero.out, /has done nothing/);
+  assert.match(zero.out, /quiet/);
+  const other = opened("w-f9c9b");
+  const ledgerFile = path.join(runDir(other), "ledger.json");
+  writeFileSync(ledgerFile, JSON.stringify({ ...JSON.parse(readFileSync(ledgerFile, "utf8")), sessions: ["S1", "S2"] }));
+  spawnSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: "S2", cwd: other, hook_event_name: "SubagentStart", agent_id: "B1", agent_type: "done-gate:reviewer" }), encoding: "utf8", env: { ...envFor(other), DONE_GATE_SESSION: "S2" } });
+  const r = await watch(other, { DONE_GATE_WATCH_IDLE_MS: "300", DONE_GATE_WATCH_QUIET_MS: "1200" });
+  assert.doesNotMatch(r.out, /B1 has done nothing/);
+});
