@@ -1268,28 +1268,6 @@ test("C8 happy: the prompt line gate brief prints names both the packet path and
 });
 }
 
-// fence-reads-and-brief-crash C5: a directory in the plan's --files
-test("C5 reported-surface: a directory in the plan's --files is listed as a directory in the skeptic and the blind QA packets, not an EISDIR crash", () => {
-  const repo = makeRepo("packets-dir-files", { "src/widgets/a.ts": "export const a = 1;\n", "src/widgets/b.ts": "export const b = 2;\n" });
-  const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
-  delete env.CLAUDE_CODE_SESSION_ID;
-  const run = (verb, args) => spawnSync(process.execPath, [gate, verb, ...args], { encoding: "utf8", env });
-  execFileSync("git", ["add", "."], { cwd: repo });
-  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: repo });
-  assert.equal(run("open", ["dirs", "feature"]).status, 0);
-  // a run under the new rules refuses a folder in --files (tests/plan-binds.test.mjs C13); an old one lists it
-  asOldRun(repo);
-  const r = run("note", ["plan", "touch the widgets", "--files", "src/widgets,src/a.ts", "--size", "large"]);
-  assert.equal(r.status, 0, r.stderr);
-  for (const role of ["skeptic", "qa"]) {
-    const r = run("brief", [role]);
-    assert.equal(r.status, 0, `${role}: ${r.stderr}`);
-    const packet = readFileSync(/packet: (\S+)/.exec(r.stdout)[1], "utf8");
-    assert.match(packet, /^(?:- |\d+\. )src\/widgets\/ \(directory\)$/m, `${role} packet`);
-    assert.match(packet, /^(?:- |\d+\. )src\/a\.ts \(/m, `${role} packet keeps the plain file`);
-  }
-});
-
 // 6.11: the strength check's survivors reach the reviewer packet and the report
 {
 const LOG = (name) => path.join(path.dirname(new URL(import.meta.url).pathname), ".tmp", `${name}.runs`);

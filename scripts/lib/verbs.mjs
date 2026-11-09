@@ -9,7 +9,7 @@ import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
 import { sealProblems, sealRunFile } from "./seal.mjs";
-import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, uncovered, afterReview, changedUnitsOf, parseEntry, pathOf, parseReplies, pointerResolver, proofProblem, wrongProblem, callProblem, proofReading, runProblem, upheldItem, uiTrial, reviewTrialed, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid, workerRuns } from "./rules.mjs";
+import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, oldRun, oldRunText, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, uncovered, afterReview, changedUnitsOf, parseEntry, pathOf, parseReplies, pointerResolver, proofProblem, wrongProblem, callProblem, proofReading, runProblem, upheldItem, uiTrial, reviewTrialed, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid, workerRuns } from "./rules.mjs";
 import { assess, broughtSinceOpen, buildState, cleanAtHead, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
@@ -147,11 +147,11 @@ function oneQuestion(text) {
   return !words || /^(?:none|unverified)\.?$/i.test(words) ? null : words;
 }
 
-// On a run under the new rules the plan check closes itself once every finding is answered. A
+// The plan check closes itself once every finding is answered. A
 // question for the user leaves the close to the lead: the gate cannot tell it was asked.
 function settleCheck(ledger, dir) {
   const step = ledger.steps.find((s) => s.key === "skeptic");
-  if (!newRules(ledger) || !step || step.state !== null || checkAnswered(ledger, dir)) return;
+  if (!step || step.state !== null || checkAnswered(ledger, dir)) return;
   const last = ledger.huddles.filter((h) => h.role === "skeptic" && h.file).at(-1);
   if (oneQuestion(readFileSync(path.join(dir, last.file), "utf8"))) return;
   Object.assign(step, { state: "DONE", note: "closed by the gate: every finding answered", evidence: last.file, auto: "fact", seq: nextSeq() });
@@ -160,14 +160,13 @@ function settleCheck(ledger, dir) {
 // Code and tests wait for an owed plan check; a run whose code already changed is not stalled
 // mid-edit by growing into one, and R8 still asks for it.
 function holdForCheck(ledger) {
-  if (!newRules(ledger) || !tiered(ledger)) return;
+  if (!tiered(ledger)) return;
   const check = ledger.steps.find((s) => s.key === "skeptic");
   ledger.checkHold = Boolean(check && check.state === null && (!ledger.lastSourceChangeSeq || ledger.checkHold));
 }
 
-// On a run under the new rules a plan names files: a folder or a pattern would let any file in.
-function refuseNotFiles(ctx, ledger, given, named) {
-  if (!newRules(ledger)) return;
+// A plan names files: a folder or a pattern would let any file in.
+function refuseNotFiles(ctx, given, named) {
   if (!named.length) throw new UsageError(`--files "${given}" names no file; leave --files out to keep the plan's list`);
   const loose = named.find((f) => /\/$|[*?]/.test(f) || (existsSync(path.resolve(ctx.root, f)) && statSync(path.resolve(ctx.root, f)).isDirectory()));
   if (loose) throw new UsageError(`"${loose}" is a folder or a pattern: a plan names each file it changes (a new file is fine)`);
@@ -284,7 +283,6 @@ const PIECES_USAGE = 'gate plan pieces "<a.ts,b.ts>" "<c.ts>" ... [--shared <x.t
 function planPieces(ctx, given) {
   if (!given.length) throw new UsageError(`usage: ${PIECES_USAGE}`);
   const { ledger } = open(ctx);
-  if (!newRules(ledger)) throw new UsageError(`run ${ledger.slug} opened before gate plan pieces: brief each worker with \`gate brief worker --files a,b\``);
   if (!tiered(ledger)) throw new UsageError(`a ${ledger.playbook} run has no file plan to split into pieces`);
   const out = workerRuns({ ledger, events: ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)) }).find((r) => r.running);
   if (out) throw new UsageError(`${out.n === null ? "a worker" : `worker ${out.n}`} is still running: the pieces change once it has stopped`);
@@ -296,7 +294,7 @@ function planPieces(ctx, given) {
   const filesOf = (text, what) => {
     const named = text.split(",").map((f) => f.trim()).filter(Boolean);
     if (!named.length) throw new UsageError(`${what} "${text}" names no file`);
-    refuseNotFiles(ctx, ledger, text, named);
+    refuseNotFiles(ctx, text, named);
     const files = [];
     for (const f of named) {
       const rel = toPosixRel(ctx.root, f, ledger.repos);
@@ -413,12 +411,12 @@ export const verbs = {
     if (outside.length && outside.length === named.length) throw new UsageError(`--files: ${outsideRepos(outside.join(", "))}`);
     if (section === "plan" && files !== undefined) {
       const { ledger } = open(ctx);
-      refuseNotFiles(ctx, ledger, files, named);
+      refuseNotFiles(ctx, files, named);
       // once code changed a list the plan named is what it promised: it grows only by gate plan add
       const paths = named.map((f) => toPosixRel(ctx.root, f, ledger.repos)).filter(Boolean);
       const now = tierOf(ledger).predictedFiles;
       const same = paths.every((p) => inPlan(now, p)) && now.every((p) => inPlan(paths, p));
-      if (newRules(ledger) && tiered(ledger) && ledger.lastSourceChangeSeq && now.length && !same) throw new UsageError('the code has changed, so the plan\'s files are fixed: add one with `gate plan add <file> "<why>"`; the list no longer drops a file');
+      if (tiered(ledger) && ledger.lastSourceChangeSeq && now.length && !same) throw new UsageError('the code has changed, so the plan\'s files are fixed: add one with `gate plan add <file> "<why>"`; the list no longer drops a file');
     }
     // a plan past the split limit is several tasks: one review cannot cover it well
     if (named.length) {
@@ -465,11 +463,10 @@ export const verbs = {
     const why = words.join(" ").trim();
     if (action !== "add" || !files || !why) throw new UsageError(`usage: gate plan add <a.ts,b.ts> "<why the task needs them>" · ${PIECES_USAGE}`);
     const { ledger } = open(ctx);
-    if (!newRules(ledger)) throw new UsageError(`run ${ledger.slug} opened before gate plan add: name every file with \`gate note plan "<plan>" --files <every file>\``);
     if (!tiered(ledger)) throw new UsageError(`a ${ledger.playbook} run has no file plan to add to`);
     const named = files.split(",").map((f) => f.trim()).filter(Boolean);
     if (!named.length) throw new UsageError(`gate plan add: "${files}" names no file`);
-    refuseNotFiles(ctx, ledger, files, named);
+    refuseNotFiles(ctx, files, named);
     const outside = named.filter((f) => toPosixRel(ctx.root, f, ledger.repos) === null);
     if (outside.length) throw new UsageError(`gate plan add: ${outsideRepos(outside.join(", "))}`);
     const now = tierOf(ledger).predictedFiles;
@@ -563,13 +560,13 @@ export const verbs = {
         if (testPtr) shared = ledger.cases.filter((c) => c.id !== id && c.status === "closed" && c.test === testPtr).map((c) => c.id);
         const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
         const config = loadConfig(ctx.root, ledger.repos ?? []);
-        if (testPtr && newRules(ledger)) {
+        if (testPtr) {
           const file = pointerFile(testPtr);
           if (!file) throw new UsageError(`${id}: "${testPtr}" names no test file. Close on the test as <file:name> or <file:line>.`);
           if (!existsSync(path.resolve(ctx.root, file))) throw new UsageError(`${id}: ${file} does not exist. Write the test first, then close the case on it.`);
         }
         let saidWords = null;
-        if (na && newRules(ledger)) {
+        if (na) {
           // an edit from before this run opened, kept by an abandoned run, is not this run's code
           const first = firstCodeEdit({ events, config, ledger }, ledger.openedSeq ?? 0);
           if (!first || row.seq < first.seq) {
@@ -665,13 +662,13 @@ export const verbs = {
       if (!step) throw new UsageError(`no step "${ref}"`);
       if (step.key === "close") throw new UsageError("step {close} is closed by `gate close`, which closes the run once `gate check` is clean; run `gate close`");
       if (state === "SKIPPED" && step.key && EVIDENCED_KEYS.has(step.key)) {
-        throw new UsageError(`step {${step.key}} has script/agent evidence and cannot be SKIPPED — ${Object.hasOwn(NO_WAIVER, step.key) ? `it has no waiver either. ${NO_WAIVER[step.key]}.` : step.key === "tests" && newRules(ledger) ? 'write them; `gate step tests na "<why>"` when this change holds no code (config, lockfile, CSS, images, docs). A code change with no test has no waiver' : `do it,${step.key === "tests" ? ' close it `gate step tests na "<why>"` when this change touches no source file,' : ""} or get the user's waiver with \`gate waive ${step.key} "<reason>" --user-ok "<their words>"\``}`);
+        throw new UsageError(`step {${step.key}} has script/agent evidence and cannot be SKIPPED — ${Object.hasOwn(NO_WAIVER, step.key) ? `it has no waiver either. ${NO_WAIVER[step.key]}.` : step.key === "tests" ? 'write them; `gate step tests na "<why>"` when this change holds no code (config, lockfile, CSS, images, docs). A code change with no test has no waiver' : `do it, or get the user's waiver with \`gate waive ${step.key} "<reason>" --user-ok "<their words>"\``}`);
       }
       if (step.key === "context" && ledger.lookups) throw new UsageError('step {context} is closed by `gate note context "Traced: … · Related: … · Research: …"` after you search the code and memory yourself; run that instead.');
       if (state === "N/A" && (step.key === "repro" || step.key === "rootcause")) {
         throw new UsageError(`step {${step.key}} cannot be N/A: a bug fix with no ${step.key === "repro" ? "reproduction" : "root cause"} is a guess. Do it, or get the user's waiver with \`gate waive ${step.key} "<reason>" --user-ok "<their words>"\``);
       }
-      if (state === "N/A" && step.key === "skeptic" && newRules(ledger) && tiered(ledger)) {
+      if (state === "N/A" && step.key === "skeptic" && tiered(ledger)) {
         const policy = policyFor(ledger);
         const size = effectiveTier(policy, ledger, gateState?.tier?.measured ?? tierOf(ledger).measured);
         if (requiredSteps(policy, size, ledger).includes("skeptic")) throw new UsageError(`step {skeptic} cannot be N/A at size ${size}: the plan check is owed there. Run it (\`gate brief skeptic\`), or get the user's waiver with \`gate waive skeptic "<reason>" --user-ok "<their words>"\``);
@@ -683,7 +680,7 @@ export const verbs = {
         if (owed && !uiTrial(gateState)) throw new UsageError(`step {review} cannot be N/A at size ${size}: the review is owed. Only the UI trial skips it, for a looks-only change where every changed file is a stylesheet, a .vue or .svelte component or a script component (in a Next, Remix, React Router, TanStack Start or Waku repo one that opens with "use client"), none is named *.server.* or +server.*, and none is API, schema or high-risk code; otherwise run the review, or get the user's waiver with \`gate waive review "<reason>" --user-ok "<their words>"\``);
         if (owed) step.trial = true;
       }
-      if (state === "N/A" && newRules(ledger) && SURFACE_KEYS.has(step.key)) {
+      if (state === "N/A" && SURFACE_KEYS.has(step.key)) {
         // the tree alone: a full assess here would reopen the N/A steps it judges as a next check does
         const repos = ledger.repos ?? [];
         const tree = snapshot(ctx.root, loadSession(ctx.stateDir, ctx.session)?.lastTree ?? ledger.baseline, repos);
@@ -735,10 +732,7 @@ export const verbs = {
       if (!file && role !== "qa") throw new UsageError(`gate huddle add ${role} needs --file <${prefix}-<n>.md>: the helper's own file is the evidence`);
       if (file) {
         const { dir, ledger } = open(ctx);
-        // a ledger from before the second reviewer had its own stream recorded it on
-        // review-<n>.md; one that ever briefed a reviewer-2 on review2-<n>.md is not that
-        const legacy = role === "reviewer-2" && !Object.keys(ledger.seen ?? {}).some((k) => k.startsWith("review2-"));
-        const ownFile = legacy ? /^review2?-\d+\.md$/ : new RegExp(`^${prefix}-\\d+\\.md$`);
+        const ownFile = new RegExp(`^${prefix}-\\d+\\.md$`);
         if (!ownFile.test(file)) throw new UsageError(`gate huddle add ${role}: --file must be that role's own ${prefix}-<n>.md, not ${file}`);
         const other = ledger.huddles.find((h) => h.file === file && h.role !== role);
         if (other) throw new UsageError(`gate huddle add ${role}: ${file} is already recorded as ${other.id} (${other.role})`);
@@ -942,7 +936,7 @@ export const verbs = {
         return;
       }
       const proof = found ? proofProblem(state, found, evidence) : undefined;
-      if (proof) throw new UsageError(`${aid}: on this run ${proof}`);
+      if (proof) throw new UsageError(`${aid}: ${proof}`);
       if (proof === undefined && !pointerResolver(state)(evidence)) throw new UsageError(`resolve evidence "${evidence}" does not resolve; point at a test (file:name), a file:line, ledger.md#<section>, verify.json, events#<seq> or a helper file`);
       withLedger(ctx, (ledger, dir) => {
         const item = ledger.huddles.flatMap((h) => h.actOn).find((a) => a.id === aid);
@@ -980,7 +974,7 @@ export const verbs = {
           // a fix is shown by a test, a source line, verify.json or an event, never by the
           // worker's own reply file or a packet
           const proof = r.kind === "fixed" ? proofProblem(state, a, r.pointer) : undefined;
-          if (proof) throw new UsageError(`${r.id} fixed: on this run ${proof}`);
+          if (proof) throw new UsageError(`${r.id} fixed: ${proof}`);
           if (r.kind === "fixed" && proof === undefined && (/^(?:worker|brief)-/.test(r.pointer) || !resolves(r.pointer))) throw new UsageError(`${r.id} fixed: pointer "${r.pointer}" does not resolve; point at a test (file:name), a file:line, ledger.md#<section>, verify.json or events#<seq>`);
           if (r.kind === "disagree" && (!r.pointer || /^(?:worker|brief)-/.test(r.pointer) || !resolves(r.pointer))) throw new UsageError(`${r.id} disagree: needs a pointer that resolves after the reason (… — <ptr>), not the worker's own file`);
           if (r.kind === "disagree" && a.dispute) throw new UsageError(`${r.id} was already disputed once; one round is the limit${a.dispute.verdict?.startsWith("arbiter:") ? " and the arbiter has ruled" : ""}`);
@@ -1026,6 +1020,8 @@ export const verbs = {
     const key = byRule ? Object.keys(WAIVERS).find((k) => WAIVERS[k] === named) : named;
     const valid = `valid keys: ${Object.keys(WAIVERS).filter((k) => k !== "qa").map((k) => `${k} (${WAIVERS[k]})`).join(", ")}`;
     if (byRule && !key) throw new UsageError(`${named} has no waiver: do what \`gate check\` says for it. ${valid}`);
+    const { ledger: current } = open(ctx);
+    if (oldRun(current)) throw new UsageError(oldRunText(current));
     const couldNot = ctx.args.includes("--could-not-run");
     if (couldNot && key !== "driver" && key !== "schema") throw new UsageError(`--could-not-run is for a surface that cannot run: driver or schema, not ${key}`);
     if (Object.hasOwn(NO_WAIVER, key)) throw new UsageError(`${key} cannot be waived: a rule with no waiver would still block behind the step. ${NO_WAIVER[key]}.`);
@@ -1045,22 +1041,19 @@ export const verbs = {
       }
       // a step with no script or agent evidence is closed by hand; a waiver there would clear nothing a rule reads
       if (!rule && !EVIDENCED_KEYS.has(key)) throw new UsageError(`step {${key}} has no waiver: close it with \`gate step ${key} done|skipped|na "<note>"\`. ${valid}`);
-      if (couldNot && !newRules(ledger)) throw new UsageError("--could-not-run is for a run opened under the new rules; this one takes a plain waiver");
-      if (newRules(ledger) && (key === "tests" || key === "qa") && ledger.steps.some((s) => s.key === "tests")) {
+      if ((key === "tests" || key === "qa") && ledger.steps.some((s) => s.key === "tests")) {
         throw new UsageError(`${key} cannot be waived in this run: a code change with no test has no waiver. Write the tests. (\`qa-pass\` covers only the blind QA pass at size large; a change with no code owes no test.)`);
       }
-      if (newRules(ledger)) {
-        const tell = 'ask the user, naming what is given up, then pass --user-ok "<their words, at least three>"; a question\'s options must name it too, since an answer holds only the chosen label';
-        if (!words) throw new UsageError(`giving up ${key} is the user's call: ${tell}`);
-        const problem = waiverWordsProblem(key, words);
-        if (problem) throw new UsageError(`gate waive ${key}: ${problem}. ${tell}`);
-        const events = notRecommended(ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq));
-        if (!userSaid(ledger, events, words)) throw new UsageError(`the user did not say "${words.trim()}" in this task: ${tell}`);
-        if (ON_CODE.has(key) && (ledger.lastSourceHash !== hashBefore || !saidSince(events, ledger.lastSourceChangeSeq ?? 0, words))) {
-          throw new UsageError(`the user said "${words.trim()}" before the last code edit, about other code: ${tell}`);
-        }
+      const tell = 'ask the user, naming what is given up, then pass --user-ok "<their words, at least three>"; a question\'s options must name it too, since an answer holds only the chosen label';
+      if (!words) throw new UsageError(`giving up ${key} is the user's call: ${tell}`);
+      const problem = waiverWordsProblem(key, words);
+      if (problem) throw new UsageError(`gate waive ${key}: ${problem}. ${tell}`);
+      const events = notRecommended(ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq));
+      if (!userSaid(ledger, events, words)) throw new UsageError(`the user did not say "${words.trim()}" in this task: ${tell}`);
+      if (ON_CODE.has(key) && (ledger.lastSourceHash !== hashBefore || !saidSince(events, ledger.lastSourceChangeSeq ?? 0, words))) {
+        throw new UsageError(`the user said "${words.trim()}" before the last code edit, about other code: ${tell}`);
       }
-      const onCode = newRules(ledger) && LAPSING.has(key) ? { code: ledger.lastSourceHash } : {};
+      const onCode = LAPSING.has(key) ? { code: ledger.lastSourceHash } : {};
       ledger.waivers.push({ key, reason, ...(words ? { words: words.trim() } : {}), ...onCode, ...(couldNot ? { could: true } : {}), seq: nextSeq(), ...(flagged ? { lines: flagged } : {}), ...(changes ? { changes } : {}) });
       if (step) {
         delete step.auto;

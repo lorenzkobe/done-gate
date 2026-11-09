@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, waiveArgs, asOldRun } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, waiveArgs } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { DEFAULT_POLICY, loadPolicy } from "../scripts/lib/size.mjs";
@@ -157,9 +157,9 @@ test("C4 happy: feature, bugfix and refactor have a {tests} step (tests before c
 // C5 edge — R7 wording and waivers
 // ---------------------------------------------------------------------------
 
-test("C5 edge: R7 names writing the tests and gate waive tests; a tests waiver satisfies it; an old ledger's qa waiver still does", () => {
-  const repo = opened("tbl-c5-r7", ["src/a.ts"]);
-  asOldRun(repo);
+test("C5 edge: on a run with no tests step R7 names writing the tests and gate waive tests; a tests or qa waiver satisfies it", () => {
+  // a plan run has no tests step, so its tests may be given up; "qa" is the key older ledgers carry
+  const repo = opened("tbl-c5-r7", ["src/a.ts"], "plan");
   write(repo, "src/a.ts", "export const x = 2;\n");
   const r7 = lineStarting(cli(repo, "check").stdout.replace(/^\d+\. /gm, ""), "R7");
   assert.ok(r7, "R7 expected with source changed and no test file");
@@ -170,10 +170,9 @@ test("C5 edge: R7 names writing the tests and gate waive tests; a tests waiver s
   cli(repo, "waive", waiveArgs(repo, "tests", "user said so"));
   assert.doesNotMatch(cli(repo, "check").stdout, /\bR7\b/, "a tests waiver did not satisfy R7");
 
-  // the pure rule, with a ledger from before this task
   const config = loadConfig(repo);
   const state = { config, root: repo, ledger: { ...ledgerOf(repo), waivers: [{ key: "qa", reason: "old" }], steps: [], cases: [], huddles: [] }, changed: ["src/a.ts"], now: { files: {} }, verify: null, events: [], reviews: [], dir: runDir(repo) };
-  assert.ok(!evaluate(state).some((u) => u.rule === "R7"), "an old qa waiver no longer satisfies R7");
+  assert.ok(!evaluate(state).some((u) => u.rule === "R7"), "a qa waiver no longer satisfies R7");
 });
 
 // ---------------------------------------------------------------------------
@@ -208,7 +207,7 @@ test("C7 happy: the tests hint says to write the tests first from the case table
   assert.match(tests, /write the tests/i, tests);
   assert.match(tests, /case table/, tests);
   assert.match(tests, /\bred\b/i, tests);
-  assert.match(tests, /gate step tests done/, tests);
+  assert.match(tests, /closes itself/, tests);
   assert.match(tests, /large[^;]*gate brief qa/i, tests);
   const implement = nextHint({ ...base, steps: steps("implement") });
   assert.doesNotMatch(implement, /QA's tests/, implement);

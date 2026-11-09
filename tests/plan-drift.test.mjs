@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { asOldRun, gate, here, makeRepo, planChecked, readyToEdit, waiveArgs } from "./helpers.mjs";
+import { gate, here, makeRepo, planChecked, readyToEdit, waiveArgs } from "./helpers.mjs";
 import { DEFAULT_POLICY, loadPolicy, policyFor } from "../scripts/lib/size.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
@@ -210,18 +210,7 @@ test("C11 happy: in active mode a verb prints one warning line about the drift",
   assert.doesNotMatch(cli(planned("pd-c11-shadow"), "case", "add", "x", "--kind", "edge"), /^warning:/m, "shadow prints nothing");
 });
 
-test("C12 edge: an old run is silent in active mode, and an investigation has no drift", () => {
-  const repo = committed("pd-c12");
-  cli(repo, "open", "pd-c12", "feature");
-  asOldRun(repo);
-  const l = ledgerOf(repo);
-  l.policy.guards = { planDiff: "active" };
-  writeFileSync(ledgerFile(repo), JSON.stringify(l, null, 2));
-  readyToEdit(repo, { plan: ["--files", "src/a.ts"] });
-  shellWrite(repo, "src/b.ts");
-  assert.doesNotMatch(cli(repo, "check"), /R19/);
-  assert.equal(ledgerOf(repo).planDrift, undefined);
-
+test("C12 edge: a run pinned before guards existed records drift in shadow, and an investigation has no drift", () => {
   // a stamped run pinned before guards existed: the re-merged pin is shadow
   const pinned = committed("pd-c12-pin");
   cli(pinned, "open", "pd-c12-pin", "feature");

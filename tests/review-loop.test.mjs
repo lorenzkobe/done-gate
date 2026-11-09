@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, doneArgs, lookedUp, asOldRun, planChecked, pinnedBefore, redRun, userSays } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, doneArgs, lookedUp, planChecked, pinnedBefore, redRun, userSays } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { pointerResolver } from "../scripts/lib/rules.mjs";
@@ -579,9 +579,9 @@ test("C17 refused: gate huddle add reviewer --file skeptic-1.md is refused and n
 
 test("C18 refused: gate huddle resolve H1.1 --evidence nope-nothing is refused and the item stays open; --evidence verify.json after a green verify closes it", () => {
   const repo = opened("rd-c18");
-  asOldRun(repo); // the pointer rule this test pins; on a new run 6.6 P1 holds the proof rule
-  helperFile(repo, "review-1.md", reviewFile(1, "rd-c18", [FIND_1]));
-  cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
+  // a skeptic item: a reviewer finding closes on a run instead (6.6 P1)
+  helperFile(repo, "skeptic-1.md", `# Skeptic 1 — rd-c18\n\n## Act on\n- ${FIND_1}\n`);
+  cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
 
   const bad = refused(repo, "huddle", ["resolve", "H1.1", "--evidence", "nope-nothing"]);
   assert.match(bad.stderr, /nope-nothing|evidence|pointer/i, `the refusal does not name the pointer: ${bad.stderr}`);
@@ -662,9 +662,9 @@ test("C20 refused: hand-typed acton items do not pay for a bullet the file lists
 
 test("C21 refused: gate huddle resolve --evidence decisions#9999 is refused and the item stays open; after one decide row decisions#1 closes it and decisions#2 is refused", () => {
   const repo = opened("rd-c21");
-  asOldRun(repo); // the pointer rule this test pins; on a new run 6.6 P1 holds the proof rule
-  helperFile(repo, "review-1.md", reviewFile(1, "rd-c21", [FIND_1, FIND_2]));
-  cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
+  // a skeptic item: a reviewer finding closes on a run instead (6.6 P1)
+  helperFile(repo, "skeptic-1.md", `# Skeptic 1 — rd-c21\n\n## Act on\n- ${FIND_1}\n- ${FIND_2}\n`);
+  cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
 
   // no decisions.tsv at all yet
   assert.ok(!existsSync(path.join(runDir(repo), "decisions.tsv")), "premise: nothing has been decided yet");
@@ -1086,14 +1086,13 @@ test("C1 happy: gate huddle reply --file worker-1.md with 'H1.1 — fixed: tests
 
 test("C2 refused: gate huddle reply with a 'fixed:' pointer that does not resolve is refused, names the pointer, and H1.1 stays open", () => {
   const repo = reviewed("rl-c2");
-  asOldRun(repo); // the pointer rule this test pins; on a new run 6.6 P1 holds the proof rule
   helperFile(repo, "worker-1.md", workerFile(1, "rl-c2", ["H1.1 — fixed: nope-nothing"]));
 
   const r = refused(repo, "huddle", ["reply", "--file", "worker-1.md"]);
   assert.match(
     r.stderr,
-    /nope-nothing|resolve|pointer/i,
-    `the refusal does not say the pointer does not resolve: ${r.stderr}`,
+    /H1\.1 fixed: a reviewer finding closes on a run/,
+    `the refusal does not say what closes the finding: ${r.stderr}`,
   );
   assert.equal(
     itemById(ledgerOf(repo), "H1.1").closed,
@@ -1104,10 +1103,10 @@ test("C2 refused: gate huddle reply with a 'fixed:' pointer that does not resolv
   // the same pointer `gate huddle resolve` refuses is the one `reply` must refuse
   refused(repo, "huddle", ["resolve", "H1.1", "--evidence", "nope-nothing"]);
 
-  // and a pointer that does resolve still closes it, so the refusal was about the pointer
-  helperFile(repo, "worker-2.md", workerFile(2, "rl-c2", ["H1.1 — fixed: src/a.ts:3"]));
+  // and a pointer that proves the fix still closes it, so the refusal was about the pointer
+  helperFile(repo, "worker-2.md", workerFile(2, "rl-c2", ["H1.1 — fixed: doc"]));
   cli(repo, "huddle", ["reply", "--file", "worker-2.md"]);
-  assert.equal(itemById(ledgerOf(repo), "H1.1").closed, "src/a.ts:3");
+  assert.equal(itemById(ledgerOf(repo), "H1.1").closed, "doc");
 });
 
 // ---------------------------------------------------------------------------
@@ -1323,7 +1322,7 @@ test("C8 happy: the next: hint for the {review} step names gate brief reviewer, 
     seq: i + 1,
   }));
   const h = nextHint({
-    status: "open",
+    status: "open", rules: 2,
     playbook: "feature",
     taskSeq: 1,
     planSeq: 2,
@@ -1381,15 +1380,12 @@ test("6.6 P2 happy: a test that failed since the finding, a browser call and doc
   assert.ok(itemsOf(ledgerOf(repo)).every((a) => a.closed), JSON.stringify(itemsOf(ledgerOf(repo))));
 });
 
-test("6.6 P3 idempotent: a skeptic item and a run from before keep today's pointer rule", () => {
+test("6.6 P3 idempotent: a skeptic item keeps the pointer rule", () => {
   const repo = committed("rl-66-p3");
   cli(repo, "open", ["rl-66-p3", "feature"]);
   helperFile(repo, "skeptic-1.md", "# Skeptic 1\n\n## Act on\n- the plan misses the empty list — src/a.ts:1\n");
   cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "src/a.ts:1"]);
-  const old = reviewed("rl-66-p3-old");
-  asOldRun(old);
-  cli(old, "huddle", ["resolve", "H1.1", "--evidence", "src/a.ts:1"]);
 });
 
 test("6.6 P5 refused: a gate verb, a failed command, a git command and a reviewer's red run do not close a reviewer finding", () => {
@@ -1695,10 +1691,11 @@ test("C4 happy: the skeptic packet's You-may-write line names <run dir>/skeptic-
     .find((l) => /\bact[- ]on\b/i.test(l) && /\bonly\b/i.test(l) && /\breply\b/i.test(l));
   assert.ok(replyLine, `no line tells the skeptic to reply with the Act-on list only:\n${first.text}`);
 
-  // n is one past the highest existing skeptic file. A run under the new rules checks the plan
-  // once (tests/plan-hold.test.mjs C12), so the numbering is an old run's.
-  asOldRun(repo);
-  writeFileSync(path.join(dir, "skeptic-1.md"), "# Skeptic 1 — skeptic-packet\n");
+  // n is one past the highest existing skeptic file. The plan check runs once (tests/plan-hold.test.mjs
+  // C12), so a disputed finding brings it back.
+  writeFileSync(path.join(dir, "skeptic-1.md"), "# Skeptic 1 — skeptic-packet\n\n## Act on\n- the plan misses the empty list — src/a.ts:1\n");
+  cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
+  cli(repo, "huddle", ["dispute", "H1.1", "the case table holds it", "--evidence", "src/a.ts:1"]);
   const second = packet(repo, "skeptic", ["--round", "2"]);
   const may2 = section(second.text, "You may write");
   assert.ok(
@@ -1863,11 +1860,12 @@ test("C9 refused: with a ledger open, the skeptic and the reviewer may write the
 test("C10 edge: with review-1.md and skeptic-1.md on disk, the round-2 packets name review-2.md and skeptic-2.md", () => {
   const repo = opened("skeptic-round2");
   pinnedBefore(repo);
-  // a second plan check is an old run's (tests/plan-hold.test.mjs C12)
-  asOldRun(repo);
   const dir = runDir(repo);
   writeFileSync(path.join(dir, "review-1.md"), "# Review 1\n\n## Act on\n\n_none_\n");
-  writeFileSync(path.join(dir, "skeptic-1.md"), "# Skeptic 1 — skeptic-round2\n\n## Act on\n\n_none_\n");
+  // a second plan check answers a disputed finding (tests/plan-hold.test.mjs C12)
+  writeFileSync(path.join(dir, "skeptic-1.md"), "# Skeptic 1 — skeptic-round2\n\n## Act on\n- the plan misses the empty list — src/a.ts:1\n");
+  cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
+  cli(repo, "huddle", ["dispute", "H1.1", "the case table holds it", "--evidence", "src/a.ts:1"]);
 
   for (const [role, want] of [["reviewer", "review-2.md"], ["skeptic", "skeptic-2.md"]]) {
     const { text } = packet(repo, role, ["--round", "2"]);

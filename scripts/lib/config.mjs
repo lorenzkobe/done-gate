@@ -197,12 +197,10 @@ export function loadConfig(root, repos = []) {
   // R13 asks whether what the gate runs changed mid-task: the repo's config (or its absence)
   // plus the verify command list it resolves to. The driver key is left out: verify-setup
   // adds it mid-task by design. A plugin upgrade that only reshapes entries (a new field)
-  // does not move it; removing the test script does. A ledger from before hashed the file
-  // text; legacyHash keeps it matching.
+  // does not move it; removing the test script does.
   const verifyList = resolved.verify.map((v) => v.cmd).join("\n");
   const { driver: _driver, ...judged } = r;
   const hash = createHash("sha1").update(explicit ? JSON.stringify(judged) : "defaults").update("\n").update(verifyList).digest("hex");
-  const legacyHash = createHash("sha1").update(existsSync(file) ? readFileSync(file, "utf8") : "defaults").update("\n").update(verifyList).digest("hex");
   const opts = { ignoreCase: IGNORE_CASE };
   // the skill folder of the repo's driver; a driver given as a command has none
   const driverSkill = resolved.driver ? /^skill:\s*([\w-]+)$/.exec(resolved.driver)?.[1] : "verify";
@@ -221,7 +219,7 @@ export function loadConfig(root, repos = []) {
     isHighRisk: (p) => matchAny(resolved.highRisk, p, opts),
     isDriverFile: (p) => Boolean(driverFolder) && matchAny([`${driverFolder}/**`], p, opts) && !p.split("/").includes(".."),
   };
-  if (!repos.length) return { ...resolved, hash, legacyHash, ...main };
+  if (!repos.length) return { ...resolved, hash, ...main };
   // each repo's config is loaded once; its verify list and hash are read from here too
   const own = repos.map((repo) => ({ ...repo, missing: !existsSync(repo.root), config: repoConfig(repo.root) }));
   const dispatch = (name) => (p) => {
@@ -231,5 +229,5 @@ export function loadConfig(root, repos = []) {
     // a repo with no gate.json of its own: the main globs, and its own test conventions too
     return main[name](at.rel) || (name === "isTest" && Boolean(repo?.isTest(at.rel)));
   };
-  return { ...resolved, hash, legacyHash, repos: own, ...Object.fromEntries(Object.keys(main).map((name) => [name, dispatch(name)])) };
+  return { ...resolved, hash, repos: own, ...Object.fromEntries(Object.keys(main).map((name) => [name, dispatch(name)])) };
 }

@@ -2,7 +2,7 @@ import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
 import { policyFor, tiered } from "./size.mjs";
 import { loadConfig } from "./config.mjs";
 import { readEvents } from "./events.mjs";
-import { clickStale, driverCommand, lastEditSeq, newRules, nextGroup } from "./rules.mjs";
+import { clickStale, driverCommand, lastEditSeq, nextGroup } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 
 // One line after every verb: what to do next and the exact verb. The skill no longer has
@@ -24,7 +24,7 @@ const VERB_FOR = {
   close: "`gate close`",
 };
 
-// On a run under the new rules these steps close themselves (settleSteps), so the hint drops the hand close.
+// These steps close themselves (settleSteps), so the hint drops the hand close.
 const SELF_CLOSE = {
   tests: ["then `gate step tests done \"<red output, trimmed>\" --evidence <test file>`;", "the step closes itself on that run, which comes before the code;"],
   implement: [", then `gate step implement done \"…\" --evidence <file>`", "; the step closes itself on a green `gate verify`"],
@@ -32,8 +32,6 @@ const SELF_CLOSE = {
   review: ["; then `gate step review done … --evidence review-<n>.md`;", "; the step closes itself once a round is clean and every item is closed;"],
 };
 
-// A run from before the plan check held code: tests while the skeptic reads, and a hand close.
-const OLD_SKEPTIC = "`gate brief skeptic`, spawn done-gate:skeptic with the prompt it prints (it writes skeptic-<n>.md and replies with its Act-on list) and write the tests from the case table in the same turn while it reads (if it stops before finishing its file, `gate brief skeptic` again and spawn a fresh one, which continues from the file); then `gate huddle add skeptic --file skeptic-<n>.md`, answer each item (a new case gets a new test); a non-empty \"The one question\" in its file is the user's to answer: ask it with AskUserQuestion before any code; then `gate step skeptic done … --evidence skeptic-<n>.md`";
 
 // On a pieces run the implement hint walks the groups: the next group's briefs, or verify once
 // every piece was briefed. Its key names the group, so each new group prints in full.
@@ -73,7 +71,7 @@ function hintOf(ledger, after, config = null) {
   if (step) {
     const e2e = step.key === "driver" && config ? driverCommand(config) : null;
     const inVerify = e2e && config.verify.some((v) => v.cmd.trim() === e2e);
-    const how = inVerify ? `\`gate verify --final\`: a green \`${e2e}\` counts as the drive, then \`gate step driver done "<what it showed>" --evidence events#<seq>\` with the pointer it prints` : step.key === "skeptic" && !newRules(ledger) ? OLD_SKEPTIC : step.key && SELF_CLOSE[step.key] && newRules(ledger) ? VERB_FOR[step.key].replace(...SELF_CLOSE[step.key]) : step.key ? VERB_FOR[step.key] : null;
+    const how = inVerify ? `\`gate verify --final\`: a green \`${e2e}\` counts as the drive, then \`gate step driver done "<what it showed>" --evidence events#<seq>\` with the pointer it prints` : step.key && SELF_CLOSE[step.key] ? VERB_FOR[step.key].replace(...SELF_CLOSE[step.key]) : step.key ? VERB_FOR[step.key] : null;
     const groups = step.key === "implement" && ledger.pieces ? groupsHint(ledger) : null;
     if (groups) return { text: `next: step ${step.n}: ${groups.text}${how.replace(/^implement, /, "")}`, step, key: groups.key };
     return { text: `next: step ${step.n}: ${how ?? `${step.text} then \`gate step ${step.n} done|skipped|na "…"\``}`, step };

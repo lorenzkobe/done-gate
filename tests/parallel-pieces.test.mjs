@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { asOldRun, gate, makeRepo, planChecked, readyToEdit } from "./helpers.mjs";
+import { gate, makeRepo, planChecked, readyToEdit } from "./helpers.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
 import { workerRuns } from "../scripts/lib/rules.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
@@ -146,10 +146,7 @@ test("C8 refused: a folder, a pattern, code outside the plan, an empty piece or 
   assert.deepEqual(ledgerOf(repo).pieces.groups, [[0, 2], [1]]);
 });
 
-test("C9 refused: pieces on a run under the old rules or on a run with no file plan", () => {
-  const old = planned("pp-c9-old");
-  asOldRun(old);
-  assert.match(refused(old, "plan", "pieces", "src/a.ts", "src/b.ts"), /opened before/);
+test("C9 refused: pieces on a run with no file plan", () => {
   const inv = planned("pp-c9-inv", { files: null, playbook: "investigation" });
   assert.match(refused(inv, "plan", "pieces", "src/a.ts", "src/b.ts"), /no file plan/);
 });

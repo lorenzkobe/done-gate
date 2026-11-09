@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { asOldRun, gate, makeRepo, planChecked, readyToEdit } from "./helpers.mjs";
+import { gate, makeRepo, planChecked, readyToEdit } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 
 function envFor(repo) {
@@ -35,10 +35,9 @@ function committed(name, config = CONFIG) {
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
   return repo;
 }
-function planned(name, files = "src/a.ts,src/b.ts", { old = false, config } = {}) {
+function planned(name, files = "src/a.ts,src/b.ts", { config } = {}) {
   const repo = committed(name, config);
   cli(repo, "open", name, "feature");
-  if (old) asOldRun(repo);
   readyToEdit(repo, { plan: ["--files", files] });
   if (ledgerOf(repo).checkHold) planChecked(repo);
   return repo;
@@ -202,19 +201,11 @@ test("C8 happy: a clean reviewer round closes review, an open item does not, and
   assert.match(after, /R5/, "R5 still asks for a round on the new lines");
 });
 
-test("C9 edge: schema stays by hand, an old run closes nothing by itself, and a hand-closed step keeps its note", () => {
+test("C9 edge: schema stays by hand, and a hand-closed step keeps its note", () => {
   const schema = planned("sff-c9-schema", "src/a.ts,db/001.sql");
   edited(schema, "db/001.sql", "create table t (id int);\n");
   cli(schema, "verify");
   assert.equal(stepOf(schema, "schema").state, null);
-
-  const old = planned("sff-c9-old", "src/a.ts,src/b.ts", { old: true });
-  edited(old, "src/a.ts", "export const a = 2;\n");
-  edited(old, "tests/a.test.ts", "test('a is 2', () => {});\n", PAST());
-  ran(old, "npm test", 0);
-  cli(old, "verify");
-  assert.equal(stepOf(old, "tests").state, null);
-  assert.equal(stepOf(old, "implement").state, null);
 
   const hand = planned("sff-c9-hand");
   edited(hand, "tests/a.test.ts", "test('a is 2', () => {});\n", PAST());
@@ -225,16 +216,13 @@ test("C9 edge: schema stays by hand, an old run closes nothing by itself, and a 
   assert.equal(stepOf(hand, "tests").auto, undefined);
 });
 
-test("C10 reported-surface: the hints on a run under the new rules say these steps close themselves; an old run's keep gate step", () => {
+test("C10 reported-surface: the hints say these steps close themselves", () => {
   const nextOf = (repo) => cli(repo, "next").split("\n").find((l) => l.startsWith("next:"));
   const repo = planned("sff-c10");
   const tests = nextOf(repo);
   assert.match(tests, /\{?tests\}?|step 5/);
   assert.match(tests, /closes itself/);
   assert.doesNotMatch(tests, /gate step tests done/);
-  const old = planned("sff-c10-old", "src/a.ts,src/b.ts", { old: true });
-  cli(old, "step", "skeptic", "na", "an old run");
-  assert.match(nextOf(old), /gate step tests done/);
   const text = readFileSync(new URL("../scripts/lib/next.mjs", import.meta.url), "utf8");
   for (const key of ["implement", "driver", "review"]) assert.ok(text.includes(`${key}: `), key);
 });
@@ -269,12 +257,7 @@ test("F5 C1 reported-surface: a test run that worked closes the tests step as pa
   }
 });
 
-test("F5 C2 reported-surface: an old run's waiver hints drop --user-ok; a new run's keep it", () => {
-  const old = planned("sff-f5-old", "src/a.ts,src/b.ts", { old: true });
-  edited(old, "src/a.ts", "export const a = 2;\n");
-  const oldCheck = cli(old, "check");
-  assert.match(oldCheck, /gate waive tests "<reason>"`/);
-  assert.doesNotMatch(oldCheck, /gate waive [^`]*--user-ok/);
+test("F5 C2 reported-surface: a run's waiver hints ask for the user's words", () => {
   const fresh = planned("sff-f5-new");
   edited(fresh, "src/a.ts", "export const a = 2;\n");
   assert.match(cli(fresh, "check"), /gate waive \w[\w-]* "<reason>" --user-ok "<their words>"/);

@@ -141,7 +141,7 @@ test("R8: blank steps and open cases block; R2: the Plan and case table must exi
   const cfg = loadConfig(makeRepo("verbs-rules"));
   const base = { config: cfg, changed: ["src/a.ts", "tests/a.test.ts"], now: { hash: "x", files: {} }, verify: { sourceHash: "n/a", commands: [] }, events: [], reviews: [], lastMessage: "" };
   const ledger = {
-    status: "open", waivers: [], planSeq: 10, taskSeq: 9,
+    status: "open", rules: 2, waivers: [], planSeq: 10, taskSeq: 9,
     cases: [{ id: "C1", status: "closed", test: "t:x", seq: 11 }, { id: "C2", status: "open", seq: 12 }],
     steps: [{ n: 1, key: "read", state: "DONE" }, { n: 2, key: "plan", state: null }],
   };
@@ -302,16 +302,6 @@ test("3.6 C4 words that do not name the check are refused and say what would; a 
   assert.equal(waivers(reviewed).length, 1);
 });
 
-test("3.6 C5 an old run with no stamp still waives freely, with no flag", () => {
-  const repo = opened("verbs-w5");
-  const ledger = ledgerOf(repo);
-  delete ledger.rules;
-  saveLedger(runDir(repo), ledger);
-  assert.equal(waive(repo, "driver", "no flag at all").status, 0);
-  assert.equal(waivers(repo)[0].reason, "no flag at all");
-  assert.equal(waivers(repo)[0].words, undefined);
-});
-
 test("3.6 C6 the report prints the user's words, in full and in For you", () => {
   const repo = opened("verbs-w6");
   cli(repo, "waive", waiveArgs(repo, "driver", "chrome is disconnected"));
@@ -407,11 +397,6 @@ const uiChanged = (name) => {
   cli(repo, "check");
   return repo;
 };
-const age = (repo) => {
-  const ledger = ledgerOf(repo);
-  delete ledger.rules;
-  saveLedger(runDir(repo), ledger);
-};
 
 test("3.7 C1 an edit lapses a driver waiver: R4 returns, the step goes blank, the record stays marked lapsed", () => {
   const repo = uiChanged("verbs-l1");
@@ -446,16 +431,6 @@ test("3.7 C3 a later waiver with new words clears the lapsed check", () => {
   assert.equal(ruleIn(check(repo), "R4"), false);
   assert.equal(stepState(repo, "driver"), "WAIVED");
   assert.deepEqual(waivers(repo).map((w) => w.lapsed ?? false), [true, false]);
-});
-
-test("3.7 C4 an old waiver with no code never lapses", () => {
-  const repo = uiChanged("verbs-l4");
-  age(repo);
-  cli(repo, "waive", ["driver", "an old run's waiver"]);
-  assert.equal(waivers(repo)[0].code, undefined);
-  write(repo, "src/app/page.tsx", "export default () => 2;\n");
-  assert.equal(ruleIn(check(repo), "R4"), false);
-  assert.equal(waivers(repo)[0].lapsed, undefined);
 });
 
 test("3.7 C5 the report lists a lapsed waiver as lapsed, not as skipped with your OK, and stats counts both kinds", () => {
@@ -506,25 +481,12 @@ test("3.7 C7 a version bump and CSS need no test; one .ts beside them fires R7, 
   assert.doesNotMatch(line, /gate waive/);
 });
 
-test("3.7 C8 a plan run may still waive tests, an old run may too, and an old qa waiver still counts", () => {
+test("3.7 C8 a plan run may still waive tests", () => {
   const plan = opened("verbs-t3", "plan");
   editsCode(plan);
   assert.match(check(plan), /gate waive tests/);
   cli(plan, "waive", waiveArgs(plan, "tests", "a throwaway prototype"));
   assert.equal(ruleIn(check(plan), "R7"), false);
-
-  const old = opened("verbs-t4");
-  age(old);
-  editsCode(old);
-  assert.match(check(old), /gate waive tests/);
-  cli(old, "waive", ["tests", "an old run's waiver"]);
-  assert.equal(ruleIn(check(old), "R7"), false);
-
-  const qa = opened("verbs-t5");
-  age(qa);
-  editsCode(qa);
-  cli(qa, "waive", ["qa", "an older ledger's key"]);
-  assert.equal(ruleIn(check(qa), "R7"), false);
 });
 
 const couldNotRun = (repo, key, reason) => {
@@ -619,7 +581,7 @@ test("3.7 C13 a change with no code runs through to gate close; the hints name h
 // test pointer each need something real behind them.
 const answers = (repo, label) => hook(repo, { hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", tool_input: {}, tool_response: { answers: { "Which way?": label } } });
 const question = (question, label, description = "") => ({ tool_name: "AskUserQuestion", tool_input: { questions: [{ question, options: [{ label, description }, { label: "Other way", description: "" }] }] } });
-const NEW = { rules: 1 };
+const RUN = { rules: 2 };
 const closeCase = (repo, ...args) => spawnSync(process.execPath, [gate, "case", "close", ...args], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" } });
 const caseOf = (repo, id = "C1") => ledgerOf(repo).cases.find((c) => c.id === id);
 const planned = (name) => {
@@ -647,7 +609,7 @@ test("3.8 C2 the fence refuses a (Recommended) option that skips a check, waives
     question("Next?", "Abandon this run (Recommended)"),
     question("What now?", "Drop this run (Recommended)"),
   ]) {
-    const verdict = decide(q, root, null, null, NEW);
+    const verdict = decide(q, root, null, null, RUN);
     assert.equal(verdict.deny, true, JSON.stringify(q));
     assert.match(verdict.reason, /\(Recommended\)/);
   }
@@ -663,17 +625,16 @@ test("4.6 C10 a recommendation to abandon or drop a run is refused even with no 
   assert.equal(decide(question("Which migration?", "Drop the users column (Recommended)"), root, null, null, null).deny, false);
 });
 
-test("3.8 C3 a recommendation that gives up no check passes; a bare yes on a question skipping one is refused; an old run or no run passes", () => {
+test("3.8 C3 a recommendation that gives up no check passes; a bare yes on a question skipping one is refused; no run passes", () => {
   const root = makeRepo("verbs-r3");
   for (const q of [
     question("Which migration?", "Drop the users column (Recommended)"),
     question("Should I skip the review?", "No, keep the review (Recommended)"),
     question("Which test runner?", "Vitest (Recommended)"),
-  ]) assert.equal(decide(q, root, null, null, NEW).deny, false, JSON.stringify(q));
+  ]) assert.equal(decide(q, root, null, null, RUN).deny, false, JSON.stringify(q));
   const bare = question("Should I skip the review?", "Yes (Recommended)");
-  assert.equal(decide(bare, root, null, null, NEW).deny, true);
+  assert.equal(decide(bare, root, null, null, RUN).deny, true);
   const giving = question("How do we handle the rebase?", "Skip the review for rebases (Recommended)");
-  assert.equal(decide(giving, root, null, null, {}).deny, false, "old run");
   assert.equal(decide(giving, root, null, null, null).deny, false, "no run");
 });
 
@@ -691,15 +652,11 @@ test("3.8 C4 --na on a planned case needs the user's words; with them it closes 
   assert.match(cli(repo, "report").stdout, /n\/a: covered elsewhere \(the user: "no case for this one"\)/);
 });
 
-test("3.8 C5 a case written after the first code edit stays free with --na, and an old run is unchanged", () => {
+test("3.8 C5 a case written after the first code edit stays free with --na", () => {
   const later = opened("verbs-n2");
   editsCode(later);
   cli(later, "case", ["add", "found while building", "--kind", "edge"]);
   assert.equal(closeCase(later, "C1", "--na", "covered by the fix").status, 0);
-
-  const old = planned("verbs-n3");
-  age(old);
-  assert.equal(closeCase(old, "C1", "--na", "covered elsewhere").status, 0);
 });
 
 test("3.8 C6 --ran closes a case on the lead's successful recorded run, with no words, and shows in the table", () => {
@@ -720,7 +677,7 @@ test("3.8 C6 --ran closes a case on the lead's successful recorded run, with no 
   assert.match(closeCase(repo, "C2", "--ran", "probe.mjs measured").stderr, /click/);
 });
 
-test("3.8 C7 --drop of the last configured test command needs words; add then drop, a lint drop and one of two stay free; an old run is unchanged", () => {
+test("3.8 C7 --drop of the last configured test command needs words; add then drop, a lint drop and one of two stay free", () => {
   const verifyWith = (name, verify) => {
     const repo = makeRepo(name, { ".claude/gate.json": JSON.stringify({ testFiles: null, verify }) });
     gitIn(repo, "add", "-A");
@@ -747,13 +704,9 @@ test("3.8 C7 --drop of the last configured test command needs words; add then dr
   const added = verifyWith("verbs-d4", ["npx eslint ."]);
   cli(added, "verify", ["--add", "npx vitest run"]);
   assert.equal(drop(added, "npx vitest run").status, 0);
-
-  const old = verifyWith("verbs-d5", ["npx vitest run"]);
-  age(old);
-  assert.equal(drop(old, "npx vitest run").status, 0);
 });
 
-test("3.8 C8 --test refuses a pointer whose file does not exist or names no file; file:line and file:name pass; an old run is unchanged", () => {
+test("3.8 C8 --test refuses a pointer whose file does not exist or names no file; file:line and file:name pass", () => {
   const repo = planned("verbs-p1");
   for (const pointer of ["tests/nothing-here.test.mjs:no such test", "tests/nothing-here.test.mjs", "the tests pass"]) {
     assert.match(closeCase(repo, "C1", "--test", pointer).stderr, /does not exist|no test file/, pointer);
@@ -764,10 +717,6 @@ test("3.8 C8 --test refuses a pointer whose file does not exist or names no file
   assert.equal(closeCase(repo, "C2", "--test", "tests/a.test.ts:the named test").status, 0);
   cli(repo, "case", ["add", "a third", "--kind", "edge"]);
   assert.equal(closeCase(repo, "C3", "--test", "tests/a.test.ts::named").status, 0);
-
-  const old = planned("verbs-p2");
-  age(old);
-  assert.equal(closeCase(old, "C1", "--test", "tests/nothing-here.test.mjs:no such test").status, 0);
 });
 
 test("3.8 C9 a run from before the last edit cannot close a case, one run closes one case, and an edit opens it again", () => {
@@ -856,12 +805,12 @@ test("3.8 C14 common give-up shapes are refused, several questions are read, and
     question("Skip the tests here?", "OK (Recommended)"),
     question("Skip the drive?", "Sure (Recommended)"),
     question("Skip the drive?", "Proceed (Recommended)"),
-  ]) assert.equal(decide(q, root, null, null, NEW).deny, true, JSON.stringify(q));
+  ]) assert.equal(decide(q, root, null, null, RUN).deny, true, JSON.stringify(q));
   const several = { tool_name: "AskUserQuestion", tool_input: { questions: [question("Which runner?", "Vitest (Recommended)").tool_input.questions[0], question("Next?", "Skip the review (Recommended)").tool_input.questions[0]] } };
-  assert.equal(decide(several, root, null, null, NEW).deny, true);
-  assert.equal(decide(question("Should I run the review?", "Yes (Recommended)"), root, null, null, NEW).deny, false, "a yes to running it");
+  assert.equal(decide(several, root, null, null, RUN).deny, true);
+  assert.equal(decide(question("Should I run the review?", "Yes (Recommended)"), root, null, null, RUN).deny, false, "a yes to running it");
   for (const tool_input of [undefined, {}, { questions: "x" }, { questions: [null] }, { questions: [{ options: "x" }] }, { questions: [{ options: [null] }] }]) {
-    assert.equal(decide({ tool_name: "AskUserQuestion", tool_input }, root, null, null, NEW).deny, false, JSON.stringify(tool_input));
+    assert.equal(decide({ tool_name: "AskUserQuestion", tool_input }, root, null, null, RUN).deny, false, JSON.stringify(tool_input));
   }
 });
 

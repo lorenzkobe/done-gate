@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { evaluate, sourceHash, lateOrder } from "../scripts/lib/rules.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
-import { makeRepo, write, gate, pluginRoot, lookedUp, waiveArgs, asOldRun, naArgs } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, lookedUp, waiveArgs, naArgs } from "./helpers.mjs";
 import { spawnSync, execFileSync } from "node:child_process";
 import path from "node:path";
 import { readFileSync, appendFileSync, existsSync, writeFileSync } from "node:fs";
@@ -40,7 +40,7 @@ test("doc-only changes without a ledger pass R1", () => {
 });
 
 test("R3: with a ledger, verify.json must exist, be green, and match the current source hash", () => {
-  const ledger = { status: "open", steps: [], waivers: [], cases: [] };
+  const ledger = { status: "open", rules: 2, steps: [], waivers: [], cases: [] };
   const now = { hash: "x", files: { "src/a.ts": { h: "1" }, "docs/x.md": { h: "2" } } };
   const changed = ["src/a.ts", "tests/a.test.ts"];
   assert.ok(ids(evaluate(state({ ledger, changed, now }))).includes("R3"));
@@ -63,7 +63,7 @@ test("sourceHash ignores non-source files so a docs edit after verify does not i
 });
 
 test("R7: source changed without any test file changing blocks unless the qa step is waived", () => {
-  const ledger = { status: "open", steps: [], waivers: [], cases: [] };
+  const ledger = { status: "open", rules: 2, steps: [], waivers: [], cases: [] };
   assert.ok(ids(evaluate(state({ ledger, changed: ["src/a.ts"] }))).includes("R7"));
   assert.ok(!ids(evaluate(state({ ledger, changed: ["src/a.ts", "tests/a.test.ts"] }))).includes("R7"));
   const waived = { ...ledger, waivers: [{ key: "qa", quote: "skip tests", found: true }] };
@@ -93,7 +93,7 @@ const ids = (s) => evaluate(s).map((u) => u.rule);
 const green = (now) => ({ sourceHash: "n/a", commands: [{ cmd: "x", exit: 0, timedOut: false }] });
 const clean = (over = {}) => {
   const ledger = {
-    status: "open", planSeq: 1, taskSeq: 1, waivers: [], huddles: [], reviews: [],
+    status: "open", rules: 2, planSeq: 1, taskSeq: 1, waivers: [], huddles: [], reviews: [],
     cases: [{ id: "C1", status: "closed", test: "t", seq: 2 }],
     steps: [{ n: 1, key: "schema", state: "N/A", note: "none" }],
     gateHash: cfg.hash, baseline: { seq: 0 },
@@ -441,7 +441,7 @@ const textOf = (s, rule) => evaluate(s).find((u) => u.rule === rule)?.text ?? ""
 
 const clean = (over = {}) => {
   const ledger = {
-    status: "open", playbook: "feature", planSeq: 1, taskSeq: 1, waivers: [], huddles: [], reviews: [],
+    status: "open", rules: 2, playbook: "feature", planSeq: 1, taskSeq: 1, waivers: [], huddles: [], reviews: [],
     cases: [{ id: "C1", status: "closed", test: "t", seq: 2 }],
     steps: [{ n: 1, key: "schema", state: "N/A", note: "none" }],
     gateHash: cfg.hash, baseline: { seq: 0 },
@@ -655,9 +655,9 @@ const errorLog = (repo) => path.join(stateDir(repo), "gate-error.log");
 
 // An open feature ledger over a repo whose only change is one source file — the exact
 // shape R7 fires on (source changed, no test file changed).
-function openedWithSourceEdit(name) {
+function openedWithSourceEdit(name, playbook = "feature") {
   const repo = makeRepo(name);
-  cli(repo, "open", [name, "feature"]);
+  cli(repo, "open", [name, playbook]);
   cli(repo, "note", ["task", "Change one module."]);
   cli(repo, "note", ["plan", "One module.", "--files", "src/a.ts"]);
   write(repo, "src/a.ts", "export const a = 2;\n");
@@ -671,13 +671,12 @@ function openedWithSourceEdit(name) {
 const QA_REASON = "no tests for this one, it is a prose-only change and I read it myself";
 
 test("C1: waive qa records the reason with no transcript lookup, satisfies R7, and the report prints the reason", () => {
-  const repo = openedWithSourceEdit("waivers-c1");
+  // a plan run has no tests step, so its tests may be waived; "qa" is the key older ledgers carry
+  const repo = openedWithSourceEdit("waivers-c1", "plan");
 
   // R7 is unmet before the waiver: source changed, no test file changed.
   assert.ok(ruleLine(check(repo), "R7"), `R7 did not fire on a source-only change:\n${check(repo)}`);
 
-  // qa is the key older ledgers carry; in a run with a tests step today it has no waiver
-  asOldRun(repo);
   const waived = cli(repo, "waive", waiveArgs(repo, "qa", QA_REASON));
   assert.doesNotMatch(
     waived.stdout,
@@ -774,39 +773,11 @@ test("C3: an unlabelled claim in ledger.md or in the final message never produce
 });
 
 // ---------------------------------------------------------------------------
-// C4 boundary — an old ledger.json, written before this change, still waives
-// ---------------------------------------------------------------------------
-
-test("C4: a waiver carried over with found:false still counts as waived, and never raises R12", () => {
-  const repo = openedWithSourceEdit("waivers-c4");
-  asOldRun(repo);
-  cli(repo, "waive", waiveArgs(repo, "qa", QA_REASON));
-
-  // Rewrite the waiver in the shape the previous version stored: a quote plus a transcript
-  // verdict of false. A ledger opened before this task can hold exactly this.
-  const ledger = ledgerOf(repo);
-  ledger.waivers = [{ key: "qa", quote: QA_REASON, found: false, seq: ledger.waivers[0].seq }];
-  writeLedger(repo, ledger);
-
-  const out = check(repo);
-  assert.ok(!ruleLine(out, "R7"), `a waiver with found:false stopped waiving R7 (the match is on the key):\n${out}`);
-  assert.ok(!ruleLine(out, "R12"), `R12 still fires on an old waiver's transcript verdict:\n${out}`);
-  assert.doesNotMatch(out, /transcript/i, `a rule still talks about the transcript:\n${out}`);
-
-  // The stop hook agrees with `gate check`, and leaves the old field alone.
-  const reason = stop(repo).json?.reason ?? "";
-  assert.ok(!ruleLine(reason, "R12"), `the stop hook reported R12 for an old waiver:\n${reason}`);
-  assert.ok(!ruleLine(reason, "R7"), `the stop hook did not honour an old waiver:\n${reason}`);
-  assert.equal(ledgerOf(repo).waivers[0].key, "qa", "the stop hook rewrote the carried-over waiver");
-});
-
-// ---------------------------------------------------------------------------
 // C5 edge — the Stop hook no longer needs a transcript at all
 // ---------------------------------------------------------------------------
 
 test("C5: the stop hook with no transcript_path in the payload does not throw", () => {
-  const repo = openedWithSourceEdit("waivers-c5");
-  asOldRun(repo);
+  const repo = openedWithSourceEdit("waivers-c5", "plan");
   cli(repo, "waive", waiveArgs(repo, "qa", QA_REASON));
   cli(repo, "waive", waiveArgs(repo, "driver", "no UI here, skip the phone pass"));
 

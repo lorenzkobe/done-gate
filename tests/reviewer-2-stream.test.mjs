@@ -66,7 +66,7 @@ test("C1 brief reviewer then brief reviewer-2 with no file written name review-1
   assert.match(second.text, /## You may write\n\nonly .*review2-1\.md/);
 });
 
-test("C2 huddle add reviewer-2 takes review2-<n>.md, refuses a skeptic file, still takes review-<n>.md from a ledger from before", () => {
+test("C2 huddle add reviewer-2 takes review2-<n>.md and refuses a skeptic file or a review-<n>.md", () => {
   const repo = opened("r2s-c2");
   helperFile(repo, "review2-1.md", reviewFile(1, [FIND(1)]));
   cli(repo, "huddle", ["add", "reviewer-2", "--file", "review2-1.md"]);
@@ -75,8 +75,8 @@ test("C2 huddle add reviewer-2 takes review2-<n>.md, refuses a skeptic file, sti
   assert.equal(h.actOn.length, 1);
   assert.match(run(repo, "huddle", ["add", "reviewer-2", "--file", "skeptic-1.md"]).stderr, REFUSAL);
   helperFile(repo, "review-2.md", reviewFile(2, []));
-  cli(repo, "huddle", ["add", "reviewer-2", "--file", "review-2.md"]);
-  assert.equal(ledgerOf(repo).huddles.filter((x) => x.role === "reviewer-2").length, 2);
+  assert.match(run(repo, "huddle", ["add", "reviewer-2", "--file", "review-2.md"]).stderr, /own review2-<n>\.md/);
+  assert.equal(ledgerOf(repo).huddles.filter((x) => x.role === "reviewer-2").length, 1);
 });
 
 test("C2 once a reviewer-2 was briefed on the new stream, review-<n>.md is refused for it, and a file recorded under one role is refused for another", () => {
@@ -163,9 +163,6 @@ test("C6 three reviewer rounds are still the cap; review2 files do not count tow
     cli(repo, "huddle", ["add", "reviewer", "--file", `review-${n}.md`]);
   }
   for (const n of [1, 2, 3]) helperFile(repo, `review2-${n}.md`, reviewFile(n, [FIND(n)]));
-  // a ledger from before recorded a reviewer-2 round on review-<n>.md; it is not the reviewer's
-  helperFile(repo, "review-9.md", reviewFile(9, []));
-  cli(repo, "huddle", ["add", "reviewer-2", "--file", "review-9.md"]);
   const third = packet(repo, "reviewer");
   const own = /Your file is .*\/(review-\d+\.md)/.exec(third.stdout)[1];
   assert.equal(third.path.split("/").pop(), `brief-reviewer-${/\d+/.exec(own)[0]}.md`, "packet and file numbers agree");

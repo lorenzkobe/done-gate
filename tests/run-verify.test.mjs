@@ -379,11 +379,6 @@ const counted = (name, extra = {}, files = {}) => {
   rmSync(path.join(here, ".tmp", `${name}.count`), { force: true });
   return opened(name, [{ cmd: COUNT(name), ...extra }], files);
 };
-const aged = (repo) => {
-  const ledger = ledgerOf(repo);
-  delete ledger.rules;
-  saveLedger(runDir(repo), ledger);
-};
 
 test("3.4 C1 gate verify twice on the same tree runs each command once, and the second closes the step", () => {
   const repo = counted("rv-34c1");
@@ -465,15 +460,6 @@ test("3.4 C4 a skip keeps R18 clean and the packet calls verify fresh", () => {
   assert.equal(ruleLines(cli(repo, "check"), "R18"), "");
   const packet = /^packet: (.+)$/m.exec(cli(repo, "brief", ["reviewer"]))[1];
   assert.match(readFileSync(packet, "utf8"), /verify\.json is fresh/);
-});
-
-test("3.4 C5 an old run with no stamp still runs every command", () => {
-  const repo = counted("rv-34c5");
-  aged(repo);
-  cli(repo, "verify");
-  cli(repo, "verify");
-  assert.equal(runsOf(repo, "rv-34c5"), 2);
-  assert.equal(verifyJson(repo).greenTree, undefined);
 });
 
 test("3.4 C6 a command that edits a source file records nothing green, leaves the step open and names it; the next clean run goes green", () => {
@@ -639,13 +625,6 @@ test("3.5 C3 a real summary stays green, unknown output stays green, and past 2 
 
 test("3.5 C4 lint is untouched: no test runner printing a zero stays green", () => {
   isGreen(judged("rv-35l", "eslint", [], "Tests:       0 total", "running 0 tests"), "lint");
-});
-
-test("3.5 C5 an old run with no stamp stays green on a zero summary", () => {
-  const repo = opened("rv-35o", ["sh bin/jest"], runner("jest", "No tests found, exiting with code 0"));
-  aged(repo);
-  cli(repo, "verify");
-  isGreen({ row: row(repo) }, "old run");
 });
 
 test("3.5 C6 a report key: a fresh file with tests is green; stale, empty, missing or zero-test is red", () => {
@@ -938,7 +917,7 @@ test("F1 C8 edge: the worktree and its links are gone after verify, git lists on
   assert.equal(existsSync(dropped.baseRuns()[0].replace(/ linked$/, "")), false);
 });
 
-test("F1 C9 edge: a timeout, a lint command and a run opened on an older version never run on the base commit", async () => {
+test("F1 C9 edge: a timeout and a lint command never run on the base commit", () => {
   const timed = baseRepo("rv-f1c9t", { base: "old one\n", extra: { "slow.txt": "x\n" } });
   const gateJson = path.join(timed.repo, ".claude/gate.json");
   writeFileSync(gateJson, JSON.stringify({ verify: [{ cmd: "sh bin/vitest", timeout: 1 }] }));
@@ -952,13 +931,6 @@ test("F1 C9 edge: a timeout, a lint command and a run opened on an older version
   cli(lint.repo, "verify");
   assert.equal(row(lint.repo).exit, 1);
   assert.equal(lint.baseRuns().length, 0);
-
-  const { asOldRun } = await import("./helpers.mjs");
-  const old = baseRepo("rv-f1c9o", { base: "old one\n" });
-  asOldRun(old.repo);
-  cli(old.repo, "verify");
-  assert.equal(row(old.repo).exit, 1);
-  assert.equal(old.baseRuns().length, 0);
 });
 
 test("F1 C10 happy: failing test names are read from node spec, TAP, vitest, jest, pytest, go and cargo output", async () => {

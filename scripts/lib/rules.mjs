@@ -396,16 +396,16 @@ export function ranEvents(state) {
   return (state.events ?? []).filter((e) => RUN_KINDS.has(e.kind) && !e.reused && e.seq > since && !e.background && (!e.readOnly || e.runs) && !e.failed && !gateNote(e.cmd) && (e.kind !== "skill" || e.skill === "verify") && !notesTool(e));
 }
 
-// On a run under the new rules a reviewer's finding closes on a run, not on a pointer. undefined:
-// the rule does not apply (a skeptic item, an older run); null: proven; else the refusal.
+// A reviewer's finding closes on a run, not on a pointer. undefined: the rule does not apply (a
+// skeptic item); null: proven; else the refusal.
 const PROOF_TEXT = "a reviewer finding closes on a run: a test file named in a test command that failed since the finding (run it red first), `events#<seq>` of a browser call or a command that ran cleanly since (not a gate verb, a git command or a scratch write), or `doc` when the fix is text only";
 export function proofProblem(state, item, ptr) {
   const h = (state.ledger.huddles ?? []).find((x) => x.actOn.some((a) => a.id === item.id));
-  if (!h || !newRules(state.ledger) || (h.role !== "reviewer" && h.role !== "reviewer-2")) return undefined;
+  if (!h || (h.role !== "reviewer" && h.role !== "reviewer-2")) return undefined;
   if (ptr === "doc") return null;
   const since = proofEvents(state, h);
-  // after the readings, what the runner printed decides: a piped run's exit is the pipe's
-  const failed = (e) => (onReadings(state.ledger) && e.tests ? e.tests.ran && (e.tests.failed > 0 || (e.exit ?? 0) !== 0) : (e.exit ?? 0) !== 0);
+  // what the runner printed decides: a piped run's exit is the pipe's
+  const failed = (e) => (e.tests ? e.tests.ran && (e.tests.failed > 0 || (e.exit ?? 0) !== 0) : (e.exit ?? 0) !== 0);
   const red = (e) => e.kind === "command" && testRun(e) && failed(e);
   const seq = /^events#(\d+)$/.exec(String(ptr ?? ""));
   if (seq) {
@@ -413,7 +413,7 @@ export function proofProblem(state, item, ptr) {
     return e && (e.kind === "browser" || red(e) || (ranCleanly(e) && (e.exit ?? 0) === 0 && !testRun(e))) ? null : PROOF_TEXT;
   }
   const file = String(ptr ?? "").replace(/:[^/]*$/, "");
-  const names = (e) => (onReadings(state.ledger) ? wordsOf(e).some((w) => w === file || w.endsWith(`/${file}`)) : e.cmd.includes(file));
+  const names = (e) => wordsOf(e).some((w) => w === file || w.endsWith(`/${file}`));
   return state.config.isTest(file) && since.some((e) => red(e) && names(e)) ? null : PROOF_TEXT;
 }
 
@@ -434,14 +434,13 @@ export function wrongProblem(state, item, ptr) {
   const seq = /^events#(\d+)$/.exec(String(ptr ?? ""));
   const e = h && seq ? proofEvents(state, h).find((x) => x.seq === Number(seq[1])) : null;
   if (!e || !(e.kind === "browser" || ranCleanly(e))) return "a finding closes as wrong on `events#<seq>` of a browser call or a command run since its round that shows it wrong (not a read, a gate verb, a git command or a scratch write)";
-  if (!onReadings(state.ledger) || e.kind === "browser") return null;
+  if (e.kind === "browser") return null;
   if (ranNothing(e)) return `${ptr}: no test ran, so it shows nothing about the finding. Run a test that runs`;
   const files = [...new Set(tracedPointers(item.text, state.root, state.repos ?? []).map((p) => p.file))];
   return !files.length || namesFinding(e, files, state.config) ? null : `${ptr} names none of the finding's files (${files.join(", ")}): run what shows it wrong on that file, or a test of it`;
 }
 
-// D1 Part A: a run opened at rules 2 or later closes on what its run reached, as the hook read it
-const onReadings = (ledger) => (ledger?.rules ?? 0) >= 2;
+// D1 Part A: a run closes on what its run reached, as the hook read it
 const ranNothing = (e) => e?.tests?.ran === false;
 const NOTHING_TEXT = (e) => `\`${shortRun(e)}\`: no test ran (its output says so). Run the test file itself, so a test runs`;
 const shortRun = (e) => ranText(e).slice(0, 80);
@@ -475,7 +474,7 @@ export function proofReading(e) {
 // The problem with a run a --ran close names, or null: on a readings run a test run that ran no
 // test proves nothing; a case's test run also names the test file it ran.
 export function runProblem(ledger, e, { config, root } = {}) {
-  if (!onReadings(ledger) || e.kind !== "command" || !testRun(e)) return null;
+  if (e.kind !== "command" || !testRun(e)) return null;
   if (ranNothing(e)) return NOTHING_TEXT(e);
   if (config && e.tests?.failed > 0) return `\`${shortRun(e)}\` ran red (${proofReading(e)}): a failing run does not show the case working`;
   if (config && !testFilesNamed(e, config, root).length) return `\`${shortRun(e)}\` names no test file, so nothing ties it to this case: close on the case's test (\`--test <file:name>\`), or run its test file and close on that run`;
@@ -503,7 +502,7 @@ const sameWord = (w, seg) => seg === w || seg === `${w}s` || w === `${seg}s`;
 // recorded run does; after, the cmd: driver or a call the hook read a status below 500 from, to a
 // url that holds a word of a changed API file.
 export function callProblem(state, e, after) {
-  if (!onReadings(state.ledger) || driverRun(state, after)(e)) return null;
+  if (driverRun(state, after)(e)) return null;
   if (!e.call) return `\`${shortRun(e)}\` is not a call the gate read: call the endpoint, \`curl -i <url>\`, so its url and status line are recorded`;
   if (e.call.status === null) return `\`${shortRun(e)}\` showed no status line: call it with \`curl -i\` (or \`-w '%{http_code}'\`) so the gate reads the status`;
   if (e.call.status >= 500) return `\`${shortRun(e)}\` got ${e.call.status}: a server error does not show the change working`;
@@ -643,7 +642,7 @@ export function fileRole(name) {
 }
 
 // The brief that named a helper file: reviewer pieces under ledger.seen, the other roles
-// under ledger.briefed (kept apart so a ledger with no seen map stays a legacy one).
+// under ledger.briefed.
 export function briefOf(ledger, file) {
   return ledger.seen?.[file] ?? ledger.briefed?.[file] ?? null;
 }
@@ -1249,21 +1248,23 @@ export function askedNotSaid(text, words) {
   return (end < 0 ? rest : rest.slice(0, end)).includes("?");
 }
 
-export const newRules = (ledger) => (ledger?.rules ?? 0) >= 1;
+// The rules a run opens under. An open run stamped lower opened on an older done-gate: it is
+// finished there or given up, never judged by rules it did not open under.
+export const RULES = 2;
+export const oldRun = (ledger) => ledger?.status === "open" && (ledger.rules ?? 0) < RULES;
+export const oldRunText = (ledger) => `run ${ledger.slug} opened on an older done-gate, whose rules this one no longer keeps. Finish it on that version, or ask the user to give it up (\`gate abandon ${ledger.slug} "<why>" --user-ok "<their words>"\`); no waiver clears this.`;
 
 // The code this task changed that its plan does not name, on a run whose plan binds.
 export function planDrift({ ledger, config, changed }) {
-  if (!newRules(ledger) || !tiered(ledger)) return [];
+  if (!tiered(ledger)) return [];
   return outsidePlan(tierOf(ledger).predictedFiles, changed ?? [], config);
 }
 
-// A test or doc file is no surface: nobody drives it or probes it, whatever a glob says. A run from
-// before the stamp keeps reading the globs alone.
-const surfaceOf = (ledger, config, changed, matches) => changed.filter((p) => matches(p) && (!newRules(ledger) || (!config.isTest(p) && !config.isDoc(p))));
+// A test or doc file is no surface: nobody drives it or probes it, whatever a glob says.
+const surfaceOf = (ledger, config, changed, matches) => changed.filter((p) => matches(p) && !config.isTest(p) && !config.isDoc(p));
 export const uiFiles = (ledger, config, changed) => surfaceOf(ledger, config, changed, config.isUi);
 const schemaFiles = (ledger, config, changed) => surfaceOf(ledger, config, changed, config.isSchema);
-// A run from before the stamp closes driver on a note, whatever changed.
-export const apiFiles = (ledger, config, changed) => (newRules(ledger) ? surfaceOf(ledger, config, changed, config.isApi) : []);
+export const apiFiles = (ledger, config, changed) => surfaceOf(ledger, config, changed, config.isApi);
 
 // The changed files that keep a step open: what driving reaches, what a probe reaches.
 const STEP_SURFACE = {
@@ -1276,14 +1277,14 @@ export const stepSurfaceFiles = (key, ledger, config, changed) => STEP_SURFACE[k
 // only tests or docs changed, or the repo declared its globs and none matched. The mark holds the
 // hash judged, so an edit takes it back. Each repo of a multi-repo run has its own globs: left by hand.
 export function surfaceClear(key, ledger, config, touched) {
-  if (!newRules(ledger) || ledger.repos?.length) return false;
+  if (oldRun(ledger) || ledger.repos?.length) return false;
   const surface = STEP_SURFACE[key];
   const code = touched.filter((p) => config.isSource(p) && !config.isTest(p) && !config.isDoc(p));
   return !surface.files(ledger, config, touched).length && (!code.length || surface.declared(config.declared));
 }
 
 export function workOutSteps(ledger, config, touched, hash) {
-  if (!newRules(ledger) || ledger.repos?.length) return;
+  if (oldRun(ledger) || ledger.repos?.length) return;
   for (const [key, surface] of Object.entries(STEP_SURFACE)) {
     const step = ledger.steps.find((s) => s.key === key);
     // a step the gate closed from a fact is not a worked-out mark
@@ -1440,7 +1441,8 @@ const stillOpen = (r, role) => (r.openItems?.length ? `still open from earlier r
 const GATE_TEST = /\bgate(?:\.mjs)?["']?\s+test\b/;
 export function settleSteps(state) {
   const { ledger, config, changed = [], events = [], verify, now } = state;
-  if (!ledger || !newRules(ledger)) return false;
+  // an older open run is finished on its own version: this one closes nothing in it
+  if (!ledger || oldRun(ledger)) return false;
   let moved = false;
   const close = (key, note, evidence) => {
     const step = ledger.steps?.find((s) => s.key === key);
@@ -1462,7 +1464,7 @@ export function settleSteps(state) {
     const wrote = events.find((e) => e.kind === "edit" && e.path && config.isTest(e.path) && e.seq > opened);
     const since = wrote ? Date.parse(wrote.ts) : Math.min(...tests.map((p) => now.files[p].m ?? Infinity));
     const after = (e) => (wrote ? e.seq > wrote.seq : Date.parse(e.ts) > since);
-    const run = events.find((e) => e.kind === "command" && !e.background && e.seq < codeAt && after(e) && (runsTests(e.cmd ?? "", config.testFiles) || GATE_TEST.test(e.cmd ?? "") || Object.hasOwn(e, "tests")) && !(onReadings(ledger) && ranNothing(e)));
+    const run = events.find((e) => e.kind === "command" && !e.background && e.seq < codeAt && after(e) && (runsTests(e.cmd ?? "", config.testFiles) || GATE_TEST.test(e.cmd ?? "") || Object.hasOwn(e, "tests")) && !ranNothing(e));
     // Claude Code sends an exit code only when a command fails: none means it worked, unless its
     // output was piped, when the exit is the pipe's last command's
     const piped = run && /(?<!\|)\|(?!\|)/.test(String(run.cmd ?? "").replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, "''"));
@@ -1492,6 +1494,8 @@ export function settleSteps(state) {
 
 export function evaluate(state) {
   const { config, ledger, changed, now, verify } = state;
+  // R13 alone, before the repo checks: no other rule of this version applies to it
+  if (oldRun(ledger)) return [{ rule: "R13", text: oldRunText(ledger) }];
   const unmet = [];
   const src = changed.filter((p) => config.isSource(p));
 
@@ -1515,9 +1519,9 @@ export function evaluate(state) {
   const sizeNow = effectiveTier(state.policy ?? policyFor(ledger), ledger, state.tier?.measured ?? null);
   const large = src.length > 0 && delegatedTier(state.policy ?? policyFor(ledger), sizeNow);
   const grew = ledger.tier?.grewAt ? " (it grew there mid-task)" : "";
-  const testable = newRules(ledger) ? src.filter((p) => !NOT_CODE.test(p)) : src;
-  // a plan run has no tests step: there, and in an old run, the user may still give tests up
-  const testsWaivable = !newRules(ledger) || !ledger.steps?.some((s) => s.key === "tests");
+  const testable = src.filter((p) => !NOT_CODE.test(p));
+  // a plan run has no tests step: there the user may still give tests up
+  const testsWaivable = !ledger.steps?.some((s) => s.key === "tests");
   if (testable.length) {
     // a blind QA pass: a QA helper that stopped during the run, whenever it ran
     const qaRan = (state.events ?? []).some((e) => e.kind === "subagent-stop" && isRole(e.agentType, "qa") && e.seq > (ledger.openedSeq ?? 0));
@@ -1571,7 +1575,7 @@ export function evaluate(state) {
   // R20: evidence the gate wrote changed outside it. The user decides; a waiver covers the changes
   // it saw, so a later one is named again
   const covered = new Set((ledger.waivers ?? []).filter((w) => w.key === "evidence").flatMap((w) => w.changes ?? []));
-  const tampered = onReadings(ledger) ? sealProblems(state).filter((p) => !covered.has(p.key)) : [];
+  const tampered = sealProblems(state).filter((p) => !covered.has(p.key));
   if (tampered.length) unmet.push({ rule: "R20", text: `evidence changed outside the gate: ${tampered.map((p) => p.text).join("; ")}. Something other than a gate command or a hook wrote it. Tell the user what changed; they decide whether to keep the run (\`gate waive evidence "<what changed>" --user-ok "<their words>"\`) or give it up.` });
 
   // R5: source changed → an independent reviewer looked after the last edit and every Act-on
@@ -1612,8 +1616,8 @@ export function evaluate(state) {
     }
   }
 
-  // R13: the gate's own config changed mid-task (a ledger from before hashed the file text)
-  if (ledger.gateHash && ![config.hash, config.legacyHash].includes(ledger.gateHash) && !waived(ledger, "gate-config")) {
+  // R13: the gate's own config changed mid-task
+  if (ledger.gateHash && ledger.gateHash !== config.hash && !waived(ledger, "gate-config")) {
     unmet.push({ rule: "R13", text: ".claude/gate.json changed since this ledger opened. Restore it and change what verify runs for this run only with `gate verify --add \"<cmd>\"` and `gate verify --drop \"<cmd>\"`, or get the user's waiver (`gate waive gate-config \"<reason>\" --user-ok \"<their words>\"`)." });
   }
   for (const repo of config.repos ?? []) {
@@ -1711,7 +1715,5 @@ export function evaluate(state) {
     unmet.push({ rule: "R15", text: `the ${role} stopped before finishing ${f}: resume it with SendMessage, or \`gate brief ${role}${again}\` and spawn a fresh one, its packet continues from the file; \`gate diagnose\` says which.` });
   }
 
-  // a run from before the new rules takes a waiver without the user's words
-  if (!newRules(ledger)) for (const u of unmet) u.text = u.text.replace(/(`gate waive [^`]*?) --user-ok "<their words>"/g, "$1");
   return unmet;
 }

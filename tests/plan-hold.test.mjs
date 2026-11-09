@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { asOldRun, gate, lookedUp, makeRepo, pluginRoot, readyToEdit, waiveArgs } from "./helpers.mjs";
+import { gate, lookedUp, makeRepo, pluginRoot, readyToEdit, waiveArgs } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 
 const TWO = "src/a.ts,src/app/page.tsx";
@@ -202,7 +202,7 @@ test("C14 edge: an open item or a partial file leaves the step blank; a worker r
   assert.equal(stepOf(repo, "skeptic").state, "DONE");
 });
 
-test("C15 edge: a WAIVED step stays WAIVED after huddle add, a hand close still works, and an old run's step waits for the hand close", () => {
+test("C15 edge: a WAIVED step stays WAIVED after huddle add, and a hand close still works", () => {
   const waived = planned("ph-c15-waived");
   cli(waived, "waive", ...waiveArgs(waived, "skeptic", "the user ran the check by hand"));
   writeFileSync(path.join(runDir(waived), "skeptic-1.md"), skepticFile());
@@ -214,29 +214,9 @@ test("C15 edge: a WAIVED step stays WAIVED after huddle add, a hand close still 
   cli(byHand, "step", "skeptic", "done", "checked", "--evidence", "skeptic-1.md");
   assert.equal(stepOf(byHand, "skeptic").state, "DONE");
   assert.equal(stepOf(byHand, "skeptic").auto, undefined, "a hand close is the lead's");
-
-  const old = planned("ph-c15-old");
-  asOldRun(old);
-  cli(old, "huddle", "add", "skeptic", "--file", checked(old, skepticFile()));
-  assert.equal(stepOf(old, "skeptic").state, null, "an old run closes the check by hand");
-  cli(old, "step", "skeptic", "done", "checked", "--evidence", "skeptic-1.md");
-  assert.equal(stepOf(old, "skeptic").state, "DONE");
 });
 
-test("C16 happy: an old run is never held, and its skeptic can be briefed again after a finished file", () => {
-  const repo = committed("ph-c16");
-  cli(repo, "open", "ph-c16", "feature");
-  asOldRun(repo);
-  readyToEdit(repo, { plan: ["--files", TWO] });
-  assert.equal(edit(repo, "src/a.ts"), null);
-  assert.match(cli(repo, "step", "skeptic", "na", "an old run") , /N\/A/, "an old run keeps its old N/A");
-  const again = planned("ph-c16-brief");
-  asOldRun(again);
-  checked(again, skepticFile());
-  assert.match(cli(again, "brief", "skeptic"), /skeptic-2\.md/);
-});
-
-test("C18 reported-surface: the hint leads with the one question and says code and tests wait; an old run's hint keeps the hand close; the skill and session start agree", () => {
+test("C18 reported-surface: the hint leads with the one question and says code and tests wait; the skill and session start agree", () => {
   const repo = committed("ph-c18");
   cli(repo, "open", "ph-c18", "feature");
   lookedUp(repo);
@@ -248,15 +228,6 @@ test("C18 reported-surface: the hint leads with the one question and says code a
   assert.match(hint, /code and tests wait/);
   assert.match(hint, /closes itself/);
   assert.doesNotMatch(hint, /same turn|gate step skeptic done/);
-
-  const old = committed("ph-c18-old");
-  cli(old, "open", "ph-c18-old", "feature");
-  asOldRun(old);
-  lookedUp(old);
-  cli(old, "note", "task", "the task");
-  cli(old, "note", "context", "Traced: src/a.ts:1 · Related: none: `grep -rn a src` · Research: none needed: a test fixture");
-  cli(old, "note", "plan", "the plan", "--files", TWO);
-  assert.match(cli(old, "case", "add", "the case", "--kind", "happy"), /gate step skeptic done/);
 
   const skill = readFileSync(path.join(pluginRoot, "skills/gate/SKILL.md"), "utf8");
   assert.ok(Buffer.byteLength(skill) < 4096, `SKILL.md is ${Buffer.byteLength(skill)} bytes`);

@@ -1,15 +1,14 @@
 // A green verify works out the driver and schema steps when the run's changes cannot reach them,
-// and a later edit takes that back. A run opened before the stamp keeps today's behaviour.
+// and a later edit takes that back.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { gate, lookedUp, makeRepo, write, waiveArgs } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
-import { newRules } from "../scripts/lib/rules.mjs";
 
 function envFor(repo) {
   const e = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
@@ -56,12 +55,6 @@ function opened(name, config = DECLARED, playbook = "feature", files = {}) {
   cli(repo, "note", ["task", "Add checkout. [inferred]"]);
   return repo;
 }
-// A run from before the stamp: the marker taken back out of its ledger.
-function aged(repo) {
-  const ledger = ledgerOf(repo);
-  delete ledger.rules;
-  writeFileSync(ledgerPath(repo), JSON.stringify(ledger, null, 2));
-}
 const closedAuto = (repo, key) => {
   const step = stepOf(repo, key);
   assert.equal(step.state, "N/A", `${key} stayed ${step.state}`);
@@ -73,13 +66,9 @@ const stillOpen = (repo, key) => {
   assert.equal(step.auto, undefined);
 };
 
-test("C1 a new run carries the stamp; a ledger with it removed still checks as an old run", () => {
+test("C1 a new run carries the stamp", () => {
   const repo = opened("wo-c1");
   assert.equal(ledgerOf(repo).rules, 2);
-  assert.equal(newRules(ledgerOf(repo)), true);
-  aged(repo);
-  assert.equal(newRules(ledgerOf(repo)), false);
-  assert.equal(newRules(null), false);
   assert.equal(run(repo, "check").status, 0);
 });
 
@@ -206,26 +195,6 @@ test("C8 a step closed by hand is not overwritten, and a later edit leaves it al
   cli(repo, "check");
   assert.equal(stepOf(repo, "driver").state, "N/A");
   assert.equal(stepOf(repo, "driver").note, "this repo has no surface");
-});
-
-test("C9 an old run is unchanged: nothing worked out, na stays free, a test file a ui glob matches still owes R4", () => {
-  const repo = opened("wo-c9");
-  aged(repo);
-  edit(repo, "src/server.ts", "export const s = 2;\n");
-  cli(repo, "verify");
-  stillOpen(repo, "driver");
-  stillOpen(repo, "schema");
-
-  const free = opened("wo-c9-free");
-  aged(free);
-  edit(free, "src/app/page.tsx", "export default () => 1;\n");
-  cli(free, "step", ["driver", "na", "fixture"]);
-  assert.equal(stepOf(free, "driver").state, "N/A");
-
-  const tsx = opened("wo-c9-tsx");
-  aged(tsx);
-  edit(tsx, "src/app/page.test.tsx", "test('p2', () => {});\n");
-  assert.match(cli(tsx, "check"), /\bR4\b/);
 });
 
 test("C10 gate step na is refused when a matching file changed, and passes when none did", () => {
@@ -455,16 +424,6 @@ test("3.3 C3 a call from before the last edit cannot close it; an edit after the
   call(repo, "curl -s localhost:3000/api/users?again=1");
   cli(repo, "step", ["driver", "done", "returned 200 again", "--ran", "again=1"]);
   assert.equal(r4(repo), "");
-});
-
-test("3.3 C4 an old run is unchanged: an api file closes driver on a note and owes no R4 for it", () => {
-  const repo = opened("wo-33c4");
-  aged(repo);
-  edit(repo, "app/api/users/route.ts", "export const GET = 2;\n");
-  assert.equal(r4(repo), "");
-  write(repo, "notes.txt", "looks fine\n");
-  cli(repo, "step", ["driver", "done", "looks fine", "--evidence", "notes.txt"]);
-  assert.equal(stepOf(repo, "driver").state, "DONE");
 });
 
 test("3.3 C5 a UI-only change in a new run closes driver on evidence, and R4 reads the drive", () => {

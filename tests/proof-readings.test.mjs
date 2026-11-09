@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, asOldRun } from "./helpers.mjs";
+import { makeRepo, write, gate } from "./helpers.mjs";
 import { testTotals } from "../scripts/lib/verify.mjs";
 import { eventsFromHookInput, readEvents } from "../scripts/lib/events.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
@@ -281,45 +281,6 @@ test("C17 the report shows the reading beside a step's run pointer", () => {
   assert.match(cli(repo, "report"), /\[events#\d+\] \(3 tests, 2 passed, 1 failed\)/);
 });
 
-test("C18 a run opened before the rules stamp keeps today's closes", () => {
-  const repo = bugfix("pr-c18");
-  asOldRun(repo);
-  shell(repo, "node --test tests/a.test.ts", NODE_NONE);
-  cli(repo, "step", ["repro", "done", "fails (src/a.ts:1)", "--ran", "node --test tests/a.test.ts"]);
-
-  const api = feature("pr-c18b", API());
-  asOldRun(api);
-  edited(api, "app/api/users/route.ts", "export const GET = 2;\n");
-  shell(api, "curl -si localhost:3000/api/users", STATUS(500, "Internal Server Error"));
-  writeFileSync(path.join(api, "notes.txt"), "looks fine\n");
-  cli(api, "step", ["driver", "done", "looks fine", "--evidence", "notes.txt"]);
-
-  const old = reviewed("pr-c18c");
-  asOldRun(old);
-  const plain = shell(old, "node probe.mjs", "fine\n");
-  cli(old, "huddle", ["resolve", "H1.1", "--wrong", "--evidence", `events#${plain.seq}`]);
-});
-
-// a run open since before this release: the stamp it was opened with
-function stampedOne(repo) {
-  const file = path.join(runDir(repo), "ledger.json");
-  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), rules: 1 }, null, 2));
-}
-
-test("C20 a run open under rules 1 keeps today's closes; gate open stamps rules 2", () => {
-  const repo = bugfix("pr-c20");
-  assert.equal(ledgerOf(repo).rules, 2);
-  stampedOne(repo);
-  shell(repo, "node --test tests/a.test.ts", NODE_NONE);
-  cli(repo, "step", ["repro", "done", "fails (src/a.ts:1)", "--ran", "node --test tests/a.test.ts"]);
-
-  const api = feature("pr-c20b", API());
-  stampedOne(api);
-  edited(api, "app/api/users/route.ts", "export const GET = 2;\n");
-  shell(api, "curl -s localhost:3000", "{}");
-  cli(api, "step", ["driver", "done", "returned", "--ran", "curl -s localhost:3000"]);
-});
-
 test("C21 a command past the 200 characters an event keeps still has its test file and url read", () => {
   const long = `cd ${"/very/long/folder".repeat(12)} && npx vitest run tests/a.test.ts`;
   const [e] = eventsFromHookInput({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: long }, tool_response: { stdout: VITEST_GREEN } }, "/repo");
@@ -395,16 +356,11 @@ test("C19 a 2 MB test output is read from its last 256 KB only, quickly", () => 
 const PIPED = "npx vitest run tests/a.test.ts 2>&1 | grep -E \"Tests \"";
 const VITEST_RED = "      Tests  4 failed | 34 passed (38)\n";
 
-test("P1 a piped red test run, read as failed, closes a finding on its test file; before rules 2 it does not", () => {
+test("P1 a piped red test run, read as failed, closes a finding on its test file", () => {
   const repo = reviewed("pr-p1");
   shell(repo, PIPED, VITEST_RED);
   assert.equal(lastEvent(repo).exit, null, "premise: the pipe hid the exit");
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts"]);
-
-  const old = reviewed("pr-p1b");
-  stampedOne(old);
-  shell(old, PIPED, VITEST_RED);
-  refused(old, "huddle", ["resolve", "H1.1", "--evidence", "tests/a.test.ts"]);
 });
 
 test("P2 a case --ran on a piped test run read as failed is refused", () => {

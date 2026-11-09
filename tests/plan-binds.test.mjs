@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { asOldRun, gate, makeRepo, planChecked, readyToEdit } from "./helpers.mjs";
+import { gate, makeRepo, planChecked, readyToEdit } from "./helpers.mjs";
 import { decide } from "../scripts/lib/guard.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { IGNORE_CASE } from "../scripts/lib/paths.mjs";
@@ -127,15 +127,6 @@ test("C7 edge: an unreadable run lets the edit through, and plan and investigati
   const inv = committed("pb-c7-inv");
   cli(inv, "open", "pb-c7-inv", "investigation");
   assert.equal(edit(inv, "src/b.ts"), null);
-});
-
-test("C8 happy: an old run keeps the growth limit only, and gate plan add is refused there, naming gate note plan", () => {
-  const repo = committed("pb-c8");
-  cli(repo, "open", "pb-c8", "feature");
-  asOldRun(repo);
-  readyToEdit(repo, { plan: ["--files", "src/a.ts"] });
-  assert.equal(edit(repo, "src/b.ts"), null);
-  assert.match(refused(repo, "plan", "add", "src/b.ts", "why"), /gate note plan/);
 });
 
 test("C9 refused: gate plan add with no reason, a folder, a glob, a path outside the repo or past 40 code files records nothing", () => {

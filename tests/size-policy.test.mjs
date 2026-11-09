@@ -940,7 +940,7 @@ test("C31 refused: the policy is hashed, and a policy that changed since the led
     changed: ["src/a.ts", "tests/a.test.ts"],
     now: { hash: "x", files: {} }, verify: null, events: [], reviews: [], lastMessage: "", ledgerMd: "",
     ledger: {
-      status: "open", planSeq: 1, taskSeq: 1, waivers: [], huddles: [], reviews: [],
+      status: "open", rules: 2, planSeq: 1, taskSeq: 1, waivers: [], huddles: [], reviews: [],
       cases: [{ id: "C1", status: "closed", test: "t", seq: 2 }], blast: [{ fact: "f", rung: 4 }],
       steps: [{ n: 1, key: "schema", state: "N/A", note: "none" }],
       gateHash: cfg.hash, policyHash: real.hash, baseline: { seq: 0, dirty: [] },
@@ -1827,7 +1827,7 @@ function state(over = {}) {
 
 const ids = (unmet) => unmet.map((u) => u.rule);
 const r8Of = (unmet) => unmet.filter((u) => u.rule === "R8");
-const base = { status: "open", steps: [], waivers: [], cases: [], blast: [] };
+const base = { status: "open", rules: 2, steps: [], waivers: [], cases: [], blast: [] };
 
 test("C6 edge: R8 fires for a blank step and an open case, and for nothing else", () => {
   // 1. an open case

@@ -157,7 +157,7 @@ attempt to finish, and a plain question gets one line saying how to pause.
 | R8 | any case or step is blank, or a click case's click is older than the last source edit; the close step is closed by `gate close`, never by `gate step close …` |
 | R9 | high-risk paths changed, or the run is size large, without a clean second-reviewer round (same round rules as R5; an open reviewer-2 item is named) |
 | R10 | a repo check failed: the slop scan found a banner comment, step narration, an empty label, an end marker, an emoji, a bare TODO or a `@param` that echoes its name on an added non-test line (`"slop": false` in gate.json turns it off between tasks; mid-task, `gate waive slop` clears a false positive), or an opted-in check (`claude-md-budget`, `migration-number`) |
-| R13 | `.claude/gate.json` or the plugin's `models.json` changed mid-task |
+| R13 | `.claude/gate.json` or the plugin's `models.json` changed mid-task, or the run opened on an older done-gate (before 0.22.0): finish it on that version or give it up with the user's words (`gate abandon <slug> "<why>" --user-ok "<their words>"`); no waiver clears that one |
 | R15 | a helper's file lists more findings than the ledger recorded, a briefed skeptic or reviewer stopped before finishing its file, or an Act-on item outside the reviewers' rounds is still open (a skeptic item added after its step closed, one typed by hand) |
 | R17 | a skeptic, reviewer, reviewer-2 or worker that wrote its file or edited source made no code or no memory lookup since the run opened (QA: no memory lookup), less any kind the lead declared missing; waivable with `gate waive lookups` |
 | R18 | verify ran no test command covering a closed case's test file: lint and build never count, a test command that names paths covers only those (a `cd` is followed, `--ignore` and `--deselect file::name` take a file out); waivable with `gate waive coverage` |
@@ -176,10 +176,10 @@ waive tests. A batch of runs shares one OK: `gate waive <key> --standing "<batch
 check and the batch>"` lasts 14 days (not for tests or slop), `gate open <slug> <playbook> --batch
 <name>` copies it into a run, where it holds whatever is edited until its 14 days end (inside an
 open run too), every report lists it, and `gate waive --end <batch>` stops it sooner and takes back
-the copies in open runs. In a new run the words are required: three or more, said by the user in
+the copies in open runs. The words are required: three or more, said by the user in
 this task, naming what is given up (the key or a word like it: drive, click, screen for
-`driver`), not saying the opposite, and for a check on code said after the last code edit. An
-old run waives on the reason alone. The keys: `driver` (R4),
+`driver`), not saying the opposite, and for a check on code said after the last code edit. The
+keys: `driver` (R4),
 `review` (R5), `schema` (R6), `tests` (R7), `review-2` (R9), `slop` (R10), `gate-config`
 (R13), `lookups` (R17), or the key of a step whose waiving clears something. A rule number
 is taken for its key (`gate waive R4` records `driver`). Any other key is refused with the
@@ -404,7 +404,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | `huddle reply --file worker-<n>.md` | record a worker's answers: `fixed:` closes an item, `disagree:` disputes it; an unknown id fails and lists the open ones. Worker reply files are their own stream, numbered like their packet (`brief-worker-2.md` asks for `worker-2.md`); a worker with no lookups is refused (R17) |
 | `waive <key\|R<n>> "<reason>" --user-ok "<their words>"` | record a waiver on the user's words and print what it clears; it shows in the report |
 | `verify [--final] [--step verify-before]` | run the repo's verify commands, then each declared repo's in its own directory, write `verify.json`; a `"when": "final"` command runs only with `--final` and is owed until then |
-| `verify --add "<cmd>"` · `verify --drop "<cmd>" [--user-ok "<their words>"]` | change what verify runs for this run only; nothing runs. In a new run, dropping the last test command needs the user's words naming the tests. `--add` adds a command (it runs after the config ones at every `gate verify`, with the default timeout, also when the config has none) or restores a dropped gate.json one; `--drop` removes an added one or drops a gate.json one for this run. They live on the ledger, not in gate.json (R13 stays quiet), and the worker and reviewer packets' Test command lists what verify will run with them, so there is no need to edit gate.json to steer helpers; `gate doctor` and the report list them, and For you names every dropped gate.json command. An added or restored command that has not run blocks the close (R3) |
+| `verify --add "<cmd>"` · `verify --drop "<cmd>" [--user-ok "<their words>"]` | change what verify runs for this run only; nothing runs. Dropping the last test command needs the user's words naming the tests. `--add` adds a command (it runs after the config ones at every `gate verify`, with the default timeout, also when the config has none) or restores a dropped gate.json one; `--drop` removes an added one or drops a gate.json one for this run. They live on the ledger, not in gate.json (R13 stays quiet), and the worker and reviewer packets' Test command lists what verify will run with them, so there is no need to edit gate.json to steer helpers; `gate doctor` and the report list them, and For you names every dropped gate.json command. An added or restored command that has not run blocks the close (R3) |
 | `setup [--apply [file] \| --decline] --user-ok "<words>"` | propose the faster test loop's gate.json keys; `--apply` writes the proposal (or the edited file) and `--decline` records `"testFiles": null`, each only with the user's words and no run open |
 | `test <test file>...` | run gate.json's `testFiles` on these test files of this repo, output streamed, exit code passed through; with `serialTests` it waits for the repo-wide test lock (exit 75 when busy past five minutes) |
 | `decide <phase> <decision> <why> <evidence> <result>` | append a decision-log row |
@@ -477,7 +477,7 @@ main root, whatever the shell's directory. `gate open`, `gate attach` and
 }
 ```
 
-A changed `api` file is driven by calling the endpoint: in a new run the driver step closes only on
+A changed `api` file is driven by calling the endpoint: the driver step closes only on
 a recorded, successful run of the lead's after the last edit (`gate step driver done "<what it
 returned>" --ran "<part of the command or url>"`), and R4 holds it until then. On a run opened at
 rules 2 (0.22.0 on), the call must show its status line (`curl -i`, or `-w '%{http_code}'`), the
@@ -494,14 +494,14 @@ test file named for it), and the tests step does not close on such a run. A test
 to load counts as a red run. Output the gate cannot read never blocks: the close says "test totals
 not read". It still cannot tell that a passing test checks the right thing.
 
-In a new run `gate verify` does not run a command again on a tree it is already green on: the
+`gate verify` does not run a command again on a tree it is already green on: the
 whole tree and the command as resolved must match, so a doc edit runs it again. `--force` runs
 everything; `"external": true` on a verify entry runs it on such a tree too (`when` still applies), for a command that reads what the
 tree does not hold (an ignored `.env`, a service). Source that moves while verify runs records
 nothing green and leaves the step open, naming the files. `verify.json` keeps the last 20 runs,
 and `gate stats` counts the verifies that ran a command again on the same source hash.
 
-In a new run a test command that exits 0 is red when its own summary shows no test ran (jest,
+A test command that exits 0 is red when its own summary shows no test ran (jest,
 vitest, pytest, `node --test`, go and cargo are read; output the gate cannot read stays green, as
 does a zero beside any line counting a test that ran). A wrapper that prints no count declares
 `"report": "<file>"`: this command must write that file and it must show a test. With a

@@ -12,7 +12,7 @@ import { emptyTier } from "./size.mjs";
 // size.mjs imports assess.mjs, which imports this module: loadPolicy is only ever called at
 // verb time, never at module top level, or the cycle would hit a TDZ error.
 import { loadPolicy } from "./size.mjs";
-import { helpersOut, implementationHash, newRules, saidSince } from "./rules.mjs";
+import { helpersOut, implementationHash, RULES, saidSince } from "./rules.mjs";
 import { carryStanding, requireLiveBatch } from "./standing.mjs";
 import { sealRunFile } from "./seal.mjs";
 import { leftBehind } from "./diagnose.mjs";
@@ -313,8 +313,8 @@ export function openLedger(ctx, slug, playbook, repoPaths = []) {
     openedSeq: nextSeq(),
     // the lead and its helpers search code and memory first (gate note context, R17)
     lookups: true,
-    // which rules this run opened under: what a later release tightens reaches new runs only (newRules)
-    rules: 2,
+    // which rules this run opened under: a later release that drops them refuses the open run (oldRun)
+    rules: RULES,
     closedAt: null,
     sessions: [ctx.session],
     ...(repos.length ? { repos } : {}),
@@ -440,7 +440,7 @@ function printOpen(ctx, dir, ledger, story = []) {
   const newer = newerInstalled(ctx.version);
   if (newer) ctx.out(`done-gate ${newer} is installed, but this session runs ${ctx.version}: restart Claude Code to use it`);
   // the steps the gate closes from what it records are left out; `gate steps` lists every one
-  const own = newRules(ledger) ? ledger.steps.filter((s) => SELF_CLOSING.includes(s.key)).map((s) => s.key) : [];
+  const own = ledger.steps.filter((s) => SELF_CLOSING.includes(s.key)).map((s) => s.key);
   printStepLines(ctx, ledger.steps.filter((s) => s.key && !own.includes(s.key)), { short: true });
   if (own.length) ctx.out(`the gate closes ${own.slice(0, -1).join(", ")}${own.length > 1 ? " and " : ""}${own.at(-1)} itself from what it records (\`gate steps\` lists them)`);
   for (const line of story) ctx.out(line);

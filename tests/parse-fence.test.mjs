@@ -678,7 +678,7 @@ test("C2 refused: a run planned at 3 files that grew to 13 refuses a new unplann
   const v = decide(editOf("src/new.ts", "Write"), repo, cfg, RUN_REL, grown(["src/a.ts", "src/b.ts", "src/c.ts"], 13));
   assert.equal(v.deny, true);
   assert.match(v.reason, /new run|gate open/, v.reason);
-  assert.match(v.reason, /gate note plan/, v.reason);
+  assert.match(v.reason, /gate plan add src\/new\.ts/, v.reason);
   assert.match(v.reason, /planned 3/, v.reason);
   const shell = decide(bash("echo x > src/new.ts"), repo, cfg, RUN_REL, grown(["src/a.ts", "src/b.ts", "src/c.ts"], 13));
   assert.equal(shell.deny, true, "a shell write is held the same way");

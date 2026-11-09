@@ -299,7 +299,7 @@ function leftRun(name, build) {
   const stateDir = path.join(root, ".claude", "gate");
   const dir = path.join(stateDir, "runs", `2026-11-01-${name}`);
   mkdirSync(dir, { recursive: true });
-  const ledger = { slug: name, playbook: "feature", status: "open", openedAt: "2026-11-01T00:00:00.000Z", openedSeq: 10, sessions: ["S0"], steps: [{ key: "context", state: "DONE" }, { key: "plan", state: "DONE" }, { key: "cases" }, { key: "close" }] };
+  const ledger = { slug: name, playbook: "feature", status: "open", rules: 2, openedAt: "2026-11-01T00:00:00.000Z", openedSeq: 10, sessions: ["S0"], steps: [{ key: "context", state: "DONE" }, { key: "plan", state: "DONE" }, { key: "cases" }, { key: "close" }] };
   let seq = 10;
   const events = [];
   const at = (minutes) => new Date(Date.now() - minutes * 60 * 1000).toISOString();

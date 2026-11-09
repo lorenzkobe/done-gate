@@ -177,7 +177,7 @@ test("C8 performance: one diff read per file per assess; the slop check and chan
   const state = {
     root: repo,
     config: loadConfig(repo),
-    ledger: { status: "open", steps: [], waivers: [], cases: [], baseline: { head: "HEAD" } },
+    ledger: { status: "open", rules: 2, steps: [], waivers: [], cases: [], baseline: { head: "HEAD" } },
     baseline: { head: "HEAD" },
     changed: ["src/a.ts"],
     diff: { changed: ["src/a.ts"], deleted: [] },

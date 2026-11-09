@@ -7,7 +7,7 @@ import { segments, withoutHeredocs } from "./guard.mjs";
 import { buildState } from "./assess.mjs";
 import { currentLedger, isDone, loadLedger, saveLedger } from "./ledger.mjs";
 import { appendEvents, nextSeq, readEvents } from "./events.mjs";
-import { diffTextOf, driverCommand, implementationHash, newRules, processAlive, surfaceClear, notRecommended, saidSince, sourceHash, timeoutAdvice, timeoutText, verifyKey, verifyWhere, waiverWordsProblem, workOutSteps } from "./rules.mjs";
+import { diffTextOf, driverCommand, implementationHash, processAlive, surfaceClear, notRecommended, saidSince, sourceHash, timeoutAdvice, timeoutText, verifyKey, verifyWhere, waiverWordsProblem, workOutSteps } from "./rules.mjs";
 import { repoPath } from "./paths.mjs";
 import { loadSession } from "./session-state.mjs";
 import { diffSnapshots, gitIgnored, parseHunks, snapshot } from "./tree.mjs";
@@ -131,20 +131,18 @@ function changeAdded(ctx, flag, cmd) {
       : `verify command added for this run: ${cmd} — it runs after the config commands, and the run cannot close until \`gate verify\` has run it`);
   } else {
     const words = ctx.args.includes("--user-ok") ? ctx.args[ctx.args.indexOf("--user-ok") + 1]?.trim() : null;
-    if (newRules(ledger)) {
-      // the last test command is what R18 cannot catch once no case points at a test file; a repo
-      // that configured none gives nothing up
-      const config = loadConfig(ctx.root, ledger.repos);
-      const testEntry = (v) => v.related || runsTests(v.cmd, config.testFiles);
-      if (config.verify.some(testEntry) && verifyEntries(config, ledger).filter((v) => v.cmd !== cmd && testEntry(v)).length === 0 && verifyEntries(config, ledger).some((v) => v.cmd === cmd && testEntry(v))) {
-        const tell = 'dropping the last test command is the user\'s call: ask them, then pass --user-ok "<their words, at least three, naming the tests>"';
-        if (!words || words.startsWith("--")) throw new UsageError(tell);
-        const problem = waiverWordsProblem("tests", words);
-        if (problem) throw new UsageError(`gate verify --drop: ${problem}. ${tell}`);
-        const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
-        if (!saidSince(notRecommended(events), ledger.openedSeq ?? 0, words)) throw new UsageError(`the user did not say "${words}" in this task: ${tell}`);
-        ledger.verifyDropWords = { ...ledger.verifyDropWords, [cmd]: words };
-      }
+    // the last test command is what R18 cannot catch once no case points at a test file; a repo
+    // that configured none gives nothing up
+    const config = loadConfig(ctx.root, ledger.repos);
+    const testEntry = (v) => v.related || runsTests(v.cmd, config.testFiles);
+    if (config.verify.some(testEntry) && verifyEntries(config, ledger).filter((v) => v.cmd !== cmd && testEntry(v)).length === 0 && verifyEntries(config, ledger).some((v) => v.cmd === cmd && testEntry(v))) {
+      const tell = 'dropping the last test command is the user\'s call: ask them, then pass --user-ok "<their words, at least three, naming the tests>"';
+      if (!words || words.startsWith("--")) throw new UsageError(tell);
+      const problem = waiverWordsProblem("tests", words);
+      if (problem) throw new UsageError(`gate verify --drop: ${problem}. ${tell}`);
+      const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
+      if (!saidSince(notRecommended(events), ledger.openedSeq ?? 0, words)) throw new UsageError(`the user did not say "${words}" in this task: ${tell}`);
+      ledger.verifyDropWords = { ...ledger.verifyDropWords, [cmd]: words };
     }
     if (!inConfig && !added.includes(cmd)) throw new UsageError(`\`${cmd}\` is neither a verify command of the repo config nor one this run added${added.length ? `; added: ${added.join(" · ")}` : ""}`);
     ledger.verifyAdded = added.filter((c) => c !== cmd);
@@ -646,7 +644,7 @@ async function runVerify(ctx, { stepKey = "verify", final = false, force = false
   const repos = current.ledger.repos ?? [];
   const config = loadConfig(ctx.root, repos);
   const entries = verifyEntries(config, current.ledger);
-  if (newRules(current.ledger)) refuseSourceReport(entries, config, ctx.root);
+  refuseSourceReport(entries, config, ctx.root);
   if (entries.length === 0) throw new UsageError("nothing to verify: no verify commands in .claude/gate.json, no lint/test/build scripts in package.json and none added with `gate verify --add`");
   if (entries.some((e) => e.related && !e.repo) && !config.testFiles) throw new UsageError(`a {"related": true} verify entry needs testFiles in .claude/gate.json: the command that runs given test files, with {files} where they go`);
 
@@ -674,9 +672,8 @@ async function runVerify(ctx, { stepKey = "verify", final = false, force = false
   const sourceNow = sourceHash(snap, config);
   // what each command last went green on: the whole tree and the command as it ran. An ignored
   // file (.env) is not in the tree, so a command that reads one declares itself external
-  const stamped = newRules(current.ledger);
   const greenTree = lastGreen(file, "greenTree");
-  const greenOnThisTree = (entry, key, cmd) => stamped && !force && !entry.external && greenTree[key]?.tree === snap.hash && greenTree[key]?.cmd === cmd;
+  const greenOnThisTree = (entry, key, cmd) => !force && !entry.external && greenTree[key]?.tree === snap.hash && greenTree[key]?.cmd === cmd;
   const repeated = (row, key) => {
     const { tree: _tree, cmd: _cmd, ...old } = greenTree[key];
     ctx.err(`verify: ${row.cmd}${verifyWhere(row)} skipped (green on this exact tree already)`);
@@ -751,7 +748,7 @@ async function runVerify(ctx, { stepKey = "verify", final = false, force = false
     }
     ctx.err(`verify: ${name} (timeout ${entry.timeout}s)`);
     // a related template handed only source may find no test for it: the final suite runs later
-    const readsTotals = stamped && runsTests(run.cmd, config.testFiles) && !(config.testRelated && entry.related && !row.files.length);
+    const readsTotals = runsTests(run.cmd, config.testFiles) && !(config.testRelated && entry.related && !row.files.length);
     const ranAt = Date.now();
     const spawnOptions = { onSpawn: (pgid) => lock?.setGroup(pgid), env: lock ? { [HELD_ENV]: String(process.pid) } : {} };
     const { output, ...result } = { ...row, ...(await runCommand({ ...run, whole: readsTotals }, entry.cwd ?? ctx.root, spawnOptions)) };
@@ -761,7 +758,7 @@ async function runVerify(ctx, { stepKey = "verify", final = false, force = false
       const old = oldFindingsOnly(output, entry, ctx, config);
       if (old) Object.assign(result, { exit: 0, rawExit: 1, oldFindings: old.length, oldList: old.slice(0, 20) });
     }
-    if (stamped && result.exit === 0 && !result.timedOut) {
+    if (result.exit === 0 && !result.timedOut) {
       const why = entry.report ? reportProblem(path.resolve(entry.cwd ?? ctx.root, entry.report), ranAt) : readsTotals && ranNoTests(output) ? "its summary shows no test" : null;
       if (why) Object.assign(result, { exit: 1, rawExit: 0, noTests: true, noTestsWhy: why });
     }
@@ -784,11 +781,11 @@ async function runVerify(ctx, { stepKey = "verify", final = false, force = false
     ctx.err(`  → ${result.timedOut ? timeoutText(result) : `exit ${result.exit} in ${(result.ms / 1000).toFixed(1)}s`}`);
   }
   // code that moved while the commands ran was not what they judged: none of this counts as green
-  const after = stamped ? snapshot(ctx.root, snap, repos) : snap;
+  const after = snapshot(ctx.root, snap, repos);
   const moved = sourceHash(after, config) === sourceNow ? [] : diffSnapshots(snap, after).changed.filter((p) => config.isSource(p));
   const greens = moved.length
     ? { greenAt: lastGreen(file), greenSource: lastGreen(file, "greenSource"), greenTree: lastGreen(file, "greenTree") }
-    : { greenAt, greenSource, ...(stamped ? { greenTree } : {}) };
+    : { greenAt, greenSource, greenTree };
   const before = lastGreen(file, "history");
   const history = [...(Array.isArray(before) ? before : []), {
     at: startedAt,
@@ -801,7 +798,7 @@ async function runVerify(ctx, { stepKey = "verify", final = false, force = false
   const record = { startedAt, finishedAt: new Date().toISOString(), sourceHash: sourceNow, ...greens, commands, history };
   // a green e2e entry is the drive, for this code only: nothing if it moved. On a skip the code is
   // what a green run judged, as after an edit and an undo, so the mark says so and is no run itself.
-  const drove = stamped && !moved.length && driverCmd ? commands.find((c) => !c.repo && c.cmd.trim() === driverCmd && (c.skipped ? c.covers || c.greenCode : c.exit === 0 && !c.timedOut)) : null;
+  const drove = !moved.length && driverCmd ? commands.find((c) => !c.repo && c.cmd.trim() === driverCmd && (c.skipped ? c.covers || c.greenCode : c.exit === 0 && !c.timedOut)) : null;
   const driveEvent = drove ? { seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, agent: null, agentType: null, kind: "command", tool: "Bash", cmd: driverCmd, exit: 0, readOnly: true, runs: true, viaVerify: true, ...(drove.skipped ? { reused: true } : {}) } : null;
   if (driveEvent) appendEvents(ctx.stateDir, ctx.session, [driveEvent]);
   // written whole: a Stop hook may read it while a background verify is still writing

@@ -10,7 +10,7 @@ import { toPosixRel } from "./paths.mjs";
 import { ancestorPids, pidsDir } from "./context.mjs";
 import { headReflog } from "./tree.mjs";
 import { runsTests } from "./verify.mjs";
-import { newRules, runningPieces, workerRuns } from "./rules.mjs";
+import { runningPieces, workerRuns } from "./rules.mjs";
 
 // Files only the gate's own verbs may write. A model that could edit these could
 // forge its evidence, so the deny is unconditional and every attempt is logged.
@@ -879,14 +879,13 @@ function outgrown(ledger, config, rel) {
   const now = ledger.tier.measured?.files ?? 0;
   const limit = policyFor(ledger).splitPast.files;
   if (now <= limit && !(planned.length && now >= Math.max(2 * planned.length, planned.length + 10))) return null;
-  const add = newRules(ledger) ? `\`gate plan add ${rel} "<why>"\`` : `\`gate note plan "<plan>" --files <every file>\``;
-  return `${rel} is outside this task's plan, and the task has grown to ${now} changed files (planned ${planned.length}). Finish and \`gate close\` this task and \`gate open\` a new run for the rest; if it is truly the same request, add the file with ${add} (at most ${limit} files)`;
+  return `${rel} is outside this task's plan, and the task has grown to ${now} changed files (planned ${planned.length}). Finish and \`gate close\` this task and \`gate open\` a new run for the rest; if it is truly the same request, add the file with \`gate plan add ${rel} "<why>"\` (at most ${limit} files)`;
 }
 
-// On a run under the new rules the lead's edit tools take only planned code; a file outside the
+// The lead's edit tools take only planned code; a file outside the
 // plan comes in through `gate plan add`, which the reviewer and the user see.
 function unplanned(ledger, config, rel) {
-  if (!newRules(ledger) || !tiered(ledger)) return null;
+  if (!tiered(ledger)) return null;
   const named = tierOf(ledger).predictedFiles;
   if (!outsidePlan(named, [rel], config).length) return null;
   if (!named.length) return `the plan names no files: name the code this task changes with \`gate plan add <a,b> "<why>"\``;
@@ -1134,7 +1133,7 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
   }
   if (tool === "Read") return { deny: false };
   if (tool === "AskUserQuestion") {
-    if (!recommendsGivingUpRun(input) && !(newRules(ledger) && recommendsGivingUp(input))) return { deny: false };
+    if (!recommendsGivingUpRun(input) && !(ledger && recommendsGivingUp(input))) return { deny: false };
     return { deny: true, reason: "done-gate: a question that gives up a check or abandons a run cannot mark an option (Recommended). The choice is the user's, and a recommended answer does not count as their words. Ask it again with no recommendation, naming what is given up.", paths: [] };
   }
 

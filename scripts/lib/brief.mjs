@@ -9,7 +9,7 @@ import { baseCopy, fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs"
 import { ROLES, flag, outsideRepos, positional } from "./verbs.mjs";
 import { repoPath, toPosixRel } from "./paths.mjs";
 import { OWN_FILE } from "./guard.mjs";
-import { LOOKUP_EXAMPLE, newRules, waitingDisputes, fixCheckDone, capUnitsOf, nextPiece, roundOnDisk, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, pieceBriefed, reviewScope, runningPieces, uncovered, unfinishedFile, unfinishedVerify, verifyProblem, workerRuns } from "./rules.mjs";
+import { LOOKUP_EXAMPLE, waitingDisputes, fixCheckDone, capUnitsOf, nextPiece, roundOnDisk, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, pieceBriefed, reviewScope, runningPieces, uncovered, unfinishedFile, unfinishedVerify, verifyProblem, workerRuns } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { cutText, cutWorkers } from "./diagnose.mjs";
@@ -318,9 +318,9 @@ function renderPacket(state, role, { round, n, piece = null, owned = null, conti
     const shown = piece ? (state.changed ?? []).filter((p) => paths.has(p) || !scopeSet.has(p)) : state.changed ?? [];
     // a fix-check round: the role's earlier findings on these files, each closed, to confirm
     const cites = (text) => (paths ? [...paths] : reviewScope(state)).some((f) => text.includes(f));
-    // on a new run a closed pointer is a run or doc, which no longer names the file the fix landed
-    // in, so a fix-check re-checks every closed finding of its role
-    const recheck = state.ledger.huddles.filter((h) => h.role === role).flatMap((h) => h.actOn.filter((a) => a.closed && !a.wrong && (cites(a.text) || cites(String(a.closed)) || (fixCheck && newRules(state.ledger)))));
+    // a closed pointer is a run or doc, which no longer names the file the fix landed in, so a
+    // fix-check re-checks every closed finding of its role
+    const recheck = state.ledger.huddles.filter((h) => h.role === role).flatMap((h) => h.actOn.filter((a) => a.closed && !a.wrong && (cites(a.text) || cites(String(a.closed)) || fixCheck)));
     const wrongs = state.ledger.huddles.filter((h) => h.role === role).flatMap((h) => h.actOn.filter((a) => a.closed && a.wrong));
     if (recheck.length) {
       out.push("## Findings to re-check", "", "Earlier rounds found these and each was closed as shown. For each, say ADDRESSED or NOT ADDRESSED, and flag anything the fix broke in the lines below.", "");
@@ -552,7 +552,7 @@ export const verbs = {
     const numbers = (prefix) => state.reviews.filter((f) => f.startsWith(prefix)).map(fileNumber);
     // the plan check is one pass: a finished file is answered, not run again, unless a disputed
     // finding waits for the skeptic's next file to answer it
-    if (role === "skeptic" && newRules(state.ledger)) {
+    if (role === "skeptic") {
       const newest = Math.max(0, ...numbers("skeptic-"));
       const disputed = state.ledger.huddles.filter((h) => h.role === "skeptic").flatMap((h) => h.actOn).some((a) => a.dispute && !a.dispute.verdict && !a.closed);
       if (newest && !unfinished(`skeptic-${newest}.md`) && !disputed) throw new UsageError(`the plan check runs once, and skeptic-${newest}.md is finished: record it (\`gate huddle add skeptic --file skeptic-${newest}.md\`) and answer each item with \`gate huddle resolve\`, or \`gate huddle dispute\` one, which brings the skeptic back to answer it`);
@@ -595,9 +595,7 @@ export const verbs = {
     // write guard owes the file the packet names; QA writes no file of its own
     const round = prefix ? n : Number(flag(ctx.args, "--round")) || rounds + 1;
     const finished = (stream) => state.reviews.filter((f) => f.startsWith(stream) && !unfinished(f)).length;
-    // a ledger from before the second stream recorded reviewer-2 rounds on review-<n>.md
-    const legacySeconds = state.ledger.huddles.filter((h) => h.role === "reviewer-2" && /^review-/.test(h.file ?? "")).length;
-    const written = finished("review-") - legacySeconds;
+    const written = finished("review-");
     // past the cap a round is briefed only for a file no round of this role saw, so the cap
     // can never leave R5/R9 waiting on a round nobody may brief. With pieces the cap counts
     // the rounds that saw the piece's files (finished files, recorded or not), as R5 does.
@@ -615,10 +613,8 @@ export const verbs = {
       return (r.units?.[e.path] ?? []).some((k) => keys.has(k));
     };
     const perFile = piece && state.ledger.seen ? Math.max(0, ...piece.files.map((entry) => seenRounds.filter((r) => sawEntry(r, entry)).length)) : null;
-    const done = perFile ?? (role === "reviewer" ? Math.max(rounds, written) : role === "reviewer-2" ? finished("review2-") + legacySeconds : 0);
+    const done = perFile ?? (role === "reviewer" ? Math.max(rounds, written) : role === "reviewer-2" ? finished("review2-") : 0);
     const unseen = reviewing ? uncovered(state, role) : null;
-    // a ledger from before seen sets keeps its old, uncapped second reviewer
-    const legacy = !state.ledger.seen;
     // past the cap a round is briefed only for a piece holding a file no round of this role saw
     const seenByRole = new Set(state.ledger.huddles.filter((h) => h.role === role && Array.isArray(h.files) && roundOnDisk(state, h)).flatMap((h) => h.files.map(pathOf)));
     const neverSeen = unseen === null ? [] : reviewScope(state).filter((f) => !seenByRole.has(f));
@@ -663,12 +659,12 @@ export const verbs = {
     if (inParts && !stillOpen && !piece.files.some((entry) => owed.some((u) => overlaps(entry, u)))) {
       throw new UsageError(`${role} fix-check: ${piece.files.join(",")} holds no unreviewed line. The next piece: \`gate brief ${role} --files ${nextPiece(state, owed).join(",")}\``);
     }
-    if (done >= cap && !(legacy && role === "reviewer-2") && !stillOpen && !fixCheck && !answers && !late) {
+    if (done >= cap && !stillOpen && !fixCheck && !answers && !late) {
       throw new UsageError(`${role} round ${done + 1}: ${NUMBER_WORDS[cap] ?? cap} round${cap === 1 ? "" : "s"} is the cap. An upheld dispute is the user's call: ask them, then fix it or close it with their words (\`gate huddle resolve <id> --wrong --words "<their words>"\`); what is still open is fixed and closed with \`gate huddle resolve\`.`);
     }
     const own = prefix ? `${prefix}${n}.md` : null;
     // seen is what this round's reviewer is shown (its huddle inherits it); the other roles'
-    // briefs are dated under briefed, so a ledger with no seen map stays a legacy one
+    // briefs are dated under briefed
     if (piece) {
       state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...earlierOf(state.ledger.seen?.[own]), ...(Object.keys(piece.units).length ? { units: piece.units, flats: piece.flats, notes: piece.notes } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true, ...(inParts ? { part: true } : {}) } : {}), ...(answers && !stillOpen ? { answers: true } : {}), ...(lateFiles.length ? { late: lateFiles } : {}), ...(toAnswer.length ? { disputes: toAnswer.map((a) => a.id) } : {}) } };
       saveLedger(state.dir, state.ledger);

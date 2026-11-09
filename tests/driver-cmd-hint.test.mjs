@@ -13,7 +13,7 @@ function r4(files, events = []) {
   const repo = makeRepo(`dch-${Object.keys(files).join("").replace(/\W/g, "").slice(0, 40)}-${events.length}`, files);
   const config = loadConfig(repo);
   const ledger = {
-    status: "open", planSeq: 1, taskSeq: 1, waivers: [], huddles: [], reviews: [],
+    status: "open", rules: 2, planSeq: 1, taskSeq: 1, waivers: [], huddles: [], reviews: [],
     cases: [{ id: "C1", status: "closed", test: "t", seq: 2 }],
     steps: [], gateHash: config.hash, baseline: { seq: 0 },
   };

@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, write, gate, lookedUp, planChecked } from "./helpers.mjs";
@@ -98,18 +97,6 @@ test("C4 adding driver to gate.json after open raises no R13; changing the verif
   assert.ok(blocks(run(repo, "check").stdout, "R13"));
   write(repo, ".claude/gate.json", JSON.stringify({ ...GATE_JSON, source: ["src/**"] }, null, 2));
   assert.ok(blocks(run(repo, "check").stdout, "R13"));
-});
-
-test("C5 a ledger whose gateHash was computed the old way still passes R13 on an unchanged gate.json", () => {
-  const repo = makeRepo("scd-c5", { ".claude/gate.json": JSON.stringify(GATE_JSON, null, 2) });
-  const cfg = loadConfig(repo);
-  // the formula ledgers from before carry: sha1 of the file text, a newline, the verify list
-  const oldWay = createHash("sha1").update(readFileSync(path.join(repo, ".claude", "gate.json"), "utf8")).update("\n").update(cfg.verify.map((v) => v.cmd).join("\n")).digest("hex");
-  assert.notEqual(oldWay, cfg.hash);
-  const ledger = { status: "open", steps: [], waivers: [], cases: [], huddles: [], gateHash: oldWay, baseline: { seq: 0 } };
-  const state = { config: cfg, root: repo, ledger, changed: [], now: { files: {} }, verify: null, events: [], reviews: [], policy: loadPolicy() };
-  assert.ok(!evaluate(state).some((u) => u.rule === "R13"));
-  assert.ok(evaluate({ ...state, ledger: { ...ledger, gateHash: "stale" } }).some((u) => u.rule === "R13"));
 });
 
 test("C6 open pins the policy into the ledger; a pinned ledger with a stale policyHash raises no R13 and is judged by its own tiers", () => {

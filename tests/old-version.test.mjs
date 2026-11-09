@@ -1,6 +1,6 @@
-// old-version: a run opened by 0.21.0 (8218139, the last release) is read by this copy, and a run
-// opened here is read and closed by 0.21.0, so a plugin update mid-task strands no ledger either way.
-// Later batches that add a ledger field add it to these runs.
+// old-version: a run opened by 0.21.0 (8218139, the last release) is told by this copy to finish
+// there or be given up, and a run opened here is read and closed by 0.21.0, so a plugin update
+// mid-task strands no ledger either way. Later batches that add a ledger field add it to these runs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -83,17 +83,20 @@ function opened(g, repo, slug) {
   lookedUp(repo);
 }
 
-test("C1 happy: a run the old copy opened is checked by this copy with the rules the old copy lists, and no error", { skip }, () => {
+test("C1 refused: a run the old copy opened gets one item from this copy, to finish it there or give it up, and no error", { skip }, () => {
   const old = oldGate();
   const repo = committed("ov-c1");
   opened(old, repo, "ov-c1");
   planAndEdit(old, repo);
   edit(old, repo, "src/a.ts", "a0 = 0", "a0 = 2");
   edit(old, repo, "tests/a.test.ts", "'a'", "'a0 is 2'");
-  const before = ruleIds(run(old, repo, ["check"]).stdout);
-  assert.ok(before.length > 0, "premise: the old copy lists open items");
-  assert.deepEqual(ruleIds(run(gate, repo, ["check"]).stdout), before);
+  assert.ok(ruleIds(run(old, repo, ["check"]).stdout).length > 0, "premise: the old copy lists open items");
+  const out = run(gate, repo, ["check"]).stdout;
+  assert.deepEqual([...out.matchAll(/^\d+\. (R\d+)/gm)].map((m) => m[1]), ["R13"], out);
+  assert.match(out, /older done-gate/);
   assert.equal(ledgerOf(repo).rules, undefined, "the new copy stamped a run it did not open");
+  // the old copy still works the run it opened
+  assert.ok(ruleIds(run(old, repo, ["check"]).stdout).length > 0);
 });
 
 test("C2 happy: a run this copy opened is checked, verified and closed by the old copy", { skip }, () => {
