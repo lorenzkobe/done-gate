@@ -168,3 +168,17 @@ test("F3 C12 edge: a notice matched by its tool-use id ends the command even whe
   hook(repo, { hook_event_name: "UserPromptSubmit", prompt: "<task-notification>\n<task-id>other</task-id>\n<tool-use-id>toolu_9</tool-use-id>\n<status>failed</status>\n<summary>Background command \"npm test\" failed with exit code 143</summary>\n</task-notification>" });
   assert.equal(stop(repo), null);
 });
+
+test("re-trial C2 reported-surface: the line names a command without its gate() wrapper or a leading cd", () => {
+  const repo = opened("bg-rt2");
+  background(repo, `gate() { node "/x/scripts/gate.mjs" "$@"; }; gate verify --final`, started("b1"));
+  background(repo, "cd /work/app && npm run dev", started("b2"));
+  background(repo, 'cd /a && gate() { node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs" "$@"; }; gate test tests/a.test.ts', started("b3"));
+  background(repo, `cd "/my dir" && gate() { echo '{"x":1}' | node "/x/gate.mjs" "$@"; }; npm run watch`, started("b4"));
+  const line = stop(repo).systemMessage;
+  assert.match(line, /`gate verify --final` \(\d+ min\)/);
+  assert.match(line, /`npm run dev` \(\d+ min\)/);
+  assert.match(line, /`gate test tests\/a\.test\.ts` \(\d+ min\)/);
+  assert.match(line, /`npm run watch` \(\d+ min\)/);
+  assert.doesNotMatch(line, /gate\(\)|cd \/|cd "|scripts\/gate/);
+});

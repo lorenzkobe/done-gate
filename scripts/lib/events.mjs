@@ -279,8 +279,15 @@ export function backgroundOpen(events, session, sinceSeq, restart = 0) {
   return mine.filter((e) => e.kind === "command" && e.background && e.task && !e.agent && e.seq > Math.max(sinceSeq, restart) && !ended.has(e.task) && !(e.toolUseId && ended.has(e.toolUseId)));
 }
 
+// a background command as the lead would name it: no gate() wrapper or cd in front, in any order
+const LEADING = [/^\s*\w+\(\)\s*\{[\s\S]*?"\$@";?\s*\};?\s*/, /^\s*cd\s+(?:"[^"]*"|'[^']*'|\S+)\s*(?:&&|;)\s*/];
 const shortCmd = (cmd) => {
-  const first = String(cmd ?? "").split("\n")[0].trim();
+  let text = String(cmd ?? "");
+  for (let before = null; before !== text; ) {
+    before = text;
+    for (const lead of LEADING) text = text.replace(lead, "");
+  }
+  const first = text.split("\n")[0].trim();
   return first.length > 60 ? `${first.slice(0, 59)}…` : first;
 };
 export const backgroundItems = (open, now = Date.now()) => open.map((e) => ({ cmd: shortCmd(e.cmd), minutes: Math.max(0, Math.floor((now - Date.parse(e.ts)) / 60000)) }));

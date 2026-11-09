@@ -279,3 +279,16 @@ test("F5 C2 reported-surface: an old run's waiver hints drop --user-ok; a new ru
   edited(fresh, "src/a.ts", "export const a = 2;\n");
   assert.match(cli(fresh, "check"), /gate waive \w[\w-]* "<reason>" --user-ok "<their words>"/);
 });
+
+test("re-trial C1 reported-surface: a piped test run closes the tests step as ran, since its exit is the pipe's; || and a quoted | are no pipe", () => {
+  const note = (name, command) => {
+    const repo = planned(name);
+    edited(repo, "tests/a.test.ts", "test('a0 is 2', () => {});\n", PAST());
+    hook(repo, { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command }, tool_response: {} });
+    cli(repo, "check");
+    return stepOf(repo, "tests").note;
+  };
+  assert.match(note("sff-rt1", "npx vitest run tests/a.test.ts 2>&1 | tail -15"), /` ran \(its exit is the pipe's, not the tests'\)/);
+  assert.match(note("sff-rt2", "npm test -- tests/a.test.ts || echo failed"), /` passed/);
+  assert.match(note("sff-rt3", "npm test -- tests/a.test.ts -t 'a|b'"), /` passed/);
+});

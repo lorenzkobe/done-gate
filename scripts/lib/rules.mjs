@@ -1378,8 +1378,10 @@ export function settleSteps(state) {
     const since = wrote ? Date.parse(wrote.ts) : Math.min(...tests.map((p) => now.files[p].m ?? Infinity));
     const after = (e) => (wrote ? e.seq > wrote.seq : Date.parse(e.ts) > since);
     const run = events.find((e) => e.kind === "command" && !e.background && e.seq < codeAt && after(e) && (runsTests(e.cmd ?? "", config.testFiles) || GATE_TEST.test(e.cmd ?? "")));
-    // Claude Code sends an exit code only when a command fails: none means it worked
-    if (run) close("tests", `${list(tests)} ran by \`${ranText(run).slice(0, 80)}\` ${(run.exit ?? 0) === 0 ? "passed" : `exit ${run.exit}`}`, `events#${run.seq}`);
+    // Claude Code sends an exit code only when a command fails: none means it worked, unless its
+    // output was piped, when the exit is the pipe's last command's
+    const piped = run && /(?<!\|)\|(?!\|)/.test(String(run.cmd ?? "").replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, "''"));
+    if (run) close("tests", `${list(tests)} ran by \`${ranText(run).slice(0, 80)}\` ${(run.exit ?? 0) !== 0 ? `exit ${run.exit}` : piped ? "ran (its exit is the pipe's, not the tests')" : "passed"}`, `events#${run.seq}`);
     else if (codeAt === Infinity && verify && Date.parse(verify.finishedAt) > since && (verify.commands ?? []).some((c) => !c.skipped && runsTests(c.cmd, config.testFiles))) close("tests", `gate verify ran the tests after ${list(tests)}`, "verify.json");
   }
 
