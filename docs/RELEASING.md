@@ -40,7 +40,10 @@ it stays. Advice that never blocks is preferred over a new rule.
 - `npm test` passes in full.
 - A run opened on the previous version is read by the new one with only its normal open
   items (open it with the installed copy, then run `gate check` with this repo's
-  `scripts/gate.mjs`).
+  `scripts/gate.mjs`). A release that drops the old rules, as 0.22.0 does, shows such a run
+  one R13 item instead: finish it on the older version or give it up in the user's words.
+  `tests/old-version.test.mjs` checks both directions against `OLD_COMMIT`; once a release is
+  pushed, set `OLD_COMMIT` to its commit, so the next release is checked against it.
 - The three manifests (`package.json`, `.claude-plugin/plugin.json`,
   `.claude-plugin/marketplace.json`) carry the same new version.
 - After the owner updates (`claude plugin marketplace update done-gate`, then
