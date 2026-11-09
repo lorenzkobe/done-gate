@@ -272,8 +272,9 @@ checked.
   `gate attach <slug>` to continue it, and to ask you before giving it up: `gate abandon <slug>
   "<reason>" --user-ok "<your words>"` takes your own words, said since the run opened, saying to
   abandon, drop or give up this run (a run with nothing in it needs none), and marks it abandoned
-  (reason in its report) so it no longer blocks anything. Nothing is finalised: the changes it
-  left behind still count against the next ledger.
+  (reason in its report) so it no longer blocks anything. What it committed is released: git
+  holds it, so it no longer counts as the session's change. Its uncommitted changes, a committed
+  file edited again included, still count against the next ledger.
 - **The lead may edit at any size.** It holds the context, so handing a piece to a fresh worker
   can lose it. Size large (`policy.delegatesAt` in `models.json`; a plan naming more than ten
   files) brings blind QA and the second reviewer, whoever edits. Any helper the lead spawns

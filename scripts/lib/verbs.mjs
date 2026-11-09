@@ -341,6 +341,29 @@ function emptyRun(ctx, dir, ledger) {
   return !events.some((e) => e.seq > (ledger.openedSeq ?? 0) && (e.kind === "edit" || e.kind === "subagent-start"));
 }
 
+// What an abandoned run committed is git's now: each of its sessions' starting points takes in
+// the changed files clean at HEAD. Anything still dirty keeps counting against the next run.
+// Session state holds main-root files only, so a declared repo's files end with the run anyway.
+function releaseCommitted(ctx, ledger) {
+  const config = loadConfig(ctx.root, []);
+  const released = new Set();
+  for (const id of new Set([ctx.session, ...(ledger.sessions ?? [])])) {
+    const session = loadSession(ctx.stateDir, id);
+    if (!session?.baseline) continue;
+    const now = snapshot(ctx.root, session.lastTree ?? session.baseline);
+    const changed = diffSnapshots(session.baseline, now).changed.filter((p) => config.isSource(p));
+    const committed = cleanAtHead(ctx.root, changed, now, []);
+    if (!committed.length) continue;
+    const holder = { baseline: session.baseline };
+    foldIntoBaseline(holder, committed, now, config);
+    // with nothing left over, the edits before now are history, as after a close
+    const clean = committed.length === changed.length ? { baselineSeq: nextSeq() } : {};
+    saveSession(ctx.stateDir, { ...session, baseline: holder.baseline, ...clean });
+    for (const p of committed) released.add(p);
+  }
+  return [...released].sort();
+}
+
 // Giving up a used run is the user's call: their own words since it opened, saying to abandon,
 // drop or give up this run, not asked as a question and not a recommended answer.
 function abandonWords(ctx, dir, ledger, words) {
@@ -1090,8 +1113,8 @@ export const verbs = {
   },
 
   // The user gives up on a task: the ledger is marked abandoned with the reason, so it no
-  // longer attaches to later sessions or blocks their turns. Nothing is finalised: the
-  // baseline stays, so the next ledger still sees the changes this one left behind.
+  // longer attaches to later sessions or blocks their turns. Nothing is finalised: what it
+  // committed is released, and the next ledger still sees what it left uncommitted.
   abandon(ctx) {
     const [slug, ...rest] = positional(ctx.args);
     const reason = rest.join(" ").trim();
@@ -1100,6 +1123,8 @@ export const verbs = {
     if (!found) throw new UsageError(`no open run for slug "${slug}" (a closed or abandoned run cannot be abandoned)`);
     const { dir, ledger } = found;
     if (!emptyRun(ctx, dir, ledger)) abandonWords(ctx, dir, ledger, flag(ctx.args, "--user-ok"));
+    // before the run is marked: a git failure here leaves it open, not half abandoned
+    const released = releaseCommitted(ctx, ledger);
     ledger.status = "abandoned";
     ledger.abandonedAt = new Date().toISOString();
     ledger.abandonReason = reason;
@@ -1111,6 +1136,7 @@ export const verbs = {
     if (session) saveSession(ctx.stateDir, { ...session, ...lastTree, current: session.current === name ? null : session.current, lastClosed: name, ...(ledger.sessions?.includes(ctx.session) ? { runEndSeq: nextSeq() } : {}) });
     writeReport(ctx, dir, ledger);
     ctx.out(`${ledger.slug} abandoned — ${reason}`);
+    if (released.length) ctx.out(`released ${list(released)}: committed, so no longer counted as this session's change`);
     ctx.out(`report: ${path.join(dir, "report.md")}`);
   },
 

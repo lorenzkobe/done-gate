@@ -517,3 +517,46 @@ test("4.6 C13 the setup refusal offers no bare abandon", () => {
   assert.doesNotMatch(r.stderr, /Close or abandon the run first/);
   assert.match(r.stderr, /--user-ok/);
 });
+
+// F2: gate abandon also releases what this session committed; what is still uncommitted counts.
+// the lead's own write and commit, as the hooks log them
+const gitCommit = (repo, ...files) => {
+  for (const f of files) logHook(repo, { hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: path.join(repo, f) }, tool_response: {} });
+  const command = `git add ${files.join(" ")} && git -c user.name=t -c user.email=t@t commit -qm work`;
+  logHook(repo, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } });
+  execFileSync("sh", ["-c", command], { cwd: repo });
+  logHook(repo, { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command }, tool_response: { stdout: "", stderr: "" } });
+};
+const r1 = (repo, session = "S1") => cli(repo, "check", [], { session }).stdout.split("\n").filter((l) => /R1\b/.test(l)).join("\n");
+
+test("F2 C1 happy: after an abandon, a file the run committed no longer blocks the session; the next run does not count it", () => {
+  const repo = blocked("ssh-f2c1");
+  gitCommit(repo, "src/a.ts");
+  cli(repo, "abandon", abandonArgs(repo, "ssh-f2c1", "the user moved on"));
+  assert.equal(r1(repo), "");
+  assert.equal(stopHook(repo), null);
+  cli(repo, "open", ["next-one", "feature"]);
+  assert.doesNotMatch(cli(repo, "check").stdout, /src\/a\.ts/);
+});
+
+test("F2 C2 refused: an uncommitted change, and a committed file edited again, still count against the session and the next run", () => {
+  const repo = blocked("ssh-f2c2");
+  gitCommit(repo, "src/a.ts");
+  writeFileSync(path.join(repo, "src", "a.ts"), "export const a = 3;\n");
+  writeFileSync(path.join(repo, "src", "b.ts"), "export const b = 1;\n");
+  logHook(repo, { hook_event_name: "PostToolUse", tool_name: "Write", tool_input: { file_path: path.join(repo, "src", "b.ts") } });
+  cli(repo, "abandon", abandonArgs(repo, "ssh-f2c2", "the user moved on"));
+  const line = r1(repo);
+  assert.match(line, /src\/a\.ts/);
+  assert.match(line, /src\/b\.ts/);
+});
+
+test("F2 C3 edge: an abandon from another session releases the run's own session too, and a session with no commits is unchanged", () => {
+  const repo = blocked("ssh-f2c3");
+  gitCommit(repo, "src/a.ts");
+  sessionStart(repo, "S2");
+  const before = loadSession(stateDir(repo), "S2").baseline;
+  cli(repo, "abandon", abandonArgs(repo, "ssh-f2c3", "the user moved on", { session: "S2" }), { session: "S2" });
+  assert.equal(r1(repo), "");
+  assert.deepEqual(loadSession(stateDir(repo), "S2").baseline.files, before.files);
+});
