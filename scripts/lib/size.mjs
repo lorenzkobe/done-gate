@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -414,13 +414,84 @@ export function reconcileTier(ledger, policy, measured, { trial = false } = {}) 
 }
 
 const STYLESHEET = /\.(?:css|scss|sass|less)$/i;
+const SCRIPT = /\.[cm]?[jt]sx?$/i;
+const COMPONENT = /\.(?:vue|svelte)$/i;
+const SERVER_NAMED = /(?:^|\/)(?:[^/]*\.server\.[^/]+|\+server\.[^/]+)$/i;
+const SERVER_FRAMEWORK = (name) => ["next", "@react-router/dev", "@tanstack/react-start", "waku"].includes(name) || name.startsWith("@remix-run/");
+const PROLOGUE_BYTES = 4096;
+
+function readHead(file) {
+  let fd;
+  try {
+    fd = openSync(file, "r");
+    const buf = Buffer.alloc(PROLOGUE_BYTES);
+    return buf.toString("utf8", 0, readSync(fd, buf, 0, PROLOGUE_BYTES, 0));
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+// The string statements that open a script (its directive prologue, ECMAScript 14.1.1).
+function directives(text) {
+  const found = [];
+  const gap = /^(?:\s+|\/\/[^\n]*|\/\*[\s\S]*?\*\/)*/;
+  let rest = text.replace(/^\uFEFF/, "").replace(/^#![^\n]*/, "");
+  for (;;) {
+    rest = rest.replace(gap, "");
+    const literal = /^(["'])([^"'\\\n]*)\1/.exec(rest);
+    if (!literal) return found;
+    rest = rest.slice(literal[0].length).replace(/^(?:[ \t]+|\/\*[^\n]*?\*\/|\/\/[^\n]*)*/, "");
+    if (rest.startsWith(";")) rest = rest.slice(1);
+    // a line break ends the statement unless the next token continues the expression
+    else if (!/^(?:\r?\n|$)/.test(rest) || /^[.([`+\-*/%,?=<>&|^]/.test(rest.replace(gap, ""))) return found;
+    found.push(literal[2]);
+  }
+}
+
+// When any package.json from the file's folder up to its repo root names a server-component
+// framework, or cannot be read, a component file runs on the server unless it says "use client".
+function serverComponentRepo(repoRoot, file, seen) {
+  for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
+    if (!seen.has(dir)) seen.set(dir, namesFramework(path.join(dir, "package.json")));
+    if (seen.get(dir)) return true;
+    if (path.relative(repoRoot, dir) === "" || path.dirname(dir) === dir) return false;
+  }
+}
+
+function namesFramework(file) {
+  if (!existsSync(file)) return false;
+  try {
+    const pkg = JSON.parse(readFileSync(file, "utf8"));
+    return ["dependencies", "devDependencies", "peerDependencies"].some((key) => Object.keys(pkg?.[key] ?? {}).some(SERVER_FRAMEWORK));
+  } catch {
+    return true;
+  }
+}
+
+// A changed UI file is client code: a stylesheet, a .vue or .svelte component, or a script that in
+// a server-component repo opens with "use client" (and not "use server"); a file gone is not.
+function clientFile(p, { root, repos }, seen) {
+  if (STYLESHEET.test(p)) return true;
+  const at = repoPath(root, p, repos);
+  const file = path.join(at.repoRoot, at.rel);
+  const head = readHead(file);
+  if (head === null) return false;
+  if (COMPONENT.test(p) || !serverComponentRepo(at.repoRoot, file, seen)) return true;
+  const said = directives(head);
+  return said.includes("use client") && !said.includes("use server");
+}
 
 // The small UI trial: below size large, every changed source file is UI or a stylesheet and none
-// is schema, high-risk or API. A server component in a .tsx looks like UI by its name.
-export function trialHolds(policy, config, changed, tier) {
-  if (!policy.uiTrial || tier === "large") return false;
+// is schema, high-risk, API or server code. Names are checked for every file before any is read.
+export function trialHolds(policy, config, changed, tier, { root, repos = [] } = {}) {
+  if (!policy.uiTrial || tier === "large" || !root) return false;
   const files = sized(config, changed);
-  return files.length > 0 && files.every((p) => (config.isUi(p) || STYLESHEET.test(p)) && !config.isSchema(p) && !config.isHighRisk(p) && !config.isApi?.(p));
+  const named = (p) => STYLESHEET.test(p) || (config.isUi(p) && (SCRIPT.test(p) || COMPONENT.test(p)) && !SERVER_NAMED.test(p));
+  if (!files.length || !files.every((p) => named(p) && !config.isSchema(p) && !config.isHighRisk(p) && !config.isApi?.(p))) return false;
+  const seen = new Map();
+  return files.every((p) => clientFile(p, { root, repos }, seen));
 }
 
 const plural = (n, one) => `${n} ${one}${n === 1 ? "" : "s"}`;

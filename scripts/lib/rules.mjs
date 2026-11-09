@@ -434,7 +434,7 @@ export function wrongProblem(state, item, ptr) {
 // The small UI trial holds for this run now, and its review step closed N/A on the lead's reason.
 export function uiTrial(state) {
   const policy = state.policy ?? policyFor(state.ledger);
-  return trialHolds(policy, state.config, state.changed ?? [], effectiveTier(policy, state.ledger, state.tier?.measured ?? null));
+  return trialHolds(policy, state.config, state.changed ?? [], effectiveTier(policy, state.ledger, state.tier?.measured ?? null), { root: state.root, repos: state.repos ?? [] });
 }
 export function reviewTrialed(state) {
   const step = (state.ledger.steps ?? []).find((s) => s.key === "review");

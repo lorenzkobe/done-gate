@@ -8,6 +8,7 @@ import { makeRepo, write, gate, pluginRoot, here, doneArgs, lookedUp, readyToEdi
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
+import { IGNORE_CASE } from "../scripts/lib/paths.mjs";
 import { evaluate } from "../scripts/lib/rules.mjs";
 import { snapshot, diffSnapshots } from "../scripts/lib/tree.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
@@ -2077,8 +2078,144 @@ test("6.9 T6 refused: an API file breaks the trial, and at size large there is n
   const { trialHolds, loadPolicy } = await import("../scripts/lib/size.mjs");
   const config = { isSource: () => true, isTest: () => false, isUi: (p) => p.endsWith(".tsx"), isSchema: () => false, isHighRisk: () => false, isApi: () => false };
   const policy = { ...loadPolicy(), uiTrial: true };
-  assert.equal(trialHolds(policy, config, ["src/app/a.tsx", "src/app/a.css"], "standard"), true);
-  assert.equal(trialHolds(policy, config, ["src/app/a.tsx"], "large"), false, "no trial at large");
-  assert.equal(trialHolds({ ...policy, uiTrial: false }, config, ["src/app/a.tsx"], "standard"), false, "off when the pin has none");
-  assert.equal(trialHolds(policy, config, [], "standard"), false, "nothing changed yet");
+  const at = { root: onDisk({ "src/app/a.tsx": "export default () => null;\n", "src/app/a.css": "a {}\n" }) };
+  assert.equal(trialHolds(policy, config, ["src/app/a.tsx", "src/app/a.css"], "standard", at), true);
+  assert.equal(trialHolds(policy, config, ["src/app/a.tsx"], "large", at), false, "no trial at large");
+  assert.equal(trialHolds({ ...policy, uiTrial: false }, config, ["src/app/a.tsx"], "standard", at), false, "off when the pin has none");
+  assert.equal(trialHolds(policy, config, [], "standard", at), false, "nothing changed yet");
+});
+
+// The UI trial reads a script file in a server-component repo: only a 'use client' prologue is UI
+function onDisk(files) {
+  const root = mkdtempSync(path.join(os.tmpdir(), "dg-trial-"));
+  for (const [rel, content] of Object.entries(files)) write(root, rel, content);
+  return root;
+}
+const NEXT = JSON.stringify({ name: "web", scripts: { lint: "true", test: "true", build: "true" }, dependencies: { next: "15.0.0", react: "19.0.0" } });
+const VITE = JSON.stringify({ name: "web", dependencies: { react: "19.0.0" }, devDependencies: { vite: "6.0.0" } });
+const CLIENT = '"use client";\nimport { useState } from "react";\nexport default function B() { return null; }\n';
+const SERVER = 'import { db } from "../db";\nexport default async function Page() { return await db.query(process.env.SECRET); }\n';
+
+async function holds(files, changed, { repos } = {}) {
+  const { trialHolds, loadPolicy } = await import("../scripts/lib/size.mjs");
+  const root = onDisk(files);
+  const config = loadConfig(root, []);
+  const policy = { ...loadPolicy(), uiTrial: true };
+  try {
+    return trialHolds(policy, config, changed, "standard", { root, repos: repos?.(root) ?? [] });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+const prologue = (text) => holds({ "package.json": NEXT, "src/app/page.tsx": text }, ["src/app/page.tsx"]);
+
+function nextTrialRun(name, page) {
+  const t = trialRun(name, { files: { "package.json": NEXT, "src/app/page.tsx": "export default () => null;\n" } });
+  write(t.repo, "src/app/page.tsx", page);
+  return t;
+}
+
+test("6.9 T7 happy (C1): in a Next repo a 'use client' .tsx and a .css keep the trial, review N/A is accepted", () => {
+  const { run, r5 } = nextTrialRun("sp-69-t7", CLIENT);
+  const r = run("step", "review", "na", REASON);
+  assert.doesNotMatch(r.stderr, /^done-gate: /m, r.stderr);
+  assert.equal(r5(), "");
+});
+
+test("6.9 T8 refused (C2): in a Next repo a .tsx with no directive is a server component, review N/A is refused", () => {
+  const { run, r5 } = nextTrialRun("sp-69-t8", SERVER);
+  assert.match(run("step", "review", "na", REASON).stderr, /UI trial[\s\S]*use client/);
+  assert.match(r5(), /R5/);
+});
+
+test("6.9 T9 idempotent (C9): dropping the directive after the trial's N/A brings R5 back", () => {
+  const { repo, run, r5 } = nextTrialRun("sp-69-t9", CLIENT);
+  run("step", "review", "na", REASON);
+  assert.equal(r5(), "");
+  write(repo, "src/app/page.tsx", SERVER);
+  assert.match(r5(), /R5/, "the file became a server component");
+});
+
+test("6.9 T10 refused (C3): 'use server' ends the trial, with or without 'use client'", async () => {
+  assert.equal(await prologue('"use server";\nexport async function save() {}\n'), false);
+  assert.equal(await prologue('"use client";\n"use server";\nexport async function save() {}\n'), false);
+  assert.equal(await prologue('"use server";\n"use client";\nexport default () => null;\n'), false);
+});
+
+test("6.9 T11 edge (C4): the directive after comments, a BOM, a hashbang, 'use strict', single quotes or no semicolon still counts", async () => {
+  assert.equal(await prologue(CLIENT), true, "anchor: the plain form");
+  assert.equal(await prologue("/**\n * Copyright 2026 Someone.\n * Licensed MIT.\n */\n// the button\n'use client'\nexport default () => null;\n"), true);
+  assert.equal(await prologue("\uFEFF\"use client\"\nexport default () => null;\n"), true);
+  assert.equal(await prologue("#!/usr/bin/env node\n\"use client\";\nexport default () => null;\n"), true);
+  assert.equal(await prologue("'use strict';\n'use client';\nexport default () => null;\n"), true);
+  assert.equal(await prologue('"use client" /* why */ ;\nexport default () => null;\n'), true);
+  assert.equal(await prologue('"use client"\r\nexport default () => null;\r\n'), true);
+});
+
+test("6.9 T12 boundary (C5): a 'use client' outside the prologue, or not a directive statement, does not count", async () => {
+  assert.equal(await prologue('import x from "y";\n"use client";\nexport default () => x;\n'), false, "after an import");
+  assert.equal(await prologue('export const label = "use client";\n'), false, "inside a later string");
+  assert.equal(await prologue('// "use client"\nexport default () => null;\n'), false, "inside a comment");
+  assert.equal(await prologue('("use client");\nexport default () => null;\n'), false, "parenthesised");
+  assert.equal(await prologue('"use client" + x;\nexport default () => null;\n'), false, "an expression");
+  assert.equal(await prologue('"use client"\n+ x;\nexport default () => null;\n'), false, "an expression over two lines");
+  assert.equal(await prologue("`use client`;\nexport default () => null;\n"), false, "a template literal");
+  assert.equal(await prologue('"use clientx";\nexport default () => null;\n'), false, "another directive");
+  assert.equal(await prologue(""), false, "an empty file");
+});
+
+test("6.9 T13 edge (C6): a deleted .tsx does not keep the trial", async () => {
+  assert.equal(await holds({ "package.json": NEXT }, ["src/app/gone.tsx"]), false, "in a Next repo");
+  assert.equal(await holds({ "package.json": VITE }, ["src/app/gone.tsx"]), false, "in a Vite repo");
+  assert.equal(await holds({ "package.json": VITE }, ["src/app/gone.css"]), true, "a deleted stylesheet still holds it");
+});
+
+test("6.9 T14 boundary (C7): stylesheets, .vue and .svelte keep the trial by name; .server.vue and .astro do not", async () => {
+  const files = { "package.json": NEXT, "src/a.css": "a {}\n", "src/b.scss": "b {}\n", "src/C.vue": "<template><p/></template>\n", "src/D.svelte": "<p/>\n" };
+  assert.equal(await holds(files, ["src/a.css", "src/b.scss", "src/C.vue", "src/D.svelte"]), true);
+  const ui = { "package.json": VITE, ".claude/gate.json": JSON.stringify({ ui: ["**/*.{tsx,vue,svelte,astro}"] }) };
+  assert.equal(await holds({ ...ui, "src/Card.server.vue": "<template><p/></template>\n" }, ["src/Card.server.vue"]), false, "a Nuxt server component");
+  assert.equal(await holds({ ...ui, "src/pages/index.astro": "---\nconst rows = await db();\n---\n<p/>\n" }, ["src/pages/index.astro"]), false, "an .astro page");
+  assert.equal(await holds({ ...ui, "src/App.TSX": "export default () => null;\n" }, ["src/App.TSX"]), IGNORE_CASE, "the extension ignores case where config does");
+});
+
+test("6.9 T15 happy (C10): in a repo with no server-component framework a .tsx with no directive keeps the trial", async () => {
+  assert.equal(await holds({ "package.json": VITE, "src/App.tsx": "export default () => null;\n" }, ["src/App.tsx"]), true);
+  assert.equal(await holds({ "src/App.tsx": "export default () => null;\n" }, ["src/App.tsx"]), true, "no package.json at all");
+});
+
+test("6.9 T16 boundary (C11): each server-component framework, a monorepo app and a broken package.json require the directive", async () => {
+  const page = { "src/app/page.tsx": SERVER };
+  for (const deps of [{ devDependencies: { next: "15" } }, { dependencies: { "@remix-run/react": "2" } }, { dependencies: { "@react-router/dev": "7" } }, { dependencies: { "@tanstack/react-start": "1" } }, { dependencies: { waku: "0.21" } }]) {
+    assert.equal(await holds({ ...page, "package.json": JSON.stringify(deps) }, ["src/app/page.tsx"]), false, JSON.stringify(deps));
+    assert.equal(await holds({ "src/app/page.tsx": CLIENT, "package.json": JSON.stringify(deps) }, ["src/app/page.tsx"]), true, `anchor: ${JSON.stringify(deps)}`);
+  }
+  const mono = { "package.json": VITE, "apps/web/package.json": NEXT, "apps/web/app/page.tsx": SERVER, "apps/ui/package.json": VITE, "apps/ui/src/B.tsx": SERVER };
+  assert.equal(await holds(mono, ["apps/web/app/page.tsx"]), false, "the app's own package.json lists next");
+  assert.equal(await holds(mono, ["apps/ui/src/B.tsx"]), true, "a sibling app without a framework");
+  assert.equal(await holds({ ...page, "package.json": "{ not json" }, ["src/app/page.tsx"]), false, "a broken package.json");
+  const nested = { "package.json": NEXT, "src/app/ui/package.json": JSON.stringify({ type: "module" }), "src/app/ui/Page.tsx": SERVER };
+  assert.equal(await holds(nested, ["src/app/ui/Page.tsx"]), false, "a nested package.json with no framework does not hide the app's next");
+  assert.equal(await holds({ ...page, "package.json": JSON.stringify({ peerDependencies: { next: "15" } }) }, ["src/app/page.tsx"]), false, "next as a peer dependency");
+});
+
+test("6.9 T17 refused (C12): *.server.* and +server.* lose the trial in any repo, even with 'use client'", async () => {
+  const ui = { "package.json": VITE, ".claude/gate.json": JSON.stringify({ ui: ["**/*.{ts,tsx,vue,svelte}"] }) };
+  assert.equal(await holds({ ...ui, "src/app/page.server.tsx": CLIENT }, ["src/app/page.server.tsx"]), false);
+  assert.equal(await holds({ ...ui, "src/routes/+server.ts": CLIENT }, ["src/routes/+server.ts"]), false);
+  assert.equal(await holds({ ...ui, "src/routes/+page.server.ts": "export const load = () => ({});\n" }, ["src/routes/+page.server.ts"]), false);
+  assert.equal(await holds({ ...ui, "src/routes/server.tsx": "export default () => null;\n" }, ["src/routes/server.tsx"]), true, "anchor: a file merely named server");
+});
+
+test("6.9 T18 boundary (C13): a 'use client' past the first 4096 bytes does not count", async () => {
+  const header = (n) => `/*${"x".repeat(n)}*/\n`;
+  assert.equal(await prologue(`${header(3000)}"use client";\nexport default () => null;\n`), true, "anchor: inside the window");
+  assert.equal(await prologue(`${header(5000)}"use client";\nexport default () => null;\n`), false);
+});
+
+test("6.9 T19 edge (C8): a sibling-repo file is read from its own repo, with its own package.json", async () => {
+  const files = { "package.json": VITE, "web/package.json": NEXT, "web/app/page.tsx": SERVER, "web/app/ok.tsx": CLIENT };
+  const repos = (root) => [{ prefix: "site", root: path.join(root, "web") }];
+  assert.equal(await holds(files, ["site/app/page.tsx"], { repos }), false);
+  assert.equal(await holds(files, ["site/app/ok.tsx"], { repos }), true);
 });

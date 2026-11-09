@@ -335,7 +335,7 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
     if (lapseWaivers(current.ledger, implementationHash(now, config))) flipped = true;
     if (tiered(current.ledger)) {
       const measured = measure({ config, policy, diff, baseline, now, root: ctx.root, dir: current.dir, repos });
-      const trial = trialHolds(policy, config, diff.changed, effectiveTier(policy, current.ledger, measured));
+      const trial = trialHolds(policy, config, diff.changed, effectiveTier(policy, current.ledger, measured), { root: ctx.root, repos });
       if (reconcileTier(current.ledger, policy, measured, { trial }).length) flipped = true;
       // a new measured size is kept: a later re-prediction reads it
       if (current.ledger.tier?.measured?.tier !== measured.tier) flipped = true;

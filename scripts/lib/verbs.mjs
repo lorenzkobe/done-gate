@@ -673,7 +673,7 @@ export const verbs = {
         const policy = policyFor(ledger);
         const size = effectiveTier(policy, ledger, gateState.tier?.measured ?? tierOf(ledger).measured);
         const owed = (gateState.changed ?? []).some((p) => gateState.config.isSource(p) && !gateState.config.isTest(p)) && requires(policy, size).includes("reviewer");
-        if (owed && !uiTrial(gateState)) throw new UsageError(`step {review} cannot be N/A at size ${size}: the review is owed. Only the UI trial skips it, for a looks-only change where every changed file is UI or a stylesheet and none is server, API, schema or high-risk code; otherwise run the review, or get the user's waiver with \`gate waive review "<reason>" --user-ok "<their words>"\``);
+        if (owed && !uiTrial(gateState)) throw new UsageError(`step {review} cannot be N/A at size ${size}: the review is owed. Only the UI trial skips it, for a looks-only change where every changed file is a stylesheet, a .vue or .svelte component or a script component (in a Next, Remix, React Router, TanStack Start or Waku repo one that opens with "use client"), none is named *.server.* or +server.*, and none is API, schema or high-risk code; otherwise run the review, or get the user's waiver with \`gate waive review "<reason>" --user-ok "<their words>"\``);
         if (owed) step.trial = true;
       }
       if (state === "N/A" && newRules(ledger) && SURFACE_KEYS.has(step.key)) {
