@@ -3,6 +3,7 @@ import path from "node:path";
 import { assess, unmetCount } from "./assess.mjs";
 import { ensureSession, loadSession, updateSession } from "./session-state.mjs";
 import { recordGateError, sessionUnderParent, UsageError } from "./context.mjs";
+import { nextSeq } from "./events.mjs";
 import { attachLedger, currentLedger, isDone, loadLedger, openRuns, runsDir, saveLedger, staleForeign } from "./ledger.mjs";
 import { leftBehind } from "./diagnose.mjs";
 import { writeReport } from "./verbs.mjs";
@@ -54,6 +55,8 @@ export const verbs = {
     if (ctx.input?.agent_id) return; // subagents get no mandate and no snapshot
     if (!ctx.session) return;
     ensureSession(ctx.stateDir, ctx.root, ctx.session);
+    // a restart (startup, resume) ends the session's background commands; a clear or compact does not
+    if (["startup", "resume"].includes(ctx.input?.source ?? ctx.input?.session_start_source)) updateSession(ctx.stateDir, ctx.session, { restartSeq: nextSeq() });
     try {
       mkdirSync(ctx.stateDir, { recursive: true });
       writeFileSync(path.join(ctx.stateDir, "current-session"), ctx.session);

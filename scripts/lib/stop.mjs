@@ -1,6 +1,6 @@
 import { assess, LedgerParseError, unmetLines } from "./assess.mjs";
 import { recordGateError } from "./context.mjs";
-import { appendEvents, nextSeq } from "./events.mjs";
+import { appendEvents, backgroundItems, backgroundLine, backgroundOpen, nextSeq } from "./events.mjs";
 import { loadLedger, saveLedger } from "./ledger.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { HELPER_MAX_MS, helperAlive, NOT_THE_USER, unfinishedVerify } from "./rules.mjs";
@@ -39,6 +39,15 @@ function bumpBlocks(ctx, key, opts = {}) {
 function clearBlocks(ctx) {
   const session = loadSession(ctx.stateDir, ctx.session);
   if (session?.blocks?.count) saveSession(ctx.stateDir, { ...session, blocks: { key: null, count: 0 } });
+}
+
+// A turn that ends unblocked names what the run left running in the background: advice only.
+function endQuietly(ctx, state) {
+  clearBlocks(ctx);
+  if (!state.ledger) return;
+  const restart = loadSession(ctx.stateDir, ctx.session)?.restartSeq ?? 0;
+  const line = backgroundLine(backgroundItems(backgroundOpen(state.events ?? [], ctx.session, state.ledger.openedSeq ?? 0, restart)));
+  if (line) ctx.out({ systemMessage: line });
 }
 
 // An agent this session started since the user's last prompt and that has not stopped: a
@@ -103,26 +112,26 @@ export const verbs = {
         ledger.pauses.push(entry);
         saveLedger(state.dir, ledger);
       } else appendEvents(ctx.stateDir, ctx.session, [{ ...entry, agent: null, agentType: null, kind: "pause" }]);
-      clearBlocks(ctx);
+      endQuietly(ctx, state);
       return;
     }
 
     // a helper this session spawned is still running: the turn ends so the helper's
     // hand-back can wake the lead; nothing is finalised
     if (ledgerOpen && helperRunning(state.events ?? [], ctx.session)) {
-      clearBlocks(ctx);
+      endQuietly(ctx, state);
       return;
     }
     // so does a gate verify this session started that still runs (in the background, its exit
     // wakes the lead); another session's verify, or one running past the helper limit, does not
     const started = state.verifyStarted;
     if (ledgerOpen && started?.session === ctx.session && unfinishedVerify(state)?.running && Date.now() - Date.parse(started.startedAt) < HELPER_MAX_MS) {
-      clearBlocks(ctx);
+      endQuietly(ctx, state);
       return;
     }
 
     if (unmet.length === 0) {
-      clearBlocks(ctx);
+      endQuietly(ctx, state);
       return;
     }
 
@@ -137,7 +146,7 @@ export const verbs = {
       }
       // the emergency brake is the gate working as designed, not a gate error: it goes to the event log
       appendEvents(ctx.stateDir, ctx.session, [{ seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, agent: null, agentType: null, kind: "override", blocks: count, rules: unmet.map((u) => u.rule) }]);
-      clearBlocks(ctx);
+      endQuietly(ctx, state);
       return;
     }
     const reason = asks && count < ASK_AFTER ? QUESTION_REASON : renderReason(unmet, { ledgerOpen, repeat: listed, stuck: count >= ASK_AFTER ? count : 0 });

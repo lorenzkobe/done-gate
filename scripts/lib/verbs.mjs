@@ -15,7 +15,7 @@ import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
 import { weakened } from "./slop.mjs";
 import { pointerFile } from "./verify.mjs";
 import { endStanding, waiveStanding } from "./standing.mjs";
-import { appendEvents, readEvents } from "./events.mjs";
+import { appendEvents, backgroundItems, backgroundLine, backgroundOpen, readEvents } from "./events.mjs";
 
 // A reviewer's finding closed unfixed: on a run that shows it wrong, or on the user's words. A
 // dispute still waiting is the reviewer's to answer; an upheld one is the user's call.
@@ -68,8 +68,11 @@ function finalise(ctx, state) {
   ledger.afterReview = afterReview(state);
   if (reviewTrialed(state)) ledger.uiTrial = true;
   if (state.tier) ledger.tier = state.tier;
-  saveLedger(state.dir, ledger);
   const session = loadSession(ctx.stateDir, ctx.session);
+  // saved, so a later rebuild of the report says what close saw
+  const running = backgroundItems(backgroundOpen(state.events ?? [], ctx.session, ledger.openedSeq ?? 0, session?.restartSeq ?? 0));
+  if (running.length) ledger.backgroundAtClose = running;
+  saveLedger(state.dir, ledger);
   // a declared repo's files end with the run: session state holds main-root keys only
   const main = withoutRepos(state.now, state.repos);
   saveSession(ctx.stateDir, { ...session, current: null, lastClosed: path.basename(state.dir), baseline: { ...main, head: gitHead(ctx.root) }, foreignHead: null, lastTree: main, baselineSeq: nextSeq(), runEndSeq: nextSeq() });
@@ -1155,6 +1158,7 @@ export const verbs = {
     }
     const ledger = finalise(ctx, state);
     ctx.out(`${ledger.slug} closed`);
+    if (ledger.backgroundAtClose) ctx.out(backgroundLine(ledger.backgroundAtClose));
     ctx.out("next: `gate report --brief`, pasted as your final message");
   },
 };

@@ -81,7 +81,8 @@ export function eventsFromHookInput(input, root, repos = []) {
     const handback = HANDBACK.test(text);
     // the helper it names sits inside notice, not as the event's agent: the prompt stays the lead's
     const notice = handback ? helperNotice(text) : null;
-    return [{ ...b(), kind: "prompt", text: text.slice(0, WORDS_LIMIT), ...(handback ? { handback: true } : {}), ...(notice ? { notice } : {}) }];
+    const ended = handback ? taskEnded(text) : null;
+    return [{ ...b(), kind: "prompt", text: text.slice(0, WORDS_LIMIT), ...(handback ? { handback: true } : {}), ...(notice ? { notice } : {}), ...(ended ? { ended } : {}) }];
   }
   // an API error ended the lead's turn: Claude Code runs this instead of Stop and ignores its output
   if (event === "StopFailure") {
@@ -117,7 +118,12 @@ export function eventsFromHookInput(input, root, repos = []) {
     const readOnly = readsOnly(cmd);
     const own = ownEdits(input, cmd, root, b);
     const scratch = !readOnly && (own.length > 0 || scratchOnly(cmd));
-    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...toolUse(input), ...(background ? { background: true } : {}), ...(git ? { git: true, commits: !gitMoves(cmd), ...reflogField(root) } : {}), ...(readOnly ? { readOnly: true } : {}), ...(runsInline(cmd) ? { runs: true } : {}), ...(scratch ? { scratch: true } : {}) }, ...own];
+    const task = background ? backgroundTask(input.tool_response) : null;
+    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...toolUse(input), ...(background ? { background: true } : {}), ...(task ? { task } : {}), ...(git ? { git: true, commits: !gitMoves(cmd), ...reflogField(root) } : {}), ...(readOnly ? { readOnly: true } : {}), ...(runsInline(cmd) ? { runs: true } : {}), ...(scratch ? { scratch: true } : {}) }, ...own];
+  }
+  if (STOP_TOOLS.has(tool)) {
+    const task = input.tool_input?.task_id ?? input.tool_input?.shell_id;
+    return typeof task === "string" && task ? [{ ...b(), kind: "task-stop", tool, task }] : [];
   }
   if (tool === "Agent" || tool === "Task") {
     return [{ ...b(), kind: "agent", tool, spawned: input.tool_input?.subagent_type ?? null }];
@@ -247,6 +253,41 @@ function helperNotice(text) {
   if (!found) return null;
   return { agent: /<task-id>\s*([^<\s]+)\s*<\/task-id>/.exec(text)?.[1] ?? null, ...found };
 }
+
+// A background Bash call's task id: Claude Code returns it, and prints it in the call's output.
+function backgroundTask(response) {
+  if (typeof response?.backgroundTaskId === "string" && response.backgroundTaskId) return response.backgroundTaskId;
+  return /running in background with ID: (\w+)/.exec(String(response?.stdout ?? ""))?.[1] ?? null;
+}
+
+// Any task-notification with a status ends the task it names, a helper's or a background command's.
+function taskEnded(text) {
+  if (!NOTICE_START.test(text)) return null;
+  const status = /<status>\s*([^<\s]+)\s*<\/status>/.exec(text)?.[1];
+  const task = /<task-id>\s*([^<\s]+)\s*<\/task-id>/.exec(text)?.[1];
+  const use = /<tool-use-id>\s*([^<\s]+)\s*<\/tool-use-id>/.exec(text)?.[1];
+  return status && (task || use) ? { ...(task ? { task } : {}), ...(use ? { toolUse: use } : {}), status } : null;
+}
+
+const STOP_TOOLS = new Set(["TaskStop", "KillShell", "KillBash"]);
+// What the lead started in the background in this session after sinceSeq, since its last restart
+// (the session's restartSeq), and no notice or stop has ended. A server stopped with pkill sends
+// nothing, so the gate can only say it may still run.
+export function backgroundOpen(events, session, sinceSeq, restart = 0) {
+  const mine = events.filter((e) => e.session === session);
+  const ended = new Set(mine.flatMap((e) => (e.kind === "task-stop" ? [e.task] : e.ended ? [e.ended.task, e.ended.toolUse] : [])).filter(Boolean));
+  return mine.filter((e) => e.kind === "command" && e.background && e.task && !e.agent && e.seq > Math.max(sinceSeq, restart) && !ended.has(e.task) && !(e.toolUseId && ended.has(e.toolUseId)));
+}
+
+const shortCmd = (cmd) => {
+  const first = String(cmd ?? "").split("\n")[0].trim();
+  return first.length > 60 ? `${first.slice(0, 59)}…` : first;
+};
+export const backgroundItems = (open, now = Date.now()) => open.map((e) => ({ cmd: shortCmd(e.cmd), minutes: Math.max(0, Math.floor((now - Date.parse(e.ts)) / 60000)) }));
+export const backgroundText = (items) => `${items.map((i) => `\`${i.cmd}\` (${i.minutes} min)`).join(", ")}`;
+export const backgroundLine = (items) => (items.length
+  ? `done-gate: may still be running in the background from this run: ${backgroundText(items)}. The session wakes when one ends; one that never ends, like a dev server, wakes nothing: stop it, or tell the user it runs.`
+  : null);
 
 const SILENT = { continue: true, suppressOutput: true };
 

@@ -6,7 +6,7 @@ import { weakened } from "./slop.mjs";
 import { loadLedger, runsDir, section } from "./ledger.mjs";
 import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
-import { readEvents } from "./events.mjs";
+import { backgroundText, readEvents } from "./events.mjs";
 import { delegatedTier, effectiveTier, policyFor, renderTierBlock, requires, splitAdvice, tiered, tierOf } from "./size.mjs";
 import { afterReview, reviewTrialed, clickStale, contextPart, drivenAfter, driverCommand, isRole, lastEditSeq, hasContextStep, lateOrder, timeoutText, tracedPointers, verifyWhere } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
@@ -476,6 +476,7 @@ const FOR_YOU_MAX = 6;
 function forYouLine(state, unmet) {
   const { ledger } = state;
   const items = [];
+  if (ledger.backgroundAtClose?.length) items.push(`may still be running in the background: ${backgroundText(state.ledger.backgroundAtClose)}`);
   const thinner = weakenedIn(state);
   if (thinner.length) items.push(`tests weakened: ${thinner.slice(0, 3).map(plain).join(", ")}${thinner.length > 3 ? `, and ${thinner.length - 3} more` : ""}`);
   const said = (w) => (w.words ? ` (you said: "${w.words}")` : "");
