@@ -257,3 +257,25 @@ test("C12 reported-surface: the report marks a step the gate closed", () => {
   const line = cli(repo, "report").split("\n").find((l) => /Implement/.test(l) && /\*\*ran\*\*/.test(l));
   assert.match(line ?? "", /by the gate/, line);
 });
+
+test("F5 C1 reported-surface: a test run that worked closes the tests step as passed, not exit unknown", () => {
+  for (const [name, response] of [["sff-f5a", {}], ["sff-f5b", { exit_code: 0 }]]) {
+    const repo = planned(name);
+    edited(repo, "tests/a.test.ts", "test('a0 is 2', () => {});\n", PAST());
+    hook(repo, { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "npm test -- tests/a.test.ts" }, tool_response: response });
+    cli(repo, "check");
+    assert.match(stepOf(repo, "tests").note, /ran by `npm test -- tests\/a\.test\.ts` passed/, name);
+    assert.doesNotMatch(stepOf(repo, "tests").note, /unknown/, name);
+  }
+});
+
+test("F5 C2 reported-surface: an old run's waiver hints drop --user-ok; a new run's keep it", () => {
+  const old = planned("sff-f5-old", "src/a.ts,src/b.ts", { old: true });
+  edited(old, "src/a.ts", "export const a = 2;\n");
+  const oldCheck = cli(old, "check");
+  assert.match(oldCheck, /gate waive tests "<reason>"`/);
+  assert.doesNotMatch(oldCheck, /gate waive [^`]*--user-ok/);
+  const fresh = planned("sff-f5-new");
+  edited(fresh, "src/a.ts", "export const a = 2;\n");
+  assert.match(cli(fresh, "check"), /gate waive \w[\w-]* "<reason>" --user-ok "<their words>"/);
+});

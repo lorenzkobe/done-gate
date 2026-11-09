@@ -1371,7 +1371,8 @@ export function settleSteps(state) {
     const since = wrote ? Date.parse(wrote.ts) : Math.min(...tests.map((p) => now.files[p].m ?? Infinity));
     const after = (e) => (wrote ? e.seq > wrote.seq : Date.parse(e.ts) > since);
     const run = events.find((e) => e.kind === "command" && !e.background && e.seq < codeAt && after(e) && (runsTests(e.cmd ?? "", config.testFiles) || GATE_TEST.test(e.cmd ?? "")));
-    if (run) close("tests", `${list(tests)} ran by \`${ranText(run).slice(0, 80)}\` exit ${run.exit ?? "unknown"}`, `events#${run.seq}`);
+    // Claude Code sends an exit code only when a command fails: none means it worked
+    if (run) close("tests", `${list(tests)} ran by \`${ranText(run).slice(0, 80)}\` ${(run.exit ?? 0) === 0 ? "passed" : `exit ${run.exit}`}`, `events#${run.seq}`);
     else if (codeAt === Infinity && verify && Date.parse(verify.finishedAt) > since && (verify.commands ?? []).some((c) => !c.skipped && runsTests(c.cmd, config.testFiles))) close("tests", `gate verify ran the tests after ${list(tests)}`, "verify.json");
   }
 
@@ -1610,5 +1611,7 @@ export function evaluate(state) {
     unmet.push({ rule: "R15", text: `the ${role} stopped before finishing ${f}: resume it with SendMessage, or \`gate brief ${role}${again}\` and spawn a fresh one, its packet continues from the file; \`gate diagnose\` says which.` });
   }
 
+  // a run from before the new rules takes a waiver without the user's words
+  if (!newRules(ledger)) for (const u of unmet) u.text = u.text.replace(/(`gate waive [^`]*?) --user-ok "<their words>"/g, "$1");
   return unmet;
 }
