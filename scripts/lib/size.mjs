@@ -91,7 +91,7 @@ export function loadPolicy(file = path.join(pluginRoot, "models.json")) {
 }
 
 // The policy a task is judged by: the one pinned into its ledger at open, so a plugin
-// upgrade mid-task changes nothing for it; models.json for a ledger from before pinning.
+// upgrade mid-task changes nothing for it; models.json when no run is open.
 export function policyFor(ledger) {
   // the pin is re-merged, so a field this version added is backfilled from the defaults
   return ledger?.policy?.tiers ? merge({ policy: ledger.policy }) : loadPolicy();

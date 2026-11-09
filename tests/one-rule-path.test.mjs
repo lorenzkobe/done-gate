@@ -47,7 +47,11 @@ function stamped(repo, rules) {
 
 test("C1 happy: a run this copy opens is stamped 2 and asks for the user's words to waive a step", () => {
   const repo = opened("orp-c1");
-  assert.equal(JSON.parse(readFileSync(ledgerFile(repo), "utf8")).rules, 2);
+  const ledger = JSON.parse(readFileSync(ledgerFile(repo), "utf8"));
+  assert.equal(ledger.rules, 2);
+  // still written, so 0.21.0 reading a run this copy opened judges it by the same rules
+  assert.equal(ledger.lookups, true);
+  assert.match(ledger.policyHash, /^[0-9a-f]{40}$/);
   const r = run(repo, "waive", ["driver", "no time"]);
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /--user-ok/);

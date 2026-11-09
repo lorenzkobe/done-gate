@@ -463,20 +463,35 @@ test("C14 edge: a kind the lead declared missing exempts every helper for that k
   assert.match(err, /memory/i, `a skeptic with no memory lookup is not named for memory:\n${err}`);
 });
 
-test("C15 boundary: a ledger opened without the lookups stamp (an older run) is not checked at note context or by R17", () => {
+test("C15b boundary: a run whose lookups key is missing still holds helpers to their searches (huddle add, R17) and refuses a hand close of context", () => {
+  const repo = opened("srch-c15b");
+  const ledger = ledgerOf(repo);
+  delete ledger.lookups;
+  writeFileSync(ledgerPath(repo), JSON.stringify(ledger, null, 2));
+  assert.match(refused(repo, "step", ["context", "done", "traced it", "--evidence", "src/a.ts:1"]), /gate note context/);
+  lookedUp(repo);
+  cli(repo, "note", ["context", CONTEXT]);
+  cli(repo, "note", ["plan", "The plan.", "--files", "src/a.ts,src/app/page.tsx"]);
+  shellWrite(repo, "src/a.ts", "export const a = 2;\n");
+  start(repo, "R1", "reviewer");
+  helperWrites(repo, "R1", "reviewer", "review-1.md", reviewFile(1, "srch-c15b"));
+  stop(repo, "R1", "reviewer");
+  assert.match(refused(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]), /without searching first/);
+  assert.notDeepEqual(r17(repo), []);
+});
+
+test("C15 boundary: a run whose lookups key is missing is still checked: note context with no lead lookups is refused, and the packet keeps its Lookups section", () => {
   const repo = opened("srch-c15");
   const ledger = ledgerOf(repo);
   assert.equal(ledger.lookups, true, "premise: gate open stamps lookups: true");
   delete ledger.lookups;
   writeFileSync(ledgerPath(repo), JSON.stringify(ledger, null, 2));
+  assert.match(refused(repo, "note", ["context", CONTEXT]), /search/i);
+  lookedUp(repo);
   cli(repo, "note", ["context", CONTEXT]);
   cli(repo, "note", ["plan", "The plan.", "--files", "src/a.ts,src/app/page.tsx"]);
-  shellWrite(repo, "src/a.ts", "export const a = 2;\n");
-  start(repo, "R1", "reviewer");
-  helperWrites(repo, "R1", "reviewer", "review-1.md", reviewFile(1, "srch-c15"));
-  stop(repo, "R1", "reviewer");
-  cli(repo, "huddle", ["add", "reviewer", "--file", "review-1.md"]);
-  assert.deepEqual(r17(repo), []);
+  const out = cli(repo, "brief", ["skeptic"]);
+  assert.match(readFileSync(/packet: (\S+)/.exec(out)[1], "utf8"), /^## Lookups$/m);
 });
 
 test("C17 happy: helper packets carry a Lookups section naming the tools the lead used, or the declared gap", () => {

@@ -917,7 +917,7 @@ test("C30 boundary: a non-ASCII path dirty at open is recorded verbatim and meas
 // C31
 // ---------------------------------------------------------------------------
 
-test("C31 refused: the policy is hashed, and a policy that changed since the ledger opened blocks under R13", () => {
+test("C31 edge: the policy is hashed; a run pins it, so a stale hash alone raises no R13 and a changed gate.json still does", () => {
   const real = loadPolicy();
   assert.match(real.hash, /^[0-9a-f]{40}$/);
 
@@ -951,9 +951,11 @@ test("C31 refused: the policy is hashed, and a policy that changed since the led
   const fresh = evaluate(state()).filter((u) => u.rule === "R13");
   assert.deepEqual(fresh, [], "a matching policy hash does not block");
 
-  const stale = evaluate(state({ policyHash: "other" })).filter((u) => u.rule === "R13");
-  assert.equal(stale.length, 1, JSON.stringify(evaluate(state({ policyHash: "other" }))));
-  assert.match(stale[0].text, /models\.json/);
+  // every open run pins its policy at open, so a hash alone is never judged
+  assert.deepEqual(evaluate(state({ policyHash: "other" })).filter((u) => u.rule === "R13"), [], "a stale hash with no pin raised R13");
+  const config = evaluate(state({ gateHash: "other" })).filter((u) => u.rule === "R13");
+  assert.equal(config.length, 1);
+  assert.match(config[0].text, /\.claude\/gate\.json changed/);
 });
 
 // ---------------------------------------------------------------------------
@@ -1662,7 +1664,6 @@ test("C3 boundary: an old ledger.json carrying blast rows, a {blast} step and ti
     },
   ];
   stepOf(old, "skeptic").state = null; // reopened by the old R14 plumbing
-  delete old.lookups; // stamped from 0.16.0 on
   old.tier = { ...old.tier, reopened: ["skeptic"] };
   writeLedger(repo, old);
 
@@ -1703,7 +1704,9 @@ test("C3 boundary: an old ledger.json carrying blast rows, a {blast} step and ti
     }
   }
 
-  // And it closes.
+  // And it closes. Context closes only through gate note context, after the lead searched.
+  lookedUp(repo);
+  cli(repo, "note", ["context", "Traced: src/a.ts:1 · Related: none: `grep -rn a src` · Research: none needed: a test fixture"]);
   for (const s of ledgerOf(repo).steps) {
     if (!s.state && s.key !== "close") cli(repo, "step", [String(s.n), "na", "carried-over run, nothing to do"]);
   }

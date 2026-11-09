@@ -122,7 +122,7 @@ function header(state, role, round) {
   out.push("## Plan", "", section(md, "Plan") || "_not written_", "");
   if (ledger.planAdds?.length) out.push("## Plan additions", "", ...ledger.planAdds.map((a) => `- ${a.files.join(", ")} — ${a.why}`), "");
   out.push("## Context", "", section(md, "Context") || "_not written_", "");
-  if (ledger.lookups) out.push("## Lookups", "", ...lookupLines(state, role), "");
+  out.push("## Lookups", "", ...lookupLines(state, role), "");
   out.push("## Cases", "", ...caseTable(ledger, lastEditSeq(state, state.config, ledger)), "");
   if (role === "worker") out.push("## Tier", "", ...renderTierBlock(ledger, state.policy, state.tier?.measured ?? null), "");
   if (role === "qa" || role === "worker") out.push("## Tests", "", `globs: ${testGlobs(state)}`, `framework: ${detectFramework(state.root)}`, "");

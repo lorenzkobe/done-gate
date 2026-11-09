@@ -119,7 +119,6 @@ export function positional(args) {
 
 // A helper file is recorded only when every helper that wrote it searched first.
 function refuseSkipped(ctx, dir, ledger, file) {
-  if (!ledger.lookups) return;
   const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
   const skipped = skippedLookups({ ledger, dir, root: ctx.root, events }, file);
   if (skipped.length) throw new UsageError(`${file} was written by ${skipped.map(skippedText).join(", ")} without searching first; nothing recorded. Send it back (SendMessage) to search, e.g. ${LOOKUP_KINDS.map((k) => LOOKUP_EXAMPLE[k]).join(" and ")}, and recheck its file.`);
@@ -249,7 +248,6 @@ function checkLookups(ctx, ledger, rest) {
     if (!why?.trim() || why.startsWith("--")) throw new UsageError(`${name} needs the tool and why, e.g. ${name} "<tool>: not installed" or "<tool>: not indexed"`);
     declared[kind] = why.trim();
   }
-  if (!ledger.lookups) return declared;
   const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
   const found = leadLookups(ledger, events);
   // a skipped search is the user's call, told what is set up: a tool that is set up and was not
@@ -664,7 +662,7 @@ export const verbs = {
       if (state === "SKIPPED" && step.key && EVIDENCED_KEYS.has(step.key)) {
         throw new UsageError(`step {${step.key}} has script/agent evidence and cannot be SKIPPED — ${Object.hasOwn(NO_WAIVER, step.key) ? `it has no waiver either. ${NO_WAIVER[step.key]}.` : step.key === "tests" ? 'write them; `gate step tests na "<why>"` when this change holds no code (config, lockfile, CSS, images, docs). A code change with no test has no waiver' : `do it, or get the user's waiver with \`gate waive ${step.key} "<reason>" --user-ok "<their words>"\``}`);
       }
-      if (step.key === "context" && ledger.lookups) throw new UsageError('step {context} is closed by `gate note context "Traced: … · Related: … · Research: …"` after you search the code and memory yourself; run that instead.');
+      if (step.key === "context") throw new UsageError('step {context} is closed by `gate note context "Traced: … · Related: … · Research: …"` after you search the code and memory yourself; run that instead.');
       if (state === "N/A" && (step.key === "repro" || step.key === "rootcause")) {
         throw new UsageError(`step {${step.key}} cannot be N/A: a bug fix with no ${step.key === "repro" ? "reproduction" : "root cause"} is a guess. Do it, or get the user's waiver with \`gate waive ${step.key} "<reason>" --user-ok "<their words>"\``);
       }

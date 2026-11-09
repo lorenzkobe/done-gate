@@ -353,7 +353,7 @@ const LOOKUP_NEEDS = { skeptic: LOOKUP_KINDS, reviewer: LOOKUP_KINDS, "reviewer-
 // role needs since the run opened; a resumed helper keeps its id and its lookups.
 export function skippedLookups(state, file = null) {
   const { ledger } = state;
-  if (!ledger?.lookups || waived(ledger, "lookups")) return [];
+  if (!ledger || waived(ledger, "lookups")) return [];
   const since = ledger.openedSeq ?? 0;
   const helpers = new Map();
   for (const e of state.events ?? []) {
@@ -1626,10 +1626,6 @@ export function evaluate(state) {
     } else if (repo.config.hash !== repo.gateHash && !waived(ledger, "gate-config")) {
       unmet.push({ rule: "R13", text: `.claude/gate.json or the verify commands of the declared repo ${repo.prefix} changed since it was declared. Restore them, or get the user's waiver (\`gate waive gate-config "<reason>" --user-ok "<their words>"\`).` });
     }
-  }
-  // a ledger with a pinned policy is judged by it; only one from before pinning can go stale
-  if (!ledger.policy && ledger.policyHash && state.policy?.hash && state.policy.hash !== ledger.policyHash && !waived(ledger, "gate-config")) {
-    unmet.push({ rule: "R13", text: "the plugin's models.json (tier policy) changed since this ledger opened. Restore it, or get the user's waiver (`gate waive gate-config \"<reason>\" --user-ok \"<their words>\"`)." });
   }
 
   // R2: Context, plan and case table must predate the first source edit this task. Blocks only
