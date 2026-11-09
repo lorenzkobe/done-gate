@@ -8,7 +8,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
-import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, uncovered, afterReview, changedUnitsOf, parseEntry, pathOf, parseReplies, pointerResolver, proofProblem, wrongProblem, upheldItem, uiTrial, reviewTrialed, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid, workerRuns } from "./rules.mjs";
+import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, uncovered, afterReview, changedUnitsOf, parseEntry, pathOf, parseReplies, pointerResolver, proofProblem, wrongProblem, callProblem, proofReading, runProblem, upheldItem, uiTrial, reviewTrialed, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid, workerRuns } from "./rules.mjs";
 import { assess, broughtSinceOpen, buildState, cleanAtHead, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
@@ -41,7 +41,8 @@ function closeAsWrong(ctx, state, item, aid, evidence, words) {
   withLedger(ctx, (ledger, dir) => {
     const a = ledger.huddles.flatMap((x) => x.actOn).find((x) => x.id === aid);
     a.closed = `wrong: ${evidence ?? `the user said "${words}"`}`;
-    a.wrong = evidence ? { evidence, seq: nextSeq() } : { words, seq: nextSeq() };
+    const reading = evidence ? proofReading(state.events?.find((e) => `events#${e.seq}` === evidence)) : null;
+    a.wrong = evidence ? { evidence, ...(reading ? { reading } : {}), seq: nextSeq() } : { words, seq: nextSeq() };
     a.closedSeq = nextSeq();
     settleCheck(ledger, dir);
   });
@@ -585,7 +586,10 @@ export const verbs = {
           const state = { ledger, events, config };
           // one run closes one case: nothing else ties a run to what the case claims
           const taken = new Set(ledger.cases.filter((c) => c.id !== id && c.ran).map((c) => c.event));
-          run = apiCalls(state, lastEditSeq(state, config, ledger)).filter((e) => !e.reused && !taken.has(`events#${e.seq}`) && ranText(e).includes(ranPart)).pop();
+          const named = apiCalls(state, lastEditSeq(state, config, ledger)).filter((e) => !e.reused && !taken.has(`events#${e.seq}`) && ranText(e).includes(ranPart));
+          const problem = (e) => runProblem(ledger, e, { config, root: ctx.root });
+          run = named.filter((e) => !problem(e)).pop();
+          if (!run && named.length) throw new UsageError(`${id}: ${problem(named.at(-1))}`);
           if (!run) throw new UsageError(`${id}: no recorded run of yours after the last edit that names "${ranPart}" and that no other case holds. Run it (a failed, background, read-only or helper's run does not count), then close on it.`);
         }
         let event = null;
@@ -610,7 +614,8 @@ export const verbs = {
         }
         delete row.ran;
         delete row.words;
-        Object.assign(row, { test: testPtr ?? null, na: na ?? null, ...(saidWords ? { words: saidWords } : {}), ...(row.kind === "click" ? { event: event ? `events#${event.seq}` : null } : {}), ...(run ? { event: `events#${run.seq}`, ran: ranText(run).slice(0, 120) } : {}), status: "closed", closedSeq: nextSeq() });
+        delete row.reading;
+        Object.assign(row, { test: testPtr ?? null, na: na ?? null, ...(saidWords ? { words: saidWords } : {}), ...(row.kind === "click" ? { event: event ? `events#${event.seq}` : null } : {}), ...(run ? { event: `events#${run.seq}`, ran: ranText(run).slice(0, 120), ...(proofReading(run) ? { reading: proofReading(run) } : {}) } : {}), status: "closed", closedSeq: nextSeq() });
         return event;
       });
       ctx.out(taken ? `${id} closed by ${clickLine(taken)}` : `${id} closed`);
@@ -631,6 +636,7 @@ export const verbs = {
         delete row.event;
         delete row.ran;
         delete row.words;
+        delete row.reading;
         delete row.closedSeq;
       });
       ctx.out(`${id} amended and open again; the report keeps the earlier text`);
@@ -685,9 +691,14 @@ export const verbs = {
       }
       const onCall = state === "DONE" && step.key === "driver" && apiFiles(ledger, gateState.config, gateState.changed).length > 0;
       if (state === "DONE" && (RUN_KEYS.has(step.key) || onCall)) {
-        const runs = onCall ? apiCalls(gateState, lastEditSeq(gateState, gateState.config, ledger)) : ranEvents(gateState);
+        const last = lastEditSeq(gateState, gateState.config, ledger);
+        const runs = onCall ? apiCalls(gateState, last) : ranEvents(gateState);
         if (ran !== undefined && ran !== null && ran.trim().length < 4) throw new UsageError("--ran needs at least four characters of the command or url, enough to name one run");
-        by = (ran ? runs.filter((e) => ranText(e).includes(ran)).pop() : runs.find((e) => `events#${e.seq}` === evidence)) ?? null;
+        // the newest named run that shows what it claims; a later one that does not hides nothing
+        const named = runs.filter((e) => (ran ? ranText(e).includes(ran) : `events#${e.seq}` === evidence));
+        const problem = (e) => (onCall ? callProblem({ ...gateState, ledger }, e, last) : runProblem(ledger, e));
+        by = named.filter((e) => !problem(e)).pop() ?? null;
+        if (!by && named.length) throw new UsageError(`step {${step.key}}: ${problem(named.at(-1))}`);
         if (!by) throw new UsageError(`step {${step.key}} closes on a run the gate recorded, not on a note: run it (the Bash tool, the browser or the /verify driver) after ${onCall ? "the last edit" : "this run opened"}, then \`gate step ${step.key} done "<what it showed>" --ran "<part of the command or url>"\` (the gate keeps the first 200 characters of a command; a background run, a read of the code and a memory, docs or code-search lookup do not count)`);
         if (step.key === "rootcause" && !tracedPointers(note, ctx.root, ctx.repos).some((p) => p.exists)) {
           throw new UsageError("step {rootcause}: the note names the line at fault as a file:line that resolves; a cause with no line is a guess");
@@ -705,7 +716,8 @@ export const verbs = {
       delete step.auto;
       Object.assign(step, { state, note: note || null, evidence: evidence ?? null, seq: nextSeq() });
     });
-    ctx.out(by ? `step ${ref} → ${state} by \`${ranText(by).slice(0, 80)}\`${by.exit == null ? "" : ` exit ${by.exit}`} (events#${by.seq})` : `step ${ref} → ${state}`);
+    const reading = by ? proofReading(by) : null;
+    ctx.out(by ? `step ${ref} → ${state} by \`${ranText(by).slice(0, 80)}\`${by.exit == null ? "" : ` exit ${by.exit}`} (events#${by.seq})${reading ? `: ${reading}` : ""}` : `step ${ref} → ${state}`);
     printNext(ctx);
   },
 

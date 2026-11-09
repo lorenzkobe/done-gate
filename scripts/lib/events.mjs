@@ -4,7 +4,8 @@ import { toPosixRel } from "./paths.mjs";
 import { configPath } from "./config.mjs";
 import { commandReflog } from "./tree.mjs";
 // guard.mjs imports this module back: both sides only call each other inside functions
-import { gitMoves, gitWrites, ownFileWrites, readsOnly, runsInline, scratchOnly } from "./guard.mjs";
+import { gitMoves, gitWrites, ownFileWrites, readsOnly, runsInline, scratchOnly, segments, withoutHeredocs } from "./guard.mjs";
+import { failedTests, runsTests, testTotals } from "./verify.mjs";
 
 // Wall-clock microseconds, strictly increasing within a process. Orders events across
 // parallel hook processes by wall clock without a shared counter file (which would race).
@@ -20,6 +21,8 @@ const TEXT_LIMIT = 200;
 // the user's own words are kept longer: an OK can come late in a long message
 const WORDS_LIMIT = 2000;
 const CHROME_PREFIX = "mcp__claude-in-chrome__";
+// a runner's summary and a status line come last: only the tail of a long output is read
+const READ_CAP = 256 * 1024;
 
 function base(input) {
   return {
@@ -101,7 +104,7 @@ export function eventsFromHookInput(input, root, repos = []) {
     if (tool !== "Bash" || !code) return [];
     const cmd = String(input.tool_input?.command ?? "");
     const own = ownEdits(input, cmd, root, b);
-    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: Number(code[1]), ...toolUse(input), ...(gitWrites(cmd) ? { git: true, commits: !gitMoves(cmd), ...reflogField(root) } : {}), ...(readsOnly(cmd) ? { readOnly: true } : {}), ...(runsInline(cmd) ? { runs: true } : {}), ...(own.length ? { scratch: true } : {}) }, ...own];
+    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: Number(code[1]), ...readings(cmd, String(input.tool_error ?? ""), root), ...toolUse(input), ...(gitWrites(cmd) ? { git: true, commits: !gitMoves(cmd), ...reflogField(root) } : {}), ...(readsOnly(cmd) ? { readOnly: true } : {}), ...(runsInline(cmd) ? { runs: true } : {}), ...(own.length ? { scratch: true } : {}) }, ...own];
   }
   if (event !== "PostToolUse") return [];
 
@@ -119,7 +122,9 @@ export function eventsFromHookInput(input, root, repos = []) {
     const own = ownEdits(input, cmd, root, b);
     const scratch = !readOnly && (own.length > 0 || scratchOnly(cmd));
     const task = background ? backgroundTask(input.tool_response) : null;
-    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...toolUse(input), ...(background ? { background: true } : {}), ...(task ? { task } : {}), ...(git ? { git: true, commits: !gitMoves(cmd), ...reflogField(root) } : {}), ...(readOnly ? { readOnly: true } : {}), ...(runsInline(cmd) ? { runs: true } : {}), ...(scratch ? { scratch: true } : {}) }, ...own];
+    const r = input.tool_response;
+    const output = !background && r && typeof r === "object" ? `${r.stdout ?? ""}\n${r.stderr ?? ""}` : "";
+    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...(background ? {} : readings(cmd, output, root)), ...toolUse(input), ...(background ? { background: true } : {}), ...(task ? { task } : {}), ...(git ? { git: true, commits: !gitMoves(cmd), ...reflogField(root) } : {}), ...(readOnly ? { readOnly: true } : {}), ...(runsInline(cmd) ? { runs: true } : {}), ...(scratch ? { scratch: true } : {}) }, ...own];
   }
   if (STOP_TOOLS.has(tool)) {
     const task = input.tool_input?.task_id ?? input.tool_input?.shell_id;
@@ -132,7 +137,8 @@ export function eventsFromHookInput(input, root, repos = []) {
     return [{ ...b(), kind: "skill", tool, skill: input.tool_input?.skill ?? null }];
   }
   if (tool.startsWith(CHROME_PREFIX)) {
-    return [{ ...b(), kind: "browser", tool, ...browserFields(tool.slice(CHROME_PREFIX.length), input.tool_input ?? {}) }];
+    const page = pageOf(input.tool_response);
+    return [{ ...b(), kind: "browser", tool, ...browserFields(tool.slice(CHROME_PREFIX.length), input.tool_input ?? {}), ...(page ? { page } : {}) }];
   }
   // the user's answer to a question counts as their words, like a message
   if (tool === "AskUserQuestion") {
@@ -158,6 +164,68 @@ function browserFields(short, ti) {
     // a batch item is {name, input}; a flat {tool, ...input} item is read the same way
     ...(short === "browser_batch" && Array.isArray(ti.actions) ? { actions: ti.actions.map((a) => browserFields(String(a?.name ?? a?.tool ?? ""), a?.input ?? a ?? {})) } : {}),
   };
+}
+
+// What a command reached, read by the hook from the whole command and its output, where the agent
+// cannot write it: a test run's totals (null when the gate cannot read them), a call's method, url
+// and status, and for a command cut to TEXT_LIMIT the file-like words a check needs.
+function readings(cmd, output, root) {
+  const text = output.length > READ_CAP ? output.slice(-READ_CAP) : output;
+  const out = {};
+  if (runsTests(cmd)) {
+    const read = testTotals(text);
+    const names = read?.failed ? (failedTests(text, [root])?.names ?? []).slice(0, 5) : [];
+    out.tests = read ? { ...read, ...(names.length ? { names } : {}) } : null;
+  }
+  const call = CALL_WORD.test(cmd) ? callOf(cmd, text) : null;
+  if (call) out.call = call;
+  if (cmd.length > TEXT_LIMIT) {
+    const named = [...new Set(segments(withoutHeredocs(cmd)).flat().map((w) => w.text).filter((w) => !w.startsWith("-") && w.length <= TEXT_LIMIT && /[/]|\.[a-z0-9]{1,6}$/i.test(w) && !/^\w+:\/\//.test(w)))].slice(0, 30);
+    if (named.length) out.named = named;
+  }
+  return out;
+}
+
+const CALLERS = new Set(["curl", "http", "https", "xh", "xhs", "wget"]);
+// a quick look before the command is split into words: most commands call nothing
+const CALL_WORD = /\b(?:curl|https?|xhs?|wget)\b|\bfetch\(/;
+// curl flags whose next word is a value, never the url
+const VALUE_FLAGS = new Set(["-X", "--request", "-H", "--header", "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "-F", "--form", "--json", "-o", "--output", "-w", "--write-out", "-u", "--user", "-A", "--user-agent", "-e", "--referer", "-b", "--cookie", "-c", "--cookie-jar", "-m", "--max-time", "--connect-timeout", "-x", "--proxy", "-T", "--upload-file", "-K", "--config", "-r", "--range", "--retry", "-O", "--output-document"]);
+const BODY_FLAGS = /^(?:-d|--data(?:-raw|-binary|-urlencode)?|-F|--form|--json)$/;
+const HOSTLIKE = /^(?:https?:\/\/\S+|(?:localhost|[\w-]+(?:\.[\w-]+)+|\[[\da-f:]+\])(?::\d+)?(?:[/?#]\S*)?|:\d+(?:[/?#]\S*)?)$/i;
+// An HTTP call: curl, httpie, xh or wget, or a script's fetch('<url>'). The status is the last
+// status line printed (curl -i, -v, httpie), else what -w '%{http_code}' printed last.
+function callOf(cmd, output) {
+  let call = null;
+  for (const seg of segments(withoutHeredocs(cmd))) {
+    const words = seg.map((w) => w.text);
+    let at = seg.findIndex((w) => !w.assign);
+    while (["rtk", "proxy", "sudo", "time", "command"].includes(words[at])) at += 1;
+    if (!CALLERS.has(words[at]?.split("/").pop())) continue;
+    const rest = words.slice(at + 1);
+    const flagged = rest.findIndex((w, i) => (w === "-X" || w === "--request") && rest[i + 1]);
+    const verb = rest.find((w) => /^[A-Z]{3,7}$/.test(w));
+    const method = flagged >= 0 ? rest[flagged + 1].toUpperCase() : verb && words[at] !== "curl" ? verb : rest.some((w) => w === "-I" || w === "--head") ? "HEAD" : rest.some((w) => BODY_FLAGS.test(w)) ? "POST" : "GET";
+    const url = rest.find((w, i) => rest[i - 1] === "--url") ?? rest.find((w, i) => !VALUE_FLAGS.has(rest[i - 1]) && !w.startsWith("-") && HOSTLIKE.test(w));
+    if (url) call = { method, url };
+    if (call) break;
+  }
+  const fetched = call ? null : /\bfetch\(\s*['"`](https?:\/\/[^'"`\s]+)/.exec(cmd);
+  if (fetched) call = { method: (/method:\s*['"](\w+)['"]/.exec(cmd)?.[1] ?? "GET").toUpperCase(), url: fetched[1] };
+  if (!call) return null;
+  const line = [...output.matchAll(/^(?:< )?HTTP\/[\d.]+ (\d{3})\b/gm)].at(-1)?.[1];
+  const written = /http_code/.test(cmd) ? /(?:^|\D)([1-5]\d\d)$/.exec(output.trimEnd().slice(-200))?.[1] : undefined;
+  return { method: call.method, url: call.url.slice(0, TEXT_LIMIT), status: line ?? written ? Number(line ?? written) : null };
+}
+
+// The url of the tab a Chrome call's reply says it ran on: its text ends in a Tab Context that
+// names the tab ("Executed on tabId: N") and lists each tab with its title and url.
+function pageOf(response) {
+  const blocks = Array.isArray(response) ? response : Array.isArray(response?.content) ? response.content : null;
+  const text = blocks ? blocks.map((b) => (typeof b?.text === "string" ? b.text : "")).join("\n") : typeof response === "string" ? response : "";
+  const tab = [...text.matchAll(/Executed on tabId: (\d+)/g)].at(-1)?.[1];
+  const url = tab ? new RegExp(`tabId ${tab}: ".*" \\("([^"]+)"\\)`).exec(text)?.[1] : null;
+  return url ? url.slice(0, TEXT_LIMIT) : null;
 }
 
 export function sessionDir(stateDir, session) {

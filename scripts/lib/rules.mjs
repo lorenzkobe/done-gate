@@ -403,14 +403,15 @@ export function proofProblem(state, item, ptr) {
   if (!h || !newRules(state.ledger) || (h.role !== "reviewer" && h.role !== "reviewer-2")) return undefined;
   if (ptr === "doc") return null;
   const since = proofEvents(state, h);
-  const red = (e) => e.kind === "command" && testRun(e) && (e.exit ?? 0) !== 0;
+  const red = (e) => e.kind === "command" && testRun(e) && (e.exit ?? 0) !== 0 && !(onReadings(state.ledger) && ranNothing(e));
   const seq = /^events#(\d+)$/.exec(String(ptr ?? ""));
   if (seq) {
     const e = since.find((x) => x.seq === Number(seq[1]));
     return e && (e.kind === "browser" || red(e) || (ranCleanly(e) && (e.exit ?? 0) === 0 && !testRun(e))) ? null : PROOF_TEXT;
   }
   const file = String(ptr ?? "").replace(/:[^/]*$/, "");
-  return state.config.isTest(file) && since.some((e) => red(e) && e.cmd.includes(file)) ? null : PROOF_TEXT;
+  const names = (e) => (onReadings(state.ledger) ? wordsOf(e).some((w) => w === file || w.endsWith(`/${file}`)) : e.cmd.includes(file));
+  return state.config.isTest(file) && since.some((e) => red(e) && names(e)) ? null : PROOF_TEXT;
 }
 
 // The lead's runs and a worker's since the finding's round; a reviewer's or QA's run is not
@@ -419,7 +420,8 @@ function proofEvents(state, h) {
   return (state.events ?? []).filter((e) => e.seq > (h.seq ?? 0) && !e.background && (!e.agentType || isRole(e.agentType, "worker")));
 }
 const gateCall = (cmd) => GATE_CALL.exec(cmd ?? "")?.[1];
-const testRun = (e) => runsTests(e.cmd ?? "") || gateCall(e.cmd) === "test";
+// a cut command keeps its test reading, so the reading's key marks a test run too
+const testRun = (e) => Object.hasOwn(e, "tests") || runsTests(e.cmd ?? "") || gateCall(e.cmd) === "test";
 const ranCleanly = (e) => e.kind === "command" && !gateCall(e.cmd) && !e.git && !e.scratch && !e.failed && (!e.readOnly || e.runs);
 
 // A run that shows a finding wrong: a browser call or a command that really ran since its round,
@@ -428,8 +430,86 @@ export function wrongProblem(state, item, ptr) {
   const h = (state.ledger.huddles ?? []).find((x) => x.actOn.some((a) => a.id === item.id));
   const seq = /^events#(\d+)$/.exec(String(ptr ?? ""));
   const e = h && seq ? proofEvents(state, h).find((x) => x.seq === Number(seq[1])) : null;
-  return e && (e.kind === "browser" || ranCleanly(e)) ? null : "a finding closes as wrong on `events#<seq>` of a browser call or a command run since its round that shows it wrong (not a read, a gate verb, a git command or a scratch write)";
+  if (!e || !(e.kind === "browser" || ranCleanly(e))) return "a finding closes as wrong on `events#<seq>` of a browser call or a command run since its round that shows it wrong (not a read, a gate verb, a git command or a scratch write)";
+  if (!onReadings(state.ledger) || e.kind === "browser") return null;
+  if (ranNothing(e)) return `${ptr}: no test ran, so it shows nothing about the finding. Run a test that runs`;
+  const files = [...new Set(tracedPointers(item.text, state.root, state.repos ?? []).map((p) => p.file))];
+  return !files.length || namesFinding(e, files, state.config) ? null : `${ptr} names none of the finding's files (${files.join(", ")}): run what shows it wrong on that file, or a test of it`;
 }
+
+// D1 Part A: a run opened at rules 2 or later closes on what its run reached, as the hook read it
+const onReadings = (ledger) => (ledger?.rules ?? 0) >= 2;
+const ranNothing = (e) => e?.tests?.ran === false;
+const NOTHING_TEXT = (e) => `\`${shortRun(e)}\`: no test ran (its output says so). Run the test file itself, so a test runs`;
+const shortRun = (e) => ranText(e).slice(0, 80);
+// what a command named, the stored words and, for a command cut at its 200 characters, the
+// file-like words the hook kept from the whole of it
+const wordsOf = (e) => [...String(e.cmd ?? "").split(/[\s'"=;|&()]+/), ...(e.named ?? [])].filter(Boolean).map((w) => w.replace(/^\.\//, ""));
+const fileName = (p) => p.split("/").pop();
+// a finding's file, its basename, or a test file named for it (a.ts: a.test.ts, a.spec.ts)
+function namesFinding(e, files, config) {
+  const words = wordsOf(e);
+  return files.some((f) => {
+    const stem = fileName(f).replace(/\.[^.]*$/, "");
+    return words.some((w) => w === f || w.endsWith(`/${f}`) || fileName(w) === fileName(f) || (config.isTest(w) && fileName(w).startsWith(`${stem}.`)));
+  });
+}
+// The test files a run named that exist, by repo path.
+function testFilesNamed(e, config, root) {
+  return wordsOf(e).map((w) => (path.isAbsolute(w) && root && w.startsWith(`${root}/`) ? w.slice(root.length + 1) : w)).filter((w) => config.isTest(w) && root && existsSync(path.join(root, w)));
+}
+
+// What a run reached, for a close's line and the report: a test run's totals, a call's status, a page.
+export function proofReading(e) {
+  if (!e) return null;
+  const t = e.tests;
+  if (t) return !t.ran ? "no test ran" : t.unloaded && !t.tests ? `${t.unloaded} test file${t.unloaded === 1 ? "" : "s"} failed to load` : `${t.tests} test${t.tests === 1 ? "" : "s"}, ${t.passed} passed${t.failed ? `, ${t.failed} failed` : ""}`;
+  if (t === null) return "test totals not read";
+  if (e.call) return `${e.call.method} ${e.call.url} ${e.call.status ?? "status not read"}`;
+  return e.page ? `page ${e.page}` : null;
+}
+
+// The problem with a run a --ran close names, or null: on a readings run a test run that ran no
+// test proves nothing; a case's test run also names the test file it ran.
+export function runProblem(ledger, e, { config, root } = {}) {
+  if (!onReadings(ledger) || e.kind !== "command" || !testRun(e)) return null;
+  if (ranNothing(e)) return NOTHING_TEXT(e);
+  if (config && !testFilesNamed(e, config, root).length) return `\`${shortRun(e)}\` names no test file, so nothing ties it to this case: close on the case's test (\`--test <file:name>\`), or run its test file and close on that run`;
+  return null;
+}
+
+// The words of a changed API file a url that reaches it holds: its folders and name, without a
+// framework's words, [param], (group) and _private parts. A helper (in _x, lib, utils and the
+// like) or a file with no word left gives none: any route may reach it.
+const ROUTE_GENERIC = new Set(["app", "apps", "api", "apis", "src", "pages", "routes", "route", "router", "routers", "index", "handler", "handlers", "server", "controller", "controllers", "endpoint", "endpoints", "function", "functions", "service", "services", "views", "view", "rest", "http", "web", "backend", "main", "mod", "page", "middleware", "+server", "+page", "v1", "v2", "v3"]);
+const HELPER_DIRS = new Set(["lib", "libs", "utils", "util", "helpers", "helper", "shared", "common"]);
+function routeWords(file) {
+  const parts = file.split("/");
+  const name = parts.pop().replace(/\.[^.]*$/, "");
+  if (parts.some((p) => p.startsWith("_") || HELPER_DIRS.has(p.toLowerCase()))) return [];
+  return [...parts, ...name.split(".")]
+    .filter((p) => !/^[[(].*[\])]$/.test(p) && !p.startsWith("_"))
+    .flatMap((p) => p.replace(/([a-z\d])([A-Z])/g, "$1 $2").toLowerCase().split(" "))
+    .filter((w) => w && !ROUTE_GENERIC.has(w));
+}
+const urlSegments = (url) => String(url).replace(/^\w+:\/\//, "").replace(/^[^/]*/, "").split(/[/?#&=]/).filter(Boolean).map((s) => s.toLowerCase());
+const sameWord = (w, seg) => seg === w || seg === `${w}s` || w === `${seg}s`;
+
+// The problem with a run closing the driver step on an API change, or null. Before the readings any
+// recorded run does; after, the cmd: driver or a call the hook read a status below 500 from, to a
+// url that holds a word of a changed API file.
+export function callProblem(state, e, after) {
+  if (!onReadings(state.ledger) || driverRun(state, after)(e)) return null;
+  if (!e.call) return `\`${shortRun(e)}\` is not a call the gate read: call the endpoint, \`curl -i <url>\`, so its url and status line are recorded`;
+  if (e.call.status === null) return `\`${shortRun(e)}\` showed no status line: call it with \`curl -i\` (or \`-w '%{http_code}'\`) so the gate reads the status`;
+  if (e.call.status >= 500) return `\`${shortRun(e)}\` got ${e.call.status}: a server error does not show the change working`;
+  const api = apiFiles(state.ledger, state.config, state.changed ?? []);
+  const words = api.map(routeWords);
+  const segs = urlSegments(e.call.url);
+  if (!words.length || words.some((w) => !w.length) || words.flat().some((w) => segs.some((s) => sameWord(w, s)))) return null;
+  return `${e.call.url} reaches none of the changed API files (${list(api)}): call a route they serve`;
+}
+const driverCalls = (state, after) => apiCalls(state, after).filter((e) => !callProblem(state, e, after));
 
 // The small UI trial holds for this run now, and its review step closed N/A on the lead's reason.
 export function uiTrial(state) {
@@ -1377,7 +1457,7 @@ export function settleSteps(state) {
     const wrote = events.find((e) => e.kind === "edit" && e.path && config.isTest(e.path) && e.seq > opened);
     const since = wrote ? Date.parse(wrote.ts) : Math.min(...tests.map((p) => now.files[p].m ?? Infinity));
     const after = (e) => (wrote ? e.seq > wrote.seq : Date.parse(e.ts) > since);
-    const run = events.find((e) => e.kind === "command" && !e.background && e.seq < codeAt && after(e) && (runsTests(e.cmd ?? "", config.testFiles) || GATE_TEST.test(e.cmd ?? "")));
+    const run = events.find((e) => e.kind === "command" && !e.background && e.seq < codeAt && after(e) && (runsTests(e.cmd ?? "", config.testFiles) || GATE_TEST.test(e.cmd ?? "") || Object.hasOwn(e, "tests")) && !(onReadings(ledger) && ranNothing(e)));
     // Claude Code sends an exit code only when a command fails: none means it worked, unless its
     // output was piped, when the exit is the pipe's last command's
     const piped = run && /(?<!\|)\|(?!\|)/.test(String(run.cmd ?? "").replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, "''"));
@@ -1473,8 +1553,8 @@ export function evaluate(state) {
   const api = apiFiles(ledger, config, changed);
   if (api.length && !waived(ledger, "driver")) {
     const evidence = ledger.steps?.find((s) => s.key === "driver" && s.state === "DONE")?.evidence;
-    if (!apiCalls(state, after).some((e) => `events#${e.seq}` === evidence)) {
-      unmet.push({ rule: "R4", text: `API files changed (${list(api)}) but no recorded call closes the driver step after the last edit. Call the endpoint, then \`gate step driver done "<what it returned>" --ran "<part of the command or url>"\`, or get the user's waiver (\`gate waive driver "<reason>" --user-ok "<their words>"\`).` });
+    if (!driverCalls(state, after).some((e) => `events#${e.seq}` === evidence)) {
+      unmet.push({ rule: "R4", text: `API files changed (${list(api)}) but no recorded call closes the driver step after the last edit. Call the endpoint (\`curl -i <url>\`, so the status shows), then \`gate step driver done "<what it returned>" --ran "<part of the command or url>"\`, or get the user's waiver (\`gate waive driver "<reason>" --user-ok "<their words>"\`).` });
     }
   }
 

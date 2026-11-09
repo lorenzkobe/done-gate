@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { buildState, readVerifyStarted, unmetCount } from "./assess.mjs";
-import { evaluate, uiFiles, unfinishedVerify } from "./rules.mjs";
+import { evaluate, proofReading, uiFiles, unfinishedVerify } from "./rules.mjs";
 import { weakened } from "./slop.mjs";
 import { loadLedger, runsDir, section } from "./ledger.mjs";
 import { loadSession } from "./session-state.mjs";
@@ -68,7 +68,7 @@ function summaryLine(ledger, events, unmet, after = 0) {
 export function caseTable(ledger, after = 0) {
   if (!ledger.cases.length) return ["_none_"];
   const out = ["| id | case | kind | test | status |\n| --- | --- | --- | --- | --- |"];
-  for (const c of ledger.cases) out.push(`| ${c.id} | ${cell(c.case)} | ${c.kind} | ${cell(c.test ?? (c.ran ? `ran: ${c.ran}` : c.event) ?? (c.na ? `n/a: ${c.na}${c.words ? ` (the user: "${c.words}")` : ""}` : ""))} | ${clickStale(c, after) ? `open: edited after the ${c.ran ? "run" : "click"}` : c.status} |`);
+  for (const c of ledger.cases) out.push(`| ${c.id} | ${cell(c.case)} | ${c.kind} | ${cell(c.test ?? (c.ran ? `ran: ${c.ran}${c.reading ? ` (${c.reading})` : ""}` : c.event) ?? (c.na ? `n/a: ${c.na}${c.words ? ` (the user: "${c.words}")` : ""}` : ""))} | ${clickStale(c, after) ? `open: edited after the ${c.ran ? "run" : "click"}` : c.status} |`);
   return out;
 }
 
@@ -251,10 +251,12 @@ export function renderReport(state, unmet) {
   if (amended.length) out.push("", ...amended.map((c) => `${c.id} amended; was: ${c.history.map((h) => `"${cell(h.text)}"`).join(", then ")}`));
 
   out.push("\n## Steps\n");
+  const bySeq = new Map((state.events ?? []).map((e) => [`events#${e.seq}`, e]));
   for (const s of ledger.steps) {
+    const reading = proofReading(bySeq.get(s.evidence));
     const [word, ...why] = stageOutcome(state, s).split(": ");
     const note = s.note && (word === "ran" || word === "not run") ? ` (${s.note})` : "";
-    out.push(`${s.n}. ${s.text} — **${word}**${why.length ? `: ${why.join(": ")}` : ""}${note}${s.evidence ? ` [${s.evidence}]` : ""}`);
+    out.push(`${s.n}. ${s.text} — **${word}**${why.length ? `: ${why.join(": ")}` : ""}${note}${s.evidence ? ` [${s.evidence}]` : ""}${reading ? ` (${reading})` : ""}`);
   }
 
   out.push("\n## Huddles\n");
@@ -491,7 +493,7 @@ function forYouLine(state, unmet) {
   if (trialed(state)) items.push(`review skipped under the UI trial: ${plain(ledger.steps.find((s) => s.key === "review")?.note)}`);
   if (ledger.planDrift?.length) items.push(`outside the plan: ${ledger.planDrift.join(", ")}`);
   for (const a of ledger.huddles.flatMap((h) => h.actOn).filter((x) => x.closed && x.wrong)) {
-    items.push(`closed as wrong: "${plain(a.text)}" (${a.wrong.evidence ? `shown by the run ${a.wrong.evidence}` : `you said: "${a.wrong.words}"`})`);
+    items.push(`closed as wrong: "${plain(a.text)}" (${a.wrong.evidence ? `shown by the run ${a.wrong.evidence}${a.wrong.reading ? `: ${a.wrong.reading}` : ""}` : `you said: "${a.wrong.words}"`})`);
   }
   for (const a of ledger.huddles.flatMap((h) => h.actOn)) {
     if (!a.dispute || a.wrong) continue;

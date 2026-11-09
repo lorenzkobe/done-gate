@@ -75,7 +75,7 @@ const stillOpen = (repo, key) => {
 
 test("C1 a new run carries the stamp; a ledger with it removed still checks as an old run", () => {
   const repo = opened("wo-c1");
-  assert.equal(ledgerOf(repo).rules, 1);
+  assert.equal(ledgerOf(repo).rules, 2);
   assert.equal(newRules(ledgerOf(repo)), true);
   aged(repo);
   assert.equal(newRules(ledgerOf(repo)), false);
@@ -407,7 +407,8 @@ test("C18 an edit made while verify runs is judged from the tree at its start", 
 });
 
 // Batch 3.3: an api change is driven by calling the endpoint, and only a recorded call closes it.
-const call = (repo, command = "curl -s localhost:3000/api/users") => hook(repo, { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command }, tool_response: {} });
+// a call under the readings shows its status line, so it can close the driver step
+const call = (repo, command = "curl -s localhost:3000/api/users -i") => hook(repo, { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command }, tool_response: { stdout: "HTTP/1.1 200 OK\n\n{}" } });
 const r4 = (repo) => cli(repo, "check").split("\n").filter((l) => /\bR4\b/.test(l)).join("\n");
 const apiChanged = (name) => {
   const repo = opened(name);

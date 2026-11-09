@@ -297,8 +297,9 @@ checked.
   case, and a source edit after it opens the case again (R8). `--na "<reason>"` still works, with
   `--user-ok "<their words>"` on a case written before the code. `gate case close C<n> --ran "<part
   of the command>"` closes a case on your own successful run after the last edit, one run per case,
-  and an edit opens it again. It proves a command ran, not that it checked the case; the report
-  shows the command. `--test` refuses a pointer to a file that does not exist.
+  and an edit opens it again. On a run opened at rules 2 (0.22.0 on), a test run closes a case only
+  when it names the case's test file and its output shows a test ran; the report shows the command
+  and what it read ("3 tests, 3 passed"). `--test` refuses a pointer to a file that does not exist.
 - **Size is counted from open.** A file that already had uncommitted work when the task
   opened (left by an earlier run of the session, or from before it) is copied to
   `<run>/base/<path>.base` at `gate open` and diffed against that copy, so the size, the review cap,
@@ -475,8 +476,20 @@ main root, whatever the shell's directory. `gate open`, `gate attach` and
 
 A changed `api` file is driven by calling the endpoint: in a new run the driver step closes only on
 a recorded, successful run of the lead's after the last edit (`gate step driver done "<what it
-returned>" --ran "<part of the command or url>"`), and R4 holds it until then. The gate proves the
-call ran, not that it reached the endpoint.
+returned>" --ran "<part of the command or url>"`), and R4 holds it until then. On a run opened at
+rules 2 (0.22.0 on), the call must show its status line (`curl -i`, or `-w '%{http_code}'`), the
+status must be below 500, and its url must hold a word of a changed API file (`users` for
+`app/api/users/[id]/route.ts`; a helper under `_lib`, `lib` or `utils` lets any route count); a run of
+the `cmd:` driver still counts. The report shows the method, url and status.
+
+**What a run reached.** The PostToolUse hook reads each command's output before the agent can touch
+it and keeps a short reading on the event: a test run's totals (node, vitest and rtk's vitest
+filter, jest, mocha, pytest, cargo, go -v), a call's method, url and status, and the page a Chrome
+call ended on. On a run opened at rules 2, a `--ran` close (repro, rootcause, schema, a case) refuses
+a test run whose output says no test ran, a wrong-finding close must name the finding's file (or a
+test file named for it), and the tests step does not close on such a run. A test file that fails
+to load counts as a red run. Output the gate cannot read never blocks: the close says "test totals
+not read". It still cannot tell that a passing test checks the right thing.
 
 In a new run `gate verify` does not run a command again on a tree it is already green on: the
 whole tree and the command as resolved must match, so a doc edit runs it again. `--force` runs

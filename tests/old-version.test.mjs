@@ -98,7 +98,7 @@ test("C2 happy: a run this copy opened is checked, verified and closed by the ol
   const old = oldGate();
   const repo = committed("ov-c2");
   opened(gate, repo, "ov-c2");
-  assert.equal(ledgerOf(repo).rules, 1, "premise: this copy stamps the run");
+  assert.equal(ledgerOf(repo).rules, 2, "premise: this copy stamps the run");
   planAndEdit(gate, repo);
   edit(gate, repo, "src/a.ts", "a0 = 0", "a0 = 2");
   edit(gate, repo, "tests/a.test.ts", "'a'", "'a0 is 2'");

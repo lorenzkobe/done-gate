@@ -424,6 +424,67 @@ function ranNoTests(output) {
   return totals.length > 0 || ZERO_LINES.some((pattern) => pattern.test(text));
 }
 
+// What a test run's own summary says it ran: {tests, passed, failed, ran}, or null when no line
+// here reads it. A test file that failed to load ran, as a red run does (`unloaded`); a no-tests
+// line ran nothing. The last summary counts, cargo's per crate add up.
+const lastNumber = (text, pattern) => [...text.matchAll(pattern)].map((m) => Number(m[1])).at(-1) ?? null;
+const counted = (line, word) => Number(new RegExp(`(\\d+) ${word}`).exec(line)?.[1] ?? 0);
+const SUMMARIES = [
+  (t) => {
+    const tests = lastNumber(t, /^(?:ℹ|#) tests (\d+)[ \t]*$/gm);
+    return tests === null ? null : { tests, passed: lastNumber(t, /^(?:ℹ|#) pass (\d+)[ \t]*$/gm) ?? 0, failed: lastNumber(t, /^(?:ℹ|#) fail (\d+)[ \t]*$/gm) ?? 0 };
+  },
+  (t) => {
+    const m = [...t.matchAll(/^[ \t]*Tests[ \t]+(.*?)\((\d+)\)[ \t]*$/gm)].at(-1);
+    return m ? { tests: Number(m[2]), passed: counted(m[1], "passed"), failed: counted(m[1], "failed") } : null;
+  },
+  // rtk's vitest filter
+  (t) => {
+    const m = [...t.matchAll(/^PASS \((\d+)\) FAIL \((\d+)\)/gm)].at(-1);
+    return m ? { tests: Number(m[1]) + Number(m[2]), passed: Number(m[1]), failed: Number(m[2]) } : null;
+  },
+  (t) => {
+    const m = [...t.matchAll(/^[ \t]*Tests:[ \t]+(.*?)(\d+) total[ \t]*$/gm)].at(-1);
+    return m ? { tests: Number(m[2]), passed: counted(m[1], "passed"), failed: counted(m[1], "failed") } : null;
+  },
+  (t) => {
+    const passed = lastNumber(t, /^[ \t]*(\d+) passing\b/gm);
+    const failed = lastNumber(t, /^[ \t]*(\d+) failing\b/gm);
+    return passed === null && failed === null ? null : { tests: (passed ?? 0) + (failed ?? 0), passed: passed ?? 0, failed: failed ?? 0 };
+  },
+  // pytest's last line: "1 failed, 2 passed, 1 skipped in 0.12s"
+  (t) => {
+    const line = [...t.matchAll(/^=*[ \t]*(\d+ [a-z]+(?:, \d+ [a-z]+)*) in [\d.]+s\b/gm)].at(-1)?.[1];
+    if (!line || !/\b(?:passed|failed|errors?)\b/.test(line)) return null;
+    const passed = counted(line, "passed");
+    const failed = counted(line, "failed") + counted(line, "errors?");
+    return { tests: passed + failed, passed, failed };
+  },
+  (t) => {
+    const runs = [...t.matchAll(/^test result: \w+\. (\d+) passed; (\d+) failed/gm)];
+    if (!runs.length) return null;
+    const passed = runs.reduce((n, m) => n + Number(m[1]), 0);
+    const failed = runs.reduce((n, m) => n + Number(m[2]), 0);
+    return { tests: passed + failed, passed, failed };
+  },
+  // go test -v
+  (t) => {
+    const passed = (t.match(/^[ \t]*--- PASS:/gm) ?? []).length;
+    const failed = (t.match(/^[ \t]*--- FAIL:/gm) ?? []).length;
+    return passed + failed ? { tests: passed + failed, passed, failed } : null;
+  },
+];
+export function testTotals(output) {
+  if (typeof output !== "string" || !output) return null;
+  const text = output.replace(ANSI, "").replace(/\r/g, "");
+  const unloaded = lastNumber(text, /^[ \t]*Test Suites:[ \t]+(\d+) failed/gm) ?? lastNumber(text, /^[ \t]*Test Files[ \t]+(\d+) failed/gm) ?? 0;
+  let read = null;
+  for (const summary of SUMMARIES) if ((read = summary(text))) break;
+  if (!read && !ranNoTests(text) && !unloaded) return null;
+  read ??= { tests: 0, passed: 0, failed: 0 };
+  return { ...read, ran: read.tests > 0 || unloaded > 0, ...(unloaded && !read.tests ? { unloaded } : {}) };
+}
+
 // The failing tests a runner's output names, its fail total and whether any test passed, or null
 // when it names no failure and no pass: node's spec summary (file › name), TAP, vitest and jest,
 // pytest, go and cargo. Durations, TAP numbers and the given roots are stripped, so two runs of
