@@ -4,7 +4,7 @@ import { execFileSync, spawnSync, execSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, here, doneArgs, lookedUp, readyToEdit, waiveArgs, planChecked } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, doneArgs, lookedUp, readyToEdit, waiveArgs, planChecked, resealRun } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
@@ -1470,8 +1470,11 @@ const closedRunDir = (repo, session = "S1") =>
   path.join(stateDir(repo), "runs", loadSession(stateDir(repo), session).lastClosed);
 const ledgerFileOf = (dir) => path.join(dir, "ledger.json");
 const ledgerOf = (repo) => JSON.parse(readFileSync(ledgerFileOf(runDir(repo)), "utf8"));
-const writeLedger = (repo, ledger) =>
+// a ledger in an older shape, as the gate itself would have written it
+const writeLedger = (repo, ledger) => {
   writeFileSync(ledgerFileOf(runDir(repo)), `${JSON.stringify(ledger, null, 2)}\n`);
+  resealRun(repo);
+};
 const stepOf = (ledger, key) => ledger.steps.find((s) => s.key === key);
 
 const lines = (s) => s.split("\n").filter((l) => l.trim() !== "");

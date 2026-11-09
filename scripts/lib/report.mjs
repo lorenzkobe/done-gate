@@ -3,6 +3,7 @@ import path from "node:path";
 import { buildState, readVerifyStarted, unmetCount } from "./assess.mjs";
 import { evaluate, proofReading, uiFiles, unfinishedVerify } from "./rules.mjs";
 import { weakened } from "./slop.mjs";
+import { sealProblems } from "./seal.mjs";
 import { loadLedger, runsDir, section } from "./ledger.mjs";
 import { loadSession } from "./session-state.mjs";
 import { readVerify, reviewFiles } from "./assess.mjs";
@@ -304,6 +305,8 @@ export function renderReport(state, unmet) {
     out.push("\n## Caveats\n");
     for (const c of ledger.caveats) out.push(`- ${cell(c)}`);
   }
+  const unsealed = (ledger.rules ?? 0) >= 2 ? sealProblems(state).unchecked : [];
+  if (unsealed.length) out.push(`\nNot checked against the gate's seals: ${unsealed.join("; ")}.`);
 
   out.push("\n## Attention\n");
   const attention = attentionLines(state, unmet);
@@ -387,6 +390,7 @@ export const PLAIN_RULES = {
   R17: "a helper worked without searching code and memory first",
   R18: "verify ran no test that covers a closed case's test file",
   R19: "code outside the plan changed and was not added to it",
+  R20: "evidence the gate wrote was changed outside it",
 };
 // Rules no longer raised, kept above so old records still read in plain words.
 export const RETIRED_RULES = new Set(["R16"]);

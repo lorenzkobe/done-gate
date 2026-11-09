@@ -6,6 +6,7 @@ import { commandReflog } from "./tree.mjs";
 // guard.mjs imports this module back: both sides only call each other inside functions
 import { gitMoves, gitWrites, ownFileWrites, readsOnly, runsInline, scratchOnly, segments, withoutHeredocs } from "./guard.mjs";
 import { failedTests, runsTests, testTotals } from "./verify.mjs";
+import { FINDINGS, sealEvents, sealWritten } from "./seal.mjs";
 
 // Wall-clock microseconds, strictly increasing within a process. Orders events across
 // parallel hook processes by wall clock without a shared counter file (which would race).
@@ -270,8 +271,10 @@ export function appendEvents(stateDir, session, events) {
   if (!events.length) return;
   const dir = sessionDir(stateDir, session);
   mkdirSync(dir, { recursive: true });
-  const lines = events.map((e) => `${JSON.stringify(e)}\n`).join("");
-  appendFileSync(path.join(dir, "events.jsonl"), lines);
+  const lines = events.map((e) => JSON.stringify(e));
+  // sealed first, so a check never meets a line of the gate's with no seal
+  sealEvents(stateDir, session, lines);
+  appendFileSync(path.join(dir, "events.jsonl"), lines.map((l) => `${l}\n`).join(""));
 }
 
 export function readEvents(stateDir, session) {
@@ -390,6 +393,11 @@ export const verbs = {
   async log(ctx) {
     const events = eventsFromHookInput(ctx.input, ctx.root, () => ctx.repos);
     appendEvents(ctx.stateDir, ctx.session, events);
+    // a helper's findings file as the hook saw it written (the fence let only its own writer through)
+    for (const e of events) {
+      const m = e.kind === "edit" ? /^\.claude\/gate\/runs\/([^/]+)\/([^/]+)$/.exec(e.path ?? "") : null;
+      if (m && FINDINGS.test(m[2])) sealWritten(path.join(ctx.stateDir, "runs", m[1]), m[2]);
+    }
     // Right after a tool that can change files, record whether the implementation moved,
     // so the freshness clock for R4/R5 points at the tool call that made the change.
     // Subagents are skipped: their edits carry an agent event, and the next assess dates

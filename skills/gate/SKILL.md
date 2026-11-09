@@ -6,7 +6,7 @@ description: The done-gate workflow. Use before any task that changes source fil
 # done-gate
 
 Start each Bash command with `gate() { node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs" "$@"; };`
-Every verb prints a `next:` line: follow it. `gate check` lists what is unmet (R1-R10, R13, R15, R17, R18, R19).
+Every verb prints a `next:` line: follow it. `gate check` lists what is unmet (R1-R10, R13, R15, R17, R18, R19, R20).
 
 ## The loop
 

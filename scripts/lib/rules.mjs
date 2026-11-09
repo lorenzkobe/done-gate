@@ -7,6 +7,7 @@ import { blank, delegatedTier, effectiveTier, outsidePlan, policyFor, requires, 
 import { baseCopy, changedUnits, fileDiff, gitTracked, hasReindent, indentMatters, sliceEnd } from "./tree.mjs";
 import { scanDiff } from "./slop.mjs";
 import { coverageGaps, runsTests } from "./verify.mjs";
+import { sealProblems } from "./seal.mjs";
 import { repoPath, toPosixRel } from "./paths.mjs";
 
 const SLOP_SHOWN = 12;
@@ -1178,7 +1179,7 @@ export function unfinishedFile(full) {
 // Every waiver key a rule reads, with the rule it clears. "qa" is the key older ledgers
 // carry for tests.
 const REVIEW_WAIVER = { reviewer: "review", "reviewer-2": "review-2" };
-export const WAIVERS = { driver: "R4", review: "R5", "review-2": "R9", schema: "R6", tests: "R7", qa: "R7", slop: "R10", "gate-config": "R13", lookups: "R17", coverage: "R18", "qa-pass": "R7" };
+export const WAIVERS = { driver: "R4", review: "R5", "review-2": "R9", schema: "R6", tests: "R7", qa: "R7", slop: "R10", "gate-config": "R13", lookups: "R17", coverage: "R18", "qa-pass": "R7", evidence: "R20" };
 
 // A waiver's words have to name what is given up. Words the user says, not the gate's own terms;
 // the key itself always counts. A question's answer holds only the chosen label, so its options
@@ -1198,6 +1199,7 @@ const NAMES_THE_CHECK = {
   repro: ["reproduce", "reproducing", "reproduction"],
   rootcause: ["root cause", "cause"],
   skeptic: ["design", "huddle", "plan check"],
+  evidence: ["evidence", "changed", "edited", "tampered", "ledger", "file", "files"],
 };
 const SAYS_THE_OPPOSITE = /\b(?:not|don't|dont|never)\s+(?:to\s+|just\s+)?(?:skip|skipping|waive|waiving|drop|omit|bypass|ignore|give up)\b/i;
 
@@ -1562,6 +1564,12 @@ export function evaluate(state) {
   // the plan's list is what the reviewer and the user were shown
   const drift = (state.policy ?? policyFor(ledger)).guards.planDiff === "active" ? planDrift(state) : [];
   if (drift.length) unmet.push({ rule: "R19", text: `code outside the plan changed: ${list(drift)}. If the task needs it, \`gate plan add <files> "<why>"\`, and ask the user first when it changes behaviour they did not ask for; otherwise revert it. Past what one plan holds, close this run and open a new one for the rest.` });
+
+  // R20: evidence the gate wrote changed outside it. The user decides; a waiver covers the changes
+  // it saw, so a later one is named again
+  const covered = new Set((ledger.waivers ?? []).filter((w) => w.key === "evidence").flatMap((w) => w.changes ?? []));
+  const tampered = onReadings(ledger) ? sealProblems(state).filter((p) => !covered.has(p.key)) : [];
+  if (tampered.length) unmet.push({ rule: "R20", text: `evidence changed outside the gate: ${tampered.map((p) => p.text).join("; ")}. Something other than a gate command or a hook wrote it. Tell the user what changed; they decide whether to keep the run (\`gate waive evidence "<what changed>" --user-ok "<their words>"\`) or give it up.` });
 
   // R5: source changed → an independent reviewer looked after the last edit and every Act-on
   // item is closed. A tier that requires no reviewer (tiny) is exempt.

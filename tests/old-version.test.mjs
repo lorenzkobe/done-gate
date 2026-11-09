@@ -55,7 +55,9 @@ function ok(g, repo, args) {
 }
 const hook = (g, repo, payload) =>
   execFileSync(process.execPath, [g, "log"], { input: JSON.stringify({ session_id: "S1", cwd: repo, ...payload }), env: envFor(repo) });
-const ruleIds = (out) => [...out.matchAll(/^\d+\. (R\d+)/gm)].map((m) => m[1]);
+// R20 is left out: the old copy writes the ledger with no seal, which this copy reads as a change
+// outside the gate, as it would any other writer
+const ruleIds = (out) => [...out.matchAll(/^\d+\. (R\d+)/gm)].map((m) => m[1]).filter((r) => r !== "R20");
 // by slug, since a closed run is no longer the session's current one
 const ledgerOf = (repo) => {
   const runs = path.join(repo, ".claude", "gate", "runs");

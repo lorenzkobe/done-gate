@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { nextSeq } from "./events.mjs";
 import { addLessons, currentLedger, findRun, isDone, loadLedger, openRuns, saveLedger } from "./ledger.mjs";
@@ -8,6 +8,7 @@ import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
+import { sealProblems, sealRunFile } from "./seal.mjs";
 import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, newRules, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, uncovered, afterReview, changedUnitsOf, parseEntry, pathOf, parseReplies, pointerResolver, proofProblem, wrongProblem, callProblem, proofReading, runProblem, upheldItem, uiTrial, reviewTrialed, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid, workerRuns } from "./rules.mjs";
 import { assess, broughtSinceOpen, buildState, cleanAtHead, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
@@ -781,6 +782,8 @@ export const verbs = {
         let answered = 0;
         const added = [];
         const text = file && existsSync(path.join(dir, file)) ? readFileSync(path.join(dir, file), "utf8") : null;
+        // the file as recorded is the evidence from here on
+        if (text !== null && ledger.openedSeq) sealRunFile(dir, ledger.openedSeq, file, text);
         if (text !== null) {
           // every Act-on bullet becomes an item, so nothing can be left out (R15 checks the count).
           // Bullets are matched by their position in the file, so two findings that read alike
@@ -1027,6 +1030,8 @@ export const verbs = {
     if (couldNot && key !== "driver" && key !== "schema") throw new UsageError(`--could-not-run is for a surface that cannot run: driver or schema, not ${key}`);
     if (Object.hasOwn(NO_WAIVER, key)) throw new UsageError(`${key} cannot be waived: a rule with no waiver would still block behind the step. ${NO_WAIVER[key]}.`);
     const flagged = key === "slop" ? slopHits(buildState(ctx, {})).map((h) => h.key) : null;
+    // an evidence waiver keeps the changes it was given for; a later change is named again
+    const changes = key === "evidence" ? (({ dir, ledger }) => sealProblems({ stateDir: ctx.stateDir, dir, ledger }).map((p) => p.key))(open(ctx)) : null;
     if (flagged && !flagged.length) throw new UsageError("gate waive slop: the slop check flags no line in this task's diff that a waiver does not already cover; there is nothing to waive");
     // an edit no hook saw is dated to an older command on the assess that finds it: words cannot predate it
     const hashBefore = ON_CODE.has(key) ? open(ctx).ledger.lastSourceHash : null;
@@ -1056,7 +1061,7 @@ export const verbs = {
         }
       }
       const onCode = newRules(ledger) && LAPSING.has(key) ? { code: ledger.lastSourceHash } : {};
-      ledger.waivers.push({ key, reason, ...(words ? { words: words.trim() } : {}), ...onCode, ...(couldNot ? { could: true } : {}), seq: nextSeq(), ...(flagged ? { lines: flagged } : {}) });
+      ledger.waivers.push({ key, reason, ...(words ? { words: words.trim() } : {}), ...onCode, ...(couldNot ? { could: true } : {}), seq: nextSeq(), ...(flagged ? { lines: flagged } : {}), ...(changes ? { changes } : {}) });
       if (step) {
         delete step.auto;
         Object.assign(step, { state: couldNot ? "COULD NOT RUN" : "WAIVED", note: reason, evidence: null, seq: nextSeq() });
@@ -1073,14 +1078,15 @@ export const verbs = {
   decide(ctx) {
     const cells = ctx.args;
     if (cells.length !== 5) throw new UsageError("usage: gate decide <phase> <decision> <why> <evidence> <result>");
-    const { dir } = open(ctx);
+    const { dir, ledger } = open(ctx);
     const file = path.join(dir, "decisions.tsv");
-    if (!existsSync(file)) writeFileSync(file, "ts\tphase\tdecision\twhy\tevidence\tresult\n");
     const clean = (v) => {
       const s = String(v).replace(/[\t\r\n]+/g, " ");
       return /^[=+\-@]/.test(s) ? `'${s}` : s;
     };
-    appendFileSync(file, `${new Date().toISOString()}\t${cells.map(clean).join("\t")}\n`);
+    const text = `${existsSync(file) ? readFileSync(file, "utf8") : "ts\tphase\tdecision\twhy\tevidence\tresult\n"}${new Date().toISOString()}\t${cells.map(clean).join("\t")}\n`;
+    if (ledger.openedSeq) sealRunFile(dir, ledger.openedSeq, "decisions.tsv", text);
+    writeFileSync(file, text);
     ctx.out("decision logged");
     printNext(ctx);
   },

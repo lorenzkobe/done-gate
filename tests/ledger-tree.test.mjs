@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync, execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync, utimesSync, readdirSync, writeFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, gate, write, pluginRoot, doneArgs, lookedUp, waiveArgs, planChecked } from "./helpers.mjs";
+import { makeRepo, gate, write, pluginRoot, doneArgs, lookedUp, waiveArgs, planChecked, resealRun } from "./helpers.mjs";
 import { loadSession, ensureSession } from "../scripts/lib/session-state.mjs";
 import { openLedger, attachLedger, currentLedger, loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadConfig, matchGlob, matchAny, DEFAULTS } from "../scripts/lib/config.mjs";
@@ -767,6 +767,7 @@ test("C7 boundary: a ledger written under the old 14-step feature playbook still
     n: i + 1, key, text: `old step ${i + 1}`, state: null, note: null, evidence: null, seq: null,
   }));
   writeFileSync(ledgerFile(repo), `${JSON.stringify(ledger, null, 2)}\n`);
+  resealRun(repo);
 
   // a second session joins the run the old way
   const attached = cli(repo, "attach", ["legacy-run"], { session: "S2" });
@@ -1010,8 +1011,8 @@ test("C5 boundary: open cases with every step closed hint `gate case close`, not
   assert.ok(!/`gate case close/.test(afterCase), afterCase);
 
   // at standard the skeptic and review steps are required, so an N/A is reopened at the next assess
-  writeFileSync(path.join(runDir(repo), "skeptic-1.md"), "# Skeptic 1\n\n## Act on\n- none\n");
-  cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-1.md"]);
+  writeFileSync(path.join(runDir(repo), "skeptic-2.md"), "# Skeptic 2\n\n## Act on\n- none\n");
+  cli(repo, "huddle", ["add", "skeptic", "--file", "skeptic-2.md"]);
   for (const key of ["skeptic", "review"]) cli(repo, "step", [key, "done", "fixture", "--evidence", "docs/notes.md"]);
   const afterClose = hint(repo, "close");
   assert.equal(ledgerOf(repo).status, "closed", "close closes a clean run");

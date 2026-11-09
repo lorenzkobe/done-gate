@@ -1,5 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +12,8 @@ export const gate = path.join(pluginRoot, "scripts", "gate.mjs");
 // The gate reads which MCP servers are set up from the home folder; tests see an empty one
 // unless they point DONE_GATE_HOME elsewhere, so this machine's own setup never leaks in.
 process.env.DONE_GATE_HOME ??= path.join(here, ".tmp", "home-empty");
+// the seals of what the gate writes go outside the repo; a test's stay under tests/.tmp
+process.env.DONE_GATE_SEALS ??= path.join(here, ".tmp", "seals");
 
 // False for an installed copy: the plugin cache has no .git, and a marketplace clone puts the
 // plugin below its top. Checks that read the plugin's own git history skip there.
@@ -27,6 +31,8 @@ export function makeRepo(name, files = {}) {
   const dir = path.join(here, ".tmp", name);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
+  // a repo made again at the same path starts with no seals from the last one
+  rmSync(sealsOf(path.join(realpathSync(dir), ".claude", "gate")), { recursive: true, force: true });
   execFileSync("git", ["init", "-q"], { cwd: dir });
   const all = {
     ".gitignore": "node_modules/\nignored.txt\n",
@@ -135,6 +141,19 @@ export function pinnedBefore(repo, session = "S1") {
   const { lateLines: _new, ...policy } = ledger.policy;
   ledger.policy = { ...policy, reviewRounds: 3 };
   writeFileSync(ledgerFile, JSON.stringify(ledger, null, 2));
+  resealRun(repo, session);
+}
+
+// A fixture's own write of the open run's ledger.json, sealed as the gate seals its writes
+// (scripts/lib/seal.mjs keeps the same format), so it does not read as a change outside the gate.
+const sealsOf = (realStateDir) => path.join(process.env.DONE_GATE_SEALS || path.join(os.homedir(), ".claude", "done-gate", "seals"), createHash("sha1").update(realStateDir).digest("hex").slice(0, 16));
+export function resealRun(repo, session = "S1") {
+  const stateDir = path.join(repo, ".claude", "gate");
+  const { current } = JSON.parse(readFileSync(path.join(stateDir, "sessions", session, "state.json"), "utf8"));
+  const text = readFileSync(path.join(stateDir, "runs", current, "ledger.json"), "utf8");
+  const dir = sealsOf(realpathSync(stateDir));
+  mkdirSync(dir, { recursive: true });
+  appendFileSync(path.join(dir, `run-${current}-${JSON.parse(text).openedSeq}.seals`), `ledger.json\t${createHash("sha1").update(text).digest("hex")}\n`);
 }
 
 // A run from before the rules stamp: the marker taken back out of the open ledger.

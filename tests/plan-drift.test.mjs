@@ -243,5 +243,5 @@ test("C12 edge: an old run is silent in active mode, and an investigation has no
 test("C14 reported-surface: README's rule table and SKILL.md name R19", () => {
   const readme = readFileSync(path.join(here, "..", "README.md"), "utf8");
   assert.match(readme, /^\| R19 \|[^\n]*gate plan add/m);
-  assert.match(readFileSync(path.join(here, "..", "skills/gate/SKILL.md"), "utf8"), /R18, R19\)/);
+  assert.match(readFileSync(path.join(here, "..", "skills/gate/SKILL.md"), "utf8"), /R18, R19, R20\)/);
 });

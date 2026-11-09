@@ -162,6 +162,7 @@ attempt to finish, and a plain question gets one line saying how to pause.
 | R17 | a skeptic, reviewer, reviewer-2 or worker that wrote its file or edited source made no code or no memory lookup since the run opened (QA: no memory lookup), less any kind the lead declared missing; waivable with `gate waive lookups` |
 | R18 | verify ran no test command covering a closed case's test file: lint and build never count, a test command that names paths covers only those (a `cd` is followed, `--ignore` and `--deselect file::name` take a file out); waivable with `gate waive coverage` |
 | R19 | in active mode (`guards.planDiff` in `models.json`, pinned per run; the default is shadow, which only records and reports), code outside the plan changed: `gate plan add <files> "<why>"` or revert it; it has no waiver |
+| R20 | on a run opened at rules 2 (0.22.0 on), evidence the gate wrote changed outside it: the gate seals (sha1) each events line, `ledger.json`, `verify.json`, `decisions.tsv` and each recorded findings file as it writes them, outside the repo in `~/.claude/done-gate/seals/` (or `DONE_GATE_SEALS`), and before each write it checks what is on disk, so a later gate write cannot hide a change; the user decides: `gate waive evidence "<what changed>" --user-ok "<their words>"` covers the changes seen then, a later one is named again. Detection of slips, not a lock: a shell that also writes the seals gets past it, and a file put back to a version the gate once wrote passes. What had no seals to compare with (a moved repo, no write access there) is listed in the report as not checked |
 
 Waivers are the only way past a keyed step: the user OKs it, Claude records the reason and
 their words with `gate waive <key> "…" --user-ok "<their words>"`, and the report lists every
@@ -216,7 +217,9 @@ checked.
   playbook asks for.
 - **Tamper-evident, not tamper-proof.** Locally the gate is tamper-evident: a determined agent
   can still write its evidence, and only required CI is out of its reach. Waivers and refusals
-  are listed in the report, so what happened stays visible.
+  are listed in the report, so what happened stays visible. On a run opened at rules 2 the gate
+  also keeps a seal of each piece of evidence it writes, outside the repo, and a change that no gate
+  command or hook made blocks the close until you decide (R20).
 - **Fails open, loudly.** A bug in the gate itself stamps `GATE ERROR`; in a hook it exits 0,
   because a hook that could wedge every session in every repo would cost more than one
   unreported task. A `gate` command that crashes exits 1, so a `gate … && next` chain stops.

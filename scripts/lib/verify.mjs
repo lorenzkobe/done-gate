@@ -15,6 +15,7 @@ import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { BusyError, HELD_ENV, acquireTestLock, describeHolder, quote } from "./testlock.mjs";
 import { policyFor, splitAdvice } from "./size.mjs";
+import { sealRunFile } from "./seal.mjs";
 
 const TAIL_LINES = 40;
 const TAIL_BYTES = 8000;
@@ -804,7 +805,9 @@ async function runVerify(ctx, { stepKey = "verify", final = false, force = false
   const driveEvent = drove ? { seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, agent: null, agentType: null, kind: "command", tool: "Bash", cmd: driverCmd, exit: 0, readOnly: true, runs: true, viaVerify: true, ...(drove.skipped ? { reused: true } : {}) } : null;
   if (driveEvent) appendEvents(ctx.stateDir, ctx.session, [driveEvent]);
   // written whole: a Stop hook may read it while a background verify is still writing
-  writeFileSync(`${file}.${process.pid}.tmp`, JSON.stringify(record, null, 2));
+  const text = JSON.stringify(record, null, 2);
+  if (current.ledger.openedSeq) sealRunFile(current.dir, current.ledger.openedSeq, "verify.json", text);
+  writeFileSync(`${file}.${process.pid}.tmp`, text);
   renameSync(`${file}.${process.pid}.tmp`, file);
   rmSync(started, { force: true });
   lock?.release();

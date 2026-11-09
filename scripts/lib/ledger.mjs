@@ -14,6 +14,7 @@ import { emptyTier } from "./size.mjs";
 import { loadPolicy } from "./size.mjs";
 import { helpersOut, implementationHash, newRules, saidSince } from "./rules.mjs";
 import { carryStanding, requireLiveBatch } from "./standing.mjs";
+import { sealRunFile } from "./seal.mjs";
 import { leftBehind } from "./diagnose.mjs";
 import { knownNewer, UPDATE_COMMANDS } from "./release.mjs";
 import { UsageError } from "./context.mjs";
@@ -47,7 +48,9 @@ export function saveLedger(dir, ledger) {
   ledger.updatedAt = new Date().toISOString();
   const file = path.join(dir, "ledger.json");
   const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(ledger, null, 2));
+  const text = JSON.stringify(ledger, null, 2);
+  if (ledger.openedSeq) sealRunFile(dir, ledger.openedSeq, "ledger.json", text);
+  writeFileSync(tmp, text);
   renameSync(tmp, file);
   return ledger;
 }
