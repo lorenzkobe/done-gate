@@ -565,8 +565,18 @@ A `"when": "final"` command is the area suite. Plain `gate verify` does not run 
 as owed while the implementation changed and is not green on it, and R3 holds the close until
 `gate verify --final` (every command, the final one included) has run it green on this code. Run
 it once your edits are done; it may run in the background while review runs. A test-only edit
-keeps it green. It must pass at HEAD: deselect failures that are already there, or every close
-blocks on them. The full suite stays with CI.
+keeps it green. The full suite stays with CI.
+
+A test command that goes red runs once more on the run's base commit, in a temporary git worktree
+(the repo's hooks off, its git-ignored `node_modules`, `.venv`, `venv` and `.env*` linked in), once
+per command per run. When every failing test it names fails there too, and no more fail in all,
+the row counts green as old failures: verify, the report and For you list them. A test the change
+broke, output naming no failing test (node's spec summary, TAP, vitest, jest, pytest, go and cargo
+are read), a base run with no passing test, more than 2 MB of output, or a run that began on
+uncommitted changes or took in another session's commits stays red. A red test command can take
+twice its time. It compares names, not causes: a base checkout missing an input the tests read
+that is not linked fails there too, so a test this change broke can read as old. The linked folders are
+the repo's own: a base run that writes into them writes there.
 
 A verify entry for a linter may say `"onlyNew": true`: its exit 1 counts green when every
 `path:line` or `path(line,col)` it prints is a source file of this repo and none lies on a line

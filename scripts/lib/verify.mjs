@@ -1,12 +1,13 @@
-import { spawn } from "node:child_process";
-import { closeSync, existsSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { DEFAULTS, loadConfig, matchAny } from "./config.mjs";
 import { segments, withoutHeredocs } from "./guard.mjs";
 import { buildState } from "./assess.mjs";
 import { currentLedger, isDone, loadLedger, saveLedger } from "./ledger.mjs";
 import { appendEvents, nextSeq, readEvents } from "./events.mjs";
-import { diffTextOf, driverCommand, implementationHash, newRules, surfaceClear, notRecommended, saidSince, sourceHash, timeoutAdvice, timeoutText, verifyKey, verifyWhere, waiverWordsProblem, workOutSteps } from "./rules.mjs";
+import { diffTextOf, driverCommand, implementationHash, newRules, processAlive, surfaceClear, notRecommended, saidSince, sourceHash, timeoutAdvice, timeoutText, verifyKey, verifyWhere, waiverWordsProblem, workOutSteps } from "./rules.mjs";
 import { repoPath } from "./paths.mjs";
 import { loadSession } from "./session-state.mjs";
 import { diffSnapshots, gitIgnored, parseHunks, snapshot } from "./tree.mjs";
@@ -423,6 +424,122 @@ function ranNoTests(output) {
   return totals.length > 0 || ZERO_LINES.some((pattern) => pattern.test(text));
 }
 
+// The failing tests a runner's output names, its fail total and whether any test passed, or null
+// when it names no failure and no pass: node's spec summary (file › name), TAP, vitest and jest,
+// pytest, go and cargo. Durations, TAP numbers and the given roots are stripped, so two runs of
+// one suite in two folders compare.
+const FAILED = [
+  [/^[ \t]*not ok \d+ - (.+?)[ \t]*$/gm, (m) => (/#\s*(?:TODO|SKIP)\b/i.test(m[1]) ? null : m[1].replace(/[ \t]+#.*$/, ""))],
+  [/^[ \t]*FAIL[ \t]+(\S.*?)(?:[ \t]+\d+(?:\.\d+)?m?s)?[ \t]*$/gm, (m) => m[1]],
+  [/^[ \t]*● (.+?)[ \t]*$/gm, (m) => m[1]],
+  [/^(FAILED|ERROR) (\S+)/gm, (m) => (m[1] === "ERROR" ? `error: ${m[2]}` : m[2])],
+  [/^[ \t]*--- FAIL: (\S+)/gm, (m) => m[1]],
+  [/^test (\S+) \.\.\. FAILED[ \t]*$/gm, (m) => m[1]],
+];
+const FAIL_TOTALS = [/^(?:ℹ|#) fail (\d+)[ \t]*$/gm, /\b(\d+) failed\b/g];
+const PASSED = [/^(?:ℹ|#) pass [1-9]/m, /\b[1-9]\d* (?:passed|passing)\b/, /^ok[ \t]+\S+/m];
+export function failedTests(output, roots) {
+  let text = output.replace(ANSI, "").replace(/\r/g, "");
+  for (const root of [...roots].sort((a, b) => b.length - a.length)) text = text.split(`${root}/`).join("");
+  const names = new Set();
+  const summary = text.split(/^✖ failing tests:\s*$/m)[1];
+  if (summary !== undefined) {
+    let at = null;
+    for (const line of summary.split("\n")) {
+      const where = /^test at (.+?):\d+:\d+\s*$/.exec(line);
+      const failed = /^✖ (.+?)(?: \([\d.]+m?s\))?\s*$/.exec(line);
+      if (where) at = where[1];
+      else if (failed) {
+        names.add(at ? `${at} › ${failed[1]}` : failed[1]);
+        at = null;
+      }
+    }
+  } else {
+    for (const [pattern, name] of FAILED) for (const m of text.matchAll(pattern)) if (name(m)) names.add(name(m));
+  }
+  const totals = FAIL_TOTALS.flatMap((pattern) => [...text.matchAll(pattern)].map((m) => Number(m[1])));
+  const passed = PASSED.some((pattern) => pattern.test(text));
+  if (!names.size && !passed) return null;
+  return { names: [...names].sort(), fail: totals.length ? Math.max(...totals) : null, passed };
+}
+
+const BASE_PREFIX = "done-gate-base-";
+const BASE_RUNS = "base-runs.json";
+// git-ignored inputs a suite reads that a checkout of the base commit lacks
+const BASE_INPUTS = /(?:^|\/)(?:node_modules|\.venv|venv|\.env(?:\.[^/]+)?)$/;
+const git = (root, args, extra = {}) => spawnSync("git", args, { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...extra });
+
+function removeBase(root, dir, wt) {
+  git(root, ["worktree", "remove", "--force", wt]);
+  rmSync(dir, { recursive: true, force: true });
+  git(root, ["worktree", "prune"]);
+}
+
+// A verify killed mid base run leaves its worktree; its folder names the pid that made it.
+function sweepBase(root) {
+  for (const m of (git(root, ["worktree", "list", "--porcelain"]).stdout ?? "").matchAll(/^worktree (.+)$/gm)) {
+    const pid = new RegExp(`/${BASE_PREFIX}(\\d+)-[^/]+/[^/]+$`).exec(m[1])?.[1];
+    if (pid && !processAlive(Number(pid))) removeBase(root, path.dirname(m[1]), m[1]);
+  }
+}
+
+// The command run once more in a temporary worktree of the base commit, the repo's hooks and LFS
+// filters off, with its ignored dependencies and env files linked in. Null: no worktree.
+async function onBase(root, head, run, spawnOptions) {
+  sweepBase(root);
+  const dir = mkdtempSync(path.join(os.tmpdir(), `${BASE_PREFIX}${process.pid}-`));
+  const wt = path.join(dir, path.basename(root));
+  const links = [];
+  try {
+    if (git(root, ["-c", "core.hooksPath=/dev/null", "worktree", "add", "--detach", "--quiet", wt, head], { env: { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" } }).status !== 0) return null;
+    const ignored = (git(root, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]).stdout ?? "").split("\0");
+    for (const rel of ignored.map((p) => p.replace(/\/$/, "")).filter((p) => BASE_INPUTS.test(p) && !p.startsWith(".claude/gate/"))) {
+      const at = path.join(wt, rel);
+      if (!existsSync(path.dirname(at)) || existsSync(at)) continue;
+      symlinkSync(path.join(root, rel), at);
+      links.push(at);
+    }
+    const result = await runCommand({ ...run, whole: true }, wt, spawnOptions);
+    return { ...result, roots: [wt, realpathSync(wt)] };
+  } finally {
+    // a suite that reinstalls its dependencies may have removed the link already
+    for (const link of links) if (lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) unlinkSync(link);
+    removeBase(root, dir, wt);
+  }
+}
+
+// A red test command against the run's base commit: { old: names } when every failing test it
+// names fails there too and no more fail in all, else { note } saying why it stays red, or null
+// when its output names no failing test. One base run per command per run, saved as it ends.
+async function againstBase(ctx, current, key, run, output, spawnOptions) {
+  if (output === false) return { note: "too much output to compare with the base commit" };
+  const now = failedTests(output, [ctx.root, realpathSync(ctx.root)]);
+  const { baseline, foreign } = current.ledger;
+  if (!now?.names.length || !baseline?.head) return null;
+  if (baseline.based?.length || foreign?.length) return { note: "not compared with the base commit: the run began on uncommitted changes or other sessions' commits" };
+  const file = path.join(current.dir, BASE_RUNS);
+  const saved = lastGreen(file, "runs");
+  let base = saved[key]?.head === baseline.head && saved[key]?.cmd === run.cmd ? saved[key] : null;
+  if (!base) {
+    ctx.err(`verify: ${run.cmd} once more on the base commit ${baseline.head.slice(0, 7)}, to tell old failures from new`);
+    const ran = await onBase(ctx.root, baseline.head, run, spawnOptions);
+    const read = ran && !ran.timedOut && typeof ran.output === "string" ? failedTests(ran.output, ran.roots) : null;
+    base = { head: baseline.head, cmd: run.cmd, at: new Date().toISOString(), ms: ran?.ms ?? 0, ...(read ? read : { names: [], fail: null, passed: false }) };
+    ctx.err(`  → base commit: ${ran ? (ran.timedOut ? timeoutText(ran) : `exit ${ran.exit} in ${(ran.ms / 1000).toFixed(1)}s`) : "no worktree"}`);
+    writeFileSync(`${file}.${process.pid}.tmp`, JSON.stringify({ runs: { ...saved, [key]: base } }, null, 2));
+    renameSync(`${file}.${process.pid}.tmp`, file);
+  }
+  if (!base.passed) return { note: "not compared: the base commit run showed no passing test" };
+  const known = new Set(base.names);
+  const fresh = now.names.filter((n) => !known.has(n));
+  if (fresh.length) return { note: `new with this change: ${fresh.slice(0, 10).join(", ")}${fresh.length > 10 ? ", …" : ""}` };
+  if (now.fail !== null && base.fail !== null && now.fail > base.fail) return { note: `more tests fail than on the base commit (${now.fail}, was ${base.fail})` };
+  return { old: now.names };
+}
+
+const oldFailNames = (c) => `  old: ${c.oldFailList.join(", ")}${c.oldFailures > c.oldFailList.length ? ", …" : ""}`;
+const oldFailCount = (c) => `${c.oldFailures} old test failure${c.oldFailures === 1 ? "" : "s"} (failing on the base commit too)`;
+
 const REPORT_READ = 1024 * 1024;
 const WRITE_SLACK_MS = 1000;
 
@@ -574,7 +691,8 @@ async function runVerify(ctx, { stepKey = "verify", final = false, force = false
     // a related template handed only source may find no test for it: the final suite runs later
     const readsTotals = stamped && runsTests(run.cmd, config.testFiles) && !(config.testRelated && entry.related && !row.files.length);
     const ranAt = Date.now();
-    const { output, ...result } = { ...row, ...(await runCommand({ ...run, whole: readsTotals }, entry.cwd ?? ctx.root, { onSpawn: (pgid) => lock?.setGroup(pgid), env: lock ? { [HELD_ENV]: String(process.pid) } : {} })) };
+    const spawnOptions = { onSpawn: (pgid) => lock?.setGroup(pgid), env: lock ? { [HELD_ENV]: String(process.pid) } : {} };
+    const { output, ...result } = { ...row, ...(await runCommand({ ...run, whole: readsTotals }, entry.cwd ?? ctx.root, spawnOptions)) };
     if (entry.related) Object.assign(result, { cmd: entry.cmd, ran: run.cmd });
     // a test run's failures print file:line too: onlyNew never reads one
     if (entry.onlyNew && !runsTests(entry.cmd) && result.exit === 1 && !result.timedOut && output) {
@@ -585,12 +703,17 @@ async function runVerify(ctx, { stepKey = "verify", final = false, force = false
       const why = entry.report ? reportProblem(path.resolve(entry.cwd ?? ctx.root, entry.report), ranAt) : readsTotals && ranNoTests(output) ? "its summary shows no test" : null;
       if (why) Object.assign(result, { exit: 1, rawExit: 0, noTests: true, noTestsWhy: why });
     }
+    if (readsTotals && !entry.repo && result.exit !== 0 && !result.timedOut && !result.noTests) {
+      const judged = await againstBase(ctx, current, key, run, output, spawnOptions);
+      if (judged?.old) Object.assign(result, { exit: 0, rawExit: result.exit, oldFailures: judged.old.length, oldFailList: judged.old.slice(0, 20) });
+      else if (judged?.note) result.baseNote = judged.note;
+    }
     commands.push(result);
     if (result.exit === 0 && !result.timedOut) {
       greenAt[key] = scopeOf(entry.repo ?? null).implementation;
       if (isFinal) greenSource[key] = sourceNow;
-      const { oldFindings, oldList, rawExit } = result;
-      greenTree[key] = { tree: snap.hash, cmd: run.cmd, ...(oldFindings ? { oldFindings, oldList, rawExit } : {}) };
+      const { oldFindings, oldList, oldFailures, oldFailList, rawExit } = result;
+      greenTree[key] = { tree: snap.hash, cmd: run.cmd, ...(oldFindings ? { oldFindings, oldList, rawExit } : {}), ...(oldFailures ? { oldFailures, oldFailList, rawExit } : {}) };
     } else {
       delete greenAt[key];
       delete greenSource[key];
@@ -657,11 +780,14 @@ export const verbs = {
     }
     for (const c of record.commands) {
       if (c.skipped) {
-        ctx.out(`– ${c.cmd}${verifyWhere(c)} — skipped: ${c.skipped}${c.oldFindings ? ` (${c.oldFindings} old finding${c.oldFindings === 1 ? "" : "s"} off this task's lines ignored)` : ""}`);
+        ctx.out(`– ${c.cmd}${verifyWhere(c)} — skipped: ${c.skipped}${c.oldFindings ? ` (${c.oldFindings} old finding${c.oldFindings === 1 ? "" : "s"} off this task's lines ignored)` : ""}${c.oldFailures ? ` (${oldFailCount(c)})` : ""}`);
+        if (c.oldFailures) ctx.out(oldFailNames(c));
         continue;
       }
       const green = c.exit === 0 && !c.timedOut;
-      ctx.out(`${green ? "✓" : "✗"} ${c.cmd}${verifyWhere(c)} — ${c.timedOut ? timeoutText(c) : c.noTests ? `no tests ran: ${c.noTestsWhy}` : `exit ${c.exit}`}${c.oldFindings ? ` (exit ${c.rawExit}: ${c.oldFindings} old finding${c.oldFindings === 1 ? "" : "s"} off this task's lines ignored)` : ""}, ${(c.ms / 1000).toFixed(1)}s`);
+      ctx.out(`${green ? "✓" : "✗"} ${c.cmd}${verifyWhere(c)} — ${c.timedOut ? timeoutText(c) : c.noTests ? `no tests ran: ${c.noTestsWhy}` : c.oldFailures ? `exit ${c.rawExit}: ${oldFailCount(c)}` : `exit ${c.exit}`}${c.oldFindings ? ` (exit ${c.rawExit}: ${c.oldFindings} old finding${c.oldFindings === 1 ? "" : "s"} off this task's lines ignored)` : ""}, ${(c.ms / 1000).toFixed(1)}s`);
+      if (c.oldFailures) ctx.out(oldFailNames(c));
+      if (c.baseNote) ctx.out(`  ${c.baseNote}`);
       if (!green) ctx.out("```\n" + c.tail.split("\n").slice(-12).join("\n") + "\n```"); // the failing tail: the same 12 lines the report shows
       if (c.timedOut && timeoutAdvice(c)) ctx.out(timeoutAdvice(c));
       if (!green && c.cmd.trim() === driverCmd && PORT_IN_USE.test(c.tail ?? "")) ctx.out(`hint: \`${c.cmd}\` says its port is in use: a dev server may still be running. Stop it, or have the run reuse it.`);

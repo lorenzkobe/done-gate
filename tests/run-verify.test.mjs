@@ -818,3 +818,209 @@ test("3.5 C18 R3, the verify output and the report name why a command with exit 
   assert.match(ruleLines(cli(repo, "check"), "R3"), /ran no tests \(its summary shows no test\)/);
   assert.match(cli(repo, "report"), /no tests ran: its summary shows no test/);
 });
+
+// F1: a red test command runs once more on the run's base commit, in a temporary worktree; tests
+// failing there too are old. bin/vitest stands in for a runner: it fails the names in fails.txt,
+// passes pass.txt tests (3 by default), prints node's spec summary and logs each run's folder.
+const fakeRunner = (log) => ({
+  "bin/vitest": [
+    `echo "$PWD $([ -e node_modules/x/index.js ] && echo linked)" >> ${JSON.stringify(log)}`,
+    "[ -e slow.txt ] && sleep 3",
+    "[ -e drop-link.txt ] && [ -L node_modules ] && rm node_modules",
+    "[ -e unreadable.txt ] && { echo boom; exit 1; }",
+    "P=$(cat pass.txt 2>/dev/null || echo 3)",
+    "L=$(mktemp); cat fails.txt > $L; [ -e needs-env ] && [ ! -e .env ] && echo 'env one' >> $L",
+    "F=$(cat failcount.txt 2>/dev/null || grep -c . $L)",
+    'printf "\\342\\204\\271 tests %s\\n\\342\\204\\271 pass %s\\n\\342\\204\\271 fail %s\\n" $((P+F)) $P $F',
+    '[ "$F" -gt 0 ] || exit 0',
+    'printf "\\n\\342\\234\\226 failing tests:\\n"',
+    'while read -r n; do printf "\\ntest at %s/tests/a.test.mjs:3:1\\n\\342\\234\\226 %s (0.3ms)\\n" "$PWD" "$n"; done < $L',
+    "exit 1",
+  ].join("\n") + "\n",
+});
+function baseRepo(name, { base = "", now = base, extra = {}, cmd = "sh bin/vitest" } = {}) {
+  const log = path.join(here, ".tmp", `${name}.runs`);
+  rmSync(log, { force: true });
+  const repo = opened(name, [cmd], { ...fakeRunner(log), "fails.txt": base, ...extra });
+  write(repo, "fails.txt", now);
+  write(repo, "src/a.ts", "export const a = 'changed';\n");
+  const runs = () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : []);
+  return { repo, runs, baseRuns: () => runs().filter((l) => !l.startsWith(`${repo} `) && l !== repo) };
+}
+
+test("F1 C1 happy: a test command red only on tests also failing on the base commit counts green, with the old failures named in verify.json, verify, the report and For you", () => {
+  const { repo, baseRuns } = baseRepo("rv-f1c1", { base: "old one\nold two\n" });
+  const out = cli(repo, "verify");
+  assert.match(out, /✓ sh bin\/vitest — exit 1: 2 old test failures \(failing on the base commit too\)/);
+  const c = row(repo);
+  assert.equal(c.exit, 0);
+  assert.equal(c.rawExit, 1);
+  assert.equal(c.oldFailures, 2);
+  assert.deepEqual(c.oldFailList, ["tests/a.test.mjs › old one", "tests/a.test.mjs › old two"]);
+  assert.equal(baseRuns().length, 1);
+  assert.equal(ruleLines(cli(repo, "check"), "R3"), "");
+  assert.match(cli(repo, "report"), /2 old test failures[^\n]*tests\/a\.test\.mjs › old one/);
+  assert.match(cli(repo, "report", ["--brief"]), /For you:[^\n]*2 old test failures[^\n]*sh bin\/vitest/);
+  const again = cli(repo, "verify");
+  assert.match(again, /skipped: already green on this exact tree[^\n]*2 old test failures/);
+  assert.match(again, /old: tests\/a\.test\.mjs › old one, tests\/a\.test\.mjs › old two/);
+  assert.equal(baseRuns().length, 1);
+  assert.match(cli(repo, "report"), /2 old test failures[^\n]*old two/);
+});
+
+test("F1 C2 refused: a test the change broke (passing on the base commit) keeps the command red and the output names it as new", () => {
+  const { repo } = baseRepo("rv-f1c2", { base: "old one\n", now: "old one\nbroke one\n" });
+  const out = cli(repo, "verify");
+  assert.match(out, /✗ sh bin\/vitest — exit 1/);
+  assert.match(out, /new with this change: tests\/a\.test\.mjs › broke one/);
+  assert.equal(row(repo).exit, 1);
+  assert.equal(row(repo).oldFailures, undefined);
+  assert.match(ruleLines(cli(repo, "check"), "R3"), /red/);
+});
+
+test("F1 C3 refused: a failing test the base commit does not have stays red", () => {
+  const { repo } = baseRepo("rv-f1c3", { base: "old one\n", now: "brand new test\n" });
+  assert.match(cli(repo, "verify"), /new with this change: tests\/a\.test\.mjs › brand new test/);
+  assert.equal(row(repo).exit, 1);
+});
+
+test("F1 C4 edge: output with no failing test name the gate reads stays red and the base commit is not run", () => {
+  const { repo, baseRuns } = baseRepo("rv-f1c4", { base: "old one\n", extra: { "unreadable.txt": "x\n" } });
+  cli(repo, "verify");
+  assert.equal(row(repo).exit, 1);
+  assert.equal(baseRuns().length, 0);
+});
+
+test("F1 C5 refused: a base run that shows no passing test is not trusted and the command stays red", () => {
+  const { repo, baseRuns } = baseRepo("rv-f1c5", { base: "old one\n", extra: { "pass.txt": "0\n" } });
+  write(repo, "pass.txt", "3\n");
+  const out = cli(repo, "verify");
+  assert.equal(baseRuns().length, 1);
+  assert.equal(row(repo).exit, 1);
+  assert.match(out, /the base commit run showed no passing test/);
+});
+
+test("F1 C6 boundary: the same names but a fail total above the base commit's stays red; equal totals count old", () => {
+  const { repo } = baseRepo("rv-f1c6", { base: "old one\n" });
+  write(repo, "failcount.txt", "2\n");
+  assert.match(cli(repo, "verify"), /more tests fail than on the base commit \(2, was 1\)/);
+  assert.equal(row(repo).exit, 1);
+  write(repo, "failcount.txt", "1\n");
+  cli(repo, "verify");
+  assert.equal(row(repo).exit, 0);
+});
+
+test("F1 C7 idempotent: a second red verify of the same command reuses the base result, so the base commit runs once", () => {
+  const { repo, baseRuns } = baseRepo("rv-f1c7", { base: "old one\n", now: "old one\nbroke one\n" });
+  cli(repo, "verify");
+  write(repo, "src/a.ts", "export const a = 'changed again';\n");
+  cli(repo, "verify");
+  assert.equal(baseRuns().length, 1);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(runDir(repo), "base-runs.json"), "utf8")).runs["sh bin/vitest"].names, ["tests/a.test.mjs › old one"]);
+});
+
+test("F1 C8 edge: the worktree and its links are gone after verify, git lists only the repo, and the repo's node_modules is untouched", () => {
+  const { repo, baseRuns } = baseRepo("rv-f1c8", { base: "old one\n", extra: { "node_modules/x/index.js": "module.exports = 1;\n" } });
+  cli(repo, "verify");
+  const [line] = baseRuns();
+  assert.match(line, / linked$/);
+  const dir = line.replace(/ linked$/, "");
+  assert.equal(path.basename(dir), path.basename(repo));
+  assert.equal(existsSync(dir), false);
+  assert.equal(existsSync(path.dirname(dir)), false);
+  const listed = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repo, encoding: "utf8" }).split("\n").filter((l) => l.startsWith("worktree "));
+  assert.equal(listed.length, 1);
+  assert.equal(readFileSync(path.join(repo, "node_modules/x/index.js"), "utf8"), "module.exports = 1;\n");
+
+  const dropped = baseRepo("rv-f1c8d", { base: "old one\n", extra: { "node_modules/x/index.js": "module.exports = 1;\n", "drop-link.txt": "x\n" } });
+  cli(dropped.repo, "verify");
+  assert.equal(row(dropped.repo).exit, 0);
+  assert.equal(existsSync(dropped.baseRuns()[0].replace(/ linked$/, "")), false);
+});
+
+test("F1 C9 edge: a timeout, a lint command and a run opened on an older version never run on the base commit", async () => {
+  const timed = baseRepo("rv-f1c9t", { base: "old one\n", extra: { "slow.txt": "x\n" } });
+  const gateJson = path.join(timed.repo, ".claude/gate.json");
+  writeFileSync(gateJson, JSON.stringify({ verify: [{ cmd: "sh bin/vitest", timeout: 1 }] }));
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "timeout"], { cwd: timed.repo });
+  cli(timed.repo, "verify");
+  assert.equal(row(timed.repo).timedOut, true);
+  assert.equal(timed.baseRuns().length, 0);
+
+  const lint = baseRepo("rv-f1c9l", { base: "old one\n", cmd: "sh bin/vitest-lint" });
+  write(lint.repo, "bin/vitest-lint", readFileSync(path.join(lint.repo, "bin/vitest"), "utf8"));
+  cli(lint.repo, "verify");
+  assert.equal(row(lint.repo).exit, 1);
+  assert.equal(lint.baseRuns().length, 0);
+
+  const { asOldRun } = await import("./helpers.mjs");
+  const old = baseRepo("rv-f1c9o", { base: "old one\n" });
+  asOldRun(old.repo);
+  cli(old.repo, "verify");
+  assert.equal(row(old.repo).exit, 1);
+  assert.equal(old.baseRuns().length, 0);
+});
+
+test("F1 C10 happy: failing test names are read from node spec, TAP, vitest, jest, pytest, go and cargo output", async () => {
+  const { failedTests } = await import("../scripts/lib/verify.mjs");
+  const root = "/work/repo";
+  const spec = "✖ outer (1ms)\nℹ fail 2\n\n✖ failing tests:\n\ntest at /work/repo/tests/a.test.mjs:4:1\n✖ bad one (0.306292ms)\n  AssertionError\n\ntest at tests/b.test.mjs:5:36\n✖ inner bad (12ms)\n";
+  assert.deepEqual(failedTests(spec, [root]).names, ["tests/a.test.mjs › bad one", "tests/b.test.mjs › inner bad"]);
+  assert.equal(failedTests(spec, [root]).fail, 2);
+  assert.deepEqual(failedTests("TAP version 13\nnot ok 3 - bad one # time=1.2ms\n    not ok 1 - inner\nok 4 - fine\n# fail 2\n", [root]).names, ["bad one", "inner"]);
+  assert.deepEqual(failedTests(" FAIL  tests/a.test.ts > suite > bad one 3ms\n Tests  1 failed | 4 passed (5)\n", [root]).names, ["tests/a.test.ts > suite > bad one"]);
+  assert.equal(failedTests(" Tests  1 failed | 4 passed (5)\n FAIL  x > y\n", [root]).fail, 1);
+  assert.deepEqual(failedTests("FAIL tests/a.test.js\n  ● suite › bad one\n\nTests:       1 failed, 3 passed, 4 total\n", [root]).names, ["suite › bad one", "tests/a.test.js"]);
+  assert.deepEqual(failedTests("FAILED tests/test_a.py::test_bad - assert 1 == 2\n==== 1 failed, 2 passed in 0.1s ====\n", [root]).names, ["tests/test_a.py::test_bad"]);
+  assert.deepEqual(failedTests("--- FAIL: TestBad (0.00s)\n    --- FAIL: TestBad/sub (0.00s)\nFAIL\nFAIL\texample.com/a\t0.01s\nFAIL\texample.com/b [build failed]\n", [root]).names, ["TestBad", "TestBad/sub", "example.com/a", "example.com/b [build failed]"]);
+  assert.deepEqual(failedTests("ERROR tests/test_b.py - ImportError\n1 error in 0.1s\n", [root]).names, ["error: tests/test_b.py"]);
+  assert.deepEqual(failedTests("not ok 1 - later # TODO not yet\nnot ok 2 - real\n", [root]).names, ["real"]);
+  assert.deepEqual(failedTests("test tests::bad ... FAILED\ntest result: FAILED. 2 passed; 1 failed\n", [root]).names, ["tests::bad"]);
+  assert.equal(failedTests("boom\n", [root]), null);
+});
+
+test("F1 C11 refused: an ignored .env the tests read is linked into the base worktree, so a test the change broke that needs it stays red", () => {
+  const { repo } = baseRepo("rv-f1c11", { base: "old one\n", now: "old one\nenv one\n", extra: { "needs-env": "x\n", ".gitignore": "node_modules/\nignored.txt\n.env\n" } });
+  write(repo, ".env", "KEY=1\n");
+  assert.match(cli(repo, "verify"), /new with this change: tests\/a\.test\.mjs › env one/);
+  assert.equal(row(repo).exit, 1);
+});
+
+test("F1 C12 refused: a run opened on uncommitted changes does not trust a base run and says why", () => {
+  const log = path.join(here, ".tmp", "rv-f1c12.runs");
+  rmSync(log, { force: true });
+  const repo = makeRepo("rv-f1c12", { ".claude/gate.json": JSON.stringify({ verify: ["sh bin/vitest"] }), ...fakeRunner(log), "fails.txt": "old one\n" });
+  execFileSync("git", ["add", "-A"], { cwd: repo });
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
+  write(repo, "src/a.ts", "export const dirty = 1;\n");
+  cli(repo, "open", ["t", "feature"]);
+  write(repo, "src/a.ts", "export const dirty = 2;\n");
+  assert.match(cli(repo, "verify"), /the run began on uncommitted changes or other sessions' commits/);
+  assert.equal(row(repo).exit, 1);
+});
+
+test("F1 C14 idempotent: the base result is saved when the base run ends, so a verify killed before it wrote verify.json does not run the base again", () => {
+  const { repo, baseRuns } = baseRepo("rv-f1c14", { base: "old one\n", now: "old one\nbroke one\n" });
+  cli(repo, "verify");
+  assert.ok(existsSync(path.join(runDir(repo), "base-runs.json")));
+  rmSync(path.join(runDir(repo), "verify.json"));
+  cli(repo, "verify");
+  assert.equal(baseRuns().length, 1);
+});
+
+test("F1 C15 edge: a worktree a dead verify left is removed on the next base run, and the repo's hooks do not run on the base checkout", () => {
+  const { repo, baseRuns } = baseRepo("rv-f1c15", { base: "old one\n" });
+  const left = execFileSync("mktemp", ["-d", path.join(execFileSync("node", ["-p", "require('os').tmpdir()"], { encoding: "utf8" }).trim(), "done-gate-base-999999-XXXXXX")], { encoding: "utf8" }).trim();
+  execFileSync("git", ["worktree", "add", "--detach", "-q", path.join(left, "w"), "HEAD"], { cwd: repo });
+  const marker = path.join(here, ".tmp", "rv-f1c15.hook");
+  rmSync(marker, { force: true });
+  write(repo, ".git/hooks/post-checkout", `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`);
+  execFileSync("chmod", ["+x", path.join(repo, ".git/hooks/post-checkout")]);
+  cli(repo, "verify");
+  assert.equal(baseRuns().length, 1);
+  assert.equal(row(repo).exit, 0);
+  assert.equal(existsSync(left), false);
+  assert.equal(existsSync(marker), false);
+  const listed = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repo, encoding: "utf8" }).split("\n").filter((l) => l.startsWith("worktree "));
+  assert.equal(listed.length, 1);
+});

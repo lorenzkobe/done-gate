@@ -78,10 +78,10 @@ export function verifyLines(verify, { tails = true, unfinished = null } = {}) {
   const out = [];
   for (const c of verify.commands) {
     if (c.skipped) {
-      out.push(`- – \`${c.cmd}\`${verifyWhere(c)} — skipped: ${c.skipped}${c.oldFindings ? ` (${plural(c.oldFindings, "old lint finding")} ignored)` : ""}`);
+      out.push(`- – \`${c.cmd}\`${verifyWhere(c)} — skipped: ${c.skipped}${c.oldFindings ? ` (${plural(c.oldFindings, "old lint finding")} ignored)` : ""}${c.oldFailures ? ` (${oldFailText(c)})` : ""}`);
       continue;
     }
-    out.push(`- ${c.exit === 0 && !c.timedOut ? "✓" : "✗"} \`${c.cmd}\`${verifyWhere(c)} — ${resultText(c)}${c.oldFindings ? ` (exit ${c.rawExit}: ${plural(c.oldFindings, "old finding")} off this task's lines ignored: ${c.oldList.join(", ")}${c.oldFindings > c.oldList.length ? ", …" : ""})` : ""}, ${(c.ms / 1000).toFixed(1)}s`);
+    out.push(`- ${c.exit === 0 && !c.timedOut ? "✓" : "✗"} \`${c.cmd}\`${verifyWhere(c)} — ${resultText(c)}${c.oldFindings ? ` (exit ${c.rawExit}: ${plural(c.oldFindings, "old finding")} off this task's lines ignored: ${c.oldList.join(", ")}${c.oldFindings > c.oldList.length ? ", …" : ""})` : ""}${c.oldFailures ? ` (exit ${c.rawExit}: ${oldFailText(c)})` : ""}${c.baseNote ? ` (${c.baseNote})` : ""}, ${(c.ms / 1000).toFixed(1)}s`);
     if (tails && (c.exit !== 0 || c.timedOut)) out.push(`\n\`\`\`\n${c.tail.split("\n").slice(-12).join("\n")}\n\`\`\``);
   }
   return out;
@@ -132,6 +132,7 @@ export function actOnRows(ledger, dir, reviews, { embed = true } = {}) {
 // changes carry to the next run, whose report lists them.
 const weakenedIn = (state) => (state.ledger.status === "open" ? weakened(state) : state.ledger.weakened ?? []);
 
+const oldFailText = (c) => `${plural(c.oldFailures, "old test failure")}, failing on the base commit too: ${c.oldFailList.join(", ")}${c.oldFailures > c.oldFailList.length ? ", …" : ""}`;
 const resultText = (c) => (c.timedOut ? timeoutText(c) : c.noTests ? `no tests ran: ${c.noTestsWhy}` : `exit ${c.exit}`);
 const STAGE_ROLES = { skeptic: ["skeptic"], review: ["reviewer", "reviewer-2"] };
 
@@ -504,6 +505,7 @@ function forYouLine(state, unmet) {
   for (const r of ledger.rebaselines ?? []) items.push(`${plural(r.paths.length, "file")} taken out of this task's changes by hand (${plain(r.reason)})`);
   for (const cmd of ledger.verifyDropped ?? []) if ((state.config?.verify ?? []).some((v) => v.cmd === cmd)) items.push(`\`${oneLine(cmd)}\` from gate.json was dropped from verify for this run`);
   for (const x of verifyExclusions(state).filter((e) => e.flag)) items.push(`verify excludes \`${oneLine(x.text)}\` (${x.flag})`);
+  for (const c of state.verify?.commands ?? []) if (c.oldFailures) items.push(`${plural(c.oldFailures, "old test failure")} in \`${oneLine(c.cmd)}\`, failing on the base commit too (${c.oldFailList.slice(0, 3).join(", ")}${c.oldFailures > 3 ? ", …" : ""})`);
   for (const c of state.verify?.commands ?? []) if (c.oldFindings) items.push(`${plural(c.oldFindings, "old lint finding")} ignored by \`${oneLine(c.cmd)}\` (${c.oldList.slice(0, 3).join(", ")}${c.oldFindings > 3 ? ", …" : ""})`);
   if (ledger.overridden) items.push("the gate's emergency brake stopped a stuck loop, so the checks were not met; treat everything above as unverified");
   if (ledger.steps.some((s) => s.key === "context" && s.state === null)) items.push("no context was written: what was traced, what depends on it, what was researched");
