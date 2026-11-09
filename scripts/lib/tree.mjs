@@ -453,7 +453,8 @@ export function noteLine(rel, text) {
 
 // Repeated line pairs get an occurrence ordinal, so a key is unique within the file. The flat
 // key is the code key: its previous line skips note lines, and it drops whitespace except, where
-// indentation matters, the leading indent, so a re-indent or a comment above keeps it.
+// indentation matters, the leading indent, so a re-indent or a comment above keeps it. The own
+// key is the line alone, so a line whose neighbour was rewritten can still be told unchanged.
 export function changedUnits(text, rel = "") {
   const out = [];
   const seen = new Map();
@@ -474,7 +475,8 @@ export function changedUnits(text, rel = "") {
       if (l.tag === "+" || l.tag === "-") {
         const key = ordinal(hash(`${l.tag}${line}\u0000${prev}`));
         const flat = ordinal(`f${hash(`${l.tag}${squash(line)}\u0000${squash(prevCode)}`)}`);
-        out.push({ pos: l.pos, key, flat, ...(note ? { note: true } : {}), ...(l.tag === "-" ? { minus: true } : {}) });
+        const own = ordinal(`o${l.tag}${hash(squash(line))}`);
+        out.push({ pos: l.pos, key, flat, own, ...(note ? { note: true } : {}), ...(l.tag === "-" ? { minus: true } : {}) });
       }
       if (l.tag !== "-") {
         prev = line;

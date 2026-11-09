@@ -755,11 +755,11 @@ export const verbs = {
         let huddle = file ? ledger.huddles.find((h) => h.role === role && h.file === file) : null;
         const seen = file ? ledger.seen?.[file] : null;
         const seenFacts = () => Array.isArray(seen?.files)
-          ? { files: seen.files, briefSeq: seen.seq, ...(seen.units ? { units: seen.units } : {}), ...(seen.at ? { at: seen.at } : {}), ...(seen.edges ? { edges: seen.edges } : {}), ...(seen.fixCheck ? { fixCheck: true } : {}), ...(seen.part ? { part: true } : {}), ...(seen.answers ? { answers: true } : {}), ...(seen.disputes ? { disputes: seen.disputes } : {}), ...(seen.flats ? { flats: seen.flats } : {}), ...(seen.notes ? { notes: seen.notes } : {}), ...(seen.late ? { late: seen.late } : {}) }
+          ? { files: seen.files, briefSeq: seen.seq, ...(seen.units ? { units: seen.units } : {}), ...(seen.at ? { at: seen.at } : {}), ...(seen.edges ? { edges: seen.edges } : {}), ...(seen.fixCheck ? { fixCheck: true } : {}), ...(seen.part ? { part: true } : {}), ...(seen.answers ? { answers: true } : {}), ...(seen.disputes ? { disputes: seen.disputes } : {}), ...(seen.flats ? { flats: seen.flats } : {}), ...(seen.owns ? { owns: seen.owns } : {}), ...(seen.notes ? { notes: seen.notes } : {}), ...(seen.late ? { late: seen.late } : {}) }
           : {};
         // a round whose file was lost and briefed again takes what the newer brief showed
         if (huddle && seen?.seq > (huddle.briefSeq ?? Infinity)) {
-          for (const key of ["files", "briefSeq", "units", "at", "edges", "fixCheck", "part", "answers", "disputes", "flats", "notes", "late"]) delete huddle[key];
+          for (const key of ["files", "briefSeq", "units", "at", "edges", "fixCheck", "part", "answers", "disputes", "flats", "owns", "notes", "late"]) delete huddle[key];
           Object.assign(huddle, seenFacts());
         }
         if (!huddle) {

@@ -861,7 +861,7 @@ function coverage(state, role, after) {
     }
     const units = changedUnitsOf(state, rel);
     const all = positionsOf(units);
-    counts = { keys: baseCounts(units.map((u) => u.key)), flats: baseCounts(units.map((u) => u.flat)) };
+    counts = { keys: baseCounts(units.map((u) => u.key)), flats: baseCounts(units.map((u) => u.flat)), ...(calls ? { owns: baseCounts(units.map((u) => u.own)), prev: codeBefore(units) } : {}) };
     // rounds with every item closed and an edit since: the fix narrows them to the lines it
     // changed, unless it deleted a line, which keeps the rule from before (the whole file, or
     // slice, waits for a round)
@@ -892,7 +892,7 @@ function coverage(state, role, after) {
     // round saw what it recorded, a re-indented line by its flat key where indentation is free
     const flat = (h, u) => (h.flats?.[rel] ?? []).includes(u.flat) && (Boolean(h.notes) || !indentMatters(rel));
     const saw = (h, u) => (calls && keyed(h)
-      ? h.units[rel].includes(u.key) || flat(h, u)
+      ? h.units[rel].includes(u.key) || flat(h, u) || carried(h, rel, u, counts)
       : whole(h) || (h.units?.[rel] ?? []).includes(u.key) || (Boolean(h.notes) && flat(h, u)));
     const excused = new Set((state.ledger.unchanged ?? []).flatMap((c) => c.keys?.[rel] ?? []));
     // a whitespace-only change to a line the task did not add is not in a whitespace-ignoring diff
@@ -946,7 +946,50 @@ function keptLine(round, rel, unit, now) {
   }
   const rec = byRel.get(rel);
   const kept = (set, counts, nowCounts, k) => set.has(k) && (nowCounts.get(baseOf(k)) ?? 0) <= (counts.get(baseOf(k)) ?? 0);
-  return kept(rec.keys, rec.counts, now.keys, unit.key) || kept(rec.flats, rec.flatCounts, now.flats, unit.flat);
+  return kept(rec.keys, rec.counts, now.keys, unit.key) || kept(rec.flats, rec.flatCounts, now.flats, unit.flat) || carried(round, rel, unit, now);
+}
+
+// Each changed code line's code line right before it, when that one is changed too and only
+// comment lines sit between them.
+function codeBefore(units) {
+  const notes = new Set(units.filter((u) => u.note && !u.minus).map((u) => u.pos));
+  const out = new Map();
+  let last = null;
+  for (const u of units) {
+    if (u.minus || u.note) continue;
+    if (last) {
+      let p = last.pos + 1;
+      while (p < u.pos && notes.has(p)) p++;
+      if (p === u.pos) out.set(u.key, last);
+    }
+    last = u;
+  }
+  return out;
+}
+
+// A line the round saw, right after a line rewritten since. A moved line keeps its old neighbour
+// in the file, or lands beside an old line, so it stays owed.
+const ownsBy = new WeakMap();
+function carried(round, rel, unit, now) {
+  const prev = now.prev?.get(unit.key);
+  const owns = round.owns?.[rel];
+  const at = round.at?.[rel];
+  if (!prev || !owns || !at || unit.note) return false;
+  let byRel = ownsBy.get(round);
+  if (!byRel) ownsBy.set(round, (byRel = new Map()));
+  if (!byRel.has(rel)) byRel.set(rel, { index: new Map(owns.map((k, i) => [k, i])), counts: baseCounts(owns), notes: new Set(round.notes?.[rel] ?? []) });
+  const rec = byRel.get(rel);
+  const seen = (k) => rec.index.has(k) && (now.owns.get(baseOf(k)) ?? 0) <= (rec.counts.get(baseOf(k)) ?? 0);
+  if (!seen(unit.own) || seen(prev.own)) return false;
+  const { notes } = rec;
+  const i = rec.index.get(unit.own);
+  let j = i - 1;
+  while (j >= 0 && (notes.has(round.units[rel][j]) || owns[j].startsWith("o-"))) j--;
+  if (j < 0) return false;
+  let p = at[j] + 1;
+  for (let k = j + 1; k < i && p < at[i]; k++) if (notes.has(round.units[rel][k]) && at[k] === p) p++;
+  if (p !== at[i]) return false;
+  return (now.owns.get(baseOf(owns[j])) ?? 0) < (rec.counts.get(baseOf(owns[j])) ?? 0);
 }
 
 // Whether the lines a round recorded (its keys, in file order) lost one the fix did not replace.

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp, pinnedBefore } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, pinnedBefore, resealRun } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { sliceEnd } from "../scripts/lib/tree.mjs";
 
@@ -69,6 +69,8 @@ const FINDING = "off by one — src/mid.ts:30 — x — []";
 const fixLine30 = (repo, v = 999) => edit(repo, MID, body(60, "mid").replace("mid30 = 30", `mid30 = ${v}`));
 // the R5 line's entries for the file: the bare path, or path:from-to spans
 const entriesOf = (line) => [...new Set([...line.matchAll(/src\/mid\.ts(:\d+-\d+)?/g)].map((m) => m[0]))];
+// whether the entries owe a line: the bare path owes every line
+const owes = (entries, pos) => entries.some((e) => e === MID || ((m) => m && Number(m[1]) <= pos && pos <= Number(m[2]))(/:(\d+)-(\d+)$/.exec(e)));
 
 test("C1 happy: a whole-file round's fixed finding re-opens only the edited lines; a round on them clears R5", () => {
   const repo = opened("fc-c1");
@@ -205,7 +207,7 @@ test("C12 reported-surface: a finding whose fix landed in the piece's file is re
   round(repo, "reviewer", null, ["caller passes null — src/other.ts:1 — x — []"]);
   fixLine30(repo);
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
-  const packet = packetOf(cli(repo, "brief", ["reviewer", "--files", "src/mid.ts:31-32"]));
+  const packet = packetOf(cli(repo, "brief", ["reviewer", "--files", "src/mid.ts:31-31"]));
   assert.match(/## Findings to re-check\n([\s\S]*?)(?=\n## |$)/.exec(packet)?.[1] ?? "", /H1\.1/, packet);
 });
 
@@ -385,12 +387,79 @@ test("6.4 L1 happy: a 3-line change after a clean round is held until a round re
   assert.ok(!blocks(check(repo), "R5"), "anchor: the clean round covers the file");
   lateEdit(repo, 10, 12);
   const r5 = ruleLine(check(repo), "R5");
-  // the line after an edit is owed too: its key holds the line before it
-  assert.match(r5, /src\/mid\.ts:10-13/, r5);
+  // the line after the edit kept its text, so it is not owed though its key holds the line before it
+  assert.match(r5, /src\/mid\.ts:10-12\b/, r5);
   const printed = /`gate brief reviewer --files ([^`]+)`/.exec(r5)?.[1];
-  assert.equal(printed, "src/mid.ts:10-13", r5);
+  assert.equal(printed, "src/mid.ts:10-12", r5);
   round(repo, "reviewer", printed);
   assert.ok(!blocks(check(repo), "R5"), check(repo));
+});
+
+test("6.4 L1g edge: two edits apart owe each edited line, and neither unchanged line after them", () => {
+  const repo = opened("fc-64-l1g");
+  round(repo, "reviewer", null);
+  edit(repo, MID, body(60, "mid").replace("mid9 = 9;", "mid9 = 9000;").replace("mid19 = 19;", "mid19 = 19000;"));
+  assert.deepEqual(entriesOf(ruleLine(check(repo), "R5")), ["src/mid.ts:10-10", "src/mid.ts:20-20"]);
+});
+
+test("6.4 L1h boundary: a line inserted after a clean round leaves the unchanged line after it owed", () => {
+  const repo = opened("fc-64-l1h");
+  round(repo, "reviewer", null);
+  edit(repo, MID, body(60, "mid").replace("export const mid10 = 10;", "export const added = 1;\nexport const mid10 = 10;"));
+  const entries = entriesOf(ruleLine(check(repo), "R5"));
+  for (const pos of [11, 12]) assert.ok(owes(entries, pos), `line ${pos} not owed: ${entries.join(", ")}`);
+});
+
+test("6.4 L1b edge: a reviewed line moved after a clean round is owed where it went, and so are the lines its move pulled apart", () => {
+  const repo = opened("fc-64-l1b");
+  round(repo, "reviewer", null);
+  // mid9 (line 10) moves below mid39: line 10 and the lines either side of its new place are owed
+  const lines = body(60, "mid").split("\n");
+  const [moved] = lines.splice(9, 1);
+  lines.splice(39, 0, moved);
+  edit(repo, MID, lines.join("\n"));
+  const entries = entriesOf(ruleLine(check(repo), "R5"));
+  for (const pos of [10, 40, 41]) assert.ok(owes(entries, pos), `line ${pos} not owed: ${entries.join(", ")}`);
+});
+
+test("6.4 L1c boundary: a round recorded before own keys were kept still owes the line after an edit", () => {
+  const repo = opened("fc-64-l1c");
+  round(repo, "reviewer", null);
+  const file = path.join(runDir(repo), "ledger.json");
+  const ledger = JSON.parse(readFileSync(file, "utf8"));
+  for (const h of ledger.huddles) delete h.owns;
+  for (const v of Object.values(ledger.seen ?? {})) delete v.owns;
+  writeFileSync(file, JSON.stringify(ledger, null, 2));
+  resealRun(repo);
+  lateEdit(repo, 10, 12);
+  assert.match(ruleLine(check(repo), "R5"), /src\/mid\.ts:10-13/);
+});
+
+test("6.4 L1d edge: a reviewed line deleted after a clean round leaves the line after it owed", () => {
+  const repo = opened("fc-64-l1d");
+  round(repo, "reviewer", null);
+  edit(repo, MID, body(60, "mid").replace("export const mid20 = 20;\n", ""));
+  const entries = entriesOf(ruleLine(check(repo), "R5"));
+  assert.ok(owes(entries, 21), `line 21 not owed: ${entries.join(", ")}`);
+});
+
+test("6.4 L1e edge: a reviewed line moved up to sit after a new line stays owed, since its old neighbour is still in the file", () => {
+  const repo = opened("fc-64-l1e");
+  round(repo, "reviewer", null);
+  // lines 11-14 hold mid10..mid13: mid10 is rewritten and mid12 moves above mid11
+  const lines = body(60, "mid").split("\n");
+  lines.splice(10, 3, "export const fresh = 1;", lines[12], lines[11]);
+  edit(repo, MID, lines.join("\n"));
+  const entries = entriesOf(ruleLine(check(repo), "R5"));
+  for (const pos of [11, 12, 13]) assert.ok(owes(entries, pos), `line ${pos} not owed: ${entries.join(", ")}`);
+});
+
+test("6.4 L1f boundary: a round whose finding was fixed and closed narrows to the fixed line alone", () => {
+  const repo = opened("fc-64-l1f");
+  round(repo, "reviewer", null, [FINDING]);
+  fixLine30(repo);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
+  assert.deepEqual(entriesOf(ruleLine(check(repo), "R5")), ["src/mid.ts:31-31"]);
 });
 
 test("6.4 L2 edge: a 3-line change after a finished re-check is held the same way", () => {
@@ -403,17 +472,17 @@ test("6.4 L2 edge: a 3-line change after a finished re-check is held the same wa
   let text = body(60, "mid").replace("mid30 = 30", "mid30 = 999");
   for (const i of [40, 41, 42]) text = text.replace(`mid${i} = ${i};`, `mid${i} = ${i + 5000};`);
   edit(repo, MID, text);
-  assert.match(ruleLine(check(repo), "R5"), /src\/mid\.ts:41-44/);
+  assert.match(ruleLine(check(repo), "R5"), /src\/mid\.ts:41-43\b/);
 });
 
 test("6.4 L3 happy: gate huddle unchanged with a reason clears the hold, and the report lists the reason", () => {
   const repo = opened("fc-64-l3");
   round(repo, "reviewer", null);
   lateEdit(repo, 10, 12);
-  const out = cli(repo, "huddle", ["unchanged", "src/mid.ts:10-13", "renamed constants only, no caller reads them"]);
-  assert.match(out, /4 lines/);
+  const out = cli(repo, "huddle", ["unchanged", "src/mid.ts:10-12", "renamed constants only, no caller reads them"]);
+  assert.match(out, /3 lines/);
   assert.ok(!blocks(check(repo), "R5"), check(repo));
-  assert.match(reportOf(repo), /unchanged after review: src\/mid\.ts:10-13 — renamed constants only, no caller reads them/);
+  assert.match(reportOf(repo), /unchanged after review: src\/mid\.ts:10-12 — renamed constants only, no caller reads them/);
   lateEdit(repo, 10, 12, 8);
   assert.match(ruleLine(check(repo), "R5"), /src\/mid\.ts:10-1[23]/, "a later edit to excused lines is a new change");
 });
@@ -495,7 +564,7 @@ test("6.4 L11 boundary: a late round in parts ends the file only with the part t
   edit(repo, MID, (body(60, "mid") + body(500, "late", 1000)).replace("late1009 = 1009", "late1009 = 77"));
   cli(repo, "huddle", ["resolve", id, "--evidence", "doc"]);
   const r5 = ruleLine(check(repo), "R5");
-  assert.match(r5, /src\/mid\.ts:70-71/, `the part's fixed line is still owed:\n${r5}`);
+  assert.match(r5, /src\/mid\.ts:70-70\b/, `the part's fixed line is still owed:\n${r5}`);
   const rest = /`gate brief reviewer --files ([^`]+)`/.exec(r5)[1];
   round(repo, "reviewer", rest);
   assert.ok(!blocks(check(repo), "R5"), `the part that takes the rest ends the file:\n${check(repo)}`);
@@ -529,7 +598,7 @@ test("6.5 K2 edge: a fix that adds a comment and edits code names only the code 
   edit(repo, MID, fixed.join("\n"));
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   const entries = entriesOf(ruleLine(check(repo), "R5"));
-  assert.deepEqual(entries, ["src/mid.ts:47-48"], entries.join(", ")); // the edited line and the one after it; not the comment at 41 or the line below it
+  assert.deepEqual(entries, ["src/mid.ts:47-47"], entries.join(", ")); // the edited line; not the comment at 41, the line below it or the unchanged line after the edit
 });
 
 test("6.5 K3 happy: a comment-only change after a clean round owes no call", () => {

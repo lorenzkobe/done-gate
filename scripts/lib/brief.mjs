@@ -514,11 +514,13 @@ export const verbs = {
       // moves them without losing them, and a fix re-opens only the lines it changed
       const units = {};
       const flats = {};
+      const owns = {};
       const notes = {};
       const at = {};
       for (const r of rows) {
         units[r.e.path] = [...(units[r.e.path] ?? []), ...r.units.map((u) => u.key)];
         flats[r.e.path] = [...(flats[r.e.path] ?? []), ...r.units.map((u) => u.flat)];
+        owns[r.e.path] = [...(owns[r.e.path] ?? []), ...r.units.map((u) => u.own)];
         notes[r.e.path] = [...(notes[r.e.path] ?? []), ...r.units.filter((u) => u.note && !u.minus).map((u) => u.key)];
         at[r.e.path] = [...(at[r.e.path] ?? []), ...r.units.map((u) => u.pos)];
       }
@@ -531,7 +533,7 @@ export const verbs = {
         const after = all.find((u) => u.pos > r.e.to) ?? null;
         edges[r.e.path] = [edges[r.e.path]?.[0] ?? (before && [before.key, before.pos, before.flat]), after && [after.key, after.pos, after.flat]];
       }
-      piece = { files: entries, lines, units, flats, notes, at, ...(Object.keys(edges).length ? { edges } : {}) };
+      piece = { files: entries, lines, units, flats, owns, notes, at, ...(Object.keys(edges).length ? { edges } : {}) };
     }
     // blind QA is for size large (a plan that named no files predicted nothing, and is not refused)
     if (role === "qa" && tierOf(state.ledger).predicted !== null && !leadDelegates(state.ledger, state.policy)) {
@@ -666,7 +668,7 @@ export const verbs = {
     // seen is what this round's reviewer is shown (its huddle inherits it); the other roles'
     // briefs are dated under briefed
     if (piece) {
-      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...earlierOf(state.ledger.seen?.[own]), ...(Object.keys(piece.units).length ? { units: piece.units, flats: piece.flats, notes: piece.notes } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true, ...(inParts ? { part: true } : {}) } : {}), ...(answers && !stillOpen ? { answers: true } : {}), ...(lateFiles.length ? { late: lateFiles } : {}), ...(toAnswer.length ? { disputes: toAnswer.map((a) => a.id) } : {}) } };
+      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...earlierOf(state.ledger.seen?.[own]), ...(Object.keys(piece.units).length ? { units: piece.units, flats: piece.flats, owns: piece.owns, notes: piece.notes } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true, ...(inParts ? { part: true } : {}) } : {}), ...(answers && !stillOpen ? { answers: true } : {}), ...(lateFiles.length ? { late: lateFiles } : {}), ...(toAnswer.length ? { disputes: toAnswer.map((a) => a.id) } : {}) } };
       saveLedger(state.dir, state.ledger);
     } else if (own) {
       state.ledger.briefed = { ...(state.ledger.briefed ?? {}), [own]: { seq: nextSeq(), ...earlierOf(state.ledger.briefed?.[own]), ...(owned ? { files: owned } : {}) } };
