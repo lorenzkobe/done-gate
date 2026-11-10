@@ -7,6 +7,17 @@ evidence is (a run folder, a session, a command and its output).
 
 ## Open
 
+Failed commands missing from headless trials, 2026-11-10 (re-trial 3 of the courtly discount task,
+claude 2.1.321, `claude -p` with `--plugin-dir` this branch and `--permission-mode auto`; seen in
+re-trial 2 too). The session transcript has 4 Bash results that are errors starting `Exit code 1`,
+two of them red test runs, yet the gate's events.jsonl for that session holds 105 commands and none
+with an exit other than 0. So the red-before-green runs reached the gate only when piped through
+`grep`, whose exit is the pipe's, and the gate read the test counts from the output instead. The
+hook is wired (`PostToolUseFailure` for `Bash` in hooks/hooks.json) and `events.mjs` reads
+`Exit code <n>`; why nothing was logged is not checked. Seen only headless, not yet in real work.
+First step when it is picked up: one `claude -p` call that runs `false`, and read whether the hook
+fired.
+
 To check when they first appear in a real run (0.22.0, decided 2026-11-09): the zero-test wording
 of jest, pytest and cargo (`ranNoTests` in scripts/lib/verify.mjs is from memory, not from their
 output), and the fields of Claude Code's StopFailure payload (`turn-failed` in
