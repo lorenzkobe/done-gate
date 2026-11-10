@@ -144,6 +144,12 @@ Not problems: nothing here is built until an Open entry from a real run points a
 names what to look for in the run records. From the 2026-10-20 look at pstack and Matt Pocock's
 skills.
 
+- **Import loops between the library modules.** Seen 2026-11-10 in the pre-push check of 0.22.0:
+  the code index reports 36 loops in `scripts/lib` (`events.mjs:7` and `guard.mjs:8` import each
+  other; `rules.mjs` → `size.mjs` → `assess.mjs` → `rules.mjs`; `slop.mjs` and `rules.mjs`), and
+  `rules.mjs` is 1,758 lines. Nothing in a real run was held up by them: the suite passes and four
+  trials closed clean. Look for: a change that breaks at load time on import order, or a batch
+  whose review keeps finding side effects in a module it did not mean to touch.
 - **Feedback that travels (build first after the freeze).** Run records stay on the laptop that
   made them (`.claude/gate/` is git-ignored), so friction from other laptops only arrives when
   someone asks for a report. Idea: at `gate close`, save a few lines of friction from the run

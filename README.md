@@ -369,7 +369,7 @@ before the code.
 | small | one source file, ≤ 40 lines, no UI, schema or high-risk path | reviewer |
 | standard | ≤ 10 files, ≤ 400 lines, or any UI, schema or high-risk file | skeptic, reviewer |
 | large | more than that | skeptic, QA (blind tests), reviewer, a second reviewer; a task that grows here mid-task gets the same from that point (the lead's earlier edits stand, QA writes the missing tests blind) and the report says it grew |
-| any | a round with Act-on items | another round, same reviewer, fresh context, until one comes back clean (three at most) |
+| any | a round with Act-on items | one re-check over the lines the fixes changed, by the same reviewer (sent the next packet) or a newly started one; a run pinned before 0.22 keeps three rounds |
 | any | a review finding the model disputes with evidence and the reviewer upholds | you: fix it or close it on your words |
 
 `gate note plan --files a.ts,b.ts` predicts the tier before the diff exists, so a small
