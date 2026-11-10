@@ -623,6 +623,9 @@ test("C26 both reviewer role files run a probe that may not finish under timeout
   for (const role of ["reviewer", "reviewer-2"]) {
     const text = readFileSync(path.join(pluginRoot, "agents", `${role}.md`), "utf8").replace(/\s+/g, " ");
     assert.match(text, /may not finish[^.]*`timeout 60`/, `${role}.md`);
+    // timeout is not part of stock macOS
+    assert.match(text, /`gtimeout 60` where `timeout` is not installed/, `${role}.md`);
+    assert.match(text, /with neither, skip the probe and name it under Can't verify/, `${role}.md`);
     assert.match(text, /stop every background command you started before you hand back/, `${role}.md`);
   }
 });
