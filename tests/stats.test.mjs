@@ -1167,6 +1167,88 @@ test("C73 edge: a duplicate id counts once at its largest count; a bad line and 
   assert.match(line(tokensOf(okIn(repo, home)), "standard:"), /median 100 output/);
 });
 
+// `written` alone is a line with no 1h/5m split; `h1` and `m5` give the split Claude Code writes
+const countsLine = (minute, id, { output, input, written, h1, m5, read, model }) => JSON.stringify({
+  timestamp: atMinute(minute),
+  type: "assistant",
+  message: {
+    id,
+    model,
+    role: "assistant",
+    usage: {
+      input_tokens: input,
+      cache_creation_input_tokens: written ?? h1 + m5,
+      cache_read_input_tokens: read,
+      output_tokens: output,
+      ...(written === undefined ? { cache_creation: { ephemeral_1h_input_tokens: h1, ephemeral_5m_input_tokens: m5 } } : {}),
+    },
+  },
+});
+const OPUS = "claude-opus-5-5";
+const SONNET = "claude-sonnet-5-5";
+
+test("input C1-C3 happy: a size row adds the median input per run, a role row its input totals, and each model gets a row", () => {
+  const repo = makeRepo("stats-in1");
+  const home = homeFor("stats-in1");
+  writeRun(repo, "a", hourRun(["S1"]));
+  writeRun(repo, "b", hourRun(["S2"]));
+  writeTranscript(home, "S1", [countsLine(1, "a1", { output: 100, input: 10, h1: 200, m5: 0, read: 1000, model: OPUS })]);
+  writeHelper(home, "S1", "r1", [countsLine(2, "a2", { output: 50, input: 4, h1: 0, m5: 20, read: 300, model: OPUS })]);
+  writeTranscript(home, "S2", [countsLine(1, "b1", { output: 300, input: 26, h1: 380, m5: 0, read: 3700, model: SONNET })]);
+  const block = tokensOf(okIn(repo, home));
+  assert.match(line(block, "standard:"), /helpers 11%; input per run: median 2\.5k cache read, 290 cache written 1h, 10 cache written 5m, 20 uncached$/);
+  assert.match(line(block, "reviewer:"), /100% of helper output; input: 300 cache read, 0 cache written 1h, 20 cache written 5m, 4 uncached$/);
+  const rows = block.split("\n").filter((l) => l.trimStart().startsWith("model "));
+  assert.deepEqual(rows.map((l) => l.trim()), [
+    `model ${SONNET}: 300 output, 3700 cache read, 380 cache written 1h, 0 cache written 5m, 26 uncached`,
+    `model ${OPUS}: 150 output, 1300 cache read, 200 cache written 1h, 20 cache written 5m, 14 uncached`,
+  ]);
+});
+
+test("input C4 C6 edge: a count no line carried prints missing, a line with no model counts under unknown, a synthetic line is left out", () => {
+  const repo = makeRepo("stats-in2");
+  const home = homeFor("stats-in2");
+  writeRun(repo, "a", hourRun());
+  writeTranscript(home, "S1", [
+    usageLine(1, "m1", 100),
+    countsLine(2, "s1", { output: 900, input: 900, written: 900, read: 900, model: "<synthetic>" }),
+  ]);
+  const block = tokensOf(okIn(repo, home));
+  assert.match(line(block, "standard:"), /median 100 output.*; input per run: median cache read missing, cache written 1h missing, cache written 5m missing, 5 uncached$/);
+  assert.match(line(block, "model unknown:"), /^\s*model unknown: 100 output, cache read missing, cache written 1h missing, cache written 5m missing, 5 uncached$/);
+  assert.equal(block.includes("synthetic"), false);
+});
+
+test("input C5 C9 C10 edge: a message id on several lines counts its input once, a line with no split counts as unsplit, and a model row is not rounded", () => {
+  const repo = makeRepo("stats-in3");
+  const home = homeFor("stats-in3");
+  writeRun(repo, "a", hourRun());
+  const counts = { input: 2, written: 300, read: 1234567, model: OPUS };
+  writeTranscript(home, "S1", [countsLine(1, "m1", { ...counts, output: 10 }), countsLine(1, "m1", { ...counts, output: 90 }), countsLine(1, "m1", { ...counts, output: 90 })]);
+  assert.match(line(tokensOf(okIn(repo, home)), `model ${OPUS}:`), /: 90 output, 1234567 cache read, cache written 1h missing, cache written 5m missing, 2 uncached, 300 cache written unsplit$/);
+});
+
+test("input C7 C8 reported surface: --save keeps the input counts and the claude model rows, saves any other model name as other, and the README names them", () => {
+  const repo = makeRepo("stats-in4");
+  const home = homeFor("stats-in4");
+  writeRun(repo, "a", hourRun());
+  const ARN = "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-5-5-v1:0 team: private";
+  writeTranscript(home, "S1", [
+    countsLine(1, "m1", { output: 100, input: 10, h1: 200, m5: 0, read: 1000, model: OPUS }),
+    countsLine(2, "m2", { output: 7, input: 1, h1: 2, m5: 3, read: 4, model: ARN }),
+  ]);
+  assert.ok(line(tokensOf(okIn(repo, home)), `model ${ARN}:`), "the printed report lost the model's own name");
+  const file = path.join(home, "saved.json");
+  assert.equal(okIn(repo, home, ["--save", file]).includes("saved"), true);
+  const text = readFileSync(file, "utf8");
+  const { numbers } = JSON.parse(text);
+  assert.match(numbers["tokens / standard"], /input per run: median 1\.0k cache read, 202 cache written 1h, 3 cache written 5m, 11 uncached$/);
+  assert.equal(numbers[`tokens / model ${OPUS}`], "100 output, 1000 cache read, 200 cache written 1h, 0 cache written 5m, 10 uncached");
+  assert.equal(numbers["tokens / model other"], "7 output, 4 cache read, 2 cache written 1h, 3 cache written 5m, 1 uncached");
+  assert.equal(/123456789012|private|bedrock|anthropic/.test(text), false, "a model name from the transcript reached the saved file");
+  assert.match(readFileSync(path.join(pluginRoot, "README.md"), "utf8"), /tokens read \(cache read, cache written for 1 hour and for 5 minutes, uncached\)[^|]*a row per model/);
+});
+
 test("C74 edge: a helper with no meta or a bad meta counts as other", () => {
   const repo = makeRepo("stats-t5");
   const home = homeFor("stats-t5");

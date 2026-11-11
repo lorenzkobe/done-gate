@@ -694,6 +694,26 @@ async function* fileLines(file) {
   if (rest) yield rest;
 }
 
+// Cache writes are priced by how long they are kept, so the two are counted apart; a line holding
+// only their total counts as unsplit, and a count a line does not carry is left out.
+const INPUT_KINDS = [["read", "cache read"], ["written1h", "cache written 1h"], ["written5m", "cache written 5m"], ["uncached", "uncached"]];
+function inputOf(usage) {
+  const kept = usage.cache_creation ?? {};
+  const counts = { read: usage.cache_read_input_tokens, written1h: kept.ephemeral_1h_input_tokens, written5m: kept.ephemeral_5m_input_tokens, uncached: usage.input_tokens };
+  if (typeof counts.written1h !== "number" && typeof counts.written5m !== "number") counts.unsplit = usage.cache_creation_input_tokens;
+  return Object.fromEntries(Object.entries(counts).filter(([, n]) => typeof n === "number"));
+}
+function addInput(sum, usage) {
+  for (const key in usage) sum[key] = (sum[key] ?? 0) + usage[key];
+}
+function inputText(sum, show = compact) {
+  const kinds = INPUT_KINDS.map(([key, name]) => (key in sum ? `${show(sum[key])} ${name}` : `${name} ${MISSING}`));
+  return [...kinds, ...("unsplit" in sum ? [`${show(sum.unsplit)} cache written unsplit`] : [])].join(", ");
+}
+// a model name is text from a transcript (a provider ARN, a gateway's own name): a saved file keeps
+// only the ones that read as a claude model id
+const CLAUDE_MODEL = /^claude-[a-z0-9.-]+$/;
+
 // Numbers only, each message at its largest count. A fork opens with a line copied from its parent,
 // whose id `taken` holds; a file that cannot be read loses only itself.
 async function usageOf(file, taken = new Map()) {
@@ -714,7 +734,7 @@ async function usageOf(file, taken = new Map()) {
       first ??= at;
       const output = entry.message?.usage?.output_tokens;
       if (typeof id !== "string" || typeof output !== "number" || entry.message.model === "<synthetic>") continue;
-      if (output >= (rows.get(id)?.output ?? 0)) rows.set(id, { at, output });
+      if (output >= (rows.get(id)?.output ?? 0)) rows.set(id, { at, output, model: entry.message.model, usage: inputOf(entry.message.usage) });
     }
   } catch {
     // unreadable, or a folder named like a transcript
@@ -758,8 +778,19 @@ const compact = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${(
 async function tokenLines(closed, forFile) {
   const runs = closed.filter((l) => !l.closedLate && minutesOf(l) !== null).sort((a, b) => Date.parse(a.openedAt) - Date.parse(b.openedAt));
   const folders = projectFolders();
-  const tally = new Map(runs.map((l) => [l, { lead: 0, helpers: 0 }]));
+  const tally = new Map(runs.map((l) => [l, { lead: 0, helpers: 0, input: {} }]));
   const roles = new Map();
+  const models = new Map();
+  const totalsOf = (map, key) => map.get(key) ?? map.set(key, { output: 0, input: {} }).get(key);
+  const count = (run, row, role) => {
+    addInput(tally.get(run).input, row.usage);
+    const name = typeof row.model === "string" ? row.model : "unknown";
+    const model = totalsOf(models, forFile && name !== "unknown" && !CLAUDE_MODEL.test(name) ? "other" : name);
+    for (const sum of role ? [role, model] : [model]) {
+      sum.output += row.output;
+      addInput(sum.input, row.usage);
+    }
+  };
   for (const session of new Set(runs.flatMap((l) => l.sessions).filter((s) => SESSION_ID.test(s)))) {
     const own = runs.filter((l) => l.sessions.includes(session));
     const runAt = (at) => own.find((l) => at >= Date.parse(l.openedAt) && at <= Date.parse(l.closedAt));
@@ -769,9 +800,11 @@ async function tokenLines(closed, forFile) {
         if (row.output >= (lead.get(id)?.output ?? 0)) lead.set(id, row);
       }
     }
-    for (const { at, output } of lead.values()) {
-      const run = runAt(at);
-      if (run) tally.get(run).lead += output;
+    for (const row of lead.values()) {
+      const run = runAt(row.at);
+      if (!run) continue;
+      tally.get(run).lead += row.output;
+      count(run, row);
     }
     const taken = new Map(lead);
     for (const folder of folders) {
@@ -780,11 +813,12 @@ async function tokenLines(closed, forFile) {
         const run = first === null ? null : runAt(first);
         for (const [id, row] of rows) taken.set(id, row);
         if (!run) continue;
-        const output = [...rows.values()].reduce((sum, row) => sum + row.output, 0);
-        tally.get(run).helpers += output;
         const named = roleOf(file);
         const role = forFile && !GATE_ROLES.has(named) ? "other" : named;
-        roles.set(role, (roles.get(role) ?? 0) + output);
+        for (const row of rows.values()) {
+          tally.get(run).helpers += row.output;
+          count(run, row, totalsOf(roles, role));
+        }
       }
     }
   }
@@ -795,11 +829,21 @@ async function tokenLines(closed, forFile) {
     if (!group.length) return `  ${size}: ${MISSING}`;
     const totals = group.map((l) => tally.get(l).lead + tally.get(l).helpers);
     const helpers = group.reduce((sum, l) => sum + tally.get(l).helpers, 0);
-    return `  ${size}: median ${compact(median(totals))} output (${ofRuns(group.length, runs.length)}), helpers ${Math.round((helpers / totals.reduce((a, b) => a + b, 0)) * 100)}%`;
+    const medians = {};
+    for (const key of [...INPUT_KINDS.map(([kind]) => kind), "unsplit"]) {
+      const had = group.map((l) => tally.get(l).input[key]).filter((n) => n !== undefined);
+      if (had.length) medians[key] = median(had);
+    }
+    return `  ${size}: median ${compact(median(totals))} output (${ofRuns(group.length, runs.length)}), helpers ${Math.round((helpers / totals.reduce((a, b) => a + b, 0)) * 100)}%; input per run: median ${inputText(medians)}`;
   };
-  const helperTotal = [...roles.values()].reduce((sum, n) => sum + n, 0);
-  const roleRows = [...roles].filter(([, n]) => n > 0).sort(([a, m], [b, n]) => n - m || a.localeCompare(b));
-  return [`tokens: ${ofRuns(counted.length, runs.length)}`, ...SIZES.map(sizeLine), ...roleRows.map(([role, n]) => `  ${role}: ${compact(n)} output, ${Math.round((n / helperTotal) * 100)}% of helper output`)];
+  const helperTotal = [...roles.values()].reduce((sum, role) => sum + role.output, 0);
+  const byOutput = (map) => [...map].filter(([, sum]) => sum.output > 0).sort(([a, m], [b, n]) => n.output - m.output || a.localeCompare(b));
+  return [
+    `tokens: ${ofRuns(counted.length, runs.length)}`,
+    ...SIZES.map(sizeLine),
+    ...byOutput(roles).map(([role, sum]) => `  ${role}: ${compact(sum.output)} output, ${Math.round((sum.output / helperTotal) * 100)}% of helper output; input: ${inputText(sum.input)}`),
+    ...byOutput(models).map(([model, sum]) => `  model ${model}: ${sum.output} output, ${inputText(sum.input, String)}`),
+  ];
 }
 
 // Where a saved file may go: a new file outside the repo, where it can never read as a change to
