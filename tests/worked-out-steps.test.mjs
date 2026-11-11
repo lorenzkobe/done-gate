@@ -456,7 +456,7 @@ test("3.3 C7 a test file an api glob matches, or a change no api glob matches, o
 
 test("3.3 C8 a failed call, a helper's call and a background call cannot close it", () => {
   const repo = apiChanged("wo-33c8");
-  hook(repo, { hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command: "curl -s localhost:3000/api/users" }, tool_error: "Exit code 7" });
+  hook(repo, { hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command: "curl -s localhost:3000/api/users" }, error: "Exit code 7" });
   hook(repo, { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "curl -s localhost:3000/api/users" }, tool_response: {}, agent_id: "A1", agent_type: "done-gate:reviewer" });
   hook(repo, { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "curl -s localhost:3000/api/users", run_in_background: true }, tool_response: {} });
   assert.match(run(repo, "step", ["driver", "done", "no", "--ran", "curl -s localhost:3000"]).stderr, /recorded/);

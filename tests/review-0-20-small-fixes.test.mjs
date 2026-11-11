@@ -169,7 +169,7 @@ test("C12 refused: a helper's own-file shell write is tagged scratch and never n
 
 test("C13 edge: a failed command still logs the own-file edit, and a failed node -e repro is a run", () => {
   const repo = runRepo("rsf-c13");
-  const failure = (command, agent_type = null) => ({ session_id: "S1", cwd: repo, hook_event_name: "PostToolUseFailure", ...bash(command, agent_type), tool_error: "Exit code 1" });
+  const failure = (command, agent_type = null) => ({ session_id: "S1", cwd: repo, hook_event_name: "PostToolUseFailure", ...bash(command, agent_type), error: "Exit code 1" });
   const evs = eventsFromHookInput(failure(`printf x >> ${repo}/${RUN}/review2-1.md && false`, "done-gate:reviewer-2"), repo);
   assert.equal(evs.find((e) => e.kind === "edit")?.path, `${RUN}/review2-1.md`);
   const [repro] = eventsFromHookInput(failure(`node -e "process.exit(1)"`), repo);

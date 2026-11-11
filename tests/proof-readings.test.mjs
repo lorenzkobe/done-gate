@@ -36,7 +36,7 @@ const lastEvent = (repo, kind = "command") => readEvents(stateDir(repo), "S1").f
 // a Bash call as the hook gets it: a clean one with its output, a failed one with the error text
 function shell(repo, command, output = "", exit = 0) {
   hook(repo, exit
-    ? { hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command }, tool_error: `Exit code ${exit}\n${output}` }
+    ? { hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command }, error: `Exit code ${exit}\n${output}` }
     : { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command }, tool_response: { stdout: output, stderr: "", interrupted: false } });
   return lastEvent(repo);
 }
@@ -89,11 +89,11 @@ test("C2 testTotals: a runner's no-tests line reads as nothing ran; output it ca
 test("C3 a test run logged by the hook carries its totals; a failed one its failing names, at most five", () => {
   const [green] = eventsFromHookInput({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "npx vitest run" }, tool_response: { stdout: "", stderr: VITEST_GREEN } }, "/repo");
   assert.deepEqual(green.tests, { tests: 3, passed: 3, failed: 0, ran: true });
-  const [red] = eventsFromHookInput({ hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command: "node --test tests/a.test.ts" }, tool_error: `Exit code 1\n${NODE_RED}` }, "/repo");
+  const [red] = eventsFromHookInput({ hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command: "node --test tests/a.test.ts" }, error: `Exit code 1\n${NODE_RED}` }, "/repo");
   assert.equal(red.exit, 1);
   assert.deepEqual(red.tests, { tests: 3, passed: 2, failed: 1, ran: true, names: ["tests/a.test.ts › adds"] });
   const many = Array.from({ length: 7 }, (_, i) => `not ok ${i + 1} - case ${i + 1}`).join("\n");
-  const [seven] = eventsFromHookInput({ hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command: "node --test" }, tool_error: `Exit code 1\n${many}\n# tests 7\n# pass 0\n# fail 7\n` }, "/repo");
+  const [seven] = eventsFromHookInput({ hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command: "node --test" }, error: `Exit code 1\n${many}\n# tests 7\n# pass 0\n# fail 7\n` }, "/repo");
   assert.equal(seven.tests.names.length, 5);
   assert.equal(seven.tests.failed, 7);
 });

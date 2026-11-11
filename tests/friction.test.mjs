@@ -36,7 +36,7 @@ const hook = (repo, verb, payload) => {
 const logged = (repo, payload) => hook(repo, "log", payload);
 const prompt = (repo, text = "add a badge") => logged(repo, { hook_event_name: "UserPromptSubmit", prompt: text });
 const lookup = (repo, tool_name) => logged(repo, { hook_event_name: "PostToolUse", tool_name, tool_input: { query: "badge" }, tool_response: {} });
-const failedLookup = (repo, tool_name) => logged(repo, { hook_event_name: "PostToolUseFailure", tool_name, tool_input: { query: "badge" }, tool_error: "MCP error -32000: project not indexed" });
+const failedLookup = (repo, tool_name) => logged(repo, { hook_event_name: "PostToolUseFailure", tool_name, tool_input: { query: "badge" }, error: "MCP error -32000: project not indexed" });
 const CONTEXT = "Traced: src/a.ts:1 exports a0 · Related: tests/a.test.ts:1 pins it · Research: none needed: one constant";
 
 function committed(name, files = {}) {

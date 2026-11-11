@@ -128,7 +128,7 @@ export function planChecked(repo, { session = "S1" } = {}) {
 export function redRun(repo, file = "tests/a.test.ts", session = "S1") {
   const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: session };
   delete env.CLAUDE_CODE_SESSION_ID;
-  spawnSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: session, cwd: repo, hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command: `node --test ${file}` }, tool_error: "Exit code 1\nnot ok 1" }), encoding: "utf8", env });
+  spawnSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: session, cwd: repo, hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command: `node --test ${file}` }, error: "Exit code 1\nnot ok 1" }), encoding: "utf8", env });
 }
 
 // The run's pinned policy with no call owed for lines changed after review (lateLines "off", a

@@ -1353,7 +1353,7 @@ test("C8 happy: the next: hint for the {review} step names gate brief reviewer, 
 // 6.6: on a new run a reviewer finding closes on a run: a test that failed since the finding, a
 // recorded command or browser call, or doc for a text-only fix
 // a failed Bash call arrives as PostToolUseFailure; a green one as PostToolUse
-const shell = (repo, command, exit, agent = {}) => spawnSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: "S1", cwd: repo, ...agent, tool_name: "Bash", tool_input: { command }, ...(exit ? { hook_event_name: "PostToolUseFailure", tool_error: `Exit code ${exit}` } : { hook_event_name: "PostToolUse", tool_response: { exit_code: 0 } }) }), encoding: "utf8", env: envFor(repo) });
+const shell = (repo, command, exit, agent = {}) => spawnSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: "S1", cwd: repo, ...agent, tool_name: "Bash", tool_input: { command }, ...(exit ? { hook_event_name: "PostToolUseFailure", error: `Exit code ${exit}` } : { hook_event_name: "PostToolUse", tool_response: { exit_code: 0 } }) }), encoding: "utf8", env: envFor(repo) });
 const browse = (repo, url) => spawnSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: "S1", cwd: repo, hook_event_name: "PostToolUse", tool_name: "mcp__claude-in-chrome__navigate", tool_input: { url }, tool_response: {} }), encoding: "utf8", env: envFor(repo) });
 const newestSeq = (repo, kind) => readEvents(stateDir(repo), "S1").filter((e) => e.kind === kind).at(-1).seq;
 const PROOF = /closes on a run/;

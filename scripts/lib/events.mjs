@@ -101,11 +101,11 @@ export function eventsFromHookInput(input, root, repos = []) {
   if (event === "PostToolUseFailure") {
     // a failed lookup (server down, project not indexed) is still an attempt; it is never a run
     if (tool.startsWith("mcp__") && !tool.startsWith(CHROME_PREFIX)) return [{ ...b(), kind: "tool", tool, input: JSON.stringify(input.tool_input ?? {}).slice(0, TEXT_LIMIT), failed: true }];
-    const code = /exit code:?\s*(\d+)/i.exec(String(input.tool_error ?? ""));
+    const code = /exit code:?\s*(\d+)/i.exec(String(input.error ?? ""));
     if (tool !== "Bash" || !code) return [];
     const cmd = String(input.tool_input?.command ?? "");
     const own = ownEdits(input, cmd, root, b);
-    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: Number(code[1]), ...readings(cmd, String(input.tool_error ?? ""), root), ...toolUse(input), ...(gitWrites(cmd) ? { git: true, commits: !gitMoves(cmd), ...reflogField(root) } : {}), ...(readsOnly(cmd) ? { readOnly: true } : {}), ...(runsInline(cmd) ? { runs: true } : {}), ...(own.length ? { scratch: true } : {}) }, ...own];
+    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: Number(code[1]), ...readings(cmd, String(input.error ?? ""), root), ...toolUse(input), ...(gitWrites(cmd) ? { git: true, commits: !gitMoves(cmd), ...reflogField(root) } : {}), ...(readsOnly(cmd) ? { readOnly: true } : {}), ...(runsInline(cmd) ? { runs: true } : {}), ...(own.length ? { scratch: true } : {}) }, ...own];
   }
   if (event !== "PostToolUse") return [];
 

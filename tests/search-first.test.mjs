@@ -324,20 +324,20 @@ test("C23 edge: a failed lookup (PostToolUseFailure on an mcp__ search) is logge
   assert.ok(matchers.some((m) => m.test(CODE_LOOKUP)), "PostToolUseFailure does not fire for an mcp__ call");
   assert.ok(matchers.some((m) => m.test("Bash")), "PostToolUseFailure no longer fires for Bash");
   // the event
-  const failure = { session_id: "S1", cwd: "/repo", hook_event_name: "PostToolUseFailure", tool_name: CODE_LOOKUP, tool_input: { query: "badge" }, tool_error: "MCP error -32000: project not indexed", tool_error_type: "execution_failed" };
+  const failure = { session_id: "S1", cwd: "/repo", hook_event_name: "PostToolUseFailure", tool_name: CODE_LOOKUP, tool_input: { query: "badge" }, error: "MCP error -32000: project not indexed", tool_error_type: "execution_failed" };
   const [e] = eventsFromHookInput(failure, "/repo");
   assert.ok(e, "a failed mcp__ call produced no event");
   assert.equal(e.kind, "tool");
   assert.equal(e.tool, CODE_LOOKUP);
   // through the real hook verb, it no longer satisfies the lead's code lookup (the user's choice in 0.17)
   const repo = opened("srch-c23");
-  hook(repo, { hook_event_name: "PostToolUseFailure", tool_name: CODE_LOOKUP, tool_input: { query: "badge" }, tool_error: "MCP error -32000: project not indexed", tool_error_type: "execution_failed" });
+  hook(repo, { hook_event_name: "PostToolUseFailure", tool_name: CODE_LOOKUP, tool_input: { query: "badge" }, error: "MCP error -32000: project not indexed", tool_error_type: "execution_failed" });
   mcp(repo, MEMORY_LOOKUP);
   assert.match(refused(repo, "note", ["context", CONTEXT]), new RegExp(`${CODE_LOOKUP}\` call failed`));
   prompt(repo, "skip the code index");
   cli(repo, "note", ["context", CONTEXT, "--no-code", "SocratiCode: not indexed", "--user-ok", "skip the code index"]);
   // a failed Bash call is still a command with its exit code
-  const [bash] = eventsFromHookInput({ ...failure, tool_name: "Bash", tool_input: { command: "npm test" }, tool_error: "Exit code 1" }, "/repo");
+  const [bash] = eventsFromHookInput({ ...failure, tool_name: "Bash", tool_input: { command: "npm test" }, error: "Exit code 1" }, "/repo");
   assert.equal(bash.kind, "command");
   assert.equal(bash.exit, 1);
 });

@@ -7,6 +7,16 @@ evidence is (a run folder, a session, a command and its output).
 
 ## Open
 
+From this repo, run stats-input-tokens, 2026-11-11 (0.22.1, an interactive session, not headless):
+
+- A scratch probe written as `! node --test … > /dev/null && echo …` (exit 0 when the test fails)
+  was refused as proof: it is read as a test run, and a test run must itself be red.
+- A read of verify.json through `xargs -I{} node -e '…readFileSync…'` was refused as an evidence
+  write; the same read without xargs passed.
+- `gate stats` on this repo's 122 closed runs of 30 days: Opus read 1760M tokens from cache
+  against 4.4M written, and the three reviewing roles account for about 203M of it. Most of a
+  run's tokens are the lead re-reading its own conversation.
+
 Found while building 0.22.1, 2026-11-11 (this repo, runs piece-tests-in-packet and
 recheck-shows-the-fix, and the 0.22.0 run records of courtly and kwenta.cc):
 
@@ -27,17 +37,6 @@ recheck-shows-the-fix, and the 0.22.0 run records of courtly and kwenta.cc):
   were real effects of the change. A notes section would bring back something like the Consider
   section removed on 2026-11-08 and make slop non-blocking. Look again only if runs on 0.22.1
   still loop.
-
-Failed commands missing from headless trials, 2026-11-10 (re-trial 3 of the courtly discount task,
-claude 2.1.321, `claude -p` with `--plugin-dir` this branch and `--permission-mode auto`; seen in
-re-trial 2 too). The session transcript has 4 Bash results that are errors starting `Exit code 1`,
-two of them red test runs, yet the gate's events.jsonl for that session holds 105 commands and none
-with an exit other than 0. So the red-before-green runs reached the gate only when piped through
-`grep`, whose exit is the pipe's, and the gate read the test counts from the output instead. The
-hook is wired (`PostToolUseFailure` for `Bash` in hooks/hooks.json) and `events.mjs` reads
-`Exit code <n>`; why nothing was logged is not checked. Seen only headless, not yet in real work.
-First step when it is picked up: one `claude -p` call that runs `false`, and read whether the hook
-fired.
 
 To check when they first appear in a real run (0.22.0, decided 2026-11-09): the zero-test wording
 of jest, pytest and cargo (`ranNoTests` in scripts/lib/verify.mjs is from memory, not from their
@@ -193,6 +192,17 @@ Left out: an interview until every choice is settled (more questions), glossary 
 files (project docs, not the gate's job), issue-tracker and teaching skills (outside the gate).
 
 ## Done (moved here when a release fixes it, with the version)
+
+Fixed after 0.22.1 (run failed-commands-recorded, 2026-11-11):
+
+- No failed Bash command was ever recorded: 0 of 38836 commands in the events of courtly, kwenta.cc
+  and this repo has a failing exit, while 11 failed MCP calls are there, so the hook fires. Seen
+  headless on 2026-11-10 and in real work on 2026-11-11 (two red runs in a scratch copy could not
+  close two reviewer findings; the same runs through `| cat` did). Cause: `scripts/lib/events.mjs`
+  read the failure text from `tool_error`, the name a 2026-10-03 lookup gave; Claude Code sends it
+  as `error` (hooks page, read 2026-11-11). Every red-first rule had been judged from piped output
+  only. Reviewer findings in courtly and kwenta.cc since 11-10 took 957 and 332 close attempts for
+  545 and 161 findings. Not yet measured on a real run with the fix.
 
 Fixed in 0.22.1:
 

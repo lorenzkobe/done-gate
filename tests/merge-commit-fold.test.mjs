@@ -250,7 +250,7 @@ const failed = (repo, command, work) => {
   } catch {
     // it stops on a conflict: that is the case under test
   }
-  spawnSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: "S1", cwd: repo, hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command }, tool_error: "Exit code 1", ...id }), encoding: "utf8", env: env(repo) });
+  spawnSync(process.execPath, [gate, "log"], { input: JSON.stringify({ session_id: "S1", cwd: repo, hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command }, error: "Exit code 1", ...id }), encoding: "utf8", env: env(repo) });
 };
 const eventsOf = (repo) => readEvents(stateDir(repo), "S1");
 // what a gate from before the reflog field left: the same events with the field gone

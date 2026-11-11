@@ -661,7 +661,7 @@ test("3.8 C5 a case written after the first code edit stays free with --na", () 
 
 test("3.8 C6 --ran closes a case on the lead's successful recorded run, with no words, and shows in the table", () => {
   const repo = planned("verbs-a1");
-  const runs = (extra = {}, event = "PostToolUse", command = "node probe.mjs measured") => hook(repo, { hook_event_name: event, tool_name: "Bash", tool_input: { command }, ...(event === "PostToolUse" ? { tool_response: {} } : { tool_error: "Exit code 1" }), ...extra });
+  const runs = (extra = {}, event = "PostToolUse", command = "node probe.mjs measured") => hook(repo, { hook_event_name: event, tool_name: "Bash", tool_input: { command }, ...(event === "PostToolUse" ? { tool_response: {} } : { error: "Exit code 1" }), ...extra });
   runs({}, "PostToolUseFailure");
   assert.match(closeCase(repo, "C1", "--ran", "probe.mjs measured").stderr, /recorded/);
   runs({ agent_id: "A1", agent_type: "done-gate:reviewer" });

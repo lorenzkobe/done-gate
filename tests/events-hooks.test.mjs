@@ -49,7 +49,7 @@ test("Bash is attribution only: a truncated command, never a path", () => {
   assert.equal(e.path, undefined);
 });
 
-const failed = (tool_name, tool_input, tool_error) => ({ session_id: "S1", cwd: "/repo", hook_event_name: "PostToolUseFailure", tool_name, tool_input, tool_error, tool_error_type: "execution_failed" });
+const failed = (tool_name, tool_input, error) => ({ session_id: "S1", cwd: "/repo", hook_event_name: "PostToolUseFailure", tool_name, tool_input, error, tool_error_type: "execution_failed" });
 
 test("C1 reported-surface: a failed Bash call is logged as a command with its exit code, and closes a repro step with --ran", () => {
   const [e] = eventsFromHookInput(failed("Bash", { command: "npm test" }, "Exit code 1\nFAIL tests/a.test.ts"), "/repo");
@@ -554,7 +554,7 @@ const log44 = (repo, payload) => {
 };
 const stopFailure = (error, details, extra = {}) => ({ hook_event_name: "StopFailure", error, error_details: details, last_assistant_message: "I was in the middle of it", ...extra });
 const prompt44 = (repo, text = "carry on") => log44(repo, { hook_event_name: "UserPromptSubmit", prompt: text });
-const bashFail = (repo, command, exit = 1, extra = {}) => log44(repo, { hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command }, tool_error: `Exit code ${exit}\nboom`, ...extra });
+const bashFail = (repo, command, exit = 1, extra = {}) => log44(repo, { hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command }, error: `Exit code ${exit}\nboom`, ...extra });
 const bashOk = (repo, command) => log44(repo, { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command }, tool_response: { stdout: "ok" } });
 function opened44(name) {
   const repo = committed(name);
@@ -670,3 +670,25 @@ test("4.4 C9 a hand-back arriving first does not use up the telling", () => {
   assert.match(prompt44(repo) ?? "", /last turn ended on an error/, "the user's own message was not told after a hand-back");
 });
 }
+
+// The payload of a failed Bash call as Claude Code's hooks page shows it: the text is in `error`.
+const DOCS_FAILURE = { session_id: "S1", cwd: "/repo", hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_input: { command: "node --test tests/a.test.ts" }, is_interrupt: false, duration_ms: 4187 };
+
+test("failed command C1 reported surface: a failed Bash call as the docs show it is a command with its exit and test totals", () => {
+  const [e] = eventsFromHookInput({ ...DOCS_FAILURE, error: "Exit code 1\n# tests 3\n# pass 2\n# fail 1\n" }, "/repo");
+  assert.ok(e, "a failed Bash call left no event");
+  assert.equal(e.kind, "command");
+  assert.equal(e.exit, 1);
+  assert.deepEqual({ tests: e.tests.tests, failed: e.tests.failed, ran: e.tests.ran }, { tests: 3, failed: 1, ran: true });
+});
+
+test("failed command C2 refused: a failure with no exit code in its error (denied, interrupted) records nothing", () => {
+  assert.deepEqual(eventsFromHookInput({ ...DOCS_FAILURE, error: "The user doesn't want to proceed with this tool use.", is_interrupt: true }, "/repo"), []);
+  assert.deepEqual(eventsFromHookInput(DOCS_FAILURE, "/repo"), []);
+});
+
+test("failed command C3 edge: a failed MCP lookup is still a failed tool call", () => {
+  const [e] = eventsFromHookInput({ ...DOCS_FAILURE, tool_name: "mcp__socraticode__codebase_search", tool_input: { query: "badge" }, error: "MCP error -32000: project not indexed" }, "/repo");
+  assert.equal(e.kind, "tool");
+  assert.equal(e.failed, true);
+});
