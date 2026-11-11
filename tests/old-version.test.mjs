@@ -9,19 +9,22 @@ import path from "node:path";
 import { AT_GIT_TOPLEVEL, gate, here, lookedUp, makeRepo, planChecked, pluginRoot } from "./helpers.mjs";
 
 const OLD_COMMIT = "8218139";
-const hasOld = AT_GIT_TOPLEVEL && spawnSync("git", ["cat-file", "-e", `${OLD_COMMIT}^{commit}`], { cwd: pluginRoot }).status === 0;
-const skip = hasOld ? false : `needs the plugin's git history with ${OLD_COMMIT}`;
+// 0.22.0, the release before this one: its runs are this copy's own kind
+const LAST_RELEASE = "8ba8e29";
+const has = (commit) => AT_GIT_TOPLEVEL && spawnSync("git", ["cat-file", "-e", `${commit}^{commit}`], { cwd: pluginRoot }).status === 0;
+const skip = has(OLD_COMMIT) ? false : `needs the plugin's git history with ${OLD_COMMIT}`;
+const skipLast = has(LAST_RELEASE) ? false : `needs the plugin's git history with ${LAST_RELEASE}`;
 
-const oldRoot = path.join(here, ".tmp", "old-0.21.0");
-function oldGate() {
+function oldGate(commit = OLD_COMMIT, name = "old-0.21.0") {
+  const oldRoot = path.join(here, ".tmp", name);
   const g = path.join(oldRoot, "scripts", "gate.mjs");
   if (existsSync(g)) return g;
   // extracted beside it and renamed, so a run killed mid-extract leaves no half copy to reuse
   const part = `${oldRoot}.part`;
   rmSync(part, { recursive: true, force: true });
   mkdirSync(part, { recursive: true });
-  const tar = path.join(here, ".tmp", "old-0.21.0.tar");
-  execFileSync("git", ["archive", "--format=tar", "-o", tar, OLD_COMMIT], { cwd: pluginRoot });
+  const tar = `${oldRoot}.tar`;
+  execFileSync("git", ["archive", "--format=tar", "-o", tar, commit], { cwd: pluginRoot });
   execFileSync("tar", ["-xf", tar, "-C", part]);
   rmSync(tar);
   rmSync(oldRoot, { recursive: true, force: true });
@@ -189,4 +192,20 @@ test("C7 happy: the old copy reads and closes a run whose steps the gate closed"
   for (const key of ["driver", "schema"]) if (!ledgerOf(repo).steps.find((s) => s.key === key).state) ok(old, repo, ["step", key, "na", "no UI or schema changed"]);
   const close = run(old, repo, ["close"]);
   assert.equal(close.status, 0, `${close.stdout}${close.stderr}`);
+});
+
+test("C8 happy: a run 0.22.0 opened is this copy's own kind: the same open items, a reviewer brief that records what it carried, and 0.22.0 reads the run afterwards", { skip: skipLast }, () => {
+  const last = oldGate(LAST_RELEASE, "old-0.22.0");
+  const repo = committed("ov-c8");
+  opened(last, repo, "ov-c8");
+  planAndEdit(last, repo);
+  edit(last, repo, "src/a.ts", "a0 = 0", "a0 = 2");
+  edit(last, repo, "tests/a.test.ts", "'a'", "'a0 is 2'");
+  const before = ruleIds(run(last, repo, ["check"]).stdout);
+  assert.ok(before.length > 0 && !before.includes("R13"), `premise: 0.22.0 lists open items: ${before.join(", ")}`);
+  assert.deepEqual(ruleIds(run(gate, repo, ["check"]).stdout), before, "no older-version item for a 0.22.0 run");
+  assert.match(ok(gate, repo, ["brief", "reviewer"]), /^packet: /m);
+  assert.ok(ledgerOf(repo).seen["review-1.md"].carried["tests/a.test.ts"], "this copy records what the packet carried");
+  assert.deepEqual(ruleIds(run(last, repo, ["check"]).stdout), ruleIds(run(gate, repo, ["check"]).stdout), "0.22.0 reads the run with the new record in it");
+  assert.match(ok(last, repo, ["brief", "reviewer"]), /^packet: /m, "and briefs it again");
 });

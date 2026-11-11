@@ -7,6 +7,27 @@ evidence is (a run folder, a session, a command and its output).
 
 ## Open
 
+Found while building 0.22.1, 2026-11-11 (this repo, runs piece-tests-in-packet and
+recheck-shows-the-fix, and the 0.22.0 run records of courtly and kwenta.cc):
+
+- A red run does not count as proof when its command is piped through `tail` or `head` (the test
+  totals are cut off) or when the test file's name sits past the first 200 characters of the
+  command (a `cd … && gate() {…}; …` prefix is enough). Three times a real red-then-green run could
+  not close a finding, and a mutation probe in a scratch copy closed it instead.
+- kwenta.cc 2026-11-11-foundation: the lead repeated its ask for the gate.json OK in 12 status
+  messages over about 90 minutes before it was answered.
+- Every reviewer packet still lists every case test to run, so with several pieces each reviewer
+  runs the same tests (the `freshness` lines in scripts/lib/brief.mjs).
+- A finding that waits for another piece's re-check is not listed for re-check if that piece gets
+  no further packet (its lines excused with `gate huddle unchanged`, or its round refused at the
+  cap). Not seen in a real run.
+- Not built, the owner's choice on 2026-11-11 ("Skip run 3"): a split of findings into blocking
+  and notes, and a gate check that a finding sits on a changed line. Measured on the 0.22.0 runs:
+  32 of 629 reviewer findings pointed at a line or file the run did not change, and the ones read
+  were real effects of the change. A notes section would bring back something like the Consider
+  section removed on 2026-11-08 and make slop non-blocking. Look again only if runs on 0.22.1
+  still loop.
+
 Failed commands missing from headless trials, 2026-11-10 (re-trial 3 of the courtly discount task,
 claude 2.1.321, `claude -p` with `--plugin-dir` this branch and `--permission-mode auto`; seen in
 re-trial 2 too). The session transcript has 4 Bash results that are errors starting `Exit code 1`,
@@ -172,6 +193,20 @@ Left out: an interview until every choice is settled (more questions), glossary 
 files (project docs, not the gate's job), issue-tracker and teaching skills (outside the gate).
 
 ## Done (moved here when a release fixes it, with the version)
+
+Fixed in 0.22.1:
+
+- 2026-11-10 and 11-11, courtly (27 closed runs on 0.22.0) and kwenta.cc: review took 6.1 and
+  5.6 rounds per run for the two reviewers (2.6 and 2.2 on 0.21.0), and 182 of 358 rounds were
+  re-checks or rounds on lines changed after review, each still raising about 0.9 findings; three
+  runs asked for a review waiver to end it. Causes read in the packets: a re-check was handed the
+  piece's whole diff (129 fix-check rounds were shown 35174 changed lines, 8881 of them new to
+  that reviewer), every fix-check listed every closed finding of its role, every packet carried
+  every changed test and doc (17 tests and 5 docs beside one source file in
+  2026-11-11-new-screens-g6-monitoring/brief-reviewer-2-15.md), and a whole-file piece got no
+  diff at all once those pushed it past 300 lines. Fixed: 5f745ed (a piece's own diff is inlined;
+  a test or doc travels once per role) and 7904c0e (a re-check shows the owed lines and lists
+  each finding once). Not yet measured on a real run.
 
 Fixed in 0.21.0, moved here in 0.22.0:
 
