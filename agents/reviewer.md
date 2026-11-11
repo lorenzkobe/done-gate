@@ -44,6 +44,8 @@ One bullet per finding, with any detail indented beneath it and its `file:line` 
 
 Leave what the passing tests already prove: they ran, and the gate holds their result. Look for what they cannot show: cases nobody thought of, wrong assumptions, security and data safety, and what no test sees (a comment or doc that is now wrong). When the packet has `## Breaks no test noticed`, each line there was broken on purpose in a copy and no related test failed: judge whether that is a weak test, and put it under Act on only if it matters.
 
+When the packet has `## The lead's calls`, each is a check the lead decided this task does not need: judge it against the diff, say nothing about one the diff bears out, and put one it does not under Act on as `Call: <key> — <what in the diff needs the check>`. A packet with `## Light check` asks for that alone: run no tests and review no code.
+
 If the worker disputes a finding, your next file has a `## Disputes` section: one line per disputed id, `- H<k>.<i> — withdrawn: <reason>` or `- H<k>.<i> — upheld: <reason and a pointer>`. Do not restate the original finding. New findings still go under `## Act on`.
 
 You have 60 turns. By turn 58, stop investigating; the file you wrote stands. Confirm it exists with one read, then reply with its Act-on list only.

@@ -353,7 +353,10 @@ const LOOKUP_NEEDS = { skeptic: LOOKUP_KINDS, reviewer: LOOKUP_KINDS, "reviewer-
 // role needs since the run opened; a resumed helper keeps its id and its lookups.
 export function skippedLookups(state, file = null) {
   const { ledger } = state;
-  if (!ledger || waived(ledger, "lookups")) return [];
+  // the user's waiver clears every helper; a lead's call covers the helpers it names
+  const given = (ledger?.waivers ?? []).filter((w) => w.key === "lookups" && !w.lapsed);
+  if (!ledger || given.some((w) => w.by !== "lead")) return [];
+  const called = new Set(given.flatMap((w) => w.helpers ?? []));
   const since = ledger.openedSeq ?? 0;
   const helpers = new Map();
   for (const e of state.events ?? []) {
@@ -369,7 +372,7 @@ export function skippedLookups(state, file = null) {
   const rel = file ? toPosixRel(state.root, path.join(state.dir, file)) : null;
   const out = [];
   for (const h of helpers.values()) {
-    if (rel ? !h.wrote.has(rel) : !h.wrote.size) continue;
+    if (called.has(h.id) || (rel ? !h.wrote.has(rel) : !h.wrote.size)) continue;
     const missing = LOOKUP_NEEDS[h.role].filter((k) => !h.found.has(k) && !ledger.lookupGap?.[k]);
     if (missing.length) out.push({ id: h.id, role: h.role, missing });
   }
@@ -810,7 +813,8 @@ function spans(rel, open, all) {
 // before seen sets, which keeps the old rule.
 // Under the pinned lateLines "call", a line changed after a clean round or a re-check is one no
 // round saw: owed unless gate huddle unchanged excused it, or listed once its file has ended (a
-// finished late round held all of its owed lines), so a file comes back at most once.
+// finished late round held all of its owed lines, or a re-check whose findings are all closed), so a
+// file comes back at most once.
 export function uncovered(state, role, after = lastEditSeq(state, state.config, state.ledger)) {
   return coverage(state, role, after)?.out ?? null;
 }
@@ -822,7 +826,8 @@ export function afterReview(state) {
 }
 
 function coverage(state, role, after) {
-  const recorded = (state.ledger.huddles ?? []).filter((h) => h.role === role && h.file && Array.isArray(h.files));
+  // a light check judged the lead's calls: it saw no line
+  const recorded = (state.ledger.huddles ?? []).filter((h) => h.role === role && h.file && Array.isArray(h.files) && !h.light);
   if (!recorded.length) return null;
   const calls = (state.policy ?? policyFor(state.ledger)).lateLines === "call";
   const listed = [];
@@ -887,7 +892,12 @@ function coverage(state, role, after) {
       const now = units.filter((u) => !u.note).map((u) => ({ key: u.flat, pos: codeNew(u.pos) }));
       return fixDeleted(code.map((i) => h.flats[rel][i]), now, whole(h), edges, was ? code.map((i) => codeOld(was[i])) : null);
     };
-    const narrow = !fixed.some(deletedIn);
+    // a re-check that raised findings ends its file once each is closed: a finding closes on its
+    // own proof, so the fix gets no third round. A part takes less than the file and ends nothing
+    const closedRecheck = (h) => h.fixCheck && !h.part && h.actOn.length > 0 && h.actOn.every((a) => a.closed) && fixCheckDone(state, h);
+    const ended = calls && seeing.some((h) => ((h.late ?? []).includes(rel) && stopOf(h)) || closedRecheck(h));
+    // an ended file owes no round for a deleted line either: the deletion is listed below
+    const narrow = ended || !fixed.some(deletedIn);
     // with slices the cap counts the rounds that saw this line, not the file; under "call" a
     // round saw what it recorded, a re-indented line by its flat key where indentation is free
     const flat = (h, u) => (h.flats?.[rel] ?? []).includes(u.flat) && (Boolean(h.notes) || !indentMatters(rel));
@@ -897,7 +907,6 @@ function coverage(state, role, after) {
     const excused = new Set((state.ledger.unchanged ?? []).flatMap((c) => c.keys?.[rel] ?? []));
     // a whitespace-only change to a line the task did not add is not in a whitespace-ignoring diff
     const real = calls ? new Set(capUnitsOf(state, rel).map((u) => u.pos)) : null;
-    const ended = calls && seeing.some((h) => (h.late ?? []).includes(rel) && stopOf(h));
     const late = [];
     const open = positionsOf(units.filter((u) => {
       const rounds = seeing.filter((h) => saw(h, u));
@@ -1070,12 +1079,14 @@ export function nextPiece(state, entries) {
 }
 
 function reviewed(state, role, after) {
-  const huddles = (state.ledger.huddles ?? []).filter((h) => h.role === role && h.file && (state.reviews ?? []).includes(h.file));
+  const all = (state.ledger.huddles ?? []).filter((h) => h.role === role && h.file && (state.reviews ?? []).includes(h.file));
+  // a light check is no review of the code, but a finding it raised is still open
+  const huddles = all.filter((h) => !h.light);
   const pending = uncovered(state, role, after);
   const stopped = pending === null
     ? (state.events ?? []).some((e) => e.kind === "subagent-stop" && isRole(e.agentType, role) && e.seq > after)
     : pending.length === 0;
-  const openItems = huddles.flatMap((h) => h.actOn.filter((a) => !a.closed));
+  const openItems = all.flatMap((h) => h.actOn.filter((a) => !a.closed));
   // the next part is refused until a part's finding is closed, so nothing else is asked for yet
   const partOpen = huddles.some((h) => h.part && h.actOn.some((a) => !a.closed));
   return { stopped: stopped && !partOpen, hasFile: huddles.length > 0, openItems, partOpen, pending: pending ?? [] };
@@ -1353,6 +1364,36 @@ export function reopenWorkedOut(ledger, config, changed, hash) {
 
 const orWaive = (key) => ` Or get the user's waiver (\`gate waive ${key} "<reason>" --user-ok "<their words>"\`).`;
 
+// The checks the lead decides itself, each with the rule it clears: `gate call`. No user words;
+// the reason names something of the task and the report shows it as the lead's.
+export const CALLS = { driver: "R4", schema: "R6", "qa-pass": "R7", lookups: "R17" };
+const CALL_NAMES = { driver: "the changed file", schema: "the changed schema file", "qa-pass": "a changed test file or a case", lookups: "the helper" };
+export const BUG_FIX_DRIVE = 'a bug fix is driven again: the drive is the proof that the repro now passes. Drive it, or when the app cannot run at all, `gate call driver "<why>" --could-not-run`';
+const orCall = (key, ledger) => (key === "driver" && ledger?.playbook === "bugfix"
+  ? ' When the app cannot run at all: `gate call driver "<why>" --could-not-run`.'
+  : ` Or, when this task does not need it, decide it yourself: \`gate call ${key} "<why, naming ${CALL_NAMES[key]}>"\`; the report shows it.`);
+
+// The lead's calls that hold and that no recorded reviewer round was shown. A lookups call is the
+// record of a helper's slip, not a judgment on the task, so it waits for nobody.
+export const heldCalls = (ledger) => (ledger?.waivers ?? []).filter((w) => w.by === "lead" && !w.lapsed && w.key !== "lookups");
+export function unseenCalls(ledger) {
+  const calls = heldCalls(ledger);
+  if (!calls.length) return [];
+  const shown = new Set((ledger.huddles ?? []).filter((h) => (h.role === "reviewer" || h.role === "reviewer-2") && h.file).flatMap((h) => h.calls ?? []));
+  return calls.filter((w) => !shown.has(w.seq));
+}
+
+// What is wrong with a call's reason, or null: six words, and one of the task's own names (a
+// changed file by its path or basename, a case id, a helper id) as a whole word. names null: a
+// surface that could not run, where no file says why.
+export function callReasonProblem(reason, names) {
+  const text = reason.trim();
+  if (text.split(/\s+/).length < 6) return `"${text}" is too short: at least six words saying why this task does not need it`;
+  if (names === null) return null;
+  const whole = (name) => new RegExp(`(?<![\\w/.-])${name.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&")}(?![\\w-]|\\.\\w)`).test(text);
+  return names.some(whole) ? null : `"${text}" names nothing of this task: say which (${names.slice(0, 6).join(", ")})`;
+}
+
 function waived(ledger, key) {
   return (ledger.waivers ?? []).some((w) => w.key === key && !w.lapsed);
 }
@@ -1360,10 +1401,25 @@ function waived(ledger, key) {
 // A waiver of a check on this code holds for this code: the hash it was given on, kept by a waive in
 // a new run. Moving past it takes the waiver back and reopens its step; the record stays, marked.
 export const LAPSING = new Set(["driver", "review", "review-2", "schema", "qa-pass"]);
-export function lapseWaivers(ledger, hash, now = Date.now()) {
+// A lead's call on a surface holds for the files it was made on: a fix inside them keeps it, and
+// another UI, API or schema file joining the change takes it back. surfaceOf(key) lists them now.
+export function lapseWaivers(ledger, hash, now = Date.now(), surfaceOf = null) {
   let moved = false;
+  const surface = new Map();
+  const joined = (w) => {
+    if (!surfaceOf || !w.files) return false;
+    if (!surface.has(w.key)) surface.set(w.key, surfaceOf(w.key));
+    return surface.get(w.key).some((f) => !w.files.includes(f));
+  };
   for (const w of ledger.waivers ?? []) {
     if (w.lapsed) continue;
+    if (w.by === "lead") {
+      if (joined(w)) {
+        lapseWaiver(ledger, w, { joined: true });
+        moved = true;
+      }
+      continue;
+    }
     // a standing waiver's copy ends with its 14 days, inside an open run too
     if (w.batch && w.until && Date.parse(w.until) <= now) {
       lapseWaiver(ledger, w, { expired: true });
@@ -1529,7 +1585,8 @@ export function settleSteps(state) {
   const policy = state.policy ?? policyFor(ledger);
   if (changed.some((p) => config.isSource(p)) && requires(policy, effectiveTier(policy, ledger, state.tier?.measured ?? null)).includes("reviewer") && !waived(ledger, "review")) {
     const r = reviewed(state, "reviewer", last);
-    const round = (ledger.huddles ?? []).filter((h) => h.role === "reviewer" && h.file).at(-1);
+    // a light check judged the lead's calls, not the code
+    const round = (ledger.huddles ?? []).filter((h) => h.role === "reviewer" && h.file && !h.light).at(-1);
     if (round && r.stopped && r.hasFile && !r.openItems.length && !r.partOpen) close("review", "a clean reviewer round with every item closed", round.file);
   }
   return moved;
@@ -1569,7 +1626,7 @@ export function evaluate(state) {
     // a blind QA pass: a QA helper that stopped during the run, whenever it ran
     const qaRan = (state.events ?? []).some((e) => e.kind === "subagent-stop" && isRole(e.agentType, "qa") && e.seq > (ledger.openedSeq ?? 0));
     if (large && !qaRan && !waived(ledger, "qa-pass")) {
-      unmet.push({ rule: "R7", text: `this run is size ${sizeNow}${grew}: a blind QA pass is due. \`gate brief qa\` and spawn \`done-gate:qa\`; it writes the tests the case table still lacks, blind to the code.${orWaive("qa-pass")}` });
+      unmet.push({ rule: "R7", text: `this run is size ${sizeNow}${grew}: a blind QA pass is due. \`gate brief qa\` and spawn \`done-gate:qa\`; it writes the tests the case table still lacks, blind to the code.${orCall("qa-pass", ledger)}` });
     }
     // "qa" is the waiver key older ledgers carry for the same step
     if (!changed.some((p) => config.isTest(p)) && !waived(ledger, "tests") && !waived(ledger, "qa")) {
@@ -1592,12 +1649,12 @@ export function evaluate(state) {
       const scripted = 'If you drive it with a script (a Playwright run), set `"driver": "cmd:<the command>"` in gate.json (not a config change mid-task) and run it after the last edit.';
       const inVerify = driverCmd !== null && (config.verify ?? []).some((v) => v.cmd.trim() === driverCmd);
       unmet.push({ rule: "R4", text: driverCmd !== null
-        ? `UI files changed but the real surface was not driven after the last edit. Run ${inVerify ? `\`gate verify --final\`, whose green \`${driverCmd}\` counts as the drive,` : `\`${driverCmd}\` (the driver in gate.json) yourself,`} or get the user's waiver (\`gate waive driver "<reason>" --user-ok "<their words>"\`).`
+        ? `UI files changed but the real surface was not driven after the last edit. Run ${inVerify ? `\`gate verify --final\`, whose green \`${driverCmd}\` counts as the drive.` : `\`${driverCmd}\` (the driver in gate.json) yourself.`}${orCall("driver", ledger)}`
         : missing
-        ? `UI files changed and gate.json names the ${config.driver} driver, but this repo has no .claude/skills/${skill}/SKILL.md. Run \`/done-gate:verify-setup\` to create it, drive the surface, or get the user's waiver (\`gate waive driver "<reason>" --user-ok "<their words>"\`). ${scripted}`
+        ? `UI files changed and gate.json names the ${config.driver} driver, but this repo has no .claude/skills/${skill}/SKILL.md. Run \`/done-gate:verify-setup\` to create it and drive the surface.${orCall("driver", ledger)} ${scripted}`
         : config.driver
-        ? "UI files changed but the real surface was not driven after the last edit. Run the project's /verify driver (phone viewport first), or get the user's waiver (`gate waive driver \"<reason>\" --user-ok \"<their words>\"`)."
-        : `UI files changed and this repo has no /verify driver. Run \`/done-gate:verify-setup\` once to create it, drive the surface, or get the user's waiver (\`gate waive driver "<reason>" --user-ok "<their words>"\`). ${scripted}` });
+        ? `UI files changed but the real surface was not driven after the last edit. Run the project's /verify driver (phone viewport first).${orCall("driver", ledger)}`
+        : `UI files changed and this repo has no /verify driver. Run \`/done-gate:verify-setup\` once to create it and drive the surface.${orCall("driver", ledger)} ${scripted}` });
     }
   }
 
@@ -1606,7 +1663,7 @@ export function evaluate(state) {
   if (api.length && !waived(ledger, "driver")) {
     const evidence = ledger.steps?.find((s) => s.key === "driver" && s.state === "DONE")?.evidence;
     if (!driverCalls(state, after).some((e) => `events#${e.seq}` === evidence)) {
-      unmet.push({ rule: "R4", text: `API files changed (${list(api)}) but no recorded call closes the driver step after the last edit. Call the endpoint (\`curl -i <url>\`, so the status shows), then \`gate step driver done "<what it returned>" --ran "<part of the command or url>"\`, or get the user's waiver (\`gate waive driver "<reason>" --user-ok "<their words>"\`).` });
+      unmet.push({ rule: "R4", text: `API files changed (${list(api)}) but no recorded call closes the driver step after the last edit. Call the endpoint (\`curl -i <url>\`, so the status shows), then \`gate step driver done "<what it returned>" --ran "<part of the command or url>"\`.${orCall("driver", ledger)}` });
     }
   }
 
@@ -1628,13 +1685,13 @@ export function evaluate(state) {
   if (src.length && needsReviewer && !waived(ledger, "review") && !reviewTrialed(state)) {
     const r = reviewed(state, "reviewer", after);
     if (r.partOpen) {
-      unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer", r.openItems)}${upheldText("reviewer", r.openItems)}${orWaive("review")}` });
+      unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer", r.openItems)}${upheldText("reviewer", r.openItems)}` });
     } else if (!r.stopped || !r.hasFile) {
       unmet.push({ rule: "R5", text: stillOpen(r, "reviewer") + (r.pending.length && r.hasFile
-        ? `no clean reviewer round yet for ${list(r.pending)}: \`gate brief reviewer --files ${nextPiece(state, r.pending).join(",")}\` (a piece of at most ${policy.reviewMaxLines} source lines), spawn \`done-gate:reviewer\`, then \`gate huddle add reviewer --file review-<n>.md\`.${unchangedRoute(policy, r.pending)}${orWaive("review")}`
-        : `no reviewer pass after the last edit. Spawn \`done-gate:reviewer\` (it writes review-<n>.md), then \`gate huddle add reviewer --file review-<n>.md\`.${orWaive("review")}`) });
+        ? `no clean reviewer round yet for ${list(r.pending)}: \`gate brief reviewer --files ${nextPiece(state, r.pending).join(",")}\` (a piece of at most ${policy.reviewMaxLines} source lines), spawn \`done-gate:reviewer\`, then \`gate huddle add reviewer --file review-<n>.md\`.${unchangedRoute(policy, r.pending)}`
+        : `no reviewer pass after the last edit. Spawn \`done-gate:reviewer\` (it writes review-<n>.md), then \`gate huddle add reviewer --file review-<n>.md\`.`) });
     } else if (r.openItems.length) {
-      unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer", r.openItems)}${upheldText("reviewer", r.openItems)}${orWaive("review")}` });
+      unmet.push({ rule: "R5", text: `reviewer Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer", r.openItems)}${upheldText("reviewer", r.openItems)}` });
     }
   }
 
@@ -1642,7 +1699,7 @@ export function evaluate(state) {
   if (schemaFiles(ledger, config, changed).length && !waived(ledger, "schema")) {
     const step = (ledger.steps ?? []).find((s) => s.key === "schema");
     if (!step || step.state !== "DONE" || !step.evidence) {
-      unmet.push({ rule: "R6", text: `schema files changed: run the new/changed reader once against the real database (hit the endpoint in dev, or run the query) and close the schema step on that run with \`gate step schema done "<what it returned>" --ran "<part of the command or url>"\`. N/A is not allowed here.${orWaive("schema")}` });
+      unmet.push({ rule: "R6", text: `schema files changed: run the new/changed reader once against the real database (hit the endpoint in dev, or run the query) and close the schema step on that run with \`gate step schema done "<what it returned>" --ran "<part of the command or url>"\`. N/A is not allowed here.${orCall("schema", ledger)}` });
     }
   }
 
@@ -1651,11 +1708,11 @@ export function evaluate(state) {
   if ((highRisk || large) && !waived(ledger, "review-2")) {
     const r = reviewed(state, "reviewer-2", after);
     if (r.partOpen || (r.stopped && r.hasFile && r.openItems.length)) {
-      unmet.push({ rule: "R9", text: `reviewer-2 Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer-2", r.openItems)}${upheldText("reviewer-2", r.openItems)}${orWaive("review-2")}` });
+      unmet.push({ rule: "R9", text: `reviewer-2 Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer-2", r.openItems)}${upheldText("reviewer-2", r.openItems)}` });
     } else if (!r.stopped || !r.hasFile) {
       unmet.push({ rule: "R9", text: stillOpen(r, "reviewer-2") + (r.pending.length && r.hasFile
-        ? `high-risk paths changed: no clean reviewer-2 round yet for ${list(r.pending)}: \`gate brief reviewer-2 --files ${nextPiece(state, r.pending).join(",")}\`, spawn \`done-gate:reviewer-2\`, then \`gate huddle add reviewer-2 --file review2-<n>.md\`.${unchangedRoute(policy, r.pending)}${orWaive("review-2")}`
-        : `${highRisk ? `high-risk paths changed (${list(changed.filter((p) => config.isHighRisk(p)))})` : `this run is size ${sizeNow}${grew}`}: a second review by \`done-gate:reviewer-2\` is required after the last edit, with its review2-<n>.md recorded via \`gate huddle add reviewer-2 --file ...\` and every Act-on item closed.${orWaive("review-2")}`) });
+        ? `high-risk paths changed: no clean reviewer-2 round yet for ${list(r.pending)}: \`gate brief reviewer-2 --files ${nextPiece(state, r.pending).join(",")}\`, spawn \`done-gate:reviewer-2\`, then \`gate huddle add reviewer-2 --file review2-<n>.md\`.${unchangedRoute(policy, r.pending)}`
+        : `${highRisk ? `high-risk paths changed (${list(changed.filter((p) => config.isHighRisk(p)))})` : `this run is size ${sizeNow}${grew}`}: a second review by \`done-gate:reviewer-2\` is required after the last edit, with its review2-<n>.md recorded via \`gate huddle add reviewer-2 --file ...\` and every Act-on item closed.`) });
     }
   }
 
@@ -1705,7 +1762,13 @@ export function evaluate(state) {
   // R17: every helper that wrote or edited a file searched the code and the memory first
   const skipped = skippedLookups(state);
   if (skipped.length) {
-    unmet.push({ rule: "R17", text: `helpers worked without searching first: ${skipped.map(skippedText).join(", ")}. Send each back (SendMessage) to search, e.g. ${LOOKUP_KINDS.map((k) => LOOKUP_EXAMPLE[k]).join(" and ")}, and recheck its work.${orWaive("lookups")}` });
+    unmet.push({ rule: "R17", text: `helpers worked without searching first: ${skipped.map(skippedText).join(", ")}. Send each back (SendMessage) to search, e.g. ${LOOKUP_KINDS.map((k) => LOOKUP_EXAMPLE[k]).join(" and ")}, and recheck its work.${orCall("lookups", ledger)}` });
+  }
+
+  // R21: a reviewer was shown each call of the lead's that holds
+  const unseen = unseenCalls(ledger);
+  if (unseen.length) {
+    unmet.push({ rule: "R21", text: `the lead's call on ${unseen.map((w) => w.key).join(", ")} was shown to no reviewer: a full review round whose packet shows the call's file whole lists it; with none to come, \`gate brief reviewer --calls\` and spawn \`done-gate:reviewer\` for a light check (the diff and the calls only), then \`gate huddle add reviewer --file review-<n>.md\`.` });
   }
 
   // R15: every Act-on finding in a helper file is recorded from the file (hand-typed items do
@@ -1750,7 +1813,7 @@ export function evaluate(state) {
     if (existsSync(full) && !unfinishedFile(full)) continue;
     const run = helperRun(state, role, f, brief.seq ?? 0);
     if (!run.ran || run.running) continue;
-    const again = Array.isArray(brief.files) ? ` --files ${brief.files.join(",")}` : "";
+    const again = brief.light ? " --calls" : Array.isArray(brief.files) ? ` --files ${brief.files.join(",")}` : "";
     unmet.push({ rule: "R15", text: `the ${role} stopped before finishing ${f}: resume it with SendMessage, or \`gate brief ${role}${again}\` and spawn a fresh one, its packet continues from the file; \`gate diagnose\` says which.` });
   }
 

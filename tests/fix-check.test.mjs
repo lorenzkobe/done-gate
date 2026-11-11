@@ -568,6 +568,70 @@ test("6.4 L11 boundary: a late round in parts ends the file only with the part t
   assert.ok(!blocks(check(repo), "R5"), `the part that takes the rest ends the file:\n${check(repo)}`);
 });
 
+// A review is one round and one re-check: the fixes of a re-check's own findings close on the
+// proof each finding closed on, with no third round.
+const STILL = "still off — src/mid.ts:31 — x — []";
+function recheckedWithFinding(name) {
+  const repo = opened(name);
+  round(repo, "reviewer", null, [FINDING]);
+  fixLine30(repo);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
+  round(repo, "reviewer", "src/mid.ts:31-31", [STILL]);
+  return repo;
+}
+
+test("ends E1 happy: the fix of a re-check's finding, closed, is not held; the report lists its lines and a third round is refused", () => {
+  const repo = recheckedWithFinding("fc-ends-e1");
+  fixLine30(repo, 777);
+  cli(repo, "huddle", ["resolve", "H2.1", "--evidence", "doc"]);
+  assert.ok(!blocks(check(repo), "R5"), check(repo));
+  assert.match(reportOf(repo), /changed after its last review, not reviewed: src\/mid\.ts:31-31/);
+  assert.match(cli(repo, "report", ["--brief"]), /For you: [^\n]*changed after the last review, not reviewed again: src\/mid\.ts:31-31/);
+  assert.match(run(repo, "brief", ["reviewer", "--files", "src/mid.ts:31-31"]).stderr, /one round is the cap/);
+});
+
+test("ends E2 refused: while the re-check's finding is open the review blocks and names it, fixed or not", () => {
+  const repo = recheckedWithFinding("fc-ends-e2");
+  assert.match(ruleLine(check(repo), "R5"), /still open: H2\.1/);
+  fixLine30(repo, 777);
+  assert.match(ruleLine(check(repo), "R5"), /still open from earlier rounds: H2\.1/);
+});
+
+test("ends E3 boundary: a part of a re-check, its finding fixed and closed, does not end the file: the part that takes the rest still owes the fix", () => {
+  const repo = opened("fc-ends-e3");
+  const BIG = "src/big.ts";
+  const fixed = (v) => body(900, "big").split("\n").map((l, i) => (i < 450 ? l.replace(/= (\d+);/, `= $1${v};`) : l)).join("\n");
+  edit(repo, BIG, body(900, "big"));
+  round(repo, "reviewer", MID);
+  round(repo, "reviewer", `${BIG}:1-400`, ["off by one — src/big.ts:30 — x — []"]);
+  round(repo, "reviewer", `${BIG}:401-800`);
+  round(repo, "reviewer", `${BIG}:801-900`);
+  edit(repo, BIG, fixed("000"));
+  cli(repo, "huddle", ["resolve", "H2.1", "--evidence", "doc"]);
+  round(repo, "reviewer", `${BIG}:1-400`, ["still off — src/big.ts:30 — x — []"]);
+  const part = ledgerOf(repo).huddles.at(-1);
+  assert.ok(part.fixCheck && part.part, "anchor: the re-check runs in parts");
+  edit(repo, BIG, fixed("000").replace("big29 = 29000;", "big29 = 5;"));
+  cli(repo, "huddle", ["resolve", part.actOn[0].id, "--evidence", "doc"]);
+  const r5 = ruleLine(check(repo), "R5");
+  assert.match(r5, /src\/big\.ts:30-30/, r5);
+  assert.match(r5, /src\/big\.ts:401-450/, r5);
+});
+
+test("ends E5 edge: after the file ended, a reviewed line deleted by a later fix is listed too, not held", () => {
+  const repo = recheckedWithFinding("fc-ends-e5");
+  fixLine30(repo, 777);
+  cli(repo, "huddle", ["resolve", "H2.1", "--evidence", "doc"]);
+  edit(repo, MID, body(60, "mid").replace("mid30 = 30", "mid30 = 777").replace("export const mid50 = 50;\n", ""));
+  assert.ok(!blocks(check(repo), "R5"), check(repo));
+  assert.match(reportOf(repo), /changed after its last review, not reviewed: [^\n]*src\/mid\.ts/);
+});
+
+test("ends E4 reported-surface: README's review row says a re-check with closed findings ends its file", () => {
+  const row = readFileSync(path.join(pluginRoot, "README.md"), "utf8").split("\n").find((l) => l.startsWith("| R5 |"));
+  assert.match(row, /a re-check that raised findings ends its file the same way once each is closed/);
+});
+
 // 6.5: comment and blank lines need no round: deleting one is no deletion, and adding one is
 // no change a review must see
 const commented = (lines = body(60, "mid")) => lines.split("\n").map((l, i) => (i === 20 ? `// helpers\n${l}` : l)).join("\n");

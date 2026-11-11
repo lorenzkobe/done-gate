@@ -193,6 +193,43 @@ files (project docs, not the gate's job), issue-tracker and teaching skills (out
 
 ## Done (moved here when a release fixes it, with the version)
 
+Fixed after 0.22.1 (run calls-reviewed, 2026-11-11):
+
+- Nobody checked a call the lead made for itself (the door 0.22 closed: leads approving their
+  own skips). Now each full review packet that shows a call's file lists the call, and the
+  reviewer says nothing or raises it; a call no recorded round was shown blocks (R21) until a
+  light check, `gate brief reviewer --calls`: the calls and the diff of their files, no tests, no
+  code review, spawned at low effort, and not counted as a review in the final message. A raised
+  call is taken back with `gate call <key> --withdraw`. A `lookups` call waits for nobody: a
+  light check that skipped its own search would loop. Not yet measured: how long a light check
+  takes, and how often a reviewer disagrees with a call.
+
+Fixed after 0.22.1 (run lead-call, 2026-11-11):
+
+- The user was asked to skip checks they could not judge. The owner, 2026-11-11: "the plugin or
+  the run owns the task and not me. im just there to decide on behavior, infra changes and
+  stuff". Since 2026-10-20 courtly recorded 40 driver waivers, kwenta.cc 5 review waivers and
+  this repo 1 for blind QA, each on a message that offered "or get the user's waiver". Now the
+  lead decides the app drive, the real-schema check, the blind QA pass and a helper's missed
+  search itself (`gate call <key> "<why>"`, a reason of six words naming a file, case or helper
+  of the task), the messages offer that and no waiver, the review messages offer no skip, and the
+  report, the final message and `gate stats` show each call as the lead's. The owner's choice:
+  a bug-fix run has no call on the app drive, only `--could-not-run`. `gate waive` with the
+  user's words is unchanged for a user who says it unasked. A reviewer checks each call (run calls-reviewed, above). Left as they were, with no run that points at them: the waivers of
+  slop, coverage, the plan check, a bug fix's repro and root cause, and an upheld dispute, which
+  still go to the user. Not yet measured on a real run.
+
+Fixed after 0.22.1 (run review-ends-after-recheck, 2026-11-11):
+
+- A third review pass over the fixes of the second. kwenta.cc on 2026-11-11 asked the user to
+  waive it three times (components-controls for both reviewers, components-sheets, foundation):
+  the lines left were fixes of the re-check's own findings, each closed on a test that went red
+  then green. Read in the code: only a late round ended a file, so a re-check's fix was owed
+  another round, and when it replaced a line the re-check had recorded, every line of the first
+  round came back with it. Now a re-check that raised findings ends its file once each is closed;
+  later lines are listed in the report. A clean re-check still holds a later edit, and a part of a
+  re-check ends nothing (the part that takes the rest does). Not yet measured on a real run.
+
 Fixed after 0.22.1 (run reviewer-correctness-brief, 2026-11-11):
 
 - Reviewers blocked on style. Of 60 graded findings that only the first reviewer raised in

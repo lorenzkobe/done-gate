@@ -250,10 +250,24 @@ function findingLines(closed, configOf) {
   return out;
 }
 
+// A lead's own call (gate call) is counted on its own line, never among the user's waivers.
+const isCall = (w) => w?.by === "lead";
+
+function callLines(closed) {
+  const calls = closed.flatMap((l) => l.waivers).filter(isCall);
+  const runs = `${closed.length} closed runs`;
+  if (!calls.length) return [`the lead's calls: none in ${runs}`];
+  const byKey = new Map();
+  for (const c of calls) byKey.set(c.key, (byKey.get(c.key) ?? 0) + 1);
+  const keys = [...byKey].sort(([a, m], [b, n]) => n - m || String(a).localeCompare(String(b))).map(([key, n]) => `${key} ${n}`);
+  return [`the lead's calls: ${calls.length} in ${runs}, ${oneDecimal(calls.length / closed.length)} per run (${keys.join(", ")}); could not run ${calls.filter((c) => c.could).length}, lapsed ${calls.filter((c) => c.lapsed).length}`];
+}
+
 function waiverLines(closed) {
   const byKey = new Map();
   for (const ledger of closed) {
     for (const waiver of ledger.waivers) {
+      if (isCall(waiver)) continue;
       const key = typeof waiver.key === "string" ? waiver.key : "unknown";
       byKey.set(key, (byKey.get(key) ?? 0) + 1);
     }
@@ -936,9 +950,10 @@ async function report(ctx, { days, version, forFile = false }) {
   const configOf = configReader(ctx.root);
   out.push(...(closed.length ? findingLines(closed, configOf) : [`findings: ${MISSING}`]));
   out.push(...(closed.length ? waiverLines(closed) : [`waivers: ${MISSING}`]));
-  const recorded = closed.filter((l) => l.rules).flatMap((l) => l.waivers);
+  const recorded = closed.filter((l) => l.rules).flatMap((l) => l.waivers).filter((w) => !isCall(w));
   const countOf = (flag) => (closed.some((l) => l.rules) ? String(recorded.filter((w) => w[flag]).length) : "not recorded");
   out.push(`could-not-run waivers: ${countOf("could")}`, `lapsed waivers: ${countOf("lapsed")}`);
+  if (closed.length) out.push(...callLines(closed));
   out.push(...reRunLines(closed, ctx.stateDir), ...planLines(closed, configOf), ...largeLines(closed), ...afterCloseLines(closed, read?.ledgers ?? [], configOf, forFile), ...trialLines(closed, read?.ledgers ?? []), ...strengthLines(closed));
   const recordsOf = sessionReader(ctx.stateDir);
   out.push(...eventLines(recordsOf, closed, read?.ledgers ?? [], { version, cutoff, forFile }), ...rateLines(ctx.stateDir, recordsOf), ...neverUsedLines(ctx.stateDir, recordsOf, { days, cutoff, forFile }), ...(await tokenLines(closed, forFile)));

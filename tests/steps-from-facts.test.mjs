@@ -257,10 +257,10 @@ test("F5 C1 reported-surface: a test run that worked closes the tests step as pa
   }
 });
 
-test("F5 C2 reported-surface: a run's waiver hints ask for the user's words", () => {
+test("F5 C2 reported-surface: a run's unmet list asks for no waiver", () => {
   const fresh = planned("sff-f5-new");
   edited(fresh, "src/a.ts", "export const a = 2;\n");
-  assert.match(cli(fresh, "check"), /gate waive \w[\w-]* "<reason>" --user-ok "<their words>"/);
+  assert.doesNotMatch(cli(fresh, "check"), /gate waive/);
 });
 
 test("re-trial C1 reported-surface: a piped test run closes the tests step as ran, since its exit is the pipe's; || and a quoted | are no pipe", () => {

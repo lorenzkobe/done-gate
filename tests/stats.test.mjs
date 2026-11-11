@@ -315,6 +315,21 @@ test("C15 happy: waivers by key and per run; could-not-run and lapsed print not 
   assert.match(line(ok(none), "waivers:"), /none in 1 closed runs/);
 });
 
+test("C15b reported-surface: the lead's calls print per key on their own line and are not counted among waivers", () => {
+  const repo = makeRepo("stats-c15-calls");
+  writeRun(repo, "one", closedRun({ rules: 2, waivers: [{ key: "driver", reason: "x", words: "skip the drive" }, { key: "driver", reason: "y", by: "lead" }, { key: "schema", reason: "z", by: "lead", could: true }, { key: "driver", reason: "w", by: "lead", lapsed: true }] }));
+  writeRun(repo, "two", closedRun({ rules: 2 }));
+  const out = ok(repo);
+  assert.match(line(out, "waivers:"), /1 in 2 closed runs, 0\.5 per run/);
+  assert.match(line(out, "the lead's calls:"), /3 in 2 closed runs, 1\.5 per run \(driver 2, schema 1\); could not run 1, lapsed 1/);
+  assert.match(line(out, "could-not-run waivers:"), /: 0$/);
+  assert.match(line(out, "lapsed waivers:"), /: 0$/);
+
+  const none = makeRepo("stats-c15-calls-none");
+  writeRun(none, "two", closedRun());
+  assert.match(line(ok(none), "the lead's calls:"), /none in 1 closed runs/);
+});
+
 test("C16 reported surface: help and README name the verb, and the fence reads it as a gate call", () => {
   const repo = makeRepo("stats-c16");
   const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };

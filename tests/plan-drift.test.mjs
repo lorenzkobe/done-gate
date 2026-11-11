@@ -232,5 +232,5 @@ test("C12 edge: a run pinned before guards existed records drift in shadow, and 
 test("C14 reported-surface: README's rule table and SKILL.md name R19", () => {
   const readme = readFileSync(path.join(here, "..", "README.md"), "utf8");
   assert.match(readme, /^\| R19 \|[^\n]*gate plan add/m);
-  assert.match(readFileSync(path.join(here, "..", "skills/gate/SKILL.md"), "utf8"), /R18, R19, R20\)/);
+  assert.match(readFileSync(path.join(here, "..", "skills/gate/SKILL.md"), "utf8"), /R17-R21\)/);
 });

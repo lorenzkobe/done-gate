@@ -4,7 +4,7 @@ import { loadConfig } from "./config.mjs";
 import { appendEvents, readEvents } from "./events.mjs";
 import { currentLedger, isDone, saveLedger } from "./ledger.mjs";
 import { delegatedTier, effectiveTier, leadDelegates, measure, policyFor, reconcileTier, tiered, trialHolds } from "./size.mjs";
-import { editedLast, implementationHash, lapseWaivers, planDrift, reopenWorkedOut, writersOf } from "./rules.mjs";
+import { editedLast, implementationHash, lapseWaivers, planDrift, reopenWorkedOut, stepSurfaceFiles, writersOf } from "./rules.mjs";
 import { nextSeq } from "./events.mjs";
 import { evaluate, settleSteps } from "./rules.mjs";
 import { ensureSession, loadSession, saveSession } from "./session-state.mjs";
@@ -332,7 +332,7 @@ export function buildState(ctx, { lastMessage = "" } = {}) {
   if (current) {
     let flipped = stampSourceChange(current.ledger, implementationHash(now, config), events, { now, config }) || absorbed;
     if (reopenWorkedOut(current.ledger, config, diff.changed, implementationHash(now, config))) flipped = true;
-    if (lapseWaivers(current.ledger, implementationHash(now, config))) flipped = true;
+    if (lapseWaivers(current.ledger, implementationHash(now, config), Date.now(), (key) => stepSurfaceFiles(key, current.ledger, config, diff.changed))) flipped = true;
     if (tiered(current.ledger)) {
       const measured = measure({ config, policy, diff, baseline, now, root: ctx.root, dir: current.dir, repos });
       const trial = trialHolds(policy, config, diff.changed, effectiveTier(policy, current.ledger, measured), { root: ctx.root, repos });

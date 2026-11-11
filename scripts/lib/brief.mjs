@@ -9,7 +9,7 @@ import { baseCopy, fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs"
 import { ROLES, flag, outsideRepos, positional } from "./verbs.mjs";
 import { repoPath, toPosixRel } from "./paths.mjs";
 import { OWN_FILE } from "./guard.mjs";
-import { LOOKUP_EXAMPLE, waitingDisputes, fixCheckDone, capUnitsOf, nextPiece, roundOnDisk, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, pieceBriefed, reviewScope, runningPieces, uncovered, unfinishedFile, unfinishedVerify, verifyProblem, workerRuns } from "./rules.mjs";
+import { heldCalls, unseenCalls, LOOKUP_EXAMPLE, waitingDisputes, fixCheckDone, capUnitsOf, nextPiece, roundOnDisk, leadLookups, changedUnitsOf, helperRun, lastEditSeq, isDraft, isPartial, parseEntry, pathOf, pieceBriefed, reviewScope, runningPieces, uncovered, unfinishedFile, unfinishedVerify, verifyProblem, workerRuns } from "./rules.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { cutText, cutWorkers } from "./diagnose.mjs";
@@ -362,9 +362,44 @@ function travelling(state, role, piece, own) {
   return { carried, left };
 }
 
+const CALLS_INTRO = "The lead decided this task does not need these checks. Judge each against the diff: say nothing when the diff bears its reason out; otherwise put it under Act on as `Call: <key> — <what in the diff needs the check>`, with the `file:line`.";
+const callLines = (calls) => ["## The lead's calls", "", CALLS_INTRO, "", ...calls.map((w) => `- ${w.key} — ${w.reason}${w.could ? " (could not run)" : ""}${w.files ? ` [${w.files.join(", ")}]` : ""}`), ""];
+
+// The light check: a call no review round was shown gets a reviewer's look at the calls and the
+// diff of their files, nothing else. Its round holds no file, so it covers no line.
+function lightCheck(ctx, state, role) {
+  if (role !== "reviewer") throw new UsageError("--calls is the reviewer's light check of the lead's calls: `gate brief reviewer --calls`");
+  if (ctx.args.includes("--files")) throw new UsageError("--calls takes no --files: the light check reads the calls and the files they were made on");
+  const waiting = unseenCalls(state.ledger);
+  if (!waiting.length) throw new UsageError("no call waits for a reviewer: `gate check` names one that does");
+  const seen = state.ledger.seen ?? {};
+  const open = (f) => !state.reviews.includes(f) || unfinishedFile(path.join(state.dir, f));
+  const again = Object.entries(seen).find(([f, v]) => v.light && open(f) && !helperRun(state, role, f, v.seq).running);
+  const used = [...state.reviews, ...Object.keys(seen), ...Object.keys(state.ledger.briefed ?? {})].filter((f) => /^review-\d+\.md$/.test(f)).map(fileNumber);
+  const n = again ? fileNumber(again[0]) : Math.max(0, ...used) + 1;
+  const own = `review-${n}.md`;
+  state.ledger.seen = { ...seen, [own]: { files: [], seq: nextSeq(), calls: waiting.map((w) => w.seq), light: true } };
+  saveLedger(state.dir, state.ledger);
+  const tests = waiting.some((w) => w.key === "qa-pass") ? (state.changed ?? []).filter((p) => state.config.isTest(p)) : [];
+  const files = [...new Set([...waiting.flatMap((w) => w.files ?? []), ...tests])];
+  const out = header(state, role, n);
+  out.push("## You may write", "", mayWrite(state, role, n), "");
+  out.push("## Light check", "", "Judge the lead's calls below and nothing else: run no tests and do not review the code. Search the code and the memory as your brief says, then write your file.", "");
+  out.push(...callLines(waiting));
+  if (files.length) out.push(...diffOrFiles(state, "Diff", files, new Map(), new Set(files)));
+  out.push("## Changed files", "", ...(state.changed ?? []).map((p) => `- ${p}`), "");
+  out.push("## Write your findings to", "", path.join(state.dir, own), "");
+  const file = path.join(state.dir, `brief-${role}-${n}.md`);
+  writeFileSync(file, `${out.join("\n").replace(/\n{3,}/g, "\n\n")}\n`);
+  ctx.out(`packet: ${file}`);
+  ctx.out(`prompt: Read ${file} and follow your role brief. Your file is ${path.join(state.dir, own)}: write it first, then judge the calls and rewrite it.`);
+  ctx.out('a light check: spawn it with the Agent tool\'s effort set to "low".');
+  printNext(ctx);
+}
+
 // n is the number of the role's own file (skeptic-<n>.md, review-<n>.md, worker-<n>.md);
 // continueFrom is the text an earlier helper left in that file before it stopped.
-function renderPacket(state, role, { round, n, piece = null, owned = null, continueFrom = null, fixCheck = false, disputes = [], strength = [], travel = null, narrowed = null }) {
+function renderPacket(state, role, { round, n, piece = null, owned = null, continueFrom = null, fixCheck = false, disputes = [], strength = [], travel = null, narrowed = null, calls = [] }) {
   const out = header(state, role, round);
   out.push("## You may write", "", mayWrite(state, role, n), "");
   if (continueFrom !== null) {
@@ -432,6 +467,7 @@ function renderPacket(state, role, { round, n, piece = null, owned = null, conti
       out.push(...disputes.map((a) => `- ${a.id} — ${a.text} — disputed: ${a.dispute.why} [${a.dispute.evidence}]`), "");
     }
     if (narrowed) out.push("## This round", "", SCOPE[narrowed.kind][recheck.length ? 1 : 0], "", ...unchanged.map((p) => `- ${p}: nothing changed since your last round`), "");
+    if (calls.length) out.push(...callLines(calls));
     out.push(...diffOrFiles(state, narrowed ? NARROWED : "Diff", shown, diffRanges, paths ?? new Set()));
     if (travel?.left.length) out.push(`## ${NOT_IN_PACKET}`, "", "An earlier round of yours, or the round on another piece, checks these files and the cases whose tests they hold. Read one only when a finding of yours depends on it.", "", ...travel.left.map((p) => `- ${p}`), "");
     const closers = new Map();
@@ -562,10 +598,11 @@ function pieceBrief(state, owned) {
 export const verbs = {
   async brief(ctx) {
     const [role] = positional(ctx.args);
-    if (!ROLES.includes(role)) throw new UsageError(`usage: gate brief <${ROLES.join("|")}> [--files a,b] [--round n, qa only]`);
+    if (!ROLES.includes(role)) throw new UsageError(`usage: gate brief <${ROLES.join("|")}> [--files a,b] [--round n, qa only] · gate brief reviewer --calls`);
     const state = buildState(ctx, {});
     if (!state.ledger) throw new UsageError("no open ledger for this session — run `gate open <slug> <playbook>` first");
     const reviewing = role === "reviewer" || role === "reviewer-2";
+    if (ctx.args.includes("--calls")) return lightCheck(ctx, state, role);
     // a review round covers a piece: --files names it, or the whole change when that fits
     // the cap; past the cap the lead splits by file
     let piece = null;
@@ -767,10 +804,13 @@ export const verbs = {
     const travel = piece ? travelling(state, role, piece, own) : null;
     const narrowKind = !piece || stillOpen ? null : fixCheck ? "fix" : late ? "late" : null;
     const narrowed = narrowKind ? { kind: narrowKind, ranges: owedRanges(piece, owed), recheck: toRecheck(state, role, piece, own) } : null;
+    // a full round lists the calls made on files it shows whole; a re-check judges fixed lines only
+    const shows = new Set(piece ? piece.files.filter((e) => !parseEntry(e).from) : []);
+    const leadCalls = reviewing && !narrowed ? heldCalls(state.ledger).filter((w) => !piece || (w.files ?? []).every((f) => shows.has(f) || Object.hasOwn(travel?.carried ?? {}, f))) : [];
     // seen is what this round's reviewer is shown (its huddle inherits it); the other roles'
     // briefs are dated under briefed
     if (piece) {
-      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...earlierOf(state.ledger.seen?.[own]), ...(Object.keys(piece.units).length ? { units: piece.units, flats: piece.flats, owns: piece.owns, notes: piece.notes } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true, ...(inParts ? { part: true } : {}) } : {}), ...(answers && !stillOpen ? { answers: true } : {}), ...(lateFiles.length ? { late: lateFiles } : {}), ...(toAnswer.length ? { disputes: toAnswer.map((a) => a.id) } : {}), carried: travel.carried, ...(narrowed ? { rechecked: narrowed.recheck.map(recheckKey) } : {}) } };
+      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...earlierOf(state.ledger.seen?.[own]), ...(Object.keys(piece.units).length ? { units: piece.units, flats: piece.flats, owns: piece.owns, notes: piece.notes } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true, ...(inParts ? { part: true } : {}) } : {}), ...(answers && !stillOpen ? { answers: true } : {}), ...(lateFiles.length ? { late: lateFiles } : {}), ...(toAnswer.length ? { disputes: toAnswer.map((a) => a.id) } : {}), carried: travel.carried, ...(narrowed ? { rechecked: narrowed.recheck.map(recheckKey) } : {}), ...(leadCalls.length ? { calls: leadCalls.map((w) => w.seq) } : {}) } };
       saveLedger(state.dir, state.ledger);
     } else if (own) {
       state.ledger.briefed = { ...(state.ledger.briefed ?? {}), [own]: { seq: nextSeq(), ...earlierOf(state.ledger.briefed?.[own]), ...(owned ? { files: owned } : {}) } };
@@ -782,7 +822,7 @@ export const verbs = {
     const file = path.join(state.dir, `brief-${role}-${round}.md`);
     // after the ledger save: the check may take its 90s, and writes only strength.json
     const strength = reviewing && piece && state.config.strength && !(fixCheck && !stillOpen) ? await strengthFor(state, piece) : [];
-    writeFileSync(file, renderPacket(state, role, { round, n, piece, owned, continueFrom, fixCheck: fixCheck && !stillOpen, disputes: toAnswer, strength, travel, narrowed }));
+    writeFileSync(file, renderPacket(state, role, { round, n, piece, owned, continueFrom, fixCheck: fixCheck && !stillOpen, disputes: toAnswer, strength, travel, narrowed, calls: leadCalls }));
     ctx.out(`packet: ${file}`);
     const yours = !own || role === "worker" ? "" : continueFrom !== null
       ? ` Your file is ${full} and it already exists: keep its finished sections, never reset it to the all-unverified draft, and rewrite it after each finding.`

@@ -21,6 +21,7 @@ const HELP = `gate <verb>: node <plugin>/scripts/gate.mjs <verb>
   next                                                      the next step in full (verbs print it short after the first time)
   brief <skeptic|qa|worker|reviewer|reviewer-2> [--files a,b | a.ts:1-400]   write a helper's packet
   huddle add <role> --file <file> · huddle resolve <H#.#> --evidence <ptr> | --wrong --evidence events#<seq> | --wrong --words "<theirs>" · huddle reopen <H#.#> "<why>" · huddle dispute · huddle reply --file worker-<n>.md · huddle unchanged <lines> "<why>"
+  call <driver|schema|qa-pass|lookups> "<why>" [--could-not-run]   the lead's own decision that this task does not need the app drive, the real-schema check, the blind QA pass or a helper's search; the reason names the file, case or helper, and the report shows it; never ask the user to skip a check
   waive <key> --standing "<batch>" --user-ok "<words>" · waive --end "<batch>" · open <slug> <playbook> --batch <name>   one OK for a batch of runs, 14 days
   verify [--final] [--force] [--step verify-before]         run the verify commands, write verify.json; --final also runs the "when": "final" area suite; --force runs them all, even on a tree they are green on
   verify --add "<cmd>" · verify --drop "<cmd>" [--user-ok "<words>"]   change what verify runs for this run only (gate.json is untouched); the last test command needs the user's words

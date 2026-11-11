@@ -309,13 +309,14 @@ test("3.6 C6 the report prints the user's words, in full and in For you", () => 
   assert.match(cli(repo, "report", ["--brief"]).stdout, /chrome is disconnected \(you said: "you may skip the driver check"\)/);
 });
 
-test("3.6 C7 the rule texts, refusals and the skill's waive line name --user-ok, under the byte cap", () => {
+test("3.6 C7 the rule texts and refusals that name gate waive name --user-ok; the skill names gate call, under the byte cap", () => {
   const repo = opened("verbs-w7");
   editsCode(repo);
   const check = cli(repo, "check").stdout;
   for (const line of check.split("\n").filter((l) => /gate waive /.test(l))) assert.match(line, /gate waive [^\n]*--user-ok/, line);
   const skill = readFileSync(path.join(pluginRoot, "skills", "gate", "SKILL.md"), "utf8");
-  assert.match(skill, /gate waive <key> "<why>" --user-ok/);
+  assert.match(skill, /gate call <key> "<why>"/);
+  assert.doesNotMatch(skill, /gate waive/, "the skill no longer sends the lead to ask for a waiver");
   assert.ok(Buffer.byteLength(skill) < 4096, `${Buffer.byteLength(skill)} bytes`);
 });
 

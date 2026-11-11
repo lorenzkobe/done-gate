@@ -48,7 +48,7 @@ function stepFor(cause, count) {
 }
 
 function nextText(step, p, record, dir) {
-  const again = Array.isArray(record?.files) ? ` --files ${record.files.join(",")}` : "";
+  const again = record?.light ? " --calls" : Array.isArray(record?.files) ? ` --files ${record.files.join(",")}` : "";
   const holds = p.file && existsSync(path.join(dir, p.file)) ? `; ${p.file} holds what it wrote so far` : "";
   return {
     resume: `SendMessage ${p.agent} to continue${holds}`,

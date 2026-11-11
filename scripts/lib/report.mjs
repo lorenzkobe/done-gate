@@ -162,8 +162,10 @@ export function stageOutcome(state, step) {
   if (step.state === "WAIVED" || step.state === "COULD NOT RUN") {
     const all = (ledger.waivers ?? []).filter((w) => w.key === step.key);
     const w = all.filter((x) => !x.lapsed).at(-1) ?? all.at(-1);
-    const why = step.state === "WAIVED" ? (w?.words ? `the user: "${w.words}"` : w?.reason ?? step.note ?? "no reason given") : `${w?.reason ?? step.note ?? "no reason given"}${w?.words ? ` (the user: "${w.words}")` : ""}`;
-    return `skipped: ${step.state === "WAIVED" ? "waived" : "could not run"} — ${why}`;
+    const lead = w?.by === "lead";
+    const said = lead ? " (the lead's call)" : w?.words ? ` (the user: "${w.words}")` : "";
+    const why = step.state === "WAIVED" ? (w?.words && !lead ? `the user: "${w.words}"` : w?.reason ?? step.note ?? "no reason given") : `${w?.reason ?? step.note ?? "no reason given"}${said}`;
+    return `skipped: ${step.state === "WAIVED" ? (lead ? "the lead's call" : "waived") : "could not run"} — ${why}`;
   }
   if (step.key === "verify") {
     const red = (state.verify?.commands ?? []).find((c) => !c.skipped && (c.exit !== 0 || c.timedOut));
@@ -183,7 +185,8 @@ function attentionLines(state, unmet) {
   for (const line of weakenedIn(state)) out.push(`- weakened: ${line}`);
   const advice = splitAdvice(policyFor(ledger), ledger.tier?.measured);
   if (advice) out.push(`- ${advice}`);
-  for (const w of ledger.waivers) out.push(`- ${w.could ? "could not run" : "waived"} ${w.key}: ${w.reason ?? w.quote}${w.words ? ` (the user: "${w.words}")` : ""}${w.batch ? ` — standing, batch ${w.batch}` : ""}${w.lapsed ? (w.expired ? " — ended: its 14 days ran out" : w.ended ? " — ended with gate waive --end" : " — lapsed: the code changed after it") : ""}`);
+  for (const w of ledger.waivers.filter((x) => x.by !== "lead")) out.push(`- ${w.could ? "could not run" : "waived"} ${w.key}: ${w.reason ?? w.quote}${w.words ? ` (the user: "${w.words}")` : ""}${w.batch ? ` — standing, batch ${w.batch}` : ""}${w.lapsed ? (w.expired ? " — ended: its 14 days ran out" : w.ended ? " — ended with gate waive --end" : " — lapsed: the code changed after it") : ""}`);
+  for (const w of ledger.waivers.filter((x) => x.by === "lead")) out.push(`- ${w.could ? `could not run ${w.key}: ${w.reason} (the lead's call)` : `the lead's call on ${w.key}: ${w.reason}`}${w.withdrawn ? " — taken back" : w.lapsed ? " — no longer holds: another UI, API or schema file changed after it" : ""}`);
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) out.push(`- skipped: ${s.text} — ${s.note}`);
   for (const a of ledger.planAdds ?? []) out.push(`- added to the plan: ${a.files.join(", ")} — ${a.why}`);
   if (ledger.planDrift?.length) out.push(`- outside the plan: ${ledger.planDrift.join(", ")} (${policyFor(ledger).guards.planDiff === "active" ? "blocks until added or reverted" : "noted, nothing blocked"})`);
@@ -391,6 +394,7 @@ export const PLAIN_RULES = {
   R18: "verify ran no test that covers a closed case's test file",
   R19: "code outside the plan changed and was not added to it",
   R20: "evidence the gate wrote was changed outside it",
+  R21: "no reviewer has looked at a check the lead decided to skip",
 };
 // Rules no longer raised, kept above so old records still read in plain words.
 export const RETIRED_RULES = new Set(["R16"]);
@@ -445,7 +449,10 @@ function reviewLine2(ledger) {
   const rounds = ledger.huddles.filter((h) => h.role === "reviewer" || h.role === "reviewer-2");
   if (!rounds.length) return "No review yet.";
   const base = reviewLine(ledger).replace(/^Reviewer found/, "found").replace(/\.$/, "");
-  return `Review: ${plural(rounds.length, "round")}, ${base}.`;
+  // a light round judged the lead's calls, not the code
+  const full = rounds.filter((h) => !h.light).length;
+  if (!full) return `No code review; a reviewer checked the lead's calls and ${base}.`;
+  return `Review: ${plural(full, "round")}, ${base}.${full < rounds.length ? " A reviewer also checked the lead's calls." : ""}`;
 }
 
 function appLine(state) {
@@ -477,6 +484,7 @@ function plain(text) {
 }
 
 const FOR_YOU_MAX = 6;
+const CALLED = { driver: "app drive", schema: "real-schema check", "qa-pass": "blind test pass", lookups: "helper search" };
 
 // Waivers and decisions only: pauses and blocked writes stay in the full report.
 function forYouLine(state, unmet) {
@@ -487,12 +495,19 @@ function forYouLine(state, unmet) {
   if (thinner.length) items.push(`tests weakened: ${thinner.slice(0, 3).map(plain).join(", ")}${thinner.length > 3 ? `, and ${thinner.length - 3} more` : ""}`);
   const said = (w) => (w.words ? ` (you said: "${w.words}")` : "");
   for (const w of ledger.waivers) {
+    // a call that lapsed was made again or its check was run: the full report keeps it
+    if (w.by === "lead") {
+      if (!w.lapsed) items.push(w.could ? `could not run ${w.key === "schema" ? "the real schema" : "the app"}: ${plain(w.reason)}` : `decided without asking: no ${CALLED[w.key] ?? w.key} (${plain(w.reason)})`);
+      continue;
+    }
     if (w.expired) items.push(`your standing OK for batch ${w.batch} ran out after its 14 days: ${plain(w.reason ?? w.quote)}${said(w)}`);
     else if (w.ended) items.push(`your standing OK for batch ${w.batch} was ended: ${plain(w.reason ?? w.quote)}${said(w)}`);
     else if (w.lapsed) items.push(`your OK no longer holds, the code changed after it: ${plain(w.reason ?? w.quote)}${said(w)}`);
     else if (w.could) items.push(`could not run ${w.key === "schema" ? "the real schema" : "the app"}: ${plain(w.reason)}${said(w)}`);
     else items.push(`skipped with your OK${w.batch ? ` for batch ${w.batch}` : ""}: ${plain(w.reason ?? w.quote)}${said(w)}`);
   }
+  const after = ledger.status === "open" ? afterReview(state) : ledger.afterReview ?? [];
+  if (after.length) items.push(`changed after the last review, not reviewed again: ${after.join(", ")}`);
   for (const a of ledger.planAdds ?? []) items.push(`added to the plan: ${a.files.join(", ")} (${plain(a.why)})`);
   if (trialed(state)) items.push(`review skipped under the UI trial: ${plain(ledger.steps.find((s) => s.key === "review")?.note)}`);
   if (ledger.planDrift?.length) items.push(`outside the plan: ${ledger.planDrift.join(", ")}`);

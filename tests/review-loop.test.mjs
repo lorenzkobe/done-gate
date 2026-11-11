@@ -1785,7 +1785,7 @@ test("C6 happy: the skeptic hint names `gate huddle add skeptic --file skeptic-<
 
   for (const key of ["driver", "schema"]) {
     assert.ok(hints[key], `no hint ever pointed at {${key}}: ${JSON.stringify(hints, null, 2)}`);
-    assert.match(hints[key], /waiver/i, `the ${key} hint does not mention a waiver:\n${hints[key]}`);
+    assert.match(hints[key], /gate call[^\n]*never ask the user for a waiver/i, `the ${key} hint does not name the call and warn against asking for a waiver:\n${hints[key]}`);
     assert.match(hints[key], /save time/i, `the ${key} hint does not say "save time":\n${hints[key]}`);
   }
 

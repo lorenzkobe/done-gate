@@ -119,16 +119,17 @@ test("C1 reported-surface: gate waive worker is refused and lists the valid keys
   assert.equal(ledgerOf(repo).steps.find((s) => s.key === "skeptic").state, "WAIVED");
 });
 
-test("C2 happy: the unmet texts of R5, R6 and R9 each name the gate waive key that clears them", () => {
+test("C2 happy: the unmet texts of R5 and R9 offer no waiver, and R6 names the lead's call that clears it", () => {
   const repo = opened("sf-c2", { "db/schema.sql": "create table a (id int);\n", ...config({ schema: ["db/**"], highRisk: ["src/a.ts"] }) });
   write(repo, "src/a.ts", REWRITE);
   write(repo, "db/schema.sql", "create table a (id int, name text);\n");
   const out = cli(repo, "check").stdout;
-  for (const [rule, key] of [["R5", "review"], ["R6", "schema"], ["R9", "review-2"]]) {
+  for (const rule of ["R5", "R6", "R9"]) {
     const lines = ruleLines(out, rule);
     assert.ok(lines, `premise: ${rule} is unmet\n${out}`);
-    assert.match(lines, new RegExp(`gate waive ${key}(?![\\w-])`), `${rule} does not name its key:\n${lines}`);
+    assert.doesNotMatch(lines, /gate waive|--user-ok/, `${rule} still asks for the user's waiver:\n${lines}`);
   }
+  assert.match(ruleLines(out, "R6"), /gate call schema(?![\w-])/);
 });
 
 test("C3 reported-surface: gate case amend keeps the old text in history and reopens the case; the report shows the new text and that it was amended; an unknown id or empty text is refused", () => {
@@ -679,7 +680,7 @@ test("C21 refused: gate waive verify is refused and says to run gate verify; gat
     assert.match(err, /gate (verify|note context)/, err);
   }
   assert.match(refused(repo, "step", ["verify", "skipped", "x"]), /Run `gate verify`/);
-  assert.match(refused(repo, "step", ["review", "skipped", "x"]), /gate waive review/);
+  assert.match(refused(repo, "step", ["review", "skipped", "x"]), /cannot be SKIPPED — do it$/m);
 
   const byRule = cli(repo, "waive", waiveArgs(repo, "R4", "user said there is nothing to drive")).stdout;
   assert.deepEqual(ledgerOf(repo).waivers.map((w) => [w.key, w.reason]), [["driver", "user said there is nothing to drive"]]);

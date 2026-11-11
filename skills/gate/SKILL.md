@@ -6,7 +6,7 @@ description: The done-gate workflow. Use before any task that changes source fil
 # done-gate
 
 Start each Bash command with `gate() { node "${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs" "$@"; };`
-Every verb prints a `next:` line: follow it. `gate check` lists what is unmet (R1-R10, R13, R15, R17, R18, R19, R20).
+Every verb prints a `next:` line: follow it. `gate check` lists what is unmet (R1-R10, R13, R15, R17-R21).
 
 ## The loop
 
@@ -61,6 +61,6 @@ with what you skipped or did not check: `gate note caveat`.
 - Two readings of the ask: `AskUserQuestion` before step 2. New ask mid-run: new run.
 - A helper that stops mid-file: `gate brief <role>` again; a fresh one continues
   from it.
-- A step you cannot do: ask, then `gate waive <key> "<why>" --user-ok "<words>"`.
+- A check the task needs not: `gate call <key> "<why>"`; never ask the user to skip a check.
 - Never hand-edit `.claude/gate/runs/**` except `ledger.md`. No commits unless asked; the
   repo's CLAUDE.md wins.

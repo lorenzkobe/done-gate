@@ -9,7 +9,7 @@ import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
 import { renderReport } from "./report.mjs";
 import { sealProblems, sealRunFile } from "./seal.mjs";
-import { abandonWordsProblem, askedNotSaid, saidAt, LAPSING, ON_CODE, firstCodeEdit, notRecommended, wordsShapeProblem, saidSince, waiverWordsProblem, apiCalls, apiFiles, briefOf, caseOpen, editedIn, oldRun, oldRunText, stepSurfaceFiles, writersOf, openItem, clickEvents, driverCommand, helperRun, lastEditSeq, isDraft, unfinishedFile, parseDisputes, parseFindings, sectionBullets, uncovered, afterReview, changedUnitsOf, parseEntry, pathOf, parseReplies, pointerResolver, proofProblem, wrongProblem, callProblem, proofReading, runProblem, upheldItem, uiTrial, reviewTrialed, CONTEXT_PARTS, contextPart, tracedPointers, namesFile, ranEvents, ranText, WAIVERS, leadLookups, skippedLookups, skippedText, LOOKUP_KINDS, LOOKUP_EXAMPLE, slopHits, list, setUpServers, userSaid, workerRuns } from "./rules.mjs";
+import { abandonWordsProblem, afterReview, apiCalls, apiFiles, askedNotSaid, briefOf, BUG_FIX_DRIVE, callProblem, callReasonProblem, CALLS, caseOpen, changedUnitsOf, clickEvents, CONTEXT_PARTS, contextPart, driverCommand, editedIn, firstCodeEdit, helperRun, isDraft, lapseWaiver, LAPSING, lastEditSeq, leadLookups, list, LOOKUP_EXAMPLE, LOOKUP_KINDS, namesFile, notRecommended, oldRun, oldRunText, ON_CODE, openItem, parseDisputes, parseEntry, parseFindings, parseReplies, pathOf, pointerResolver, proofProblem, proofReading, ranEvents, ranText, reviewTrialed, runProblem, saidAt, saidSince, sectionBullets, setUpServers, skippedLookups, skippedText, slopHits, stepSurfaceFiles, tracedPointers, uiTrial, uncovered, unfinishedFile, upheldItem, userSaid, WAIVERS, waiverWordsProblem, wordsShapeProblem, workerRuns, writersOf, wrongProblem } from "./rules.mjs";
 import { assess, broughtSinceOpen, buildState, cleanAtHead, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
 import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
@@ -97,12 +97,28 @@ const NO_WAIVER = {
   close: "Run `gate close`",
 };
 
+// Why a key is not the lead's to call, and what to do instead.
+const NOT_A_CALL = {
+  review: "A review is not skipped: it ends after one round and one re-check, once every finding is closed",
+  "review-2": "A review is not skipped: it ends after one round and one re-check, once every finding is closed",
+  tests: "Tests have no skip for anyone: write them",
+  qa: "Tests have no skip for anyone: write them",
+  verify: "The checks have no skip for anyone: run `gate verify`",
+  "gate-config": "A config change mid-task is the user's: ask them, then `gate waive gate-config` with their words",
+  evidence: "Evidence changed outside the gate is the user's: tell them what changed, then `gate waive evidence` with their words",
+};
+// A bug fix's drive is its proof, so only a surface that cannot run takes a call there.
+const callHint = (ledger, key) => (key === "driver" && ledger.playbook === "bugfix"
+  ? 'when the app cannot run at all, `gate call driver "<why>" --could-not-run`'
+  : `when this task does not need it, decide it yourself: \`gate call ${key} "<why, naming the file>"\``);
+const CALL_WHAT = { driver: "app drive", schema: "real-schema check", "qa-pass": "blind QA pass", lookups: "helper search" };
+
 export function flag(args, name) {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
 }
 
-const BARE_FLAGS = new Set(["--click", "--could-not-run"]);
+const BARE_FLAGS = new Set(["--click", "--could-not-run", "--withdraw"]);
 
 export function positional(args) {
   const out = [];
@@ -121,7 +137,7 @@ export function positional(args) {
 function refuseSkipped(ctx, dir, ledger, file) {
   const events = ledger.sessions.flatMap((s) => readEvents(ctx.stateDir, s)).sort((a, b) => a.seq - b.seq);
   const skipped = skippedLookups({ ledger, dir, root: ctx.root, events }, file);
-  if (skipped.length) throw new UsageError(`${file} was written by ${skipped.map(skippedText).join(", ")} without searching first; nothing recorded. Send it back (SendMessage) to search, e.g. ${LOOKUP_KINDS.map((k) => LOOKUP_EXAMPLE[k]).join(" and ")}, and recheck its file.`);
+  if (skipped.length) throw new UsageError(`${file} was written by ${skipped.map(skippedText).join(", ")} without searching first; nothing recorded. Send it back (SendMessage) to search, e.g. ${LOOKUP_KINDS.map((k) => LOOKUP_EXAMPLE[k]).join(" and ")}, and recheck its file. Or, when this task does not need it, decide it yourself: \`gate call lookups "<why, naming the helper>"\`.`);
 }
 
 // Why the plan check is not done yet, or null: its newest file is finished and recorded and every
@@ -660,7 +676,7 @@ export const verbs = {
       if (!step) throw new UsageError(`no step "${ref}"`);
       if (step.key === "close") throw new UsageError("step {close} is closed by `gate close`, which closes the run once `gate check` is clean; run `gate close`");
       if (state === "SKIPPED" && step.key && EVIDENCED_KEYS.has(step.key)) {
-        throw new UsageError(`step {${step.key}} has script/agent evidence and cannot be SKIPPED — ${Object.hasOwn(NO_WAIVER, step.key) ? `it has no waiver either. ${NO_WAIVER[step.key]}.` : step.key === "tests" ? 'write them; `gate step tests na "<why>"` when this change holds no code (config, lockfile, CSS, images, docs). A code change with no test has no waiver' : `do it, or get the user's waiver with \`gate waive ${step.key} "<reason>" --user-ok "<their words>"\``}`);
+        throw new UsageError(`step {${step.key}} has script/agent evidence and cannot be SKIPPED — ${Object.hasOwn(NO_WAIVER, step.key) ? `it has no waiver either. ${NO_WAIVER[step.key]}.` : step.key === "tests" ? 'write them; `gate step tests na "<why>"` when this change holds no code (config, lockfile, CSS, images, docs). A code change with no test has no waiver' : step.key === "review" ? "do it" : Object.hasOwn(CALLS, step.key) ? `do it, or ${callHint(ledger, step.key)}` : `do it, or get the user's waiver with \`gate waive ${step.key} "<reason>" --user-ok "<their words>"\``}`);
       }
       if (step.key === "context") throw new UsageError('step {context} is closed by `gate note context "Traced: … · Related: … · Research: …"` after you search the code and memory yourself; run that instead.');
       if (state === "N/A" && (step.key === "repro" || step.key === "rootcause")) {
@@ -675,7 +691,7 @@ export const verbs = {
         const policy = policyFor(ledger);
         const size = effectiveTier(policy, ledger, gateState.tier?.measured ?? tierOf(ledger).measured);
         const owed = (gateState.changed ?? []).some((p) => gateState.config.isSource(p) && !gateState.config.isTest(p)) && requires(policy, size).includes("reviewer");
-        if (owed && !uiTrial(gateState)) throw new UsageError(`step {review} cannot be N/A at size ${size}: the review is owed. Only the UI trial skips it, for a looks-only change where every changed file is a stylesheet, a .vue or .svelte component or a script component (in a Next, Remix, React Router, TanStack Start or Waku repo one that opens with "use client"), none is named *.server.* or +server.*, and none is API, schema or high-risk code; otherwise run the review, or get the user's waiver with \`gate waive review "<reason>" --user-ok "<their words>"\``);
+        if (owed && !uiTrial(gateState)) throw new UsageError(`step {review} cannot be N/A at size ${size}: the review is owed. Only the UI trial skips it, for a looks-only change where every changed file is a stylesheet, a .vue or .svelte component or a script component (in a Next, Remix, React Router, TanStack Start or Waku repo one that opens with "use client"), none is named *.server.* or +server.*, and none is API, schema or high-risk code; otherwise run the review`);
         if (owed) step.trial = true;
       }
       if (state === "N/A" && SURFACE_KEYS.has(step.key)) {
@@ -683,7 +699,7 @@ export const verbs = {
         const repos = ledger.repos ?? [];
         const tree = snapshot(ctx.root, loadSession(ctx.stateDir, ctx.session)?.lastTree ?? ledger.baseline, repos);
         const owed = stepSurfaceFiles(step.key, ledger, loadConfig(ctx.root, repos), diffSnapshots(ledger.baseline, tree).changed);
-        if (owed.length) throw new UsageError(`step {${step.key}} cannot be N/A: ${owed.slice(0, 5).join(", ")} changed. Do it, or get the user's waiver with \`gate waive ${step.key} "<reason>" --user-ok "<their words>"\``);
+        if (owed.length) throw new UsageError(`step {${step.key}} cannot be N/A: ${owed.slice(0, 5).join(", ")} changed. Do it, or ${callHint(ledger, step.key)}`);
       }
       const onCall = state === "DONE" && step.key === "driver" && apiFiles(ledger, gateState.config, gateState.changed).length > 0;
       if (state === "DONE" && (RUN_KEYS.has(step.key) || onCall)) {
@@ -735,7 +751,7 @@ export const verbs = {
         const other = ledger.huddles.find((h) => h.file === file && h.role !== role);
         if (other) throw new UsageError(`gate huddle add ${role}: ${file} is already recorded as ${other.id} (${other.role})`);
         const full = path.join(dir, file);
-        if (!existsSync(full)) throw new UsageError(`${file} is not there: the helper left no file. Nothing recorded. Run \`gate brief ${role}\` again and spawn a fresh helper.`);
+        if (!existsSync(full)) throw new UsageError(`${file} is not there: the helper left no file. Nothing recorded. Run \`gate brief ${role}${ledger.seen?.[file]?.light ? " --calls" : ""}\` again and spawn a fresh helper.`);
         // a draft left by a helper cut off mid-write: every bullet reads "unverified". The
         // round is unfinished, not done — record nothing and send the lead back to re-brief it.
         if (unfinishedFile(full)) {
@@ -743,8 +759,8 @@ export const verbs = {
             throw new UsageError(`${file} is unfinished and its helper is still running: wait for it. Nothing recorded.`);
           }
           throw new UsageError(isDraft(readFileSync(full, "utf8"))
-            ? `${file} is a draft: the helper has not finished (every bullet reads "unverified"). Nothing recorded. Run \`gate brief ${role}\` again and spawn a fresh helper for the same round.`
-            : `${file} is unfinished: a section still reads "- unverified". Nothing recorded. Run \`gate brief ${role}\` again and spawn a fresh helper; its packet continues from the file.`);
+            ? `${file} is a draft: the helper has not finished (every bullet reads "unverified"). Nothing recorded. Run \`gate brief ${role}${ledger.seen?.[file]?.light ? " --calls" : ""}\` again and spawn a fresh helper for the same round.`
+            : `${file} is unfinished: a section still reads "- unverified". Nothing recorded. Run \`gate brief ${role}${ledger.seen?.[file]?.light ? " --calls" : ""}\` again and spawn a fresh helper; its packet continues from the file.`);
         }
         refuseSkipped(ctx, dir, ledger, file);
       }
@@ -755,11 +771,11 @@ export const verbs = {
         let huddle = file ? ledger.huddles.find((h) => h.role === role && h.file === file) : null;
         const seen = file ? ledger.seen?.[file] : null;
         const seenFacts = () => Array.isArray(seen?.files)
-          ? { files: seen.files, briefSeq: seen.seq, ...(seen.units ? { units: seen.units } : {}), ...(seen.at ? { at: seen.at } : {}), ...(seen.edges ? { edges: seen.edges } : {}), ...(seen.fixCheck ? { fixCheck: true } : {}), ...(seen.part ? { part: true } : {}), ...(seen.answers ? { answers: true } : {}), ...(seen.disputes ? { disputes: seen.disputes } : {}), ...(seen.flats ? { flats: seen.flats } : {}), ...(seen.owns ? { owns: seen.owns } : {}), ...(seen.notes ? { notes: seen.notes } : {}), ...(seen.late ? { late: seen.late } : {}) }
+          ? { files: seen.files, briefSeq: seen.seq, ...(seen.units ? { units: seen.units } : {}), ...(seen.at ? { at: seen.at } : {}), ...(seen.edges ? { edges: seen.edges } : {}), ...(seen.fixCheck ? { fixCheck: true } : {}), ...(seen.part ? { part: true } : {}), ...(seen.answers ? { answers: true } : {}), ...(seen.disputes ? { disputes: seen.disputes } : {}), ...(seen.flats ? { flats: seen.flats } : {}), ...(seen.owns ? { owns: seen.owns } : {}), ...(seen.notes ? { notes: seen.notes } : {}), ...(seen.late ? { late: seen.late } : {}), ...(seen.calls ? { calls: seen.calls } : {}), ...(seen.light ? { light: true } : {}) }
           : {};
         // a round whose file was lost and briefed again takes what the newer brief showed
         if (huddle && seen?.seq > (huddle.briefSeq ?? Infinity)) {
-          for (const key of ["files", "briefSeq", "units", "at", "edges", "fixCheck", "part", "answers", "disputes", "flats", "owns", "notes", "late"]) delete huddle[key];
+          for (const key of ["files", "briefSeq", "units", "at", "edges", "fixCheck", "part", "answers", "disputes", "flats", "owns", "notes", "late", "calls", "light"]) delete huddle[key];
           Object.assign(huddle, seenFacts());
         }
         if (!huddle) {
@@ -1063,6 +1079,55 @@ export const verbs = {
     ctx.out(`waived ${key} (clears ${clears}) — the report will show the reason`);
     const gone = key === "gate-config" ? ctx.repos.filter((r) => !existsSync(r.root)).map((r) => r.prefix) : [];
     if (gone.length) ctx.out(`not cleared: the R13 line for the declared repo ${gone.join(", ")}, whose directory is gone; restore it, or ask the user whether to give the run up`);
+    printNext(ctx);
+  },
+
+  // The lead's own decision that this task does not need a check, with a reason that names
+  // something of the task. No user words: the report shows it as the lead's.
+  call(ctx) {
+    const [key, ...why] = positional(ctx.args);
+    const reason = why.join(" ").trim();
+    const withdraw = ctx.args.includes("--withdraw");
+    if (!key || (!reason && !withdraw)) throw new UsageError(`usage: gate call <${Object.keys(CALLS).join("|")}> "<why this task does not need it>" [--could-not-run] · gate call <key> --withdraw`);
+    const { ledger: current } = open(ctx);
+    if (oldRun(current)) throw new UsageError(oldRunText(current));
+    // a call the reviewer raised, or the lead thought better of: the check is owed again
+    if (withdraw) {
+      withLedger(ctx, (ledger) => {
+        const held = ledger.waivers.filter((w) => w.key === key && w.by === "lead" && !w.lapsed);
+        if (!held.length) throw new UsageError(`gate call ${key} --withdraw: no call on ${key} holds`);
+        for (const w of held) lapseWaiver(ledger, w, { withdrawn: true });
+      });
+      ctx.out(`call on ${key} taken back: its check is owed again`);
+      printNext(ctx);
+      return;
+    }
+    if (!Object.hasOwn(CALLS, key)) throw new UsageError(`${key} is not the lead's call. ${NOT_A_CALL[key] ?? `The lead decides ${Object.keys(CALLS).join(", ")}; anything else is done, or is the user's (\`gate waive\` with their words)`}.`);
+    const couldNot = ctx.args.includes("--could-not-run");
+    if (couldNot && !SURFACE_KEYS.has(key)) throw new UsageError(`--could-not-run is for a surface that cannot run: driver or schema, not ${key}`);
+    if (key === "driver" && current.playbook === "bugfix" && !couldNot) throw new UsageError(`gate call driver: ${BUG_FIX_DRIVE}.`);
+    const { state, unmet } = assess(ctx, {});
+    if (key !== "lookups" && state.ledger.waivers.some((w) => w.key === key && !w.lapsed)) throw new UsageError(`gate call ${key}: a call or a waiver on ${key} already holds; the report shows it`);
+    const owed = unmet.some((u) => u.rule === CALLS[key] && (key !== "qa-pass" || /blind QA/.test(u.text)));
+    if (!owed) throw new UsageError(`gate call ${key}: nothing to call, \`gate check\` asks for no ${CALL_WHAT[key]} now`);
+    const files = SURFACE_KEYS.has(key) ? stepSurfaceFiles(key, state.ledger, state.config, state.changed) : null;
+    const helpers = key === "lookups" ? skippedLookups(state).map((h) => h.id) : null;
+    const base = (list) => [...new Set(list.flatMap((p) => [p, p.split("/").pop()]))];
+    const names = couldNot ? null : files ? base(files) : helpers ?? [...base(state.changed.filter((p) => state.config.isTest(p))), ...state.ledger.cases.map((c) => c.id)];
+    const problem = callReasonProblem(reason, names);
+    if (problem) throw new UsageError(`gate call ${key}: ${problem}`);
+    const named = helpers?.filter((id) => callReasonProblem(reason, [id]) === null);
+    const clears = withLedger(ctx, (ledger) => {
+      ledger.waivers.push({ key, reason, by: "lead", ...(files ? { files } : {}), ...(named ? { helpers: named } : {}), ...(couldNot ? { could: true } : {}), seq: nextSeq() });
+      const step = ledger.steps.find((s) => s.key === key);
+      if (step) {
+        delete step.auto;
+        Object.assign(step, { state: couldNot ? "COULD NOT RUN" : "WAIVED", note: reason, evidence: null, seq: nextSeq() });
+      }
+      return [CALLS[key], step ? `step {${key}}` : null].filter(Boolean).join(" and ");
+    });
+    ctx.out(`called ${key} (clears ${clears}) — the report will show the reason`);
+    if (key !== "lookups") ctx.out("A reviewer checks it: a full review round whose packet shows its file lists it; with none to come, `gate brief reviewer --calls`. Taken back with `gate call " + key + " --withdraw`.");
     printNext(ctx);
   },
 

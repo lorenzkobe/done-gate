@@ -27,6 +27,7 @@ const VERBS = {
   step: { hook: false, load: () => import("./lib/verbs.mjs") },
   huddle: { hook: false, load: () => import("./lib/verbs.mjs") },
   waive: { hook: false, load: () => import("./lib/verbs.mjs") },
+  call: { hook: false, load: () => import("./lib/verbs.mjs") },
   decide: { hook: false, load: () => import("./lib/verbs.mjs") },
   close: { hook: false, load: () => import("./lib/verbs.mjs") },
   abandon: { hook: false, load: () => import("./lib/verbs.mjs") },

@@ -85,6 +85,16 @@ test("C2 boundary: a fix after the fix-check round clears R9 with no third round
   assert.ok(capped(run(repo, "brief", "reviewer-2")));
 });
 
+test("C2b edge: under late-line calls the second reviewer's re-check, its finding fixed and closed, ends the file for that role only", () => {
+  const repo = opened("rcf-c2b");
+  round(repo, "reviewer", 1, { finding: false });
+  round(repo, "reviewer-2", 1);
+  round(repo, "reviewer-2", 2);
+  assert.equal(ruleLine(repo, "R9"), "");
+  assert.ok(capped(run(repo, "brief", "reviewer-2")));
+  assert.match(ruleLine(repo, "R5"), /src\/pay\.ts/, "the first reviewer's clean round does not cover the second reviewer's fixes");
+});
+
 test("C3 refused: with round 1's finding still open, round 2 is refused at the cap", () => {
   const repo = opened("rcf-c3");
   round(repo, "reviewer-2", 1, { fix: false });
