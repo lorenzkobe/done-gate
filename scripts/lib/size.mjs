@@ -132,6 +132,28 @@ export function requires(policy, tier) {
   return policy.tiers[tier]?.requires ?? [];
 }
 
+// The lead's call that the change is mechanical (a rename, generated code, one edit repeated),
+// while it holds: made on the plan note, checked by a reviewer, taken back by `gate call mechanical --withdraw`.
+export const mechanicalCall = (ledger) => (ledger?.waivers ?? []).find((w) => w.key === "mechanical" && w.by === "lead" && !w.lapsed) ?? null;
+
+// A stated risk and a mechanical call both rule out the small UI trial: one says the change
+// matters, the other already skips the plan check on the lead's word.
+export const noTrial = (ledger) => Boolean(tierOf(ledger).risk || mechanicalCall(ledger));
+
+// A size under a mechanical call: capped at the smallest size that owes a reviewer, who checks
+// the claim. A schema or high-risk file, planned or changed, keeps the plan check (standard);
+// a ui file does not.
+const KEEPS_PLAN_CHECK = new Set(["schema", "highRisk"]);
+function lowered(policy, ledger, tier, measured = null) {
+  if (!tier || !mechanicalCall(ledger)) return tier;
+  const order = tierOrder(policy);
+  const cap = order.find((name) => requires(policy, name).includes("reviewer"));
+  if (!cap) return tier;
+  const floored = [...tierOf(ledger).forced, ...(measured?.forced ?? [])].some((cat) => KEEPS_PLAN_CHECK.has(cat));
+  const target = floored && order.includes("standard") ? tierMax(policy, cap, "standard") : cap;
+  return order.indexOf(tier) > order.indexOf(target) ? target : tier;
+}
+
 // Smallest tier whose limits hold; a tier without limits is the catch-all. Any forced
 // category raises the answer to at least "standard".
 export function tierFor(policy, { files = 0, lines = 0, forced = [] } = {}) {
@@ -180,14 +202,14 @@ export function delegatedTier(policy, tier) {
 export function leadDelegates(ledger, policy = policyFor(ledger)) {
   if (!tiered(ledger)) return null;
   const t = tierOf(ledger);
-  const size = tierMax(policy, t.predicted, t.measured?.tier ?? null);
+  const size = lowered(policy, ledger, tierMax(policy, t.predicted, t.measured?.tier ?? null), t.measured);
   return delegatedTier(policy, size) ? size : null;
 }
 
 // predicted stays null until `gate note plan --files` names the files; the measured diff
 // alone then decides, so a task that never predicts is judged by what it actually changed.
 export function emptyTier() {
-  return { predicted: null, predictedFiles: [], predictedSized: null, declared: null, measured: null, autoNa: [], predictedSeq: null, grewAt: null };
+  return { predicted: null, predictedFiles: [], predictedSized: null, declared: null, risk: null, forced: [], measured: null, autoNa: [], predictedSeq: null, grewAt: null };
 }
 
 // A tier record from an older ledger, or a damaged one, is normalised rather than trusted.
@@ -201,6 +223,10 @@ export function tierOf(ledger) {
     // how many source files the plan named; null on a ledger from before 0.21.0
     predictedSized: typeof t.predictedSized === "number" ? t.predictedSized : null,
     declared: typeof t.declared === "string" ? t.declared : null,
+    // what the lead said the change touches (money, sign-in, stored data): sized as a high-risk path
+    risk: typeof t.risk === "string" && t.risk ? t.risk : null,
+    // the listed folders (ui, schema, highRisk) the planned files sit in
+    forced: Array.isArray(t.forced) ? t.forced : [],
     measured: t.measured && typeof t.measured === "object" ? t.measured : null,
     autoNa: Array.isArray(t.autoNa) ? t.autoNa : [],
     predictedSeq: typeof t.predictedSeq === "number" ? t.predictedSeq : null,
@@ -358,17 +384,20 @@ export function applyPrediction(ledger, policy, config, paths, declared = null) 
   const tier = tierOf(ledger);
   // a declaration outlives the plan note that made it: a later --files alone keeps it
   tier.declared = declared ?? tier.declared;
-  const pred = { ...predictTier(policy, config, paths), declared: tier.declared };
+  const pred = { ...predictTier(policy, config, paths), declared: tier.declared, risk: tier.risk };
   if (tier.declared) pred.tier = tierMax(policy, pred.tier, tier.declared);
-  const wasDelegated = delegatedTier(policy, tier.predicted);
-  const delegated = delegatedTier(policy, pred.tier);
+  if (tier.risk && tierOrder(policy).includes("standard")) pred.tier = tierMax(policy, pred.tier, "standard");
   tier.predicted = pred.tier;
   tier.predictedFiles = paths;
   tier.predictedSized = pred.files;
+  tier.forced = pred.forced;
+  ledger.tier = tier;
+  const sized = lowered(policy, ledger, pred.tier);
+  const delegated = delegatedTier(policy, sized);
   // when the task became large; a later re-prediction never moves that mark forward
   if (delegated && tier.predictedSeq === null) tier.predictedSeq = nextSeq();
   if (!delegated && !delegatedTier(policy, tier.measured?.tier)) Object.assign(tier, { predictedSeq: null, grewAt: null });
-  const required = requiredSteps(policy, pred.tier, ledger);
+  const required = requiredSteps(policy, sized, ledger);
   tier.autoNa = [];
   for (const key of optionalSteps(ledger)) {
     const step = ledger.steps.find((s) => s.key === key);
@@ -377,12 +406,11 @@ export function applyPrediction(ledger, policy, config, paths, declared = null) 
     if (required.includes(key)) {
       if (auto) blank(step);
     } else {
-      if (step.state === null) Object.assign(step, { state: "N/A", note: autoNote(pred.tier), evidence: null, seq: nextSeq() });
+      if (step.state === null) Object.assign(step, { state: "N/A", note: autoNote(sized), evidence: null, seq: nextSeq() });
       if (step.state === "N/A" && isAutoNote(step.note)) tier.autoNa.push(key);
     }
   }
-  ledger.tier = tier;
-  return { ...pred, tier: pred.tier };
+  return { ...pred, sized };
 }
 
 // A plan naming no source file predicts a placeholder size; while no source file has changed
@@ -390,9 +418,9 @@ export function applyPrediction(ledger, policy, config, paths, declared = null) 
 export function effectiveTier(policy, ledger, measured) {
   const t = tierOf(ledger);
   const measuredTier = measured?.tier ?? null;
-  const placeholder = t.predictedSized === 0 && !t.declared && measuredTier !== null && measured.files === 0;
+  const placeholder = t.predictedSized === 0 && !t.declared && !t.risk && measuredTier !== null && measured.files === 0;
   const predicted = placeholder ? null : t.predicted;
-  return tierMax(policy, predicted, measuredTier) ?? "standard";
+  return lowered(policy, ledger, tierMax(policy, predicted, measuredTier) ?? "standard", measured);
 }
 
 // The measured diff outgrew the prediction: any optional step still N/A (auto or by hand)
@@ -404,7 +432,7 @@ export function reconcileTier(ledger, policy, measured, { trial = false } = {}) 
   for (const key of requiredSteps(policy, effectiveTier(policy, ledger, measured), ledger)) {
     const step = ledger.steps.find((s) => s.key === key);
     // the UI trial's review N/A stands while the trial holds
-    if (step && step.state === "N/A" && !(key === "review" && step.trial && trial)) {
+    if (step && step.state === "N/A" && !(key === "review" && step.trial && trial && !noTrial(ledger))) {
       blank(step);
       reopened.push(key);
     }
@@ -504,7 +532,8 @@ export function renderTierBlock(ledger, policy, measured, { details = false } = 
   const measuredText = measured
     ? `measured ${measured.tier}: ${plural(measured.files, "file")}, ${plural(measured.lines, "line")}${measured.forced.length ? ` · forced: ${measured.forced.join(", ")}` : ""}`
     : "measured: not yet";
-  out.push(`tier: ${eff} · ${predicted} · ${measuredText}`);
+  const stated = `${t.risk ? ` · stated risk: ${t.risk}` : ""}${mechanicalCall(ledger) ? " · mechanical (the lead's call)" : ""}`;
+  out.push(`tier: ${eff}${stated} · ${predicted} · ${measuredText}`);
   const helpers = requires(policy, eff);
   out.push(`requires: ${helpers.length ? helpers.join(", ") : "none"}`);
   out.push(`piece cap ${policy.reviewMaxLines} lines: a review round covers at most that many source lines (\`gate brief reviewer --files a,b\` for a piece)`);

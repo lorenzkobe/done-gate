@@ -1858,3 +1858,9 @@ test("8.2 C13 refused: stats, watch and diagnose promise to write nothing: no ve
   const commands = line(ok(repo), "commands:");
   for (const quiet of ["stats", "watch", "diagnose"]) assert.doesNotMatch(commands, new RegExp(`\\b${quiet}\\b`), quiet);
 });
+
+test("a mechanical call is counted among the lead's calls by its key", () => {
+  const repo = makeRepo("stats-mechanical-call");
+  writeRun(repo, "one", closedRun({ rules: 2, waivers: [{ key: "mechanical", reason: "the same import path renamed in every file", by: "lead", files: ["src/a.ts"] }, { key: "driver", reason: "y", by: "lead" }] }));
+  assert.match(line(ok(repo), "the lead's calls:"), /2 in 1 closed runs, 2 per run \(driver 1, mechanical 1\); could not run 0, lapsed 0/);
+});

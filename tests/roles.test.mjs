@@ -470,8 +470,8 @@ test("C3 happy: SKILL.md says a small edit is the lead's own and that standard o
   const md = read(SKILL_MD);
   const file = "skills/gate/SKILL.md";
 
-  // small: the lead edits it itself
-  matches(md, /small[^.]{0,120}\b(yourself|your own)\b/i, file, "at size small the lead edits");
+  // small, as any size: the lead edits it itself
+  matches(md, /(small|any size)[^.]{0,120}\b(yourself|your own)\b/i, file, "at size small the lead edits");
 
   // any size: the lead may edit; independent pieces may go to workers
   matches(md, /independent[^.]{0,160}worker|worker[^.]{0,160}independent/i, file, "independent pieces may go to a worker");

@@ -1113,11 +1113,13 @@ function outsidePiece(agent, paths, ledger, events, config, currentRun) {
   return null;
 }
 
-// Whether a command runs the gate's `call` verb: the word `call` right after the gate's script, the
-// `gate` wrapper or a variable, in any segment; a shell's `-c` text is read the same way.
+// Whether a command makes a lead's call: the word `call` right after the gate's script, the `gate`
+// wrapper or a variable, or `note` there with --mechanical or --risk (which sizes the run, and
+// `--risk none` takes a risk back), in any segment; a shell's `-c` text is read the same way.
 function runsGateCall(raw) {
   return segments(withoutHeredocs(String(raw))).some((seg) => {
-    const direct = seg.some((w, i) => i > 0 && w.text === "call" && (seg[i - 1].text === "gate" || /gate\.mjs$/.test(seg[i - 1].text) || VARIABLE.test(seg[i - 1].text)));
+    const sizes = seg.some((w) => w.text === "--mechanical" || w.text === "--risk");
+    const direct = seg.some((w, i) => i > 0 && (w.text === "call" || (w.text === "note" && sizes)) && (seg[i - 1].text === "gate" || /gate\.mjs$/.test(seg[i - 1].text) || VARIABLE.test(seg[i - 1].text)));
     const shell = seg.some((w) => SHELLS.has(w.text) || w.text === "eval");
     return direct || (shell && seg.some((w) => w.quoted && /\s/.test(w.text) && runsGateCall(w.text)));
   });
@@ -1126,7 +1128,7 @@ function runsGateCall(raw) {
 export function decide(input, root, config = null, currentRun = null, ledger = null, where = {}) {
   // a call is the lead's decision: a helper cannot call off a check, least of all its own search
   if (input.agent_id && input.tool_name === "Bash" && runsGateCall(input.tool_input?.command ?? "")) {
-    return { deny: true, reason: "done-gate: only the lead makes a call (`gate call`). Tell the lead what you could not do and why; it decides." };
+    return { deny: true, reason: "done-gate: only the lead makes a call (`gate call`, `gate note plan --mechanical` or `--risk`). Tell the lead what you could not do and why; it decides." };
   }
   const repos = ledger?.repos ?? [];
   config ??= loadConfig(root, repos);

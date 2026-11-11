@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { nextSeq } from "./events.mjs";
-import { blank, delegatedTier, effectiveTier, outsidePlan, policyFor, requires, samePiece, tierOf, tiered, trialHolds } from "./size.mjs";
+import { blank, delegatedTier, effectiveTier, inPlan, noTrial, outsidePlan, policyFor, requires, samePiece, tierOf, tiered, trialHolds } from "./size.mjs";
 import { baseCopy, changedUnits, fileDiff, gitTracked, hasReindent, indentMatters, sliceEnd } from "./tree.mjs";
 import { scanDiff } from "./slop.mjs";
 import { coverageGaps, runsTests } from "./verify.mjs";
@@ -520,6 +520,7 @@ const driverCalls = (state, after) => apiCalls(state, after).filter((e) => !call
 // The small UI trial holds for this run now, and its review step closed N/A on the lead's reason.
 export function uiTrial(state) {
   const policy = state.policy ?? policyFor(state.ledger);
+  if (noTrial(state.ledger)) return false;
   return trialHolds(policy, state.config, state.changed ?? [], effectiveTier(policy, state.ledger, state.tier?.measured ?? null), { root: state.root, repos: state.repos ?? [] });
 }
 export function reviewTrialed(state) {
@@ -1325,7 +1326,9 @@ const STEP_SURFACE = {
   driver: { files: (ledger, config, changed) => surfaceOf(ledger, config, changed, (p) => config.isUi(p) || config.isApi(p)), declared: (d) => d.ui && d.api, names: "UI or API" },
   schema: { files: schemaFiles, declared: (d) => d.schema, names: "schema" },
 };
-export const stepSurfaceFiles = (key, ledger, config, changed) => STEP_SURFACE[key]?.files(ledger, config, changed) ?? [];
+// A mechanical call was made on the plan's code files: any other changed code file is outside it.
+const codeFiles = (config, changed) => changed.filter((p) => config.isSource(p) && !config.isTest(p) && !config.isDoc(p));
+export const stepSurfaceFiles = (key, ledger, config, changed) => (key === "mechanical" ? codeFiles(config, changed) : STEP_SURFACE[key]?.files(ledger, config, changed) ?? []);
 
 // On a green verify: driver and schema need no hand close when this code cannot reach them, because
 // only tests or docs changed, or the repo declared its globs and none matched. The mark holds the
@@ -1409,7 +1412,7 @@ export function lapseWaivers(ledger, hash, now = Date.now(), surfaceOf = null) {
   const joined = (w) => {
     if (!surfaceOf || !w.files) return false;
     if (!surface.has(w.key)) surface.set(w.key, surfaceOf(w.key));
-    return surface.get(w.key).some((f) => !w.files.includes(f));
+    return surface.get(w.key).some((f) => !inPlan(w.files, f));
   };
   for (const w of ledger.waivers ?? []) {
     if (w.lapsed) continue;
@@ -1705,14 +1708,15 @@ export function evaluate(state) {
 
   // R9: high-risk paths, or a large run → a second, adversarial reviewer
   const highRisk = changed.some((p) => config.isHighRisk(p));
-  if ((highRisk || large) && !waived(ledger, "review-2")) {
+  const risk = src.length > 0 ? tierOf(ledger).risk : null;
+  if ((highRisk || risk || large) && !waived(ledger, "review-2")) {
     const r = reviewed(state, "reviewer-2", after);
     if (r.partOpen || (r.stopped && r.hasFile && r.openItems.length)) {
       unmet.push({ rule: "R9", text: `reviewer-2 Act-on item(s) still open: ${r.openItems.map(openItem).join(", ")}. Fix, then \`gate huddle resolve <id> --evidence <pointer>\`.${disputedText("reviewer-2", r.openItems)}${upheldText("reviewer-2", r.openItems)}` });
     } else if (!r.stopped || !r.hasFile) {
       unmet.push({ rule: "R9", text: stillOpen(r, "reviewer-2") + (r.pending.length && r.hasFile
         ? `high-risk paths changed: no clean reviewer-2 round yet for ${list(r.pending)}: \`gate brief reviewer-2 --files ${nextPiece(state, r.pending).join(",")}\`, spawn \`done-gate:reviewer-2\`, then \`gate huddle add reviewer-2 --file review2-<n>.md\`.${unchangedRoute(policy, r.pending)}`
-        : `${highRisk ? `high-risk paths changed (${list(changed.filter((p) => config.isHighRisk(p)))})` : `this run is size ${sizeNow}${grew}`}: a second review by \`done-gate:reviewer-2\` is required after the last edit, with its review2-<n>.md recorded via \`gate huddle add reviewer-2 --file ...\` and every Act-on item closed.`) });
+        : `${highRisk ? `high-risk paths changed (${list(changed.filter((p) => config.isHighRisk(p)))})` : risk ? `the plan states a risk (${risk})` : `this run is size ${sizeNow}${grew}`}: a second review by \`done-gate:reviewer-2\` is required after the last edit, with its review2-<n>.md recorded via \`gate huddle add reviewer-2 --file ...\` and every Act-on item closed.`) });
     }
   }
 

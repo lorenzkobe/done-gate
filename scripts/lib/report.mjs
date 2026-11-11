@@ -186,7 +186,7 @@ function attentionLines(state, unmet) {
   const advice = splitAdvice(policyFor(ledger), ledger.tier?.measured);
   if (advice) out.push(`- ${advice}`);
   for (const w of ledger.waivers.filter((x) => x.by !== "lead")) out.push(`- ${w.could ? "could not run" : "waived"} ${w.key}: ${w.reason ?? w.quote}${w.words ? ` (the user: "${w.words}")` : ""}${w.batch ? ` — standing, batch ${w.batch}` : ""}${w.lapsed ? (w.expired ? " — ended: its 14 days ran out" : w.ended ? " — ended with gate waive --end" : " — lapsed: the code changed after it") : ""}`);
-  for (const w of ledger.waivers.filter((x) => x.by === "lead")) out.push(`- ${w.could ? `could not run ${w.key}: ${w.reason} (the lead's call)` : `the lead's call on ${w.key}: ${w.reason}`}${w.withdrawn ? " — taken back" : w.lapsed ? " — no longer holds: another UI, API or schema file changed after it" : ""}`);
+  for (const w of ledger.waivers.filter((x) => x.by === "lead")) out.push(`- ${w.could ? `could not run ${w.key}: ${w.reason} (the lead's call)` : `the lead's call on ${w.key}: ${w.reason}`}${w.withdrawn ? " — taken back" : w.lapsed ? w.key === "mechanical" ? " — no longer holds: a file it was not made on changed after it" : " — no longer holds: another UI, API or schema file changed after it" : ""}`);
   for (const s of ledger.steps.filter((x) => x.state === "SKIPPED")) out.push(`- skipped: ${s.text} — ${s.note}`);
   for (const a of ledger.planAdds ?? []) out.push(`- added to the plan: ${a.files.join(", ")} — ${a.why}`);
   if (ledger.planDrift?.length) out.push(`- outside the plan: ${ledger.planDrift.join(", ")} (${policyFor(ledger).guards.planDiff === "active" ? "blocks until added or reverted" : "noted, nothing blocked"})`);
@@ -421,7 +421,8 @@ function changedLine(state) {
   const names = src.slice(0, 3).join(", ") + (src.length > 3 ? ` and ${src.length - 3} more` : "");
   const m = policy && tiered(ledger) ? (state.tier?.measured ?? tierOf(ledger).measured) : null;
   const tier = m ? effectiveTier(policy, ledger, m) : null;
-  const size = tier ? `, size ${tier}${ledger.tier?.grewAt && delegatedTier(policy, tier) ? " (grew to large mid-task)" : ""}` : "";
+  const risk = tierOf(ledger).risk;
+  const size = tier ? `, size ${tier}${ledger.tier?.grewAt && delegatedTier(policy, tier) ? " (grew to large mid-task)" : ""}${risk ? ` (stated risk: ${plain(risk)})` : ""}` : "";
   return `Changed ${plural(src.length, "file")} (${names})${size}.${contextSummary(state)}`;
 }
 
@@ -497,7 +498,7 @@ function forYouLine(state, unmet) {
   for (const w of ledger.waivers) {
     // a call that lapsed was made again or its check was run: the full report keeps it
     if (w.by === "lead") {
-      if (!w.lapsed) items.push(w.could ? `could not run ${w.key === "schema" ? "the real schema" : "the app"}: ${plain(w.reason)}` : `decided without asking: no ${CALLED[w.key] ?? w.key} (${plain(w.reason)})`);
+      if (!w.lapsed) items.push(w.could ? `could not run ${w.key === "schema" ? "the real schema" : "the app"}: ${plain(w.reason)}` : w.key === "mechanical" ? `decided without asking: sized as mechanical (${plain(w.reason)})` : `decided without asking: no ${CALLED[w.key] ?? w.key} (${plain(w.reason)})`);
       continue;
     }
     if (w.expired) items.push(`your standing OK for batch ${w.batch} ran out after its 14 days: ${plain(w.reason ?? w.quote)}${said(w)}`);

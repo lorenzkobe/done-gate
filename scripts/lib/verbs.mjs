@@ -3,7 +3,7 @@ import path from "node:path";
 import { nextSeq } from "./events.mjs";
 import { addLessons, currentLedger, findRun, isDone, loadLedger, openRuns, saveLedger } from "./ledger.mjs";
 import { loadConfig } from "./config.mjs";
-import { applyPrediction, effectiveTier, groupPieces, inPlan, outsidePlan, PIECES_PER_GROUP, policyFor, samePiece, requiredSteps, requires, tierOf, tierOrder, tiered } from "./size.mjs";
+import { applyPrediction, effectiveTier, groupPieces, inPlan, mechanicalCall, outsidePlan, PIECES_PER_GROUP, policyFor, samePiece, requiredSteps, requires, tierOf, tierOrder, tiered } from "./size.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
@@ -396,14 +396,33 @@ function abandonWords(ctx, dir, ledger, words) {
   if (askedNotSaid(hit.text, words)) throw new UsageError(`"${words.trim()}" was the user's question, not their decision: ${tell}`);
 }
 
+// What is wrong with a plan note's --risk or --mechanical on this run; throws, or returns nothing.
+function checkStatements(ledger, { stated, risk, mechanical }) {
+  if (!tiered(ledger)) throw new UsageError(`--risk and --mechanical size a feature, bugfix or refactor run; a ${ledger.playbook} run has no size`);
+  if (stated.risk && (!risk || risk.startsWith("--"))) throw new UsageError('--risk needs what the change touches: --risk "<money, sign-in or stored data>" (--risk none takes it back)');
+  if (stated.mechanical && (!mechanical || mechanical.startsWith("--"))) throw new UsageError('--mechanical needs the one edit that repeats: --mechanical "<a rename, generated code, the same edit in each file>"');
+  const riskNow = stated.risk ? risk !== "none" : Boolean(tierOf(ledger).risk);
+  if (riskNow && (stated.mechanical || mechanicalCall(ledger))) throw new UsageError("a change is risky or mechanical, not both: take one back first (`--risk none`, `gate call mechanical --withdraw`)");
+  if (!stated.mechanical) return;
+  if (ledger.playbook === "bugfix") throw new UsageError("--mechanical: a bug fix changes behaviour, so it is never mechanical");
+  if (mechanicalCall(ledger)) throw new UsageError("--mechanical: a mechanical call already holds; `gate call mechanical --withdraw` takes it back");
+  const problem = callReasonProblem(mechanical, null);
+  if (problem) throw new UsageError(`--mechanical: ${problem.replace(" saying why this task does not need it", " saying which edit repeats")}`);
+}
+
 export const verbs = {
   note(ctx) {
     const [section, ...rest] = ctx.args;
     if (!["task", "context", "plan", "caveat"].includes(section)) throw new UsageError('usage: gate note <task|context|plan|caveat> "<text>" [--files a,b] [--size <tier>] (or - to read stdin)');
     const files = flag(rest, "--files");
     const size = flag(rest, "--size");
+    const stated = { risk: rest.includes("--risk"), mechanical: rest.includes("--mechanical") };
+    const risk = (flag(rest, "--risk") ?? "").trim();
+    const mechanical = (flag(rest, "--mechanical") ?? "").trim();
     const text = readText(ctx, positional(rest).join(" ")).trim();
     if (!text) throw new UsageError("note: empty text");
+    if ((stated.risk || stated.mechanical) && section !== "plan") throw new UsageError("--risk and --mechanical belong to gate note plan");
+    if (stated.risk || stated.mechanical) checkStatements(open(ctx).ledger, { stated, risk, mechanical });
     if (section === "caveat") {
       if (files !== undefined || size !== undefined) throw new UsageError('usage: gate note caveat "<what was not shown>" (--files and --size belong to gate note plan)');
       const added = withLedger(ctx, (ledger) => {
@@ -441,6 +460,21 @@ export const verbs = {
       const sizes = tierOrder(policyFor(open(ctx).ledger));
       if (!sizes.includes(size)) throw new UsageError(`unknown size "${size}" (have: ${sizes.join(", ")})`);
     }
+    if (stated.mechanical) {
+      const { ledger } = open(ctx);
+      const config = loadConfig(ctx.root, ledger.repos);
+      const policy = policyFor(ledger);
+      const paths = files === undefined ? tierOf(ledger).predictedFiles : named.map((f) => toPosixRel(ctx.root, f, ledger.repos)).filter(Boolean);
+      const code = paths.filter((p) => config.isSource(p) && !config.isTest(p));
+      if (!code.length) throw new UsageError("--mechanical: the plan names no code file, so there is nothing to size down");
+      // tried on a copy: the call is taken only when it lowers the size the run has with this plan
+      const trial = structuredClone(ledger);
+      applyPrediction(trial, policy, config, paths, size ?? null);
+      const measured = tierOf(trial).measured;
+      const counted = effectiveTier(policy, trial, measured);
+      trial.waivers = [...(trial.waivers ?? []), { key: "mechanical", by: "lead" }];
+      if (effectiveTier(policy, trial, measured) === counted) throw new UsageError(`--mechanical: nothing to lower, the run is size ${counted} with or without it`);
+    }
     let predicted = null;
     withLedger(ctx, (ledger, dir) => {
       const file = path.join(dir, "ledger.md");
@@ -457,16 +491,21 @@ export const verbs = {
         // the first plan is what R2 dates; an amendment after the skeptic keeps that date
         if (!ledger.planSeq) ledger.planSeq = seq;
         if (ledger.taskSeq) markStep(ledger, "plan", { state: "DONE", evidence: "ledger.md#plan", note: "Task and Plan written" });
-        if ((files !== undefined || size !== undefined) && tiered(ledger)) {
+        if ((files !== undefined || size !== undefined || stated.risk || stated.mechanical) && tiered(ledger)) {
           // a path outside the main root and every declared repo cannot be part of this task's diff
           // --size alone keeps the files the plan already named
           const paths = files === undefined ? tierOf(ledger).predictedFiles : named.map((f) => toPosixRel(ctx.root, f, ledger.repos)).filter((f) => f);
-          predicted = applyPrediction(ledger, policyFor(ledger), loadConfig(ctx.root, ledger.repos), paths, size ?? null);
+          const config = loadConfig(ctx.root, ledger.repos);
+          if (stated.risk) ledger.tier = { ...tierOf(ledger), risk: risk === "none" ? null : risk };
+          if (stated.mechanical) ledger.waivers.push({ key: "mechanical", reason: mechanical, by: "lead", files: paths.filter((p) => config.isSource(p) && !config.isTest(p)), seq: nextSeq() });
+          predicted = applyPrediction(ledger, policyFor(ledger), config, paths, size ?? null);
         }
         holdForCheck(ledger);
       }
     });
-    ctx.out(predicted ? `${section} noted · tier predicted ${predicted.tier} (${predicted.files} file${predicted.files === 1 ? "" : "s"}${predicted.declared ? `, declared ${predicted.declared}` : ""}${predicted.forced.length ? `, forced by ${predicted.forced.join(", ")}` : ""})` : `${section} noted`);
+    const lowerText = predicted && predicted.sized !== predicted.tier ? ` · sized ${predicted.sized} as mechanical (the lead's call): a reviewer checks it` : "";
+    ctx.out(predicted ? `${section} noted · tier predicted ${predicted.tier} (${predicted.files} file${predicted.files === 1 ? "" : "s"}${predicted.declared ? `, declared ${predicted.declared}` : ""}${predicted.forced.length ? `, forced by ${predicted.forced.join(", ")}` : ""}${predicted.risk ? `, stated risk: ${predicted.risk}` : ""})${lowerText}` : `${section} noted`);
+    if (stated.risk && risk === "none") ctx.out("stated risk taken back");
     if (outside.length) ctx.out(`not counted: ${outsideRepos(outside.join(", "))}`);
     printNext(ctx);
   },
@@ -1088,7 +1127,7 @@ export const verbs = {
     const [key, ...why] = positional(ctx.args);
     const reason = why.join(" ").trim();
     const withdraw = ctx.args.includes("--withdraw");
-    if (!key || (!reason && !withdraw)) throw new UsageError(`usage: gate call <${Object.keys(CALLS).join("|")}> "<why this task does not need it>" [--could-not-run] · gate call <key> --withdraw`);
+    if (!key || (!reason && !withdraw)) throw new UsageError(`usage: gate call <${Object.keys(CALLS).join("|")}> "<why this task does not need it>" [--could-not-run] · gate call <key|mechanical> --withdraw`);
     const { ledger: current } = open(ctx);
     if (oldRun(current)) throw new UsageError(oldRunText(current));
     // a call the reviewer raised, or the lead thought better of: the check is owed again
@@ -1102,6 +1141,7 @@ export const verbs = {
       printNext(ctx);
       return;
     }
+    if (key === "mechanical") throw new UsageError('gate call mechanical: it is stated on the plan, `gate note plan "<plan>" --mechanical "<the one edit that repeats>"`; `gate call mechanical --withdraw` takes it back');
     if (!Object.hasOwn(CALLS, key)) throw new UsageError(`${key} is not the lead's call. ${NOT_A_CALL[key] ?? `The lead decides ${Object.keys(CALLS).join(", ")}; anything else is done, or is the user's (\`gate waive\` with their words)`}.`);
     const couldNot = ctx.args.includes("--could-not-run");
     if (couldNot && !SURFACE_KEYS.has(key)) throw new UsageError(`--could-not-run is for a surface that cannot run: driver or schema, not ${key}`);

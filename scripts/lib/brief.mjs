@@ -4,7 +4,7 @@ import path from "node:path";
 import { buildState } from "./assess.mjs";
 import { caseTable, verifyLines } from "./report.mjs";
 import { LESSONS, pruneLessons, saveLedger, section } from "./ledger.mjs";
-import { inPlan, leadDelegates, renderTierBlock, samePiece, tierMax, tierOf } from "./size.mjs";
+import { effectiveTier, inPlan, leadDelegates, renderTierBlock, samePiece, tierOf } from "./size.mjs";
 import { baseCopy, fileDiff, gitTracked, sliceDiff, sliceEnd } from "./tree.mjs";
 import { ROLES, flag, outsideRepos, positional } from "./verbs.mjs";
 import { repoPath, toPosixRel } from "./paths.mjs";
@@ -363,7 +363,8 @@ function travelling(state, role, piece, own) {
 }
 
 const CALLS_INTRO = "The lead decided this task does not need these checks. Judge each against the diff: say nothing when the diff bears its reason out; otherwise put it under Act on as `Call: <key> — <what in the diff needs the check>`, with the `file:line`.";
-const callLines = (calls) => ["## The lead's calls", "", CALLS_INTRO, "", ...calls.map((w) => `- ${w.key} — ${w.reason}${w.could ? " (could not run)" : ""}${w.files ? ` [${w.files.join(", ")}]` : ""}`), ""];
+const MECHANICAL_INTRO = "A `mechanical` call says every changed line is the one edit its reason names (a rename, generated code, the same edit repeated), so the task was sized down and had no plan check. One line that changes behaviour on its own is `Call: mechanical — <what it changes>`, with its `file:line`.";
+const callLines = (calls) => ["## The lead's calls", "", CALLS_INTRO, ...(calls.some((w) => w.key === "mechanical") ? ["", MECHANICAL_INTRO] : []), "", ...calls.map((w) => `- ${w.key} — ${w.reason}${w.could ? " (could not run)" : ""}${w.files ? ` [${w.files.join(", ")}]` : ""}`), ""];
 
 // The light check: a call no review round was shown gets a reviewer's look at the calls and the
 // diff of their files, nothing else. Its round holds no file, so it covers no line.
@@ -381,7 +382,9 @@ function lightCheck(ctx, state, role) {
   state.ledger.seen = { ...seen, [own]: { files: [], seq: nextSeq(), calls: waiting.map((w) => w.seq), light: true } };
   saveLedger(state.dir, state.ledger);
   const tests = waiting.some((w) => w.key === "qa-pass") ? (state.changed ?? []).filter((p) => state.config.isTest(p)) : [];
-  const files = [...new Set([...waiting.flatMap((w) => w.files ?? []), ...tests])];
+  // a mechanical call is about every changed line, so its light check reads the whole diff
+  const all = waiting.some((w) => w.key === "mechanical") ? (state.changed ?? []).filter((p) => state.config.isSource(p) && !state.config.isTest(p)) : [];
+  const files = [...new Set([...waiting.flatMap((w) => w.files ?? []), ...tests, ...all])];
   const out = header(state, role, n);
   out.push("## You may write", "", mayWrite(state, role, n), "");
   out.push("## Light check", "", "Judge the lead's calls below and nothing else: run no tests and do not review the code. Search the code and the memory as your brief says, then write your file.", "");
@@ -673,7 +676,7 @@ export const verbs = {
     }
     // blind QA is for size large (a plan that named no files predicted nothing, and is not refused)
     if (role === "qa" && tierOf(state.ledger).predicted !== null && !leadDelegates(state.ledger, state.policy)) {
-      const eff = tierMax(state.policy, tierOf(state.ledger).predicted, state.tier?.measured?.tier ?? null);
+      const eff = effectiveTier(state.policy, state.ledger, state.tier?.measured ?? null);
       throw new UsageError(`size ${eff}: write the tests yourself from the case table, red first; blind QA is for size ${state.policy.delegatesAt} (a plan naming more than ${state.policy.tiers.standard?.maxFiles ?? 10} files)`);
     }
     const rounds = state.ledger.huddles.filter((h) => h.role === role && roundOnDisk(state, h)).length;
@@ -806,7 +809,7 @@ export const verbs = {
     const narrowed = narrowKind ? { kind: narrowKind, ranges: owedRanges(piece, owed), recheck: toRecheck(state, role, piece, own) } : null;
     // a full round lists the calls made on files it shows whole; a re-check judges fixed lines only
     const shows = new Set(piece ? piece.files.filter((e) => !parseEntry(e).from) : []);
-    const leadCalls = reviewing && !narrowed ? heldCalls(state.ledger).filter((w) => !piece || (w.files ?? []).every((f) => shows.has(f) || Object.hasOwn(travel?.carried ?? {}, f))) : [];
+    const leadCalls = reviewing && !narrowed ? heldCalls(state.ledger).filter((w) => !piece || w.key === "mechanical" || (w.files ?? []).every((f) => shows.has(f) || Object.hasOwn(travel?.carried ?? {}, f))) : [];
     // seen is what this round's reviewer is shown (its huddle inherits it); the other roles'
     // briefs are dated under briefed
     if (piece) {

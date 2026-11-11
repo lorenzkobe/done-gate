@@ -13,7 +13,7 @@ const HELP = `gate <verb>: node <plugin>/scripts/gate.mjs <verb>
   open <slug> <feature|bugfix|refactor|plan|investigation> [--repo <path>] [--setup-later "<the user's words>"]   start a run (or re-attach one with that slug); --repo adds a further git repo to it; --setup-later opens before gate setup on the user's say-so
   repo add <path>                                           add a further git repo to the open run, measured from its HEAD
   attach <slug>                                             join an open run from another session
-  note task|context|plan "<text>" [--files a,b] [--size t]  write the ledger sections
+  note task|context|plan "<text>" [--files a,b] [--size t] [--risk "<what it touches>"] [--mechanical "<the edit that repeats>"]  write the ledger sections
   plan add <a,b> "<why>"                                    add files to the plan once code may change; re-sizes the task, and reviewers and the report show why
   plan pieces "<a,b>" "<c>" ... [--shared <x,y>]            split the plan into pieces for workers at once: prints the groups (at most 4 a group; overlapping pieces later, a shared file's piece alone) and their brief lines
   case add "<case>" --kind <kind> · case add --batch <file> (one <kind><TAB><case> per line) · case amend <id> "<case>" · case close <id> --test <file:name> | --ran "<part of the command>" | --na "<why>"

@@ -155,7 +155,7 @@ attempt to finish, and a plain question gets one line saying how to pause.
 | R6 | schema files changed with no real-schema probe (the lead may call it off: `gate call schema`) |
 | R7 | source changed and no test file changed; or the run is size large (planned, or grown there mid-task, by its size now) and no QA helper ran during it (the lead may call it off: `gate call qa-pass`) |
 | R8 | any case or step is blank, or a click case's click is older than the last source edit; the close step is closed by `gate close`, never by `gate step close …` |
-| R9 | high-risk paths changed, or the run is size large, without a clean second-reviewer round (same round rules as R5; an open reviewer-2 item is named) |
+| R9 | high-risk paths changed, a risk stated on the plan (`--risk`), or the run is size large, without a clean second-reviewer round (same round rules as R5; an open reviewer-2 item is named) |
 | R10 | a repo check failed: the slop scan found a banner comment, step narration, an empty label, an end marker, an emoji, a bare TODO or a `@param` that echoes its name on an added non-test line (`"slop": false` in gate.json turns it off between tasks; mid-task, `gate waive slop` clears a false positive), or an opted-in check (`claude-md-budget`, `migration-number`) |
 | R13 | `.claude/gate.json` or the plugin's `models.json` changed mid-task, or the run opened on an older done-gate (before 0.22.0): finish it on that version or give it up with the user's words (`gate abandon <slug> "<why>" --user-ok "<their words>"`); no waiver clears that one |
 | R15 | a helper's file lists more findings than the ledger recorded, a briefed skeptic or reviewer stopped before finishing its file, or an Act-on item outside the reviewers' rounds is still open (a skeptic item added after its step closed, one typed by hand) |
@@ -179,6 +179,19 @@ now passes. A call on driver or schema holds for the files it was made on: a fix
 it, and another UI, API or schema file joining the change takes it back and reopens the step. A
 `lookups` call covers the helpers it names. The report and the final message show each call as the
 lead's, with its reason, and `gate stats` counts them per key beside the waivers. A reviewer checks every call but a `lookups` one (R21): `gate brief reviewer --calls` when no full round is left to carry it, and `gate call <key> --withdraw` when the check is to be done after all.
+
+The size follows what the change does where the lead says so on the plan note; the counts and the
+listed folders decide the rest. `gate note plan … --risk "<what it touches>"` states that the change
+touches money, sign-in or stored data: whatever the counts, the run is at least standard, the second
+reviewer is owed and the small UI trial does not hold, as on a listed high-risk path; `--risk none`
+takes it back. `gate note plan … --mechanical "<the one edit that repeats>"` (six words; never on a
+bug fix, never with a stated risk) is a call of the lead's that every changed line is that one edit,
+a rename, generated code or the same edit in each file: the run is sized small, one reviewer and
+no plan check, blind QA or second reviewer, and each full review packet lists the call for the
+reviewer to confirm or raise. A planned or changed schema or high-risk file keeps the plan check
+(standard), and a high-risk path keeps its second reviewer; a UI file does not raise it. The call
+holds for the code files the plan named when it was made: another changed code file takes it back,
+as `gate call mechanical --withdraw` does, and the counted size returns until it is stated again.
 
 A waiver is the user's own word past a keyed step: when they say it, Claude records the reason and
 their words with `gate waive <key> "…" --user-ok "<their words>"`, and the report lists every
@@ -409,7 +422,7 @@ All verbs are `node "$CLAUDE_PLUGIN_ROOT/scripts/gate.mjs" <verb>`; the skill ca
 | --- | --- |
 | `open <slug> <feature\|bugfix\|refactor\|plan\|investigation> [--repo <path>]` | start a ledger with the playbook's steps; `--repo` (repeatable, anywhere among the arguments) adds a further git repo to the run; on a slug whose run is open it joins that run and declares the repo late |
 | `repo add <path>` | add a further git repo to the open run, measured from its HEAD |
-| `note task\|context\|plan "…"` · `note context "…" [--no-code "<why>"] [--no-memory "<why>"] [--user-ok "<your words>"]` · `note plan "…" --files a,b` · `note caveat "…"` | write the prose sections (stamps the order for R2); Context is Traced (file:line pointers), Related, Research, and is refused until the lead made a code and a memory lookup, unless `--no-code`/`--no-memory` declares that kind missing with a reason and `--user-ok` quotes your OK (see Search first); `--files` predicts the size; a caveat is something the run could not show, printed in both reports |
+| `note task\|context\|plan "…"` · `note context "…" [--no-code "<why>"] [--no-memory "<why>"] [--user-ok "<your words>"]` · `note plan "…" --files a,b [--size <tier>] [--risk "<what it touches>"] [--mechanical "<the edit that repeats>"]` · `note caveat "…"` | write the prose sections (stamps the order for R2); Context is Traced (file:line pointers), Related, Research, and is refused until the lead made a code and a memory lookup, unless `--no-code`/`--no-memory` declares that kind missing with a reason and `--user-ok` quotes your OK (see Search first); `--files` predicts the size; a caveat is something the run could not show, printed in both reports |
 | `plan pieces "a,b" "c" [--shared x,y]` | split the plan into pieces for workers at once: prints the groups (at most 4 a group; a piece runs after any it shares a file with; a piece holding a shared file runs alone) and their brief lines. `gate brief worker --files` must then name a piece, a later group waits until the earlier one stopped and verify is green, and review waits for every worker; one piece stays with the lead |
 | `plan add a,b "<why>"` | add files to the plan's list: the edit tools refuse code the plan does not name (tests, docs and plain text are free), and once code has changed `note plan` keeps the list fixed; it re-sizes the task, and the reviewer's packet and both reports show each addition with its reason |
 | `case add "…" --kind <kind>` · `case add --batch <file>` · `case amend C1 "…"` · `case close C1 --test file:name \| --click [events#<seq>] \| --na "…"` | the case table; kinds: happy, edge, refused, boundary, idempotent, reported-surface, performance, click; `--batch` reads one case per line as `<kind><TAB><text>`, adds all or none and prints one `next:` line; `amend` replaces a case's text and reopens it; `--click` closes a click case with the named click, or with the only unclaimed click, or with the newest one while only one click case is open, and prints it |

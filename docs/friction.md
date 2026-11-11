@@ -158,6 +158,10 @@ Details and evidence are in that review's sections. It is no longer in the tree;
   scratch-only, so naming the gate folder anywhere in the same command trips the fence. Workaround:
   run them as two commands. Evidence: this session's deny event for that command.
 
+- 2026-11-12, done-gate, run size-by-behaviour: `sed -n '/^## Plan/,/^## /p' <run>/ledger.md | sed
+  '1d;$d' > <scratchpad>/plan.txt` was refused as an evidence write: a read of ledger.md piped to a
+  scratch file. Same shape as the 2026-10-19 entry above.
+
 ## Ideas, no evidence yet
 
 Not problems: nothing here is built until an Open entry from a real run points at it. Each idea
@@ -192,6 +196,22 @@ Left out: an interview until every choice is settled (more questions), glossary 
 files (project docs, not the gate's job), issue-tracker and teaching skills (outside the gate).
 
 ## Done (moved here when a release fixes it, with the version)
+
+Fixed after 0.22.1 (run size-by-behaviour, 2026-11-12):
+
+- The size came from files and lines alone. courtly's payment-type-refuse closed tiny at 13 lines
+  with no helper, and operator-page-width closed large at 24 files and 84 lines (amigoes'
+  back-buttons at 24 files and 138), with the plan check, blind QA and both reviewers. Now the lead
+  says on the plan note what the change is: `--risk "<what it touches>"` sizes it as a listed
+  high-risk path (at least standard, second reviewer, no UI trial); `--mechanical "<the edit that
+  repeats>"` is a lead's call that sizes it small, one reviewer who confirms the claim. The owner's
+  choices, 2026-11-12: mechanical gets one reviewer, in a UI folder too (no plan check there); risky
+  gets what a listed risky folder gets. A schema or high-risk file keeps the plan check under a
+  mechanical call, and back-buttons, which is also high-risk, would keep both reviewers and save
+  only blind QA. Not built, no run points at them yet: a reviewer raising a risk the lead did not
+  state, and a statement required on every plan, so a tiny risky change the lead says nothing about
+  still gets no helper. Not yet measured on a real run; no recorded run reaches the small size
+  outside a UI folder.
 
 Fixed after 0.22.1 (run calls-reviewed, 2026-11-11):
 

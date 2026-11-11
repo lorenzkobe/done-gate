@@ -13,16 +13,16 @@ Every verb prints a `next:` line: follow it. `gate check` lists what is unmet (R
 1. `gate open <slug> <feature|bugfix|refactor|plan|investigation>`.
 2. Before any edit: `gate note task "<the ask, quoted, then your words>"`; search code and
    memory before grep (missing: ask the user), trace, then `gate note context "Traced: … Related:
-   … Research: …"`; `gate note plan "<approach>" --files a.ts,b.ts [--size large]` (the files
-   predict the size, tiny: no reviewer, and bind edits; add one: `gate plan add`), naming hot paths, data sizes and cost shape or "no hot
+   … Research: …"`; `gate note plan "<approach>" --files a.ts,b.ts` (files bind edits and size; tiny: no reviewer;
+   add: `gate plan add`; money, auth, data: `--risk "<what>"`; same edit: `--mechanical "<why>"`), naming hot paths, data sizes and cost shape or "no hot
    path"; then per row (R2)
    `gate case add "<case>" --kind <happy|edge|refused|boundary|idempotent|reported-surface|performance|click>`;
-   a `click` row per new link, button or tab.
+   `click`: one per new link, button or tab.
 3. Tests first, from the case table, red before green. Past small, code and
    tests wait for the skeptic; fold its findings into the cases. `gate brief <role>` prints the prompt of
    each `done-gate:<role>` helper: skeptic (`skeptic-<n>.md`), qa (blind tests, large), worker,
    reviewer, reviewer-2 (high-risk/large).
-4. Tiny, small, standard, large: implement yourself; independent pieces may go to workers:
+4. Any size: implement yourself; independent pieces may go to workers:
    `gate plan pieces` groups them, at most 4 workers at once; each group's `gate brief worker`,
    spawn `done-gate:worker`. No slop: no comment that restates code,
    narrates, numbers steps, labels a block, echoes a signature or marks an end; no banner;
@@ -36,7 +36,7 @@ Every verb prints a `next:` line: follow it. `gate check` lists what is unmet (R
    Until a round is clean: one round + a fix-check. Disagree: `gate huddle dispute`, one
    round; upheld: ask the user. Wrong: `resolve --wrong`.
 6. `gate verify` after the last edit, Bash timeout 600000 ms or in the background. Drive the
-   real UI if it changed (R4); probe the real schema likewise (R6).
+   real UI if it changed (R4); probe the real schema too (R6).
 7. `gate close`, then paste `gate report --brief` as your final message; never "ledger",
    "huddle" or a rule number.
 
