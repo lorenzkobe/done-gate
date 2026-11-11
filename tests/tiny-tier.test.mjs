@@ -164,14 +164,25 @@ test("C9 reported-surface: README, SKILL.md, the playbooks and session-start.md 
   assert.match(read("hooks/session-start.md"), /tiny/i);
 });
 
-test("C10 reported-surface: the no-slop list is in SKILL.md, every playbook's implement step, worker.md and both reviewers; reviewer.md files it under Act on", () => {
+test("C10 reported-surface: the no-slop list is in SKILL.md, every playbook's implement step and worker.md; both reviewers leave style out of their file and never name slop", () => {
   const list = /restate.{0,120}hedg.{0,120}(guard|try\/catch).{0,120}docstring.{0,120}TODO.{0,120}commented-out.{0,120}emoji/i;
   assert.match(flat("skills/gate/SKILL.md"), list, "SKILL.md");
-  assert.match(read("skills/gate/playbooks.md"), /(Implement|fix)[^\n]*no slop/i, "implement steps point at it");
+  const pb = read("skills/gate/playbooks.md");
+  assert.match(pb, /(Implement|fix)[^\n]*no slop/i, "implement steps point at it");
+  assert.deepEqual(pb.split("\n").filter((l) => l.includes("{review}") && /slop/i.test(l)), [], "a review step still says the reviewer checks slop");
   assert.match(flat("agents/worker.md"), list, "worker.md");
-  assert.match(read("agents/reviewer.md"), /Act-on[^\n]*slop|slop[^\n]*Act-on/i, "reviewer.md: slop is Act-on");
-  assert.match(flat("agents/reviewer.md"), list, "reviewer.md list");
-  assert.match(read("agents/reviewer-2.md"), /slop/i, "reviewer-2.md");
+  for (const role of ["reviewer", "reviewer-2"]) {
+    const text = flat(`agents/${role}.md`);
+    assert.match(text, /Style is not a finding, so leave it out of the file: a comment's length or wording, a weak name, a docstring, formatting, a TODO, a guard that is only needless, the length of a file or function\./, `${role}.md: style is left out`);
+    assert.doesNotMatch(text, /slop/i, `${role}.md still names slop`);
+    assert.doesNotMatch(text, list, `${role}.md still carries the no-slop list`);
+    assert.match(text, /what no test sees \(a comment or doc that is now wrong\)/, `${role}.md: a text that is now wrong`);
+  }
+  const item6 = flat("agents/reviewer.md").match(/6\. \*\*Scope and leftovers\.\*\*.*?(?= 7\. \*\*)/)?.[0] ?? "";
+  for (const kept of [/quiet widening/, /quiet narrowing/, /Dead code/, /duplication/, /console\.log/, /commented-out code/, /hides a real error/, /name, comment, doc or CLAUDE\.md line that now states something false is Act-on/]) {
+    assert.match(item6, kept, `reviewer.md item 6 lacks ${kept}`);
+  }
+  assert.match(flat("agents/reviewer-2.md"), /name, comment, doc or CLAUDE\.md line that now states something false is Act-on/, "reviewer-2.md: a false text blocks");
 });
 
 test("C11 performance: tierFor is one pass over the tiers; 10000 calls stay under 50 ms", () => {

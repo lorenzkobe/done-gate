@@ -341,13 +341,12 @@ test("6.1 C2 happy: every role file bans Agent and Task in its frontmatter", () 
   }
 });
 
-test("6.1 C7 happy: reviewer.md asks for Missing/Extra/Misunderstood against the Plan, never reports open cases, names the complexity findings and words a Can't verify bullet", () => {
+test("6.1 C7 happy: reviewer.md asks for Missing/Extra/Misunderstood against the Plan, never reports open cases, no longer files length as a finding and words a Can't verify bullet", () => {
   const body = agentFile("reviewer").replace(/^---\n[\s\S]*?\n---\n/, "");
   for (const word of ["Missing:", "Extra:", "Misunderstood:"]) assert.ok(body.includes(word), `reviewer.md never names the ${word} prefix`);
   assert.match(body, /## Plan/, "reviewer.md never points at the packet's Plan");
   assert.match(body, /open case/i, "reviewer.md never says to leave open cases out");
-  assert.match(body, /800 lines/, "reviewer.md: file length signal");
-  assert.match(body, /\b80 lines/, "reviewer.md: block length signal");
+  assert.doesNotMatch(body, /800 lines|\b80 lines|overcomplication/i, "reviewer.md still files a file or function's length as a finding");
   assert.match(body, /Can't verify[^\n]*nam(?:es?|ing) what/i, "reviewer.md: a Can't verify bullet names what was not checked");
   assert.doesNotMatch(body, /say "unverified"/, "reviewer.md still asks for the bare word");
   assert.doesNotMatch(body, /elsewhere it is/i, "reviewer.md still sends off-path performance to another section");

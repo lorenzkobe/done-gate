@@ -2,8 +2,8 @@ import { diffTextOf } from "./rules.mjs";
 import { contentAt, parseHunks } from "./tree.mjs";
 
 // The greppable slop patterns from antislop-code, scanned over the added lines of a diff.
-// Judgment calls (a comment that restates the code, a hedging name, comment length) stay
-// with the reviewer.
+// Judgment calls (a comment that restates the code, a hedging name, comment length) are the
+// author's: reviewers leave style out.
 
 const MARKERS = /\/\/|\/\*|<!--|--|#|^\s*\*(?!\/)/g;
 

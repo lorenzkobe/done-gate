@@ -11,7 +11,7 @@
 7. Run `gate verify` (lint, test, build) after the last edit. {verify}
 8. Drive the real surface with the project's /verify driver, phone viewport first for UI. {driver}
 9. Real-schema probe when schema files changed: hit the endpoint or run the query once. {schema}
-10. Review: spawn the reviewer (it also checks dead code, duplication, slop and docs); close every Act-on item with an evidence pointer (N/A at tiny). {review}
+10. Review: spawn the reviewer (it also checks dead code, duplication and docs); close every Act-on item with an evidence pointer (N/A at tiny). {review}
 11. `gate close`, then paste the report as the final message. {close}
 
 ## bugfix
@@ -27,7 +27,7 @@
 9. Run `gate verify` after the last edit. {verify}
 10. Drive the same surface again: the original repro now passes. {driver}
 11. Real-schema probe when schema files changed. {schema}
-12. Review: spawn the reviewer (it also checks dead code, duplication, slop, cost, security and docs); close every Act-on item (N/A at tiny). {review}
+12. Review: spawn the reviewer (it also checks dead code, duplication, cost, security and docs); close every Act-on item (N/A at tiny). {review}
 13. `gate close`, then paste the report. {close}
 
 ## refactor
@@ -42,7 +42,7 @@
 8. Run `gate verify` again after the last edit. {verify}
 9. Drive the real surface if UI files changed. {driver}
 10. Real-schema probe when schema files changed. {schema}
-11. Review: spawn the reviewer (it also checks for compat shims, re-exports, stale names, slop and docs); close every Act-on item (N/A at tiny). {review}
+11. Review: spawn the reviewer (it also checks for compat shims, re-exports, stale names and docs); close every Act-on item (N/A at tiny). {review}
 12. `gate close`, then paste the report. {close}
 
 ## plan

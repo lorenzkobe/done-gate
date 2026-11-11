@@ -193,6 +193,20 @@ files (project docs, not the gate's job), issue-tracker and teaching skills (out
 
 ## Done (moved here when a release fixes it, with the version)
 
+Fixed after 0.22.1 (run reviewer-correctness-brief, 2026-11-11):
+
+- Reviewers blocked on style. Of 60 graded findings that only the first reviewer raised in
+  courtly's and kwenta.cc's large runs since 2026-11-10, 20 were style, and each went through the
+  fix and re-check loop. Read again from the same 127-finding list: the comment-length and
+  docstring ones closed as `doc`, and 4 of 7 file-or-function-length ones were withdrawn by the
+  reviewer; the stale-doc and wrong-comment ones were real. Both reviewer files now say style is
+  not a finding and is left out of the file (a comment's length or wording, a weak name, a docstring,
+  formatting, a TODO, a needless guard, a file's or function's length). Still blocking: a comment
+  or doc that now says something false, dead code, duplication, a leftover console.log or
+  commented-out code, a guard that hides a real error (the owner's call on those last three).
+  The slop scan and the author's no-slop list are unchanged, so a comment past two lines or one
+  that restates the code is now caught by nobody. Not yet measured on a real run.
+
 Fixed after 0.22.1 (run failed-commands-recorded, 2026-11-11):
 
 - No failed Bash command was ever recorded: 0 of 38836 commands in the events of courtly, kwenta.cc
