@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp, capRounds } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, capRounds, pluginRoot, resealRun } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadPolicy, policyFor } from "../scripts/lib/size.mjs";
 
@@ -37,8 +37,8 @@ const stop = (repo, role) => hook(repo, { hook_event_name: "SubagentStop", agent
 const lines = (n, name) => Array.from({ length: n }, (_, i) => `export const ${name}${i} = ${i};`).join("\n") + "\n";
 const reviewFile = (n, actOn) => `# Review ${n} — x\n\n## Act on\n${actOn.length ? actOn.map((t) => `- ${t}`).join("\n") : "- none"}\n## Consider\n- none\n## Noted\n- none\n## Dismissed\n- none\n## Evidence verdict\n- tests: npm test exit 0\n`;
 
-function opened(name, config = {}) {
-  const repo = makeRepo(name, { ".claude/gate.json": JSON.stringify({ source: ["src/**", "tests/**"], tests: ["tests/**"], verify: ["true"], ...config }, null, 2), "src/b.ts": "export const b = 0;\n" });
+function opened(name, config = {}, files = {}) {
+  const repo = makeRepo(name, { ".claude/gate.json": JSON.stringify({ source: ["src/**", "tests/**"], tests: ["tests/**"], verify: ["true"], ...config }, null, 2), "src/b.ts": "export const b = 0;\n", ...files });
   execFileSync("git", ["add", "-A"], { cwd: repo });
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"], { cwd: repo });
   cli(repo, "open", [name, "feature"]);
@@ -222,4 +222,230 @@ test("C8 the piece cap comes from the policy, is never below 1, and gate size sh
   assert.equal(policyFor({ policy: { tiers: loadPolicy().tiers, reviewMaxLines: 250 } }).reviewMaxLines, 250);
   const repo = opened("rp-c8");
   assert.match(cli(repo, "size"), /piece cap 400 lines/);
+});
+
+// Travel: a changed test or doc goes with one packet per reviewer role, and a piece's own diff is inlined.
+const importing = (...names) => names.map((n) => `import "../src/${n}";`).join("\n") + "\ntest('x', () => {});\n";
+const NOT_HERE = "Tests and docs not in this packet";
+const sectionOf = (packet, heading) => {
+  const from = packet.indexOf(`## ${heading}`);
+  if (from < 0) return "";
+  const to = packet.indexOf("\n## ", from + 1);
+  return packet.slice(from, to < 0 ? undefined : to);
+};
+const diffOf = (packet, rel) => packet.includes(`diff --git a/${rel}`);
+// the fixture's own .gitignore is a changed file too
+const carriedBy = (repo, file) => Object.keys(ledgerOf(repo).seen[file].carried).filter((p) => p !== ".gitignore").sort();
+const briefed = (repo, role, files) => packetOf(cli(repo, "brief", files ? [role, "--files", files] : [role]));
+// two 250-line pieces, a test importing each, and a doc that names neither
+function twoPieces(repo) {
+  edit(repo, "src/alpha.ts", lines(250, "alpha"));
+  edit(repo, "src/beta.ts", lines(250, "beta"));
+  edit(repo, "tests/alpha.test.ts", importing("alpha"));
+  edit(repo, "tests/beta.test.ts", importing("beta"));
+  edit(repo, "docs/notes.md", "# notes\n\nA paragraph about nothing in the change.\n");
+}
+
+test("travel C1 C3 C17: a piece's packet inlines its own diff and its test; the other piece's test is only listed; a doc naming no changed file goes with the first of two packets briefed back to back", () => {
+  const repo = opened("rp-travel-c1");
+  twoPieces(repo);
+  const first = briefed(repo, "reviewer", "src/alpha.ts");
+  assert.ok(diffOf(first, "src/alpha.ts"), "the piece's own diff");
+  assert.ok(diffOf(first, "tests/alpha.test.ts"), "the test that imports the piece");
+  assert.ok(diffOf(first, "docs/notes.md"), "a doc naming no changed file goes with the first packet");
+  assert.ok(!diffOf(first, "tests/beta.test.ts"), "the other piece's test waits for its piece");
+  assert.match(sectionOf(first, NOT_HERE), /- tests\/beta\.test\.ts/);
+  assert.deepEqual(carriedBy(repo, "review-1.md"), ["docs/notes.md", "tests/alpha.test.ts"]);
+  const second = briefed(repo, "reviewer", "src/beta.ts");
+  assert.ok(diffOf(second, "src/beta.ts") && diffOf(second, "tests/beta.test.ts"));
+  assert.ok(!diffOf(second, "docs/notes.md") && !diffOf(second, "tests/alpha.test.ts"), "what the first packet carries is not carried again");
+  assert.match(sectionOf(second, NOT_HERE), /- docs\/notes\.md/);
+  assert.match(sectionOf(second, NOT_HERE), /- tests\/alpha\.test\.ts/);
+  assert.deepEqual(carriedBy(repo, "review-2.md"), ["tests/beta.test.ts"]);
+});
+
+test("travel C2: a whole-file piece whose own diff is over 300 lines is inlined in full, with its small test beside it", () => {
+  const repo = opened("rp-travel-c2");
+  edit(repo, "src/alpha.ts", lines(350, "alpha"));
+  edit(repo, "tests/alpha.test.ts", importing("alpha"));
+  const packet = briefed(repo, "reviewer", "src/alpha.ts");
+  assert.ok(packet.includes("+export const alpha0 = 0;") && packet.includes("+export const alpha349 = 349;"), "first and last line of the piece");
+  assert.ok(diffOf(packet, "tests/alpha.test.ts"));
+  assert.doesNotMatch(packet, /diff too long to inline/);
+});
+
+test("travel C14: a whole-file piece whose raw diff is past three times the piece cap is listed with its line count, not inlined", () => {
+  const base = Array.from({ length: 700 }, (_, i) => `export const wide${i} = ${i};`);
+  const repo = opened("rp-travel-c14", {}, { "src/wide.ts": base.join("\n") + "\n" });
+  edit(repo, "src/wide.ts", base.map((l, i) => (i === 5 ? "  export const wide5 = 500;" : `  ${l}`)).join("\n") + "\n");
+  const packet = briefed(repo, "reviewer", "src/wide.ts");
+  assert.ok(!diffOf(packet, "src/wide.ts"), "1400 raw diff lines are not inlined");
+  assert.match(packet, /## Changed files \(diff too long to inline: \d+ lines\)/);
+  assert.match(packet, /- src\/wide\.ts \(source, 700 lines now\)/);
+});
+
+test("travel C4: a file reviewed in two slices: its test goes with the first slice and is only listed with the second", () => {
+  const repo = opened("rp-travel-c4");
+  edit(repo, "src/alpha.ts", lines(600, "alpha"));
+  edit(repo, "tests/alpha.test.ts", importing("alpha"));
+  assert.ok(diffOf(briefed(repo, "reviewer", "src/alpha.ts:1-400"), "tests/alpha.test.ts"));
+  const second = briefed(repo, "reviewer", "src/alpha.ts:401-600");
+  assert.ok(!diffOf(second, "tests/alpha.test.ts"));
+  assert.match(sectionOf(second, NOT_HERE), /- tests\/alpha\.test\.ts/);
+});
+
+test("travel C15 C5: a test naming only another piece's file waits while that piece is owed a round; edited after its piece's clean round, it goes with the next packet", () => {
+  const repo = opened("rp-travel-c15");
+  twoPieces(repo);
+  const waiting = briefed(repo, "reviewer", "src/beta.ts");
+  assert.ok(!diffOf(waiting, "tests/alpha.test.ts"), "alpha is still owed a round");
+  round(repo, "reviewer", "src/alpha.ts");
+  assert.ok(ledgerOf(repo).seen["review-2.md"].carried["tests/alpha.test.ts"]);
+  edit(repo, "tests/alpha.test.ts", importing("alpha") + "test('added by a fix', () => {});\n");
+  const next = briefed(repo, "reviewer", "src/beta.ts");
+  assert.ok(next.includes("+test('added by a fix', () => {});"), "alpha has no round left, so its changed test goes with the next packet");
+});
+
+test("travel C6: the second reviewer has its own carry", () => {
+  const repo = opened("rp-travel-c6");
+  twoPieces(repo);
+  briefed(repo, "reviewer", "src/alpha.ts");
+  const packet = briefed(repo, "reviewer-2", "src/alpha.ts");
+  assert.ok(diffOf(packet, "tests/alpha.test.ts") && diffOf(packet, "docs/notes.md"));
+  assert.deepEqual(carriedBy(repo, "review2-1.md"), ["docs/notes.md", "tests/alpha.test.ts"]);
+});
+
+test("travel C7: briefing the same packet file again carries the same files again", () => {
+  const repo = opened("rp-travel-c7");
+  twoPieces(repo);
+  briefed(repo, "reviewer", "src/alpha.ts");
+  const out = cli(repo, "brief", ["reviewer", "--files", "src/alpha.ts"]);
+  assert.match(out, /^packet: .*brief-reviewer-1\.md$/m);
+  assert.ok(diffOf(packetOf(out), "tests/alpha.test.ts") && diffOf(packetOf(out), "docs/notes.md"));
+});
+
+test("travel C16: a packet whose helper stopped on a draft carried nothing: the next piece's packet takes the unclaimed doc", () => {
+  const repo = opened("rp-travel-c16");
+  twoPieces(repo);
+  briefed(repo, "reviewer", "src/alpha.ts");
+  hook(repo, { hook_event_name: "SubagentStart", agent_id: "A-reviewer", agent_type: "done-gate:reviewer" });
+  writeFileSync(path.join(runDir(repo), "review-1.md"), "# Review 1 — x\n\n## Act on\n- unverified\n## Can't verify\n- unverified\n## Lessons\n- unverified\n## Dismissed\n- unverified\n");
+  stop(repo, "reviewer");
+  const packet = briefed(repo, "reviewer", "src/beta.ts");
+  assert.ok(diffOf(packet, "docs/notes.md"), "the cut-off packet showed it to nobody");
+  assert.ok(!diffOf(packet, "tests/alpha.test.ts"), "alpha's test still waits for alpha");
+});
+
+test("travel C8: one piece holding the whole change carries every changed test and doc and has no list of files left out", () => {
+  const repo = opened("rp-travel-c8");
+  edit(repo, "src/alpha.ts", lines(40, "alpha"));
+  edit(repo, "src/beta.ts", lines(40, "beta"));
+  edit(repo, "tests/alpha.test.ts", importing("alpha"));
+  edit(repo, "tests/beta.test.ts", importing("beta"));
+  edit(repo, "docs/notes.md", "# notes\n\nA paragraph.\n");
+  const packet = briefed(repo, "reviewer");
+  for (const f of ["src/alpha.ts", "src/beta.ts", "tests/alpha.test.ts", "tests/beta.test.ts", "docs/notes.md"]) assert.ok(diffOf(packet, f), f);
+  assert.ok(!packet.includes(NOT_HERE));
+});
+
+test("travel C9: a test naming files of two pieces goes with whichever is briefed first, once", () => {
+  const repo = opened("rp-travel-c9");
+  twoPieces(repo);
+  edit(repo, "tests/both.test.ts", importing("alpha", "beta"));
+  assert.ok(diffOf(briefed(repo, "reviewer", "src/beta.ts"), "tests/both.test.ts"));
+  assert.ok(!diffOf(briefed(repo, "reviewer", "src/alpha.ts"), "tests/both.test.ts"));
+});
+
+test("travel C10: travelling tests over 300 diff lines are listed with line counts while the piece's own diff stays inlined", () => {
+  const repo = opened("rp-travel-c10");
+  edit(repo, "src/alpha.ts", lines(50, "alpha"));
+  edit(repo, "tests/alpha.test.ts", importing("alpha") + Array.from({ length: 350 }, (_, i) => `test('t${i}', () => {});`).join("\n") + "\n");
+  const packet = briefed(repo, "reviewer", "src/alpha.ts");
+  assert.ok(diffOf(packet, "src/alpha.ts"));
+  assert.match(packet, /## Other changed files \(diff too long to inline: \d+ lines\)/);
+  assert.match(packet, /- tests\/alpha\.test\.ts \(test, 352 lines now\)/);
+  assert.ok(!diffOf(packet, "tests/alpha.test.ts"));
+});
+
+test("travel C11: a packet record with no carry list, or a damaged one, carried nothing and does not crash the brief", () => {
+  for (const damage of [undefined, "oops", null]) {
+    const repo = opened(`rp-travel-c11-${String(damage)}`);
+    twoPieces(repo);
+    briefed(repo, "reviewer", "src/alpha.ts");
+    const file = path.join(runDir(repo), "ledger.json");
+    const ledger = JSON.parse(readFileSync(file, "utf8"));
+    if (damage === undefined) delete ledger.seen["review-1.md"].carried;
+    else ledger.seen["review-1.md"].carried = damage;
+    writeFileSync(file, JSON.stringify(ledger, null, 2));
+    resealRun(repo);
+    assert.ok(diffOf(briefed(repo, "reviewer", "src/beta.ts"), "docs/notes.md"), `carried: ${String(damage)}`);
+  }
+});
+
+test("travel C12: the list of files left out says who checks them, and a deleted test is carried as a deletion line", () => {
+  const repo = opened("rp-travel-c12", {}, { "tests/old.test.ts": "test('old', () => {});\n" });
+  twoPieces(repo);
+  execFileSync("rm", [path.join(repo, "tests/old.test.ts")]);
+  const first = briefed(repo, "reviewer", "src/alpha.ts");
+  assert.match(first, /deleted: tests\/old\.test\.ts/);
+  assert.match(sectionOf(first, NOT_HERE), /An earlier round of yours, or the round on another piece, checks these files and the cases whose tests they hold\. Read one only when a finding of yours depends on it\./);
+  const second = briefed(repo, "reviewer", "src/beta.ts");
+  assert.doesNotMatch(second, /deleted: tests\/old\.test\.ts/);
+  assert.match(sectionOf(second, NOT_HERE), /- tests\/old\.test\.ts/);
+});
+
+test("travel C18: a re-check of the same piece under a new packet number lists its unchanged test as left out, and carries it again once it changes", () => {
+  const repo = opened("rp-travel-c18");
+  edit(repo, "src/alpha.ts", lines(40, "alpha"));
+  edit(repo, "tests/alpha.test.ts", importing("alpha"));
+  round(repo, "reviewer", null, ["off by one — src/alpha.ts:3 — x — []"]);
+  edit(repo, "src/alpha.ts", lines(40, "alpha").replace("alpha2 = 2", "alpha2 = 22"));
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
+  const out = cli(repo, "brief", ["reviewer"]);
+  assert.match(out, /^packet: .*brief-reviewer-2\.md$/m);
+  assert.ok(!diffOf(packetOf(out), "tests/alpha.test.ts"));
+  assert.match(sectionOf(packetOf(out), NOT_HERE), /- tests\/alpha\.test\.ts/);
+});
+
+test("travel C19: a test naming a piece file with a generic or one-letter stem goes with that piece", () => {
+  const repo = opened("rp-travel-c19");
+  edit(repo, "src/a.ts", lines(250, "a"));
+  edit(repo, "src/api/views.ts", lines(250, "views"));
+  edit(repo, "tests/one.test.ts", importing("a"));
+  edit(repo, "tests/two.test.ts", importing("api/views"));
+  const first = briefed(repo, "reviewer", "src/a.ts");
+  assert.ok(diffOf(first, "tests/one.test.ts") && !diffOf(first, "tests/two.test.ts"));
+  assert.ok(diffOf(briefed(repo, "reviewer", "src/api/views.ts"), "tests/two.test.ts"));
+});
+
+test("travel C20: the reviewer's instructions limit the case check to the tests the packet shows", () => {
+  assert.match(readFileSync(path.join(pluginRoot, "agents", "reviewer.md"), "utf8"), /For each case in the table whose test file the packet shows/);
+});
+
+test("travel C21: a packet replaced before any helper started carried nothing, so the packet that replaces it carries the piece's test", () => {
+  const repo = opened("rp-travel-c21");
+  edit(repo, "src/alpha.ts", lines(250, "alpha"));
+  edit(repo, "tests/alpha.test.ts", importing("alpha"));
+  briefed(repo, "reviewer", "src/alpha.ts:1-100");
+  const out = cli(repo, "brief", ["reviewer", "--files", "src/alpha.ts"]);
+  assert.match(out, /^packet: .*brief-reviewer-2\.md$/m);
+  assert.ok(diffOf(packetOf(out), "tests/alpha.test.ts"), "no helper read the first packet");
+});
+
+test("travel C22: a test beside its source, a test named after it, a Python from-import and an index file named by its folder each go with their own piece", () => {
+  const repo = opened("rp-travel-c22", { source: ["src/**", "app/**"], tests: ["**/*.test.ts", "**/test_*.py"] });
+  edit(repo, "src/other/thing.ts", lines(150, "thing"));
+  edit(repo, "src/api/views.ts", lines(150, "views"));
+  edit(repo, "src/api/spec.test.ts", 'import { views0 } from "./views";\ntest("x", () => {});\n');
+  edit(repo, "tests/views.test.ts", "test('named after its source, importing nothing', () => {});\n");
+  edit(repo, "app/booking.py", Array.from({ length: 150 }, (_, i) => `b${i} = ${i}`).join("\n") + "\n");
+  edit(repo, "app/test_rates.py", "from app import booking\n\ndef test_x():\n    assert booking.b0 == 0\n");
+  edit(repo, "src/Button/index.ts", lines(150, "button"));
+  edit(repo, "src/ui.test.ts", 'import { button0 } from "@/src/Button";\ntest("x", () => {});\n');
+  const first = briefed(repo, "reviewer", "src/other/thing.ts");
+  for (const f of ["src/api/spec.test.ts", "tests/views.test.ts", "app/test_rates.py", "src/ui.test.ts"]) assert.ok(!diffOf(first, f), `${f} waits for its own piece`);
+  const views = briefed(repo, "reviewer", "src/api/views.ts");
+  assert.ok(diffOf(views, "src/api/spec.test.ts") && diffOf(views, "tests/views.test.ts"));
+  assert.ok(diffOf(briefed(repo, "reviewer", "app/booking.py"), "app/test_rates.py"));
+  assert.ok(diffOf(briefed(repo, "reviewer", "src/Button/index.ts"), "src/ui.test.ts"));
 });

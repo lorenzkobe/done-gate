@@ -21,6 +21,7 @@ import { capRun, pickBreaks, runBreaks } from "./strength.mjs";
 // The model authors none of it; the helper reads it instead of the ledger and the diff.
 
 const DIFF_CAP = 300;
+const OWN_DIFF_PIECES = 3;
 const SAMPLE_LINES = 60;
 // a re-brief of a file keeps the seqs before it: a helper briefed on the first one is still tied to that file
 const earlierOf = (old) => (old?.seq ? { earlier: [...(old.earlier ?? []), old.seq] } : {});
@@ -214,6 +215,7 @@ function testCommands(state) {
   return [state.config.verify.length ? "_no verify command for this run: gate.json's are all dropped_" : "_no verify command in gate.json_"];
 }
 
+const NOT_IN_PACKET = "Tests and docs not in this packet";
 const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
 const OWNS_RUN = "`gate verify` owns the full run.";
 
@@ -243,19 +245,24 @@ function freshness(state, fixCheck = false) {
 // counts and reads what it needs, instead of a packet it cannot hold.
 function diffOrFiles(state, heading = "Diff", files = state.changed ?? [], ranges = new Map(), own = new Set()) {
   if (!files.length) return [`## ${heading}`, "", unifiedDiff(state, { files }), ""];
-  // a sliced piece's own files are sized for one read and inlined whatever their length; the
-  // files that travel with it (tests, docs) still face the cap
-  const sliced = ranges.size ? files.filter((p) => own.has(p)) : [];
-  const rest = files.filter((p) => !sliced.includes(p));
-  const out = sliced.length ? [`## ${heading}`, "", unifiedDiff(state, { cap: Infinity, files: sliced, ranges }), ""] : [];
+  // a piece's own files are inlined apart from the tests and docs beside them, which face the cap;
+  // a whole-file piece is listed past OWN_DIFF_PIECES caps (a re-indented file's raw diff is long)
+  const mine = files.filter((p) => own.has(p));
+  const ownDiff = mine.length ? unifiedDiff(state, { cap: Infinity, files: mine, ranges }) : "";
+  const lengthOf = (text) => text.split("\n").length;
+  const whole = ranges.size ? null : unifiedDiff(state, { cap: Infinity, files });
+  if (whole !== null && lengthOf(whole) <= DIFF_CAP) return [`## ${heading}`, "", whole, ""];
+  const inlined = ranges.size || lengthOf(ownDiff) <= OWN_DIFF_PIECES * state.policy.reviewMaxLines ? mine : [];
+  const rest = files.filter((p) => !inlined.includes(p));
+  const out = inlined.length ? [`## ${heading}`, "", ownDiff, ""] : [];
   if (!rest.length) return out;
-  const diff = unifiedDiff(state, { cap: Infinity, files: rest });
-  const lines = diff.split("\n").length;
-  if (lines <= DIFF_CAP) return [...out, `## ${sliced.length ? "Diff of the other changed files" : heading}`, "", diff, ""];
+  const diff = inlined.length ? unifiedDiff(state, { cap: Infinity, files: rest }) : whole;
+  const lines = lengthOf(diff);
+  if (lines <= DIFF_CAP) return [...out, `## ${inlined.length ? "Diff of the other changed files" : heading}`, "", diff, ""];
   const kind = (p) => (state.config.isTest(p) ? "test" : state.config.isSource(p) ? "source" : "other");
   return [
     ...out,
-    `## ${sliced.length ? "Other changed files" : "Changed files"} (diff too long to inline: ${lines} lines)`,
+    `## ${inlined.length ? "Other changed files" : "Changed files"} (diff too long to inline: ${lines} lines)`,
     "",
     ...rest.map((p) => `- ${p} (${kind(p)}, ${state.now?.files?.[p]?.l ?? "?"} lines now)`),
     "",
@@ -264,9 +271,57 @@ function diffOrFiles(state, heading = "Diff", files = state.changed ?? [], range
   ];
 }
 
+// Whether the test or doc at `from` names a source file: by its own name, a relative import beside
+// it, or parent/stem in its text. Loose on purpose: a wrong match only moves a file between packets.
+function namesFile(text, from, rel) {
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let dir = path.posix.dirname(rel);
+  let stem = path.posix.basename(rel).replace(/\.[^.]+$/, "");
+  // an index file is named by its folder
+  if ((stem === "index" || stem === "__init__") && dir !== ".") [stem, dir] = [path.posix.basename(dir), path.posix.dirname(dir)];
+  const has = (pattern) => new RegExp(`(?<![\\w-])${pattern}(?![\\w-])`).test(text);
+  if (path.posix.basename(from).split(".")[0] === stem) return true;
+  if (path.posix.dirname(from) === dir && new RegExp(`(?<![\\w.])\\.\\/?${esc(stem)}(?![\\w-])`).test(text)) return true;
+  if (dir === ".") return stem.length >= 3 && has(esc(stem));
+  const parent = esc(path.posix.basename(dir));
+  return has(`${parent}[./]${esc(stem)}`) || new RegExp(`\\bfrom\\s+[\\w.]*\\b${parent}\\s+import\\s+[^\\n]*\\b${esc(stem)}\\b`).test(text);
+}
+
+// The changed tests and docs this packet carries, each once per reviewer role: one no live packet
+// of the role carried as it is now, unless it names only pieces the role still owes a round on.
+function travelling(state, role, piece, own) {
+  const scope = reviewScope(state);
+  const mine = new Set(piece.files.map(pathOf));
+  const elsewhere = [...new Set((uncovered(state, role) ?? scope).map(pathOf))].filter((f) => !mine.has(f));
+  // a packet showed nothing when its helper stopped without finishing its file, or when no
+  // helper started on it and this brief names its lines again
+  const dead = (name, record) => {
+    const run = helperRun(state, role, name, record.seq ?? 0);
+    const finished = state.reviews.includes(name) && !unfinishedFile(path.join(state.dir, name));
+    if (run.ran) return !run.running && !finished;
+    return !finished && (record.files ?? []).some((e) => piece.files.some((entry) => overlaps(entry, e)));
+  };
+  const shown = new Set();
+  for (const [name, record] of Object.entries(state.ledger.seen ?? {})) {
+    if (name === own || !name.startsWith(`${reviewPrefix(role)}-`) || !record?.carried || typeof record.carried !== "object" || dead(name, record)) continue;
+    for (const [p, h] of Object.entries(record.carried)) shown.add(`${p}\n${h}`);
+  }
+  const carried = {};
+  const left = [];
+  for (const p of (state.changed ?? []).filter((f) => !scope.includes(f))) {
+    const hash = state.diff.deleted.includes(p) ? "deleted" : state.now?.files?.[p]?.h ?? "?";
+    const abs = absolute(state, p);
+    const text = !shown.has(`${p}\n${hash}`) && existsSync(abs) && statSync(abs).isFile() ? readFileSync(abs, "utf8") : "";
+    const names = (files) => files.some((f) => namesFile(text, p, f));
+    if (shown.has(`${p}\n${hash}`) || (!names([...mine]) && names(elsewhere))) left.push(p);
+    else carried[p] = hash;
+  }
+  return { carried, left };
+}
+
 // n is the number of the role's own file (skeptic-<n>.md, review-<n>.md, worker-<n>.md);
 // continueFrom is the text an earlier helper left in that file before it stopped.
-function renderPacket(state, role, { round, n, piece = null, owned = null, continueFrom = null, fixCheck = false, disputes = [], strength = [] }) {
+function renderPacket(state, role, { round, n, piece = null, owned = null, continueFrom = null, fixCheck = false, disputes = [], strength = [], travel = null }) {
   const out = header(state, role, round);
   out.push("## You may write", "", mayWrite(state, role, n), "");
   if (continueFrom !== null) {
@@ -311,11 +366,9 @@ function renderPacket(state, role, { round, n, piece = null, owned = null, conti
       for (const e of piece.files.map(parseEntry)) if (e.from) ranges.set(e.path, [...(ranges.get(e.path) ?? []), [e.from, e.to]]);
       out.push("## Piece", "", `${plural(piece.files.length, "piece")} of ${scope.length} changed source file${scope.length === 1 ? "" : "s"}, ${plural(piece.lines, "changed line")}: ${piece.files.join(", ")}${ranges.size ? " (a path:from-to entry is a slice of that file's diff by new-file line number; read the code around it with the Read tool)" : ""}`, "");
     }
-    // the piece's implementation files plus everything else that changed (tests, docs): those
-    // travel with every piece
-    const scopeSet = new Set(reviewScope(state));
+    // the piece's implementation files plus the tests and docs that travel with this packet
     const paths = piece ? new Set(piece.files.map(pathOf)) : null;
-    const shown = piece ? (state.changed ?? []).filter((p) => paths.has(p) || !scopeSet.has(p)) : state.changed ?? [];
+    const shown = piece ? (state.changed ?? []).filter((p) => paths.has(p) || Object.hasOwn(travel.carried, p)) : state.changed ?? [];
     // a fix-check round: the role's earlier findings on these files, each closed, to confirm
     const cites = (text) => (paths ? [...paths] : reviewScope(state)).some((f) => text.includes(f));
     // a closed pointer is a run or doc, which no longer names the file the fix landed in, so a
@@ -335,6 +388,7 @@ function renderPacket(state, role, { round, n, piece = null, owned = null, conti
       out.push(...disputes.map((a) => `- ${a.id} — ${a.text} — disputed: ${a.dispute.why} [${a.dispute.evidence}]`), "");
     }
     out.push(...diffOrFiles(state, "Diff", shown, ranges, paths ?? new Set()));
+    if (travel?.left.length) out.push(`## ${NOT_IN_PACKET}`, "", "An earlier round of yours, or the round on another piece, checks these files and the cases whose tests they hold. Read one only when a finding of yours depends on it.", "", ...travel.left.map((p) => `- ${p}`), "");
     const closers = new Map();
     for (const c of state.ledger.cases) if (c.status === "closed" && c.test) closers.set(c.test, [...(closers.get(c.test) ?? []), c.id]);
     const sharedTests = [...closers].filter(([, ids]) => ids.length > 1);
@@ -665,10 +719,11 @@ export const verbs = {
       throw new UsageError(`${role} round ${done + 1}: ${NUMBER_WORDS[cap] ?? cap} round${cap === 1 ? "" : "s"} is the cap. An upheld dispute is the user's call: ask them, then fix it or close it with their words (\`gate huddle resolve <id> --wrong --words "<their words>"\`); what is still open is fixed and closed with \`gate huddle resolve\`.`);
     }
     const own = prefix ? `${prefix}${n}.md` : null;
+    const travel = piece ? travelling(state, role, piece, own) : null;
     // seen is what this round's reviewer is shown (its huddle inherits it); the other roles'
     // briefs are dated under briefed
     if (piece) {
-      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...earlierOf(state.ledger.seen?.[own]), ...(Object.keys(piece.units).length ? { units: piece.units, flats: piece.flats, owns: piece.owns, notes: piece.notes } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true, ...(inParts ? { part: true } : {}) } : {}), ...(answers && !stillOpen ? { answers: true } : {}), ...(lateFiles.length ? { late: lateFiles } : {}), ...(toAnswer.length ? { disputes: toAnswer.map((a) => a.id) } : {}) } };
+      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...earlierOf(state.ledger.seen?.[own]), ...(Object.keys(piece.units).length ? { units: piece.units, flats: piece.flats, owns: piece.owns, notes: piece.notes } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true, ...(inParts ? { part: true } : {}) } : {}), ...(answers && !stillOpen ? { answers: true } : {}), ...(lateFiles.length ? { late: lateFiles } : {}), ...(toAnswer.length ? { disputes: toAnswer.map((a) => a.id) } : {}), carried: travel.carried } };
       saveLedger(state.dir, state.ledger);
     } else if (own) {
       state.ledger.briefed = { ...(state.ledger.briefed ?? {}), [own]: { seq: nextSeq(), ...earlierOf(state.ledger.briefed?.[own]), ...(owned ? { files: owned } : {}) } };
@@ -680,7 +735,7 @@ export const verbs = {
     const file = path.join(state.dir, `brief-${role}-${round}.md`);
     // after the ledger save: the check may take its 90s, and writes only strength.json
     const strength = reviewing && piece && state.config.strength && !(fixCheck && !stillOpen) ? await strengthFor(state, piece) : [];
-    writeFileSync(file, renderPacket(state, role, { round, n, piece, owned, continueFrom, fixCheck: fixCheck && !stillOpen, disputes: toAnswer, strength }));
+    writeFileSync(file, renderPacket(state, role, { round, n, piece, owned, continueFrom, fixCheck: fixCheck && !stillOpen, disputes: toAnswer, strength, travel }));
     ctx.out(`packet: ${file}`);
     const yours = !own || role === "worker" ? "" : continueFrom !== null
       ? ` Your file is ${full} and it already exists: keep its finished sections, never reset it to the all-unverified draft, and rewrite it after each finding.`

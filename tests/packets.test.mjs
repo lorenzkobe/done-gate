@@ -338,12 +338,11 @@ test("C5 happy: the reviewer packet holds the unified diff of changed source and
 // C6
 // ---------------------------------------------------------------------------
 
-test("C6 boundary: a diff longer than 300 lines is not inlined; the packet lists the changed files with line counts instead", () => {
-  const repo = opened("packets-c6");
-  // two new files of 200 lines: 400 changed lines, inside the piece cap, over the inline cap
-  const big = Array.from({ length: 200 }, (_, i) => `export const n${i} = ${i};`).join("\n") + "\n";
-  write(repo, "src/big.ts", big);
-  write(repo, "src/big2.ts", big.replace(/n(\d+)/g, "m$1"));
+test("C6 boundary: a piece whose own diff is longer than three piece caps is not inlined; the packet lists the changed files with line counts instead", () => {
+  // one changed line the piece cap counts, 700 re-indented around it: 1400 raw diff lines
+  const base = Array.from({ length: 700 }, (_, i) => `export const n${i} = ${i};`);
+  const repo = opened("packets-c6", { files: { "src/big.ts": base.join("\n") + "\n" }, planFiles: "src/big.ts" });
+  write(repo, "src/big.ts", base.map((l, i) => (i === 5 ? "  export const n5 = 500;" : `  ${l}`)).join("\n") + "\n");
 
   const { text } = packet(repo, "reviewer");
   assert.ok(!headings(text).includes("Diff"), `an oversized diff was inlined:\n${headings(text).join(", ")}`);
@@ -352,8 +351,8 @@ test("C6 boundary: a diff longer than 300 lines is not inlined; the packet lists
   assert.match(files, /\d+ lines/, `the heading does not say how long the diff is: ${files}`);
   const body = section(text, files);
   assert.ok(body.includes("src/big.ts"), `the changed file is not listed:\n${body}`);
-  assert.match(body, /src\/big\.ts \(source, 200 lines now\)/, `no line count for src/big.ts:\n${body}`);
-  assert.ok(!text.includes("export const m199 = 199;"), "the oversized diff's tail was inlined anyway");
+  assert.match(body, /src\/big\.ts \(source, 700 lines now\)/, `no line count for src/big.ts:\n${body}`);
+  assert.ok(!text.includes("export const n699 = 699;"), "the oversized diff's tail was inlined anyway");
 
   // a short diff is still inlined
   const small = opened("packets-c6-small");
@@ -1070,18 +1069,16 @@ test("C3 edge: draft-first binds the skeptic and both reviewer roles, and never 
 // C4 boundary — a big diff becomes a file list
 // ---------------------------------------------------------------------------
 
-test("C4 boundary: above 300 diff lines the reviewer packet drops the unified diff for a changed-file list with line counts, and keeps the diff below it", () => {
-  const BIG = 400;
-  const bigSrc = Array.from({ length: BIG }, (_, i) => `export const n${i} = ${i};`).join("\n") + "\n";
-  const bigLines = bigSrc.split("\n").length - 1;
-  assert.equal(bigLines, BIG, "fixture anchor: the file's own bytes");
+test("C4 boundary: a piece's own diff past three piece caps is dropped for a changed-file list with line counts, and a short diff is kept", () => {
+  const BIG = 700;
+  const base = Array.from({ length: BIG }, (_, i) => `export const n${i} = ${i};`);
 
-  // over the cap: one 400-line file added after the task opened
-  const over = opened("budget-diff-over", { planFiles: "src/big.ts" });
-  writeFileSync(path.join(over, "src", "big.ts"), bigSrc);
+  // over the cap: one counted change with every other line re-indented, 1400 raw diff lines
+  const over = opened("budget-diff-over", { planFiles: "src/big.ts", files: { "src/big.ts": base.join("\n") + "\n" } });
+  writeFileSync(path.join(over, "src", "big.ts"), base.map((l, i) => (i === 5 ? "  export const n5 = 500;" : `  ${l}`)).join("\n") + "\n");
   const bigPacket = readFileSync(packetPath(over, "reviewer"), "utf8");
 
-  assert.ok(!/^##\s+Diff\s*$/m.test(bigPacket), `a 400-line diff was inlined anyway:\n${bigPacket.slice(0, 500)}`);
+  assert.ok(!/^##\s+Diff\s*$/m.test(bigPacket), `a 1400-line diff was inlined anyway:\n${bigPacket.slice(0, 500)}`);
   assert.ok(/^##\s+Changed files\b/m.test(bigPacket), `no "## Changed files" section:\n${bigPacket.slice(0, 2000)}`);
   const changed = section(bigPacket, /^##\s+Changed files\b/);
   const row = changed.split("\n").find((l) => l.includes("src/big.ts"));
