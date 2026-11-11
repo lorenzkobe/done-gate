@@ -516,11 +516,21 @@ export function sliceDiff(text, ranges) {
   const { header, hunks } = parseHunks(text);
   const inside = (pos) => ranges.some(([from, to]) => pos >= from && pos <= to);
   const out = [...header];
+  // lines kept from one hunk that are not neighbours are separate blocks, each with its header
+  const flush = (block) => {
+    if (!block.some((l) => l.tag === "+" || l.tag === "-")) return;
+    out.push(`@@ lines ${block[0].pos}-${block[block.length - 1].pos} of the new file @@`, ...block.map((l) => l.text));
+  };
   for (const h of hunks) {
-    const kept = h.lines.filter((l) => inside(l.pos));
-    if (!kept.some((l) => l.tag === "+" || l.tag === "-")) continue;
-    out.push(`@@ lines ${kept[0].pos}-${kept[kept.length - 1].pos} of the new file @@`);
-    out.push(...kept.map((l) => l.text));
+    let block = [];
+    for (const l of h.lines) {
+      if (inside(l.pos)) block.push(l);
+      else {
+        flush(block);
+        block = [];
+      }
+    }
+    flush(block);
   }
   return out.join("\n");
 }

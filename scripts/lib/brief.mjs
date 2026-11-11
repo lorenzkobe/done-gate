@@ -216,6 +216,13 @@ function testCommands(state) {
 }
 
 const NOT_IN_PACKET = "Tests and docs not in this packet";
+const NARROWED = "Diff of the lines changed since your last round";
+const CONTEXT = 3;
+// what a narrowed round may report, by its kind and whether it lists findings to re-check
+const SCOPE = {
+  fix: ["This is a re-check, not a new review. Under Act on, report only something the lines shown below break. Your earlier round covered the rest of the file.", "This is a re-check, not a new review. Under Act on, report only a finding listed above that is NOT ADDRESSED, or something the lines shown below break. Your earlier round covered the rest of the file."],
+  late: ["These lines changed after your review. Review the lines shown, nothing else.", "These lines changed after your review. Under Act on, report only a finding listed above that is NOT ADDRESSED, or a fault in the lines shown below."],
+};
 const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
 const OWNS_RUN = "`gate verify` owns the full run.";
 
@@ -287,23 +294,59 @@ function namesFile(text, from, rel) {
   return has(`${parent}[./]${esc(stem)}`) || new RegExp(`\\bfrom\\s+[\\w.]*\\b${parent}\\s+import\\s+[^\\n]*\\b${esc(stem)}\\b`).test(text);
 }
 
-// The changed tests and docs this packet carries, each once per reviewer role: one no live packet
-// of the role carried as it is now, unless it names only pieces the role still owes a round on.
-function travelling(state, role, piece, own) {
-  const scope = reviewScope(state);
+// The changed implementation files outside the piece that the role still owes a round on.
+function owedElsewhere(state, role, piece) {
   const mine = new Set(piece.files.map(pathOf));
-  const elsewhere = [...new Set((uncovered(state, role) ?? scope).map(pathOf))].filter((f) => !mine.has(f));
-  // a packet showed nothing when its helper stopped without finishing its file, or when no
-  // helper started on it and this brief names its lines again
+  return [...new Set((uncovered(state, role) ?? reviewScope(state)).map(pathOf))].filter((f) => !mine.has(f));
+}
+
+// The role's other packet records that showed their content to a reviewer. One showed nothing when
+// its helper stopped without finishing its file, or no helper started and this brief names its lines again.
+function livePackets(state, role, piece, own) {
   const dead = (name, record) => {
     const run = helperRun(state, role, name, record.seq ?? 0);
     const finished = state.reviews.includes(name) && !unfinishedFile(path.join(state.dir, name));
     if (run.ran) return !run.running && !finished;
     return !finished && (record.files ?? []).some((e) => piece.files.some((entry) => overlaps(entry, e)));
   };
+  return Object.entries(state.ledger.seen ?? {}).filter(([name, record]) => name !== own && name.startsWith(`${reviewPrefix(role)}-`) && record && !dead(name, record)).map(([, record]) => record);
+}
+
+// What a narrowed round is shown of each piece file: the owed ranges inside its entries with
+// CONTEXT lines around them, cut to a slice entry; null when the whole file is owed.
+function owedRanges(piece, owed) {
+  const out = new Map();
+  for (const entry of piece.files) {
+    const e = parseEntry(entry);
+    const hits = owed.filter((u) => overlaps(entry, u)).map(parseEntry);
+    const before = out.has(e.path) ? out.get(e.path) : [];
+    if (before === null || (hits.some((u) => !u.from) && !e.from)) out.set(e.path, null);
+    else out.set(e.path, [...before, ...hits.map((u) => (u.from ? [Math.max(e.from ?? 1, u.from - CONTEXT), Math.min(e.to ?? Infinity, u.to + CONTEXT)] : [e.from, e.to]))]);
+  }
+  return out;
+}
+
+// The closed findings a narrowed round re-checks, each once per role: one no live packet listed
+// at this closing, unless it names only pieces the role still owes a round on.
+function toRecheck(state, role, piece, own) {
+  const mine = piece.files.map(pathOf);
+  const elsewhere = owedElsewhere(state, role, piece);
+  const listed = new Set(livePackets(state, role, piece, own).flatMap((record) => (Array.isArray(record.rechecked) ? record.rechecked : [])));
+  const names = (a, files) => files.some((f) => `${a.text} ${a.closed}`.includes(f));
+  return state.ledger.huddles.filter((h) => h.role === role).flatMap((h) => h.actOn)
+    .filter((a) => a.closed && !a.wrong && !listed.has(recheckKey(a)) && (names(a, mine) || !names(a, elsewhere)));
+}
+const recheckKey = (a) => `${a.id}@${a.closedSeq ?? ""}`;
+
+// The changed tests and docs this packet carries, each once per reviewer role: one no live packet
+// of the role carried as it is now, unless it names only pieces the role still owes a round on.
+function travelling(state, role, piece, own) {
+  const scope = reviewScope(state);
+  const mine = new Set(piece.files.map(pathOf));
+  const elsewhere = owedElsewhere(state, role, piece);
   const shown = new Set();
-  for (const [name, record] of Object.entries(state.ledger.seen ?? {})) {
-    if (name === own || !name.startsWith(`${reviewPrefix(role)}-`) || !record?.carried || typeof record.carried !== "object" || dead(name, record)) continue;
+  for (const record of livePackets(state, role, piece, own)) {
+    if (!record.carried || typeof record.carried !== "object") continue;
     for (const [p, h] of Object.entries(record.carried)) shown.add(`${p}\n${h}`);
   }
   const carried = {};
@@ -321,7 +364,7 @@ function travelling(state, role, piece, own) {
 
 // n is the number of the role's own file (skeptic-<n>.md, review-<n>.md, worker-<n>.md);
 // continueFrom is the text an earlier helper left in that file before it stopped.
-function renderPacket(state, role, { round, n, piece = null, owned = null, continueFrom = null, fixCheck = false, disputes = [], strength = [], travel = null }) {
+function renderPacket(state, role, { round, n, piece = null, owned = null, continueFrom = null, fixCheck = false, disputes = [], strength = [], travel = null, narrowed = null }) {
   const out = header(state, role, round);
   out.push("## You may write", "", mayWrite(state, role, n), "");
   if (continueFrom !== null) {
@@ -368,12 +411,13 @@ function renderPacket(state, role, { round, n, piece = null, owned = null, conti
     }
     // the piece's implementation files plus the tests and docs that travel with this packet
     const paths = piece ? new Set(piece.files.map(pathOf)) : null;
-    const shown = piece ? (state.changed ?? []).filter((p) => paths.has(p) || Object.hasOwn(travel.carried, p)) : state.changed ?? [];
-    // a fix-check round: the role's earlier findings on these files, each closed, to confirm
+    // a narrowed round shows what the role is still owed; a file with nothing owed is only named
+    const unchanged = narrowed ? [...narrowed.ranges].filter(([, spans]) => spans?.length === 0).map(([p]) => p) : [];
+    const diffRanges = narrowed ? new Map([...narrowed.ranges].filter(([, spans]) => spans?.length)) : ranges;
+    const shown = piece ? (state.changed ?? []).filter((p) => (paths.has(p) && !unchanged.includes(p)) || Object.hasOwn(travel.carried, p)) : state.changed ?? [];
+    // an ordinary round re-checks the closed findings that name its files; a narrowed one its list
     const cites = (text) => (paths ? [...paths] : reviewScope(state)).some((f) => text.includes(f));
-    // a closed pointer is a run or doc, which no longer names the file the fix landed in, so a
-    // fix-check re-checks every closed finding of its role
-    const recheck = state.ledger.huddles.filter((h) => h.role === role).flatMap((h) => h.actOn.filter((a) => a.closed && !a.wrong && (cites(a.text) || cites(String(a.closed)) || fixCheck)));
+    const recheck = narrowed?.recheck ?? state.ledger.huddles.filter((h) => h.role === role).flatMap((h) => h.actOn.filter((a) => a.closed && !a.wrong && (cites(a.text) || cites(String(a.closed)))));
     const wrongs = state.ledger.huddles.filter((h) => h.role === role).flatMap((h) => h.actOn.filter((a) => a.closed && a.wrong));
     if (recheck.length) {
       out.push("## Findings to re-check", "", "Earlier rounds found these and each was closed as shown. For each, say ADDRESSED or NOT ADDRESSED, and flag anything the fix broke in the lines below.", "");
@@ -387,7 +431,8 @@ function renderPacket(state, role, { round, n, piece = null, owned = null, conti
       out.push("## Disputes to answer", "", "The implementer disputed these findings. Answer each in your file's `## Disputes` section: `- H<k>.<i> — withdrawn: <reason>` or `- H<k>.<i> — upheld: <reason and a pointer>`. One you leave out stands as upheld.", "");
       out.push(...disputes.map((a) => `- ${a.id} — ${a.text} — disputed: ${a.dispute.why} [${a.dispute.evidence}]`), "");
     }
-    out.push(...diffOrFiles(state, "Diff", shown, ranges, paths ?? new Set()));
+    if (narrowed) out.push("## This round", "", SCOPE[narrowed.kind][recheck.length ? 1 : 0], "", ...unchanged.map((p) => `- ${p}: nothing changed since your last round`), "");
+    out.push(...diffOrFiles(state, narrowed ? NARROWED : "Diff", shown, diffRanges, paths ?? new Set()));
     if (travel?.left.length) out.push(`## ${NOT_IN_PACKET}`, "", "An earlier round of yours, or the round on another piece, checks these files and the cases whose tests they hold. Read one only when a finding of yours depends on it.", "", ...travel.left.map((p) => `- ${p}`), "");
     const closers = new Map();
     for (const c of state.ledger.cases) if (c.status === "closed" && c.test) closers.set(c.test, [...(closers.get(c.test) ?? []), c.id]);
@@ -720,10 +765,12 @@ export const verbs = {
     }
     const own = prefix ? `${prefix}${n}.md` : null;
     const travel = piece ? travelling(state, role, piece, own) : null;
+    const narrowKind = !piece || stillOpen ? null : fixCheck ? "fix" : late ? "late" : null;
+    const narrowed = narrowKind ? { kind: narrowKind, ranges: owedRanges(piece, owed), recheck: toRecheck(state, role, piece, own) } : null;
     // seen is what this round's reviewer is shown (its huddle inherits it); the other roles'
     // briefs are dated under briefed
     if (piece) {
-      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...earlierOf(state.ledger.seen?.[own]), ...(Object.keys(piece.units).length ? { units: piece.units, flats: piece.flats, owns: piece.owns, notes: piece.notes } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true, ...(inParts ? { part: true } : {}) } : {}), ...(answers && !stillOpen ? { answers: true } : {}), ...(lateFiles.length ? { late: lateFiles } : {}), ...(toAnswer.length ? { disputes: toAnswer.map((a) => a.id) } : {}), carried: travel.carried } };
+      state.ledger.seen = { ...(state.ledger.seen ?? {}), [own]: { files: piece.files, seq: nextSeq(), ...earlierOf(state.ledger.seen?.[own]), ...(Object.keys(piece.units).length ? { units: piece.units, flats: piece.flats, owns: piece.owns, notes: piece.notes } : {}), at: piece.at, ...(piece.edges ? { edges: piece.edges } : {}), ...(fixCheck && !stillOpen ? { fixCheck: true, ...(inParts ? { part: true } : {}) } : {}), ...(answers && !stillOpen ? { answers: true } : {}), ...(lateFiles.length ? { late: lateFiles } : {}), ...(toAnswer.length ? { disputes: toAnswer.map((a) => a.id) } : {}), carried: travel.carried, ...(narrowed ? { rechecked: narrowed.recheck.map(recheckKey) } : {}) } };
       saveLedger(state.dir, state.ledger);
     } else if (own) {
       state.ledger.briefed = { ...(state.ledger.briefed ?? {}), [own]: { seq: nextSeq(), ...earlierOf(state.ledger.briefed?.[own]), ...(owned ? { files: owned } : {}) } };
@@ -735,7 +782,7 @@ export const verbs = {
     const file = path.join(state.dir, `brief-${role}-${round}.md`);
     // after the ledger save: the check may take its 90s, and writes only strength.json
     const strength = reviewing && piece && state.config.strength && !(fixCheck && !stillOpen) ? await strengthFor(state, piece) : [];
-    writeFileSync(file, renderPacket(state, role, { round, n, piece, owned, continueFrom, fixCheck: fixCheck && !stillOpen, disputes: toAnswer, strength, travel }));
+    writeFileSync(file, renderPacket(state, role, { round, n, piece, owned, continueFrom, fixCheck: fixCheck && !stillOpen, disputes: toAnswer, strength, travel, narrowed }));
     ctx.out(`packet: ${file}`);
     const yours = !own || role === "worker" ? "" : continueFrom !== null
       ? ` Your file is ${full} and it already exists: keep its finished sections, never reset it to the all-unverified draft, and rewrite it after each finding.`

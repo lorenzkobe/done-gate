@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp, noLateCalls, resealRun } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, noLateCalls, pluginRoot, resealRun } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
-import { sliceEnd } from "../scripts/lib/tree.mjs";
+import { sliceDiff, sliceEnd } from "../scripts/lib/tree.mjs";
 
 function envFor(repo) {
   const e = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
@@ -659,4 +659,204 @@ test("6.5 K7 edge: a .py fix that deletes a comment and re-indents a code line n
   edit(repo, "src/m.py", py(["x = 0", "def f():", ...fixed]));
   cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
   assert.match(ruleLine(check(repo), "R5"), /src\/m\.py:8-/, `the re-indented line is owed:\n${check(repo)}`);
+});
+
+// A narrowed round (the fix-check, or the round on lines changed after review) is shown only the
+// lines its reviewer is still owed, and each closed finding is listed for re-check once per role.
+const NARROWED = "Diff of the lines changed since your last round";
+const recheckOf = (packet) => /## Findings to re-check\n([\s\S]*?)(?=\n## |$)/.exec(packet)?.[1] ?? "";
+const added = (packet, name, i, v = i) => packet.includes(`+export const ${name}${i} = ${v};`);
+const blocksOf = (packet) => (packet.match(/^@@ lines \d+-\d+ of the new file @@$/gm) ?? []).length;
+const briefed = (repo, files, role = "reviewer") => packetOf(cli(repo, "brief", files ? [role, "--files", files] : [role]));
+const OTHER = "src/other.ts";
+const fixOther40 = (repo) => edit(repo, OTHER, body(80, "other").replace("other39 = 39", "other39 = 3900"));
+function fixedFinding(name) {
+  const repo = opened(name);
+  round(repo, "reviewer", null, [FINDING]);
+  fixLine30(repo);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
+  return repo;
+}
+
+test("narrow C1 C12: a fix-check named with the whole file after a one-line fix shows that line and three lines of context; a first round shows the whole piece and no re-check words", () => {
+  const repo = opened("fc-narrow-c1");
+  const first = packetOf(round(repo, "reviewer", null, [FINDING]));
+  assert.ok(added(first, "mid", 10) && added(first, "mid", 50), "a first round shows the whole piece");
+  assert.doesNotMatch(first, /re-check, not a new review/);
+  assert.ok(!first.includes(NARROWED));
+  fixLine30(repo);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
+  const packet = briefed(repo, MID);
+  assert.ok(packet.includes(`## ${NARROWED}`), packet);
+  assert.ok(added(packet, "mid", 30, 999), "the fixed line");
+  assert.ok(added(packet, "mid", 27) && added(packet, "mid", 33), "three lines of context each side");
+  assert.ok(!added(packet, "mid", 26) && !added(packet, "mid", 34) && !added(packet, "mid", 10), "nothing beyond the context");
+});
+
+test("narrow C2: with two files each holding a fixed finding, each fix-check lists its own file's finding only", () => {
+  const repo = opened("fc-narrow-c2");
+  edit(repo, OTHER, body(80, "other"));
+  round(repo, "reviewer", MID, [FINDING]);
+  round(repo, "reviewer", OTHER, ["wrong default — src/other.ts:40 — x — []"]);
+  fixLine30(repo);
+  fixOther40(repo);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
+  cli(repo, "huddle", ["resolve", "H2.1", "--evidence", "doc"]);
+  const mid = recheckOf(briefed(repo, MID));
+  assert.match(mid, /H1\.1/);
+  assert.doesNotMatch(mid, /H2\.1/, "the other file's finding waits for its own re-check");
+  const other = recheckOf(briefed(repo, OTHER));
+  assert.match(other, /H2\.1/);
+  assert.doesNotMatch(other, /H1\.1/);
+  assert.deepEqual(ledgerOf(repo).seen["review-3.md"].rechecked.map((k) => k.split("@")[0]), ["H1.1"]);
+});
+
+test("narrow C3: a finding citing a file outside the change is listed by the first re-check briefed and not by the round after it", () => {
+  const repo = opened("fc-narrow-c3");
+  round(repo, "reviewer", null, ["caller passes null — src/zzz.ts:1 — x — []"]);
+  fixLine30(repo);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
+  assert.match(recheckOf(packetOf(round(repo, "reviewer", MID))), /H1\.1/);
+  edit(repo, MID, body(60, "mid").replace("mid30 = 30", "mid30 = 999").replace("mid50 = 50", "mid50 = 5000"));
+  const late = briefed(repo, MID);
+  assert.ok(added(late, "mid", 50, 5000), "anchor: the late round was briefed");
+  assert.doesNotMatch(recheckOf(late), /H1\.1/, "re-checked once already");
+});
+
+test("narrow C4: a finding closed, reopened and closed again is listed again", () => {
+  const repo = fixedFinding("fc-narrow-c4");
+  assert.match(recheckOf(packetOf(round(repo, "reviewer", MID))), /H1\.1/);
+  cli(repo, "huddle", ["reopen", "H1.1", "the fix missed a case"]);
+  fixLine30(repo, 777);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
+  assert.match(recheckOf(briefed(repo, MID)), /H1\.1/, "a new close is a new thing to re-check");
+});
+
+test("narrow C5: a fix that deletes a reviewed line leaves the whole file owed, and the fix-check keeps the whole diff with the finding listed", () => {
+  const repo = opened("fc-narrow-c5");
+  round(repo, "reviewer", null, [FINDING]);
+  edit(repo, MID, body(60, "mid").replace("export const mid30 = 30;\n", ""));
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
+  assert.deepEqual(entriesOf(ruleLine(check(repo), "R5")), [MID], "anchor: R5 owes the whole file");
+  const packet = briefed(repo, MID);
+  assert.ok(added(packet, "mid", 10) && added(packet, "mid", 50), "the whole file, as R5 asks");
+  assert.match(recheckOf(packet), /H1\.1/);
+  const both = briefed(repo, `${MID},${MID}:5-9`);
+  assert.ok(added(both, "mid", 10) && added(both, "mid", 50), "a slice named beside the whole file does not narrow it");
+});
+
+test("narrow C6: a fix-check in parts shows each part its own owed lines, cut to the part, and the first part briefed lists the finding", () => {
+  const repo = opened("fc-narrow-c6");
+  const BIG = "src/big.ts";
+  edit(repo, BIG, body(900, "big"));
+  round(repo, "reviewer", MID);
+  round(repo, "reviewer", `${BIG}:1-400`, ["off by one — src/big.ts:30 — x — []"]);
+  round(repo, "reviewer", `${BIG}:401-800`);
+  round(repo, "reviewer", `${BIG}:801-900`);
+  // the fix rewrites lines 1-450: more than one round reads, so the re-check runs in parts
+  edit(repo, BIG, body(900, "big").split("\n").map((l, i) => (i < 450 ? l.replace(/= (\d+);/, "= $1000;") : l)).join("\n"));
+  cli(repo, "huddle", ["resolve", "H2.1", "--evidence", "doc"]);
+  const first = briefed(repo, `${BIG}:1-400`);
+  assert.ok(added(first, "big", 399, 399000) && !added(first, "big", 400, 400000), "cut at the part's last line");
+  assert.match(recheckOf(first), /H2\.1/);
+  const second = briefed(repo, `${BIG}:401-800`);
+  assert.ok(added(second, "big", 400, 400000) && added(second, "big", 449, 449000) && added(second, "big", 452) && !added(second, "big", 453), "the rest of the owed lines and three lines of context");
+  assert.doesNotMatch(recheckOf(second), /H2\.1/, "listed once, by the first part");
+  assert.doesNotMatch(second, /a finding listed above/, "no list, so no words about one");
+  assert.match(second, /This is a re-check, not a new review\. Under Act on, report only something the lines shown below break\./);
+});
+
+test("narrow C7 C16: owed lines close together print as one block, far apart as two, each under its own header; one range prints one block per hunk as before", () => {
+  const near = opened("fc-narrow-c7-near");
+  round(near, "reviewer", null, [FINDING]);
+  edit(near, MID, body(60, "mid").replace("mid30 = 30", "mid30 = 999").replace("mid36 = 36", "mid36 = 999"));
+  cli(near, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
+  assert.equal(blocksOf(briefed(near, MID)), 1);
+  const far = opened("fc-narrow-c7-far");
+  round(far, "reviewer", null, [FINDING]);
+  edit(far, MID, body(60, "mid").replace("mid10 = 10", "mid10 = 999").replace("mid50 = 50", "mid50 = 999"));
+  cli(far, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
+  const packet = briefed(far, MID);
+  assert.equal(blocksOf(packet), 2);
+  assert.match(packet, /^@@ lines 8-14 of the new file @@$/m);
+  assert.match(packet, /^@@ lines 48-54 of the new file @@$/m);
+  const diff = ["diff --git a/x b/x", "--- a/x", "+++ b/x", "@@ -0,0 +1,60 @@", ...Array.from({ length: 60 }, (_, i) => `+line ${i + 1}`)].join("\n");
+  assert.equal((sliceDiff(diff, [[5, 9]]).match(/^@@ lines/gm) ?? []).length, 1);
+  assert.equal((sliceDiff(diff, [[5, 6], [7, 9]]).match(/^@@ lines/gm) ?? []).length, 1, "neighbouring ranges are one block");
+  const two = sliceDiff(diff, [[5, 6], [45, 46]]);
+  assert.deepEqual(two.match(/^@@ lines .*$/gm), ["@@ lines 5-6 of the new file @@", "@@ lines 45-46 of the new file @@"]);
+  assert.ok(two.includes("+line 6\n@@ lines 45-46"), "each block follows its own header");
+});
+
+test("narrow C8: a late round named with the whole file shows only the line changed after the clean round and says to review the shown lines", () => {
+  const repo = opened("fc-narrow-c8");
+  round(repo, "reviewer", null);
+  edit(repo, MID, body(60, "mid").replace("mid50 = 50", "mid50 = 5000"));
+  const packet = briefed(repo, MID);
+  assert.ok(added(packet, "mid", 50, 5000) && !added(packet, "mid", 10));
+  assert.match(packet, /These lines changed after your review\. Review the lines shown, nothing else\./);
+});
+
+test("narrow C9: a round recorded without line keys leaves the whole file owed: the fix-check shows the whole diff", () => {
+  const repo = opened("fc-narrow-c9");
+  noLateCalls(repo);
+  round(repo, "reviewer", null, [FINDING]);
+  const file = path.join(runDir(repo), "ledger.json");
+  const ledger = JSON.parse(readFileSync(file, "utf8"));
+  for (const h of ledger.huddles) delete h.units;
+  for (const s of Object.values(ledger.seen ?? {})) delete s.units;
+  writeFileSync(file, JSON.stringify(ledger, null, 2));
+  resealRun(repo);
+  fixLine30(repo);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
+  const packet = briefed(repo, MID);
+  assert.ok(added(packet, "mid", 10) && added(packet, "mid", 50));
+});
+
+test("narrow C10 C13: a re-check briefed again lists the same findings and lines; one whose helper stopped on a draft listed nothing, so the packet after it lists them", () => {
+  const repo = fixedFinding("fc-narrow-c10");
+  const once = cli(repo, "brief", ["reviewer", "--files", MID]);
+  const again = cli(repo, "brief", ["reviewer", "--files", MID]);
+  assert.equal(/packet: (\S+)/.exec(once)[1], /packet: (\S+)/.exec(again)[1], "the same packet file");
+  assert.match(recheckOf(packetOf(again)), /H1\.1/);
+  assert.ok(added(packetOf(again), "mid", 30, 999) && !added(packetOf(again), "mid", 10));
+  hook(repo, { hook_event_name: "SubagentStart", agent_id: "A-reviewer", agent_type: "done-gate:reviewer" });
+  writeFileSync(path.join(runDir(repo), "review-2.md"), "# Review 2 — x\n\n## Act on\n- unverified\n## Can't verify\n- unverified\n## Lessons\n- unverified\n## Dismissed\n- unverified\n");
+  stop(repo, "reviewer");
+  const next = cli(repo, "brief", ["reviewer", "--files", `${MID}:31-31`]);
+  assert.match(next, /^packet: .*brief-reviewer-3\.md$/m, "anchor: another packet");
+  assert.match(recheckOf(packetOf(next)), /H1\.1/);
+});
+
+test("narrow C11: the narrowed packet says it is a re-check and what Act on takes, and both reviewer instruction files point at the packet", () => {
+  const packet = briefed(fixedFinding("fc-narrow-c11"), MID);
+  assert.match(packet, /This is a re-check, not a new review\. Under Act on, report only a finding listed above that is NOT ADDRESSED, or something the lines shown below break\. Your earlier round covered the rest of the file\./);
+  for (const role of ["reviewer", "reviewer-2"]) {
+    assert.match(readFileSync(path.join(pluginRoot, "agents", `${role}.md`), "utf8"), /On a re-check or a round on lines changed after review, the packet narrows this to the lines it shows: follow the packet\./, role);
+  }
+});
+
+test("narrow C14: a finding raised in one file's round about another file, fixed there after that file's clean round, is listed by its late round", () => {
+  const repo = opened("fc-narrow-c14");
+  edit(repo, OTHER, body(80, "other"));
+  round(repo, "reviewer", MID, ["caller wrong — src/other.ts:40 — x — []"]);
+  round(repo, "reviewer", OTHER);
+  fixOther40(repo);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
+  const packet = briefed(repo, OTHER);
+  assert.ok(added(packet, "other", 39, 3900) && !added(packet, "other", 10));
+  assert.match(recheckOf(packet), /H1\.1/);
+  assert.doesNotMatch(packet, /nothing else/, "the late words must not tell the reviewer to skip the list");
+  assert.match(packet, /These lines changed after your review\. Under Act on, report only a finding listed above that is NOT ADDRESSED, or a fault in the lines shown below\./);
+});
+
+test("narrow C15: a piece file with no owed line in a re-check is left out of the diff and named", () => {
+  const repo = opened("fc-narrow-c15");
+  edit(repo, OTHER, body(80, "other"));
+  round(repo, "reviewer", `${MID},${OTHER}`, [FINDING]);
+  fixLine30(repo);
+  cli(repo, "huddle", ["resolve", "H1.1", "--evidence", "doc"]);
+  const packet = briefed(repo, `${MID},${OTHER}`);
+  assert.ok(added(packet, "mid", 30, 999) && !added(packet, "other", 10));
+  assert.match(packet, /- src\/other\.ts: nothing changed since your last round/);
 });
