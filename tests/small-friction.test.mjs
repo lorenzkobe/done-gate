@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, here, pluginRoot, lookedUp, waiveArgs, clearedFrom } from "./helpers.mjs";
+import { makeRepo, write, gate, here, pluginRoot, lookedUp, waiveArgs, abandonArgs, clearedFrom } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
@@ -806,3 +806,175 @@ test("C26 happy: gate help names case amend, case add --batch, next, verify --ad
 function repo26() {
   return makeRepo("sf-c26");
 }
+
+// A run taken to a clean close. With `waived`, its app drive is skipped on the user's words, so
+// its For you line is not "nothing".
+function closeRun(repo, slug, waived) {
+  cli(repo, "open", [slug, "feature"]);
+  lookedUp(repo);
+  cli(repo, "note", ["task", "Do the thing. [inferred]"]);
+  cli(repo, "note", ["context", CONTEXT]);
+  cli(repo, "note", ["plan", "One constant changes; no data, no hot path.", "--files", "src/a.ts"]);
+  cli(repo, "case", ["add", "renders the badge", "--kind", "happy"]);
+  if (waived) cli(repo, "waive", waiveArgs(repo, "driver", waived));
+  cli(repo, "verify");
+  for (const s of ledgerOf(repo).steps) if (!s.state && s.key !== "close") cli(repo, "step", [s.key ?? String(s.n), "na", "fixture"]);
+  cli(repo, "case", ["close", "C1", "--test", "tests/a.test.ts:a"]);
+  cli(repo, "close");
+}
+function closedWithSkip(name, waived = "chrome is disconnected, the phone pass waits") {
+  const repo = repoOf(name);
+  sessionStart(repo, "S1");
+  closeRun(repo, "t", waived);
+  return repo;
+}
+function stopWith(repo, message) {
+  const out = hook(repo, "stop", { hook_event_name: "Stop", stop_hook_active: false, last_assistant_message: message }).stdout.trim();
+  return out.startsWith("{") ? JSON.parse(out) : {};
+}
+const forYouOf = (repo) => cli(repo, "report", ["--brief"]).stdout.split("\n").find((l) => l.startsWith("For you:"));
+const owed = (repo) => loadSession(stateDir(repo), "S1").forYouOwed ?? [];
+
+test("shown C1 C10 refused: a run closed with a skipped check blocks a final message without its For you line, and names the line gate report --brief prints", () => {
+  const repo = closedWithSkip("shown-c1");
+  const line = forYouOf(repo);
+  assert.match(line, /skipped with your OK: chrome is disconnected/);
+  assert.equal(ledgerOf(repo).forYou, line);
+  const stop = stopWith(repo, "All done, everything passed.");
+  assert.equal(stop.decision, "block", JSON.stringify(stop));
+  assert.ok(stop.reason.includes(line), stop.reason);
+  assert.match(stop.reason, /word for word/);
+  assert.equal(readEvents(stateDir(repo), "S1").filter((e) => e.kind === "block").pop().rules.join(), "R22");
+});
+
+test("shown C2 happy: a final message that holds the line, also wrapped over two lines, ends the turn and the next stop asks nothing", () => {
+  const repo = closedWithSkip("shown-c2");
+  const line = forYouOf(repo);
+  const cut = line.indexOf(" ", 30);
+  assert.equal(stopWith(repo, `t: done\n\n${line.slice(0, cut)}\n  ${line.slice(cut + 1)}\n\nFull report: x`).decision, undefined);
+  assert.deepEqual(owed(repo), []);
+  assert.equal(stopWith(repo, "Anything else?").decision, undefined);
+});
+
+test("shown C3 boundary: a run closed with For you: nothing ends the turn on any message", () => {
+  const repo = repoOf("shown-c3");
+  sessionStart(repo, "S1");
+  closeRun(repo, "t");
+  assert.equal(forYouOf(repo), "For you: nothing.");
+  assert.deepEqual(owed(repo), []);
+  assert.equal(stopWith(repo, "All done.").decision, undefined);
+});
+
+test("shown C4 edge: the same message three times ends the turn at the third stop, and a later stop is not blocked", () => {
+  const repo = closedWithSkip("shown-c4");
+  assert.equal(stopWith(repo, "All done.").decision, "block");
+  assert.equal(stopWith(repo, "All done.").decision, "block");
+  const third = stopWith(repo, "All done.");
+  assert.equal(third.decision, undefined);
+  assert.ok(third.systemMessage.includes(ledgerOf(repo).forYou), JSON.stringify(third));
+  assert.deepEqual(readEvents(stateDir(repo), "S1").filter((e) => e.kind === "override").map((e) => e.rules.join()), ["R22"]);
+  assert.deepEqual(owed(repo), []);
+  assert.deepEqual(stopWith(repo, "All done."), {});
+});
+
+test("shown C5 C11 edge: a final line PAUSED: and the user's typed stop word end the turn and leave the line owed", () => {
+  const repo = closedWithSkip("shown-c5");
+  assert.equal(stopWith(repo, "One thing first.\n\nPAUSED: which colour do you want").decision, undefined);
+  assert.equal(owed(repo).length, 1);
+  assert.equal(stopWith(repo, "All done.").decision, "block");
+  hook(repo, "log", { hook_event_name: "UserPromptSubmit", prompt: "stop" });
+  assert.equal(stopWith(repo, "All done.").decision, undefined);
+  assert.equal(owed(repo).length, 1);
+});
+
+test("shown C6 boundary: an abandoned run owes no line", () => {
+  const repo = repoOf("shown-c6");
+  sessionStart(repo, "S1");
+  cli(repo, "open", ["t", "feature"]);
+  cli(repo, "abandon", abandonArgs(repo, "t", "never started"));
+  assert.deepEqual(owed(repo), []);
+  assert.equal(stopWith(repo, "Dropped it.").decision, undefined);
+});
+
+test("shown C7 edge: two runs closed in one turn each owe their line, and a message with one is blocked for the other", () => {
+  const repo = closedWithSkip("shown-c7", "chrome is disconnected");
+  const first = forYouOf(repo);
+  closeRun(repo, "u", "the staging site is down today");
+  const second = forYouOf(repo);
+  assert.notEqual(first, second);
+  const both = stopWith(repo, "All done.");
+  assert.ok(both.reason.includes(first) && both.reason.includes(second), both.reason);
+  const one = stopWith(repo, `Done.\n${first}`);
+  assert.equal(one.decision, "block");
+  assert.ok(one.reason.includes(second) && !one.reason.includes(first), one.reason);
+  assert.equal(stopWith(repo, `Done.\n${second}`).decision, undefined);
+  assert.deepEqual(owed(repo), []);
+});
+
+test("shown C8 boundary: with a run open after the close, the stop lists that run's unmet rules and the line stays owed", () => {
+  const repo = closedWithSkip("shown-c8");
+  cli(repo, "open", ["u", "feature"]);
+  write(repo, "src/a.ts", REWRITE);
+  const stop = stopWith(repo, "Working on it.");
+  assert.equal(stop.decision, "block");
+  assert.doesNotMatch(stop.reason, /R22|For you:/);
+  assert.equal(owed(repo).length, 1);
+});
+
+test("shown C10 reported-surface: gate report --brief on a closed run prints the line stored at the close, whatever the run's record says later", () => {
+  const repo = closedWithSkip("shown-c10");
+  const stored = ledgerOf(repo).forYou;
+  const ledger = ledgerOf(repo);
+  ledger.waivers[0].reason = "another reason, written after the close";
+  saveLedger(runDir(repo), ledger);
+  assert.equal(forYouOf(repo), stored);
+  assert.ok(stopWith(repo, "All done.").reason.includes(stored));
+});
+
+test("shown C8b edge: a message that shows the line while another run is open settles the debt", () => {
+  const repo = closedWithSkip("shown-c8b");
+  const line = forYouOf(repo);
+  cli(repo, "open", ["u", "feature"]);
+  assert.equal(stopWith(repo, `t: done\n${line}\n\nPAUSED: which colour for u`).decision, undefined);
+  assert.deepEqual(owed(repo), []);
+});
+
+test("shown C9 edge: with the closed run's folder gone the line is still asked for, from the session's copy, and no gate error is logged", () => {
+  const repo = closedWithSkip("shown-c9");
+  const line = forYouOf(repo);
+  rmSync(runDir(repo), { recursive: true });
+  const stop = stopWith(repo, "All done.");
+  assert.ok(stop.reason.includes(line), JSON.stringify(stop));
+  assert.ok(!existsSync(path.join(stateDir(repo), "gate-error.log")));
+});
+
+test("shown C12 edge: a new message of the user's after the close does not end the debt", () => {
+  const repo = closedWithSkip("shown-c12");
+  hook(repo, "log", { hook_event_name: "UserPromptSubmit", prompt: "now rename the venue page" });
+  assert.equal(stopWith(repo, "Renamed.").decision, "block");
+});
+
+test("shown C13 edge: a final message that ends with a question and lacks the line gets the line, not the PAUSED hint", () => {
+  const repo = closedWithSkip("shown-c13");
+  const stop = stopWith(repo, "All done. Want me to push?");
+  assert.equal(stop.decision, "block");
+  assert.ok(stop.reason.includes(forYouOf(repo)), stop.reason);
+  assert.doesNotMatch(stop.reason, /waiting for the user's answer/);
+});
+
+test("shown C14 refused: a reworded line or one in another letter case is blocked; the line in bold passes", () => {
+  const repo = closedWithSkip("shown-c14");
+  const line = forYouOf(repo);
+  assert.equal(stopWith(repo, `Done.\n${line.replace("skipped with your OK", "you let me skip")}`).decision, "block");
+  assert.equal(stopWith(repo, `Done.\n${line.toUpperCase()}`).decision, "block");
+  assert.equal(stopWith(repo, `Done.\n**For you:**${line.slice("For you:".length)}`).decision, undefined);
+});
+
+test("shown C15 reported-surface: gate stats counts the stopped turn under R22 with its plain words", () => {
+  const repo = closedWithSkip("shown-c15");
+  hook(repo, "log", { hook_event_name: "UserPromptSubmit", prompt: "anything else to report" });
+  stopWith(repo, "All done.");
+  assert.match(cli(repo, "stats").stdout, /R22 1/);
+  const wrong = cli(repo, "stats", ["wrong", "R22", ...waiveArgs(repo, "x", "y").slice(-1)]);
+  assert.match(wrong.stdout, /R22 marked wrong/);
+});

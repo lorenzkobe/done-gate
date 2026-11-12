@@ -315,7 +315,19 @@ a read; a read before a compaction still counts in the same session.
   it through when every target is under `tests/.tmp`, `/tmp` or a scratchpad; sources may be
   anywhere, a `cd` and variables set in the same command count, and a heredoc body is text.
   The lead's commands are refused only when they write an evidence file: quoting its path in
-  a heredoc or reading it with `node -e` is fine.
+  a heredoc or reading it with `node -e` is fine. Its own `ledger.md` may be appended through
+  the shell (`cat >> <run>/ledger.md`), also with the run folder in a variable set once in the
+  same command (`R=<run>; cat >> $R/ledger.md`) or after `cd <run>` beside a plain call of the
+  gate wrapper; the variable form is the lead's alone.
+- **The final message shows what a closed run skipped (R22).** `gate close` stores the run's
+  "For you" line on the run and, when it is not "nothing", in the session; `gate report --brief`
+  prints the same line. With no run open the Stop hook blocks until the final message holds each
+  owed line word for word (asterisks and line wraps aside). A line counts as shown at any
+  stop whose message holds it, also while another run is open. A final `PAUSED:` line or the
+  user's stop word ends the turn and the line stays owed, also across later turns; at the third
+  identical block the turn ends, the hook prints the line to the user itself and the debt is
+  dropped; an abandoned run owes nothing. It checks only what
+  the gate recorded: disagreeing with the user and a mistake nobody recorded stay written rules.
 - **Waiting for a helper is a legal turn end.** While any agent this session spawned (a
   `done-gate:*` helper, an Explore or Plan agent) is still running, the Stop hook lets the
   turn end quietly; the agent's hand-back wakes the lead. A hand-back, a task notification or

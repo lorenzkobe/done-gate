@@ -38,7 +38,8 @@ const GIT_STILL = new Set([...GIT_READ, "ls-tree", "grep", "describe", "shortlog
 const INTERPRETERS = new Set(["node", "nodejs", "deno", "bun", "python", "python3", "perl", "ruby", "php", "sh", "bash", "zsh"]);
 const SHELLS = new Set(["sh", "bash", "zsh"]);
 const INLINE_FLAG = /^-[a-zA-Z]*[ecpEr]$|^--eval$|^--print$/;
-const INLINE_WRITE = /\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|rename(?:Sync)?|unlink(?:Sync)?|rm(?:Sync)?|rmdir(?:Sync)?|mkdir(?:Sync)?|copyFile(?:Sync)?|truncate(?:Sync)?|createWriteStream|open\s*\([^)]*["'][wa][+]?["'])|os\.(?:remove|rename|unlink|makedirs|mkdir)|shutil\.|file_put_contents|fopen|fwrite|unlink/;
+// An open writes when its mode, the string after the first argument, holds w, a, x or +.
+const INLINE_WRITE = /\b(?:writeFile(?:Sync)?|appendFile(?:Sync)?|writeSync|rename(?:Sync)?|unlink(?:Sync)?|rm(?:Sync)?|rmdir(?:Sync)?|mkdir(?:Sync)?|copyFile(?:Sync)?|cp(?:Sync)?\s*\(|truncate(?:Sync)?|createWriteStream|open(?:Sync)?\s*\([^)]*,\s*(?:mode\s*=\s*)?["'][rbts]*[wax+][rwaxbts+]*["']|write_(?:text|bytes)\s*\()|os\.(?:remove|rename|replace|unlink|makedirs|mkdir)|shutil\.|file_put_contents|fopen|fwrite|unlink/;
 // Scratch roots, read after `..` is resolved: the system temp folders (a session scratchpad
 // lives under one) and a tests/.tmp folder. TMPDIR is not trusted: it could name the repo.
 const SCRATCH_ROOT = /^(?:\/tmp|\/private\/tmp|\/private\/var\/folders|\/var\/folders)(?:\/|$)/;
@@ -1050,7 +1051,7 @@ function inlineWriteTargets(raw) {
     // a bare cd goes home; a bare pushd swaps the stack, so it is a folder the gate cannot follow
     if (["cd", "pushd"].includes(words[0]?.text)) dirs.push(words[1]?.text ?? (words[0].text === "cd" ? "~" : "-"));
     const code = words.length ? inlineCode(words[0].text, words.slice(1), raw) : null;
-    if (code === null || !INLINE_WRITE.test(code) && !/\.write_(?:text|bytes)\s*\(/.test(code)) continue;
+    if (code === null || !INLINE_WRITE.test(code)) continue;
     // a name given a literal exactly once; one assigned again could hold anything at the write
     const assigned = [...code.matchAll(/\b([A-Za-z_]\w*)\s*=(?!=)/g)].map((m) => m[1]);
     const names = Object.fromEntries([...code.matchAll(/\b([A-Za-z_]\w*)\s*=\s*["'`]([^"'`]+)["'`]/g)].filter((m) => assigned.filter((n) => n === m[1]).length === 1).map((m) => [m[1], m[2]]));
@@ -1082,9 +1083,10 @@ function inlineWriteTargets(raw) {
       return t === null ? null : place(t);
     };
     let seen = 0;
+    let opens = 0;
     for (const m of code.matchAll(/\bopen\s*\(\s*([^,()]+?)\s*,\s*(?:mode\s*=\s*)?["']([^"']*)["']/g)) {
       if (!/[wax+]/.test(m[2])) continue;
-      seen++;
+      opens++;
       const t = argAt(m[1]);
       if (t) targets.push(t);
       else unknown = true;
@@ -1095,9 +1097,11 @@ function inlineWriteTargets(raw) {
       if (t) targets.push(t);
       else unknown = true;
     }
-    // a write the patterns above do not read (os.remove, shutil, rename, write_text, an open with no literal mode)
-    const writes = (code.match(new RegExp(INLINE_WRITE.source, "g")) ?? []).length + (code.match(/\.write_(?:text|bytes)\s*\(/g) ?? []).length;
-    if (writes > seen) unknown = true;
+    // a write the patterns above do not read (os.remove, shutil, rename, write_text, an open whose
+    // target is an expression). Opens are counted apart: one read in a mode like wb covers no other write.
+    const found = code.match(new RegExp(INLINE_WRITE.source, "g")) ?? [];
+    const opened = found.filter((w) => w.startsWith("open")).length;
+    if (opened > opens || found.length - opened > seen) unknown = true;
   }
   return { targets, unknown, lost };
 }
@@ -1166,12 +1170,43 @@ function plainSed(args) {
 }
 const sedSegment = (seg) => shift(seg).words[0]?.text === "sed";
 
+// A name given a run folder once, by a plain NAME=value where a command starts, is spelled out at each
+// $NAME and ${NAME}. Set twice or another way, used earlier or expanded another way: left as it is.
+const RUN_FOLDER = "[^\\s'\";&|$`()<>]*\\.claude/gate/runs/[^/\\s'\";&|$`()<>]+/?";
+const SETS_RUN_FOLDER = new RegExp(`(^|[;&\\n]\\s*)([A-Za-z_]\\w*)=(["']?)(${RUN_FOLDER})\\3(?=\\s*(?:;|&&|\\n|$))`, "g");
+function spellRunFolders(raw) {
+  let text = String(raw);
+  for (const [whole, start, name, , value] of [...withoutHeredocs(text).matchAll(SETS_RUN_FOLDER)]) {
+    const named = bare(text).match(new RegExp(`(?<![$\\w{])${name}(?!\\w)`, "g"))?.length ?? 0;
+    const uses = new RegExp(`\\$\\{${name}\\}/?|\\$${name}(?!\\w)/?`, "g");
+    // a use ahead of the assignment is empty to the shell
+    const first = text.search(uses);
+    const braced = text.match(new RegExp(`\\$\\{[^}]*\\b${name}\\b[^}]*\\}`, "g")) ?? [];
+    if (named !== 1 || (first !== -1 && first < text.indexOf(whole)) || braced.some((b) => b !== `\${${name}}`)) continue;
+    const folder = value.replace(/\/$/, "");
+    text = text.replace(whole, `${start}:`).replace(uses, (use) => (use.endsWith("/") ? `${folder}/` : value));
+  }
+  return text;
+}
+
+// A call of the gate wrapper made of plain words only (no $, substitution or redirect) writes
+// through the gate, whatever names it holds; it and the wrapper's definition become `:`.
+function withoutGateCalls(text, wrappers) {
+  let out = text.replace(new RegExp(`${WRAPPER}\\s*;?\\s*\\}`, "g"), (whole, a, b) => (wrappers.has(a ?? b) ? ";:" : whole));
+  for (const name of wrappers) {
+    out = out.replace(new RegExp(`(^|[;&|\\n]\\s*)${name}(?:[ \\t]+(?:"[^"$\`\\\\]*"|'[^']*'|[^\\s;&|<>$\`"'()]+))*(?=\\s*(?:;|&&|\\|\\||\\n|$))`, "g"), "$1:");
+  }
+  return out;
+}
+
 function cdFormWriter(seg) {
   const [first, ...args] = shift(seg).words;
   if (!CD_FORM_PROGRAMS.has(first?.text)) return false;
   return first.text !== "sed" || plainSed(args);
 }
-export function ownFileWrites(raw, agentType, root) {
+export function ownFileWrites(command, agentType, root) {
+  // the variable form is the lead's, for its ledger.md
+  const raw = agentType === null ? spellRunFolders(command) : String(command);
   const prefix = OWN_PREFIX[String(agentType ?? "").replace(/^done-gate:/, "")];
   // the lead's own file is its run's ledger.md, the one it may edit by hand
   const name = prefix ? `${prefix}-\\d+\\.md` : agentType === null ? "ledger\\.md" : null;
@@ -1193,7 +1228,7 @@ export function ownFileWrites(raw, agentType, root) {
   // takes only writers whose targets are read, spells every name out, and names no other file there.
   if (rest !== named) {
     // a single-quoted word is text to the shell: a sed regex's $ or [ hides no name
-    const spelled = withoutHeredocs(rest).replace(new RegExp(`\\b${name}\\b`, "g"), "OWN").replace(/'[^']*'/g, "''");
+    const spelled = withoutGateCalls(withoutHeredocs(rest), definedFunctions(raw)).replace(new RegExp(`\\b${name}\\b`, "g"), "OWN").replace(/'[^']*'/g, "''");
     if (CD_FORM_OBSCURES.test(spelled) || !notReads(raw).every(cdFormWriter)) return [];
   }
   return EVIDENCE_IN_COMMAND.test(rest) || namesGateDir(withoutHeredocs(rest)) ? [] : targets;

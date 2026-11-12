@@ -167,6 +167,15 @@ test("C9 edge: gate huddle add notes an Act-on finding whose only file:line does
   assert.equal(third.unresolved, undefined);
 });
 
+test("honest C1 reported-surface: session-start tells the agent to disagree when the facts go against the user's idea and to report its own mistake or a skipped check first", () => {
+  const text = readFileSync(path.join(pluginRoot, "hooks/session-start.md"), "utf8");
+  const line = text.split("\n").find((l) => /what pleases/.test(l)) ?? "";
+  assert.match(line, /facts go against the user's idea/, text);
+  assert.match(line, /your own mistake/);
+  assert.match(line, /a check you skipped/);
+  assert.match(line, /first/);
+});
+
 test("C10 happy: the always-loaded text, the investigation playbook and the hints carry the cite-or-unverified wording; SKILL.md stays under 4096 bytes", () => {
   const read = (rel) => readFileSync(path.join(pluginRoot, rel), "utf8");
   assert.match(read("hooks/session-start.md"), /"unverified"/);

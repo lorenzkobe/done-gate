@@ -16,6 +16,20 @@ left after the fence let a gate read run beside an unrelated command:
   refusals through a changed fence is rough: longer commands end in an unclosed quote.
 - The lead's lookup of an event number (`SEQ=$(grep … events.jsonl | tail -1 | …)`) beside a test
   run stays refused: any `$` keeps the refusal.
+- Built in run trial-list-fixes and taken out the same day on the owner's word (run
+  keep-ledger-fix-only), so both stay as they are:
+  - A fix-check reviewer that has not searched the code and memory is refused at
+    `gate huddle add`, and the lead records a `gate call lookups` for it (two of the six calls in
+    the trial run promo-offpeak-checkout-wiring). The owner: the search is cheap, and a fix can
+    break code elsewhere that only a search shows.
+  - A QA helper's `python3 - <<'EOF'` rewrite of its own test file is refused as "inline code
+    writes" and it is told to use the Write tool (deny events since 2026-10-20: 38 by QA in
+    courtly, 2 in kwenta.cc; reviewers' scratch probes 7 and 11 more). Letting it through meant
+    reading the script for the file it writes: six review rounds each found another way to name a
+    source file there, and one was still open.
+- Inline code that writes by running a shell command (`os.system`, `subprocess`,
+  `child_process.execSync('echo x > src/a.ts')`) is read as code that writes nothing. Left open in
+  run inline-write-forms on the owner's choice: helpers run tests that way in scratch probes.
 - Older than this change, found by its reviewer and not fixed: `cat x >& .claude/gate/runs/<run>/verify.json`
   passes the fence as a read. `redirect()` in scripts/lib/guard.mjs takes every `>&` for a stream
   copy, though `>& file` writes the file.
@@ -209,6 +223,38 @@ Left out: an interview until every choice is settled (more questions), glossary 
 files (project docs, not the gate's job), issue-tracker and teaching skills (outside the gate).
 
 ## Done (moved here when a release fixes it, with the version)
+
+Built in run closing-message-shows-skips, 2026-11-12, on the owner's question whether anything
+checks the honesty line of session-start:
+
+- Closed runs since 2026-10-20 that skipped or decided something (a waiver, a skipped step, a
+  finding closed as wrong, a search gap, a file changed after the last review): 75 across this
+  repo (8), courtly (59) and kwenta.cc (8). 17 closing messages held a "For you" line, 4 held none
+  but named every item in its recorded words, and 54 held none and did not, 18 of them with no skip-like word at
+  all. A rough text match on the transcripts, so an upper bound; 49 of the 54 held a user's
+  waiver, most of them courtly's standing ones. R22 now holds the turn until the final message
+  shows the line. Not checked by anything: disagreeing with the user, and a mistake or skipped
+  check the gate did not record.
+
+Fixed in run inline-write-forms, 2026-11-12:
+
+- Inline code whose only write was an `open` in a mode other than plain `w` or `a` (`'wb'`, `'x'`,
+  `'r+'`, `'wt'`, `mode='wb'`) was read as code that writes nothing, so a helper's
+  `open('src/a.ts','wb')` passed the fence, and so did the lead's on an evidence file. The same
+  held for `write_text`, `write_bytes`, `os.replace`, `fs.writeSync`, `fs.openSync` and `fs.cpSync`.
+  Each is a write now. Met while building run trial-list-fixes; no refusal data behind it.
+
+From the trial of 2026-11-12 on courtly's promo wiring (run promo-offpeak-checkout-wiring), fixed
+in runs trial-list-fixes and keep-ledger-fix-only:
+
+- The lead's `gate plan add …` followed by `cd <run> && cat >> ledger.md <<'EOF'` was refused as
+  an evidence write, and so was `R=<run>; cat >> $R/ledger.md` (lead ledger.md refusals since
+  2026-10-20: 7 in courtly, 6 in kwenta.cc, 1 here, python forms among them). Both shapes pass
+  now for the lead; a helper in the variable form stays refused, and so does a python write
+  that takes the folder as an argument (`python3 - "$R"` with `sys.argv[1]`).
+- Met on the way: the lead's inline `open('<run>/ledger.md','ab')` beside an `os.remove` of a
+  code file was taken for a write of ledger.md alone. Opens are now counted apart from other
+  writes, so it is not.
 
 From the trial of 2026-11-12 on courtly's discount engine (run setup-answer-survives-close):
 

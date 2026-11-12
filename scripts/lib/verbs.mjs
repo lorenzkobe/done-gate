@@ -7,7 +7,7 @@ import { applyPrediction, effectiveTier, groupPieces, inPlan, mechanicalCall, ou
 import { toPosixRel } from "./paths.mjs";
 import { UsageError } from "./context.mjs";
 import { printNext } from "./next.mjs";
-import { renderReport } from "./report.mjs";
+import { FOR_YOU_NOTHING, forYouLine, renderReport } from "./report.mjs";
 import { sealProblems, sealRunFile } from "./seal.mjs";
 import { abandonWordsProblem, afterReview, apiCalls, apiFiles, askedNotSaid, briefOf, BUG_FIX_DRIVE, callProblem, callReasonProblem, CALLS, caseOpen, changedUnitsOf, clickEvents, CONTEXT_PARTS, contextPart, driverCommand, editedIn, firstCodeEdit, helperRun, isDraft, lapseWaiver, LAPSING, lastEditSeq, leadLookups, list, LOOKUP_EXAMPLE, LOOKUP_KINDS, namesFile, notRecommended, oldRun, oldRunText, ON_CODE, openItem, parseDisputes, parseEntry, parseFindings, parseReplies, pathOf, pointerResolver, proofProblem, proofReading, ranEvents, ranText, reviewTrialed, runProblem, saidAt, saidSince, sectionBullets, setUpServers, skippedLookups, skippedText, slopHits, stepSurfaceFiles, tracedPointers, uiTrial, uncovered, unfinishedFile, upheldItem, userSaid, WAIVERS, waiverWordsProblem, wordsShapeProblem, workerRuns, writersOf, wrongProblem } from "./rules.mjs";
 import { assess, broughtSinceOpen, buildState, cleanAtHead, foldIntoBaseline, otherSessionsEvents, ownWrites, readVerify, reviewFiles, readVerifyStarted, unmetCount, unmetLines } from "./assess.mjs";
@@ -74,10 +74,13 @@ function finalise(ctx, state) {
   // saved, so a later rebuild of the report says what close saw
   const running = backgroundItems(backgroundOpen(state.events ?? [], ctx.session, ledger.openedSeq ?? 0, session?.restartSeq ?? 0));
   if (running.length) ledger.backgroundAtClose = running;
+  // stored once, so the brief and the stop (R22) show the same line whatever changes later
+  ledger.forYou = forYouLine({ ...state, ledger }, []);
+  const owed = ledger.forYou === FOR_YOU_NOTHING ? {} : { forYouOwed: [...(session?.forYouOwed ?? []), { run: ledger.slug, line: ledger.forYou }] };
   saveLedger(state.dir, ledger);
   // a declared repo's files end with the run: session state holds main-root keys only
   const main = withoutRepos(state.now, state.repos);
-  saveSession(ctx.stateDir, { ...session, current: null, lastClosed: path.basename(state.dir), baseline: { ...main, head: gitHead(ctx.root) }, foreignHead: null, lastTree: main, baselineSeq: nextSeq(), runEndSeq: nextSeq() });
+  saveSession(ctx.stateDir, { ...session, ...owed, current: null, lastClosed: path.basename(state.dir), baseline: { ...main, head: gitHead(ctx.root) }, foreignHead: null, lastTree: main, baselineSeq: nextSeq(), runEndSeq: nextSeq() });
   writeReport(ctx, state.dir, ledger);
   return ledger;
 }

@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 
 import os from "node:os";
 import path from "node:path";
 import { evaluate, isDraft, parseFindings } from "../scripts/lib/rules.mjs";
-import { decide, readsOnly, scratchOnly } from "../scripts/lib/guard.mjs";
+import { decide, ownFileWrites, readsOnly, scratchOnly } from "../scripts/lib/guard.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { makeRepo, gate } from "./helpers.mjs";
 
@@ -1251,5 +1251,152 @@ test("beside C9 edge: a heredoc fed to python passes beside a gate read unless i
     `python3 - <<'E'\nopen('${RUN_DIR}/verify.json','w').write('x')\nE\nnpm test`,
     `cat ${RUN_DIR}/ledger.md | python3 - <<'E'\nopen('/tmp/x.txt','w').write('x')\nE`,
   ]);
+});
+}
+
+{
+const repo = makeRepo("fence-trial-list");
+const cfg = loadConfig(repo);
+const RUN_DIR = ".claude/gate/runs/2026-11-12-x";
+const asked = (command, agent_type) => ({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: repo, session_id: "S1", ...(agent_type ? { agent_id: "A1", agent_type } : {}) });
+const READY = { steps: [] };
+const verdict = (command, agent_type, ledger = READY) => decide(asked(command, agent_type), repo, cfg, RUN_DIR, ledger);
+const passes = (cmds, role) => {
+  for (const cmd of cmds) assert.equal(verdict(cmd, role).deny, false, `${cmd}\n${verdict(cmd, role).reason}`);
+};
+const refused = (cmds, role) => {
+  for (const cmd of cmds) assert.equal(verdict(cmd, role).deny, true, cmd);
+};
+const py = (file) => `python3 - <<'EOF'\np='${file}'\ns=open(p).read()\ns=s.replace('a','b')\nopen(p,'w').write(s)\nEOF`;
+const WRAP = `gate() { node "${gate}" "$@"; }`;
+const APPEND = `cat >> ledger.md <<'EOF'\n\n## Amendments\n- H1.1: folded\nEOF`;
+
+test("ledger C13 C24 happy: a gate verb call beside cd <run> && cat >> ledger.md passes, whatever plain words the call holds", () => {
+  passes([
+    `${WRAP};\ngate plan add tests/a.test.ts "its pin reads 0291's hold; 0369 re-issues it (skeptic-1.md H1.6)"\ncd ${RUN_DIR} && ${APPEND}`,
+    `${WRAP}; gate plan add docs/friction.md "why it is needed" && cd ${RUN_DIR} && ${APPEND}`,
+    `${WRAP}; gate huddle add reviewer --file review-1.md; cd ${RUN_DIR} && ${APPEND}`,
+    `${WRAP}; cd ${RUN_DIR} && ${APPEND}\ngate case amend C2 'is it empty? then [] comes back'`,
+  ]);
+  refused([`${WRAP}; gate report > ledger.json; cd ${RUN_DIR} && ${APPEND}`, `${WRAP}; cd ${RUN_DIR} && ${APPEND}\ngate report > ledger.json`]);
+});
+
+test("ledger C16 C24 boundary: a cd form whose gate call holds a $, a substitution or a redirect, or that names another file bare, keeps the refusal", () => {
+  refused([
+    `${WRAP}; gate plan add "$F" "why it is needed"; cd ${RUN_DIR} && ${APPEND}`,
+    `${WRAP}; gate plan add $(cat x) "why it is needed"; cd ${RUN_DIR} && ${APPEND}`,
+    `${WRAP}; gate report > ledger.json; cd ${RUN_DIR} && ${APPEND}`,
+    `${WRAP}; cd ${RUN_DIR} && ${APPEND}\ngate report > ledger.json`,
+    `${WRAP}; cd ${RUN_DIR} && ${APPEND}\ncat x >> ledger.json`,
+    `${WRAP}; cd ${RUN_DIR} && cat ledger.json >> ledger.md`,
+  ]);
+});
+
+test("ledger C14 C22 happy: a name given the run folder once is spelled out: cat >> $R/ledger.md passes in each plain spelling", () => {
+  const body = `<<'EOF'\n- one more\nEOF`;
+  passes([
+    `R=${RUN_DIR}; cat >> $R/ledger.md ${body}`,
+    `cd ${repo}; R=${RUN_DIR}; cat >> $R/ledger.md ${body}`,
+    `R="${repo}/${RUN_DIR}/" && cat >> "\${R}ledger.md" ${body}`,
+    `R='${RUN_DIR}'\ncat >> "$R/ledger.md" ${body}`,
+    `R=${RUN_DIR}/ && cat >> $R/ledger.md ${body}`,
+    `R=${RUN_DIR}; cd $R && cat >> ledger.md ${body}`,
+    `${WRAP}; R=${RUN_DIR}; gate plan add tests/a.test.ts "why it is needed"; cat >> $R/ledger.md ${body}`,
+  ]);
+});
+
+test("ledger C15 refused: with the run folder in a name, a write or an unknown program given another evidence file or the folder alone is refused", () => {
+  const body = `<<'EOF'\n- one more\nEOF`;
+  refused([
+    `R=${RUN_DIR}; cat >> $R/ledger.md ${body}\ncp /tmp/x $R/verify.json`,
+    `R=${RUN_DIR}; cat >> $R/ledger.md ${body}\nmytool $R/verify.json`,
+    `R=${RUN_DIR}; cat >> $R/ledger.md ${body}\nmytool $R`,
+    `R=${RUN_DIR}; cat >> $R/ledger.md ${body}\nmytool "\${R}"`,
+    `R=${RUN_DIR}; cat >> $R/ledger.json ${body}`,
+    `R=${RUN_DIR}; cat >> $R/ledger.md ${body}\npython3 - "$R" <<'E'\nimport sys\nopen(sys.argv[1]+'/ledger.json','w').write('x')\nE`,
+  ]);
+});
+
+test("ledger H2.4 refused: any other expansion of the name that holds the run folder keeps the refusal", () => {
+  const body = `<<'EOF'\n- one more\nEOF`;
+  refused([
+    `R=${RUN_DIR}; cat >> $R/ledger.md ${body}\nmytool \${R:-x}/verify.json`,
+    `R=${RUN_DIR}; cat >> $R/ledger.md ${body}\nnode x.mjs "\${R%/}/ledger.json"`,
+    `R=${RUN_DIR}; cat >> $R/ledger.md ${body}\nmytool "\${R%/*}"`,
+    `R=${RUN_DIR}; cat >> $R/ledger.md ${body}\nmytool \${#R} \${R/x/y}`,
+  ]);
+});
+
+test("ledger C16 C22 boundary: a name set twice, by read, for or export, or by a value that expands, and a cd form whose gate call holds a $ or a substitution, keep the refusal", () => {
+  const body = `<<'EOF'\n- one more\nEOF`;
+  refused([
+    `R=${RUN_DIR}; R=${RUN_DIR}/../2026-11-01-other; cat >> $R/ledger.md ${body}\nmytool $R`,
+    `R=${RUN_DIR}; read R; cat >> $R/ledger.md ${body}\nmytool x`,
+    `for R in ${RUN_DIR}; do cat >> $R/ledger.md ${body}\ndone`,
+    `R=$BASE/${RUN_DIR}; cat >> $R/ledger.md ${body}`,
+    `cat >> $R/ledger.md ${body}\nR=${RUN_DIR}`,
+    `export R=${RUN_DIR}; cat >> $R/ledger.md ${body}\nmytool x`,
+    `${WRAP}; gate plan add "$F" "why it is needed"; cd ${RUN_DIR} && ${APPEND}`,
+    `${WRAP}; gate plan add $(cat x) "why it is needed"; cd ${RUN_DIR} && ${APPEND}`,
+  ]);
+});
+
+test("inline refused: a helper's inline write to a test file or a scratch file is refused, as before", () => {
+  refused([py("tests/a.qa.test.ts"), `cd /private/tmp/claude-501/x/scratchpad; ${py("probe.mjs")}`], "done-gate:qa");
+  refused([py("tests/.tmp/page.tsx")], "done-gate:reviewer");
+});
+
+test("inline C1 C2 refused: a helper's inline code that writes source through any writing open mode, write_text, os.replace, writeSync or cpSync is refused", () => {
+  const python = (code) => `python3 -c "${code}"`;
+  const node = (code) => `node -e "const fs=require('fs');${code}"`;
+  const writes = [
+    ...["'wb'", "'x'", "'r+'", "'rb+'", "'wt'", "'a+'", "mode='wb'"].map((mode) => python(`open('src/a.ts',${mode}).write('x')`)),
+    `python3 - <<'EOF'\np='src/a.ts'\ns=open(p,'rb').read()\nopen(p,'wb').write(s)\nEOF`,
+    node("fs.writeSync(fs.openSync('src/a.ts','w'),'x')"),
+    node("fs.openSync('src/a.ts','w')"),
+    python("from pathlib import Path; Path('src/a.ts').write_text('x')"),
+    python("from pathlib import Path; Path('src/a.ts').write_bytes(b'x')"),
+    python("import os; os.replace('/tmp/x','src/a.ts')"),
+    node("fs.writeSync(3,'x')"),
+    node("fs.cpSync('/tmp/x','src/a.ts')"),
+  ];
+  refused(writes, "done-gate:reviewer");
+  refused(writes, "done-gate:qa");
+});
+
+test("inline C3 boundary: inline code that only reads still passes for a helper", () => {
+  passes([
+    `python3 -c "print(open('src/a.ts','rb').read())"`,
+    `python3 -c "print(open('src/a.ts','r').read())"`,
+    `python3 -c "print(open('src/a.ts').read())"`,
+    `python3 -c "print(open('src/a.ts', encoding='utf8').read())"`,
+    `node -e "const fs=require('fs');console.log(fs.readSync(fs.openSync('src/a.ts','r'),Buffer.alloc(9)))"`,
+    `node -e "console.log(require('fs').readFileSync('src/a.ts','utf8'))"`,
+  ], "done-gate:reviewer");
+});
+
+test("inline C4 refused: the lead's inline open of an evidence file in mode wb is refused, as mode w is", () => {
+  const code = (mode) => `python3 - <<'EOF'\nopen('${RUN_DIR}/verify.json','${mode}').write('{}')\nEOF`;
+  refused([code("w"), code("wb"), code("x"), code("r+")]);
+});
+
+test("inline C5 edge: the lead's inline open of its ledger.md alone is its own-file write in a and ab; write_text beside it is none", () => {
+  const code = (body) => `python3 - <<'EOF'\n${body}\nEOF`;
+  for (const mode of ["a", "ab"]) assert.deepEqual(ownFileWrites(code(`open('${RUN_DIR}/ledger.md','${mode}').write('x')`), null, repo), [`${RUN_DIR}/ledger.md`], mode);
+  assert.deepEqual(ownFileWrites(code(`from pathlib import Path\nopen('${RUN_DIR}/ledger.md','a').write('x')\nPath('src/a.ts').write_text('x')`), null, repo), []);
+});
+
+test("ledger refused: the lead's inline open of its ledger.md in mode ab beside a remove of a code file is no own-file write", () => {
+  const code = (body) => `python3 - <<'EOF'\n${body}\nEOF`;
+  assert.deepEqual(ownFileWrites(code(`open('${RUN_DIR}/ledger.md','a').write('x')`), null, repo), [`${RUN_DIR}/ledger.md`]);
+  assert.deepEqual(ownFileWrites(code(`import os\nopen('${RUN_DIR}/ledger.md','ab').write(b'x')\nos.remove('src/a.ts')`), null, repo), []);
+});
+
+test("ledger C17 refused: a helper cannot use the variable form on ledger.md, its own file or another role's; the lead cannot use it on another run's ledger", () => {
+  const body = `<<'EOF'\n- one more\nEOF`;
+  refused([`R=${RUN_DIR}; cat >> $R/review-2.md ${body}`, `R=${RUN_DIR}; sed -i '' 's/a/b/' $R/review-2.md`], "done-gate:reviewer");
+  refused([`R=${RUN_DIR}; cat >> $R/ledger.md ${body}`, `R=${RUN_DIR}; cat >> $R/review2-1.md ${body}`, `R=${RUN_DIR}; cat >> $R/skeptic-1.md ${body}`], "done-gate:reviewer");
+  refused([`R=${RUN_DIR}; cat >> $R/ledger.md ${body}`], "done-gate:qa");
+  refused([`R=.claude/gate/runs/2026-11-01-other; cat >> $R/ledger.md ${body}`]);
 });
 }

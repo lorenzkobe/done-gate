@@ -397,6 +397,7 @@ export const PLAIN_RULES = {
   R19: "code outside the plan changed and was not added to it",
   R20: "evidence the gate wrote was changed outside it",
   R21: "no reviewer has looked at a check the lead decided to skip",
+  R22: "the final message left out what a closed task skipped",
 };
 // Rules no longer raised, kept above so old records still read in plain words.
 export const RETIRED_RULES = new Set(["R16"]);
@@ -489,8 +490,10 @@ function plain(text) {
 const FOR_YOU_MAX = 6;
 const CALLED = { driver: "app drive", schema: "real-schema check", "qa-pass": "blind test pass", lookups: "helper search" };
 
+export const FOR_YOU_NOTHING = "For you: nothing.";
+
 // Waivers and decisions only: pauses and blocked writes stay in the full report.
-function forYouLine(state, unmet) {
+export function forYouLine(state, unmet) {
   const { ledger } = state;
   const items = [];
   if (ledger.backgroundAtClose?.length) items.push(`may still be running in the background: ${backgroundText(state.ledger.backgroundAtClose)}`);
@@ -541,7 +544,7 @@ function forYouLine(state, unmet) {
   if (errors) items.push(`the gate itself logged ${plural(errors, "error")}; see gate-error.log`);
   const missing = [...new Set(unmet.map((u) => PLAIN_RULES[u.rule] ?? u.text.replace(/\bR\d{1,2}\b/g, "a check")))];
   for (const m of missing) items.push(`missing: ${m}`);
-  if (!items.length) return "For you: nothing.";
+  if (!items.length) return FOR_YOU_NOTHING;
   const shown = items.slice(0, FOR_YOU_MAX);
   const more = items.length - shown.length;
   return `For you: ${shown.join("; ")}${more ? `; and ${more} more in the full report` : ""}.`;
@@ -608,7 +611,8 @@ function renderBrief(state, unmet, tokens = null) {
   out.push(checksLine2(state));
   out.push(reviewLine2(ledger));
   out.push(appLine(state));
-  out.push(forYouLine(state, unmet));
+  // a closed run shows the line gate close stored: the one R22 asks the final message for
+  out.push(ledger.status === "closed" && ledger.forYou ? ledger.forYou : forYouLine(state, unmet));
   if (ledger.caveats?.length) out.push(`Caveats: ${ledger.caveats.map((c) => plain(c).replace(/\s+/g, " ").replace(/\.$/, "")).join("; ")}.`);
   if (!unmet.length && ledger.status !== "abandoned" && !ledger.overridden && tokens >= LONG_CONVERSATION) out.push(`Next task: start a fresh session (/clear). This conversation holds about ${Math.round(tokens / 1000)}k tokens, and every turn reads them again.`);
   out.push("");

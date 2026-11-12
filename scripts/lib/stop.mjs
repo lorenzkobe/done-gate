@@ -61,6 +61,20 @@ function helperRunning(events, session, now = Date.now()) {
   return [...ids].some((id) => helperAlive(mine, id, now));
 }
 
+// R22: the For you line gate close stored reaches the user in the final message. It is shown
+// when a message holds it word for word, bold and line wraps aside.
+const flat = (text) => String(text).replace(/\*/g, "").replace(/\s+/g, " ").trim();
+function owedLines(ctx, lastMessage) {
+  const session = loadSession(ctx.stateDir, ctx.session);
+  const all = session?.forYouOwed ?? [];
+  const said = flat(lastMessage);
+  const missing = all.filter((o) => !said.includes(flat(o.line)));
+  if (missing.length !== all.length) saveSession(ctx.stateDir, { ...session, forYouOwed: missing });
+  return missing;
+}
+const owedReason = (owed) =>
+  ["done-gate: the turn cannot end yet — your final message leaves out what a closed task skipped or decided (R22). Put each line below in it, word for word:", ...owed.map((o) => `${o.run} — ${o.line}`)].join("\n");
+
 function renderReason(unmet, { ledgerOpen, repeat = false, stuck = 0 }) {
   // the full text went out with the last block; a repeat names each item and points at it
   const items = unmetLines(unmet, { cut: repeat ? 120 : 0 });
@@ -102,8 +116,11 @@ export const verbs = {
     const { state, unmet } = result;
     const ledgerOpen = Boolean(state.ledger);
 
+    // a line is credited at any stop that shows it; it is asked for once nothing else is unmet
+    const unshown = owedLines(ctx, lastMessage);
+    const owed = !ledgerOpen && !unmet.length ? unshown : [];
     // a pause hands the turn to the user, run or no run: the stuck reason asks for exactly this
-    const stopWord = unmet.length ? typedStop(state.events ?? [], ctx.session) : null;
+    const stopWord = unmet.length || owed.length ? typedStop(state.events ?? [], ctx.session) : null;
     const pauseText = PAUSE_RE.exec(lastMessage)?.[1] ?? (stopWord && `the user said "${stopWord}"`);
     if (pauseText) {
       const entry = { seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, text: pauseText };
@@ -130,6 +147,19 @@ export const verbs = {
       return;
     }
 
+    if (owed.length) {
+      const { count } = bumpBlocks(ctx, `R22:${owed.map((o) => o.line).join("\n")}`);
+      if (count < ASK_AFTER) {
+        block(ctx, owedReason(owed), ["R22"]);
+        return;
+      }
+      // a message that cannot hold the line must not wedge the session: the hook shows the user the line itself
+      saveSession(ctx.stateDir, { ...loadSession(ctx.stateDir, ctx.session), forYouOwed: [] });
+      appendEvents(ctx.stateDir, ctx.session, [{ seq: nextSeq(), ts: new Date().toISOString(), session: ctx.session, agent: null, agentType: null, kind: "override", blocks: count, rules: ["R22"] }]);
+      clearBlocks(ctx);
+      ctx.out({ systemMessage: `done-gate: the final message left out what a closed task skipped or decided. ${owed.map((o) => `${o.run} — ${o.line}`).join(" ")}` });
+      return;
+    }
     if (unmet.length === 0) {
       endQuietly(ctx, state);
       return;

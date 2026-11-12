@@ -171,8 +171,9 @@ test("C9 happy: one session end to end — session start, a blocked stop, open, 
     `the brief should say the plan came after the code:\n${brief}`,
   );
 
-  // ---- the stop after the close has nothing to do --------------------------
-  const final = stop(repo);
+  // ---- the stop after the close asks only that the message shows the brief --
+  assert.equal(stop(repo).json?.decision, "block", "a final message without the For you line ended the turn");
+  const final = stop(repo, brief);
   assert.equal(final.stdout.trim(), "", `the stop after a close should allow the turn:\n${final.stdout}`);
   assert.equal(ledgerOf(dir).status, "closed");
   const closedState = loadSession(stateDir(repo), SESSION);
