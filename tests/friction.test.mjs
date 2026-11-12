@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, here, CODE_LOOKUP, MEMORY_LOOKUP, abandonArgs } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, CODE_LOOKUP, MEMORY_LOOKUP, abandonArgs, openedFiles } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { decide, shellWrites } from "../scripts/lib/guard.mjs";
@@ -178,6 +178,7 @@ test("C9 reported-surface: lookups before a clarifying answer still count when t
   prompt(repo); // the user's answer to a clarifying question
   cli(repo, "open", ["t", "feature"]);
   cli(repo, "note", ["task", "Add a badge. [inferred]"]);
+  openedFiles(repo, ["src/a.ts"]);
   cli(repo, "note", ["context", CONTEXT]);
 });
 
@@ -203,6 +204,7 @@ test("C11 refused: a failed lookup no longer counts; the refusal names it and sa
   lookup(repo, MEMORY_LOOKUP);
   cli(repo, "open", ["t", "feature"]);
   cli(repo, "note", ["task", "Add a badge. [inferred]"]);
+  openedFiles(repo, ["src/a.ts"]);
   const r = run(repo, "note", ["context", CONTEXT]);
   assert.match(r.stderr, REFUSAL);
   assert.match(r.stderr, /codebase_search[^\n]*failed|failed[^\n]*codebase_search/, r.stderr);
@@ -233,6 +235,7 @@ test("C13 edge: abandoning another session's stale run keeps this session's look
   log2({ hook_event_name: "UserPromptSubmit", prompt: "yes, go ahead" });
   assert.equal(s2("open", ["new", "feature"]).status, 0);
   assert.equal(s2("note", ["task", "Add a badge. [inferred]"]).status, 0);
+  openedFiles(repo, ["src/a.ts"], { session: "S2" });
   const r = s2("note", ["context", CONTEXT]);
   assert.equal(r.status, 0, r.stderr);
 });

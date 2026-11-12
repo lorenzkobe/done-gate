@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeRepo, write, gate, pluginRoot, here, waiveArgs } from "./helpers.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
@@ -226,6 +226,7 @@ test("C14 edge: the two git-dependent tests skip outside a git checkout's top an
   const copy = path.join(here, ".tmp", "rb2-c14", "plugin");
   mkdirSync(path.join(copy, "tests"), { recursive: true });
   writeFileSync(path.join(copy, "tests", "helpers.mjs"), readFileSync(path.join(here, "helpers.mjs"), "utf8"));
+  cpSync(path.join(pluginRoot, "scripts", "lib"), path.join(copy, "scripts", "lib"), { recursive: true });
   assert.equal(flag(copy), "false", "a copy below the top reads as the top");
 });
 

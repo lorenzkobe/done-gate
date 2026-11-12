@@ -1,9 +1,10 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { appendEvents, fileHash, nextSeq } from "../scripts/lib/events.mjs";
 
 export const here = path.dirname(fileURLToPath(import.meta.url));
 export const pluginRoot = path.resolve(here, "..");
@@ -64,7 +65,10 @@ export const MEMORY_LOOKUP = "mcp__mempalace__mempalace_search";
 // One code-search and one memory lookup, logged the way the PostToolUse hook logs an MCP call:
 // by the lead (no agent) or by a helper (agent id plus done-gate:<role>). The gate asks both of
 // the lead before `gate note context` and of each helper whose file it records.
-export function lookedUp(repo, { agent = null, role = null, session = "S1", tools = [CODE_LOOKUP, MEMORY_LOOKUP] } = {}) {
+// The lead also opens the files a fixture's context note cites and its edits touch (`opens`), so
+// the note and the fence find them opened as they are now.
+export function lookedUp(repo, { agent = null, role = null, session = "S1", tools = [CODE_LOOKUP, MEMORY_LOOKUP], opens = null } = {}) {
+  if (!agent) openedFiles(repo, opens ?? fixtureFiles(repo), { session });
   const env = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: session };
   delete env.CLAUDE_CODE_SESSION_ID;
   for (const tool_name of tools) {
@@ -75,6 +79,33 @@ export function lookedUp(repo, { agent = null, role = null, session = "S1", tool
     };
     execFileSync(process.execPath, [gate, "log"], { input: JSON.stringify(payload), env });
   }
+}
+
+// Every file of a fixture repo, the gate's own state and git's left out.
+function fixtureFiles(repo, dir = "") {
+  return readdirSync(path.join(repo, dir), { withFileTypes: true }).flatMap((entry) => {
+    const rel = path.posix.join(dir, entry.name);
+    if ([".git", ".claude", "node_modules"].includes(entry.name)) return [];
+    return entry.isDirectory() ? fixtureFiles(repo, rel) : [rel];
+  });
+}
+
+// Read events for files as they stand, as the log hook records a Read: written in process, since
+// a hook spawned per file would add minutes to the suite. A file that does not exist is left out.
+export function openedFiles(repo, files, { session = "S1", agent = null } = {}) {
+  const events = files.flatMap((rel) => {
+    const hash = fileHash(repo, rel);
+    return hash ? [{ seq: nextSeq(), ts: new Date().toISOString(), session, agent, agentType: null, kind: "read", tool: "Read", path: rel, hash }] : [];
+  });
+  appendEvents(path.join(repo, ".claude", "gate"), session, events);
+}
+
+// The agent of a fence payload has opened the file its edit tool names, for a test of another
+// rule of the fence.
+export function openedTarget(repo, payload) {
+  const file = payload.tool_input?.file_path;
+  if (typeof file !== "string" || !file) return;
+  openedFiles(repo, [path.relative(repo, path.resolve(repo, file)).split(path.sep).join("/")], { session: payload.session_id ?? "S1", agent: payload.agent_id ?? null });
 }
 
 const RUN_KEYS = new Set(["repro", "rootcause", "schema"]);

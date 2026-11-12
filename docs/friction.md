@@ -210,6 +210,21 @@ files (project docs, not the gate's job), issue-tracker and teaching skills (out
 
 ## Done (moved here when a release fixes it, with the version)
 
+Built after 0.22.1 on the owner's word, with no friction item behind it (run read-before-relying,
+2026-11-12):
+
+- The owner's rule of 2026-11-12: memory says what was discussed, the current file is checked
+  every time unless it is seen unchanged ("i want that as a policy"). Nothing recorded what an
+  agent opened, and Claude Code applies an Edit to a file inside the working directory that was
+  never read (an Edit of a file made by a shell command was applied in the session that built
+  this). Now the log hook records each file an agent opened with a hash of its content, the
+  fence refuses an edit of an existing file the agent has not opened as it is now, and
+  `gate note context` refuses a Traced file the lead has not. The owner chose both moments. Also
+  fixed on the way: a MultiEdit that names its file once, at the top, logged no edit event at
+  all. Not measured: how often the refusal fires on a real run, and what it costs. Open edges: a
+  Read of a few lines counts as the file opened; a shell write is not checked and is not an own
+  write; the Grep tool does not count; a read before a compaction still counts.
+
 Fixed after 0.22.1 (run compaction-and-fresh-session, 2026-11-12):
 
 - Sessions ran task after task in one conversation. In the transcripts since 2026-10-20 the

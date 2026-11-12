@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { makeRepo, gate, pluginRoot, lookedUp, waiveArgs } from "./helpers.mjs";
+import { makeRepo, gate, pluginRoot, lookedUp, waiveArgs, openedFiles } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
@@ -129,6 +129,7 @@ test("C7 boundary: gate note context refuses a Traced pointer past the end of it
   writeFileSync(path.join(repo, "src/app/page.tsx"), "one\ntwo\n");
   execFileSync("mkdir", ["-p", path.join(repo, "src/app/[slug]/(tabs)")]);
   writeFileSync(path.join(repo, "src/app/[slug]/(tabs)/page.tsx"), "one\ntwo\n");
+  openedFiles(repo, ["src/app/[slug]/(tabs)/page.tsx"]);
   cli(repo, "note", ["context", context({ traced: "the route (src/app/[slug]/(tabs)/page.tsx:2) renders a" })]);
   assert.match(refused(repo, "note", ["context", context({ traced: "src/app/[slug]/(tabs)/page.tsx:3" })]), /\[slug\]\/\(tabs\)\/page\.tsx:3/);
   cli(repo, "note", ["context", context({ traced: "ranEvents(src/a.ts:2) accepts; see [a.ts](src/a.ts:1) and x(src/app/[slug]/(tabs)/page.tsx:2); rows[0].id:1 is code" })]);

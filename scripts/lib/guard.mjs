@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.mjs";
 import { currentLedger, isDone } from "./ledger.mjs";
 import { inPlan, outsidePlan, policyFor, samePiece, tierOf, tiered } from "./size.mjs";
-import { appendEvents, nextSeq, readEvents, toolUse } from "./events.mjs";
+import { appendEvents, fileHash, nextSeq, readEvents, seen, toolUse } from "./events.mjs";
 import { toPosixRel } from "./paths.mjs";
 import { ancestorPids, pidsDir } from "./context.mjs";
 import { headReflog } from "./tree.mjs";
@@ -401,6 +401,76 @@ function sedScripts(args) {
 // a sed script is usually quoted, so quoting does not hide a flag here
 const writingFlag = (program, args) =>
   (Boolean(WRITING_FLAG[program]) && args.some((a) => WRITING_FLAG[program].test(a.text))) || (program === "sed" && sedScripts(args).some(sedWritesIn));
+
+const SHOWS = new Set(["cat", "head", "tail", "sed", "grep", "egrep", "fgrep", "rg", "awk", "nl", "less", "more"]);
+const SEARCHES = new Set(["grep", "egrep", "fgrep", "rg"]);
+// what may stand after a `|` and still let the file's lines reach the agent
+const PASSES_ON = new Set([...SHOWS, "cut", "sort", "uniq", "column", "tr", "fold"]);
+// a search that prints a count, a file name or nothing
+const NO_LINES = /^-[a-zA-Z]*[cqlL]|^--(?:count|quiet|silent|files-with-matches|files-without-match)$/;
+// flags of a search whose next word is their value; -e and -f give the pattern
+const SEARCH_VALUE = /^-[a-zA-Z]*[ABCmdDgtTjef]$|^--(?:after-context|before-context|context|max-count|include|exclude|exclude-dir|glob|type|type-not|regexp|file)$/;
+const GIVES_PATTERN = /^-[a-zA-Z]*[ef]$|^--(?:regexp|file|expression)$/;
+const MOVES = new Set(["cd", "pushd", "popd"]);
+
+// Whether a segment prints the lines it is given: one of `programs`, no count-only search, and no
+// redirect but stderr to /dev/null.
+function printsLines(words, programs) {
+  const [first, ...args] = words;
+  if (!first || !programs.has(first.text) || writingFlag(first.text, args)) return false;
+  if (SEARCHES.has(first.text) && args.some((a) => !a.quoted && NO_LINES.test(a.text))) return false;
+  return words.every((w, i) => redirect(w) === null || (/^2>/.test(w.text) && (redirect(w) || words[i + 1]?.text) === "/dev/null"));
+}
+
+// The file operands of a showing program: for a search, sed and awk the first operand is the
+// pattern or the script unless a flag gave it.
+function shownOperands(program, args) {
+  const operands = [];
+  let given = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a.redir || redirect(a) !== null) {
+      if (redirect(a) === "") i++;
+      continue;
+    }
+    if (!a.quoted && a.text.startsWith("-") && a.text !== "-") {
+      if (GIVES_PATTERN.test(a.text)) given = true;
+      if ((SEARCHES.has(program) && SEARCH_VALUE.test(a.text)) || ((program === "sed" || program === "awk") && GIVES_PATTERN.test(a.text))) i++;
+      continue;
+    }
+    operands.push(a);
+  }
+  return SEARCHES.has(program) || program === "sed" || program === "awk" ? operands.slice(given ? 0 : 1) : operands;
+}
+
+// The files a command prints lines of, as stored paths. A folder (`grep -rn x src`) shows no one
+// file and a pipe into a counter shows no line. One folder change is followed: a `cd <literal
+// path>` that leads the command. With any other (a second one, pushd, one in a subshell or after
+// another command, an expanded path) nothing is recorded.
+export function filesShown(cmd, cwd, root, repos = []) {
+  const text = withoutHeredocs(String(cmd));
+  const parts = segments(text).map((seg) => ({ pipeline: seg.pipeline, words: shift(seg).words }));
+  const moves = parts.filter((p) => MOVES.has(p.words[0]?.text));
+  let from = cwd || root;
+  if (moves.length) {
+    const lead = parts[0].words;
+    if (moves.length > 1 || moves[0] !== parts[0] || !/^\s*cd\s/.test(text) || lead.length !== 2 || lead[1].expands) return [];
+    from = path.resolve(from, lead[1].text);
+  }
+  const out = new Set();
+  parts.forEach(({ pipeline, words }, at) => {
+    const [first, ...args] = words;
+    if (!printsLines(words, SHOWS)) return;
+    const after = parts.slice(at + 1).filter((p) => p.pipeline === pipeline);
+    if (!after.every((p) => printsLines(p.words, PASSES_ON))) return;
+    for (const a of shownOperands(first.text, args)) {
+      if (a.expands) continue;
+      const rel = toPosixRel(root, path.resolve(from, a.text), repos);
+      if (rel) out.add(rel);
+    }
+  });
+  return [...out];
+}
 
 // What `$(($(cmd) - 1))` leaves once the substitution is cut out: `- 1`. Numbers and + - %
 // only: a name could be a program (`$X - *`) and * is a glob.
@@ -1328,7 +1398,22 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
       return { deny: true, reason: `done-gate: the reviewer writes only its own ${OWN_FILE[role("reviewer") ? "reviewer" : "reviewer-2"]}-<n>.md in the run dir; ${outside.join(", ")} is not that. Report findings, do not fix.`, paths };
     }
   }
+  const stale = unopened(paths, input, root, repos, where);
+  if (stale.length) {
+    return { deny: true, unopened: true, reason: `done-gate: open ${stale.join(", ")} as it is now before editing it (Read it, or cat, sed -n or grep it): you have not opened it since it last changed. What you remember of a file points at it; the file decides.`, paths: stale };
+  }
   return { deny: false };
+}
+
+// The edit targets the calling agent has not opened as they are now: an existing file with no
+// read or edit of its own, in this session, that carries the file's present content.
+function unopened(paths, input, root, repos, where) {
+  if (!where.stateDir || !where.session || where.unreadable) return [];
+  return paths.filter((p) => {
+    if (isScratch(p) || IN_GATE_DIR.test(p)) return false;
+    const hash = fileHash(root, p, repos);
+    return hash !== null && !seen(where.stateDir, where.session, input.agent_id ?? null, p, hash);
+  });
 }
 
 // gate.mjs as the script node runs: `node "<plugin>/scripts/gate.mjs" <verb>`, not a path that
@@ -1420,6 +1505,7 @@ export const verbs = {
         path: verdict.paths?.[0] ?? null,
         ...(ctx.input?.tool_name === "Bash" ? { cmd: String(ctx.input.tool_input?.command ?? "").slice(0, 200) } : {}),
         reason: verdict.reason,
+        ...(verdict.unopened ? { unopened: true } : {}),
       },
     ]);
     ctx.out({

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { makeRepo, write, gate, lookedUp, pluginRoot, AT_GIT_TOPLEVEL, clearedFrom } from "./helpers.mjs";
+import { makeRepo, write, gate, lookedUp, pluginRoot, AT_GIT_TOPLEVEL, clearedFrom, openedTarget } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
@@ -143,13 +143,11 @@ function hook(repo, verb, payload) {
 const sessionStart = (repo, session, source = "startup") =>
   hook(repo, "session-start", { session_id: session, hook_event_name: "SessionStart", session_start_source: source });
 
-const fence = (repo, tool, filePath) =>
-  hook(repo, "fence", {
-    session_id: "S1",
-    hook_event_name: "PreToolUse",
-    tool_name: tool,
-    tool_input: { file_path: filePath },
-  });
+function fence(repo, tool, filePath) {
+  const payload = { session_id: "S1", hook_event_name: "PreToolUse", tool_name: tool, tool_input: { file_path: filePath } };
+  openedTarget(repo, payload);
+  return hook(repo, "fence", payload);
+}
 
 const bash = (repo, command) =>
   hook(repo, "fence", {

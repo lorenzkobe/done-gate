@@ -19,7 +19,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, here, lookedUp, AT_GIT_TOPLEVEL, planChecked } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, lookedUp, AT_GIT_TOPLEVEL, planChecked, openedTarget, openedFiles } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadLedger, saveLedger } from "../scripts/lib/ledger.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
@@ -123,7 +123,9 @@ function edit(repo, dir, rel, content, { agent = null, env } = {}) {
 const command = (repo, cmd, { env } = {}) => hook(repo, { hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: cmd }, tool_response: { exitCode: 0 } }, { env });
 // null when the fence allows the call, else its deny reason
 function fence(repo, tool, tool_input, agent = null) {
-  const out = hook(repo, { hook_event_name: "PreToolUse", tool_name: tool, tool_input, ...agentOf(agent) }, { verb: "fence" });
+  const payload = { hook_event_name: "PreToolUse", tool_name: tool, tool_input, ...agentOf(agent) };
+  openedTarget(repo, payload);
+  const out = hook(repo, payload, { verb: "fence" });
   if (out === null || !out.hookSpecificOutput) return null;
   assert.equal(out.hookSpecificOutput.permissionDecision, "deny");
   return out.hookSpecificOutput.permissionDecisionReason;
@@ -613,6 +615,7 @@ test("C21 edge: a when:source command of the declared repo runs when only that r
 test("C11 boundary: a Traced pointer and a huddle evidence pointer into the declared repo resolve; into an undeclared sibling the Traced pointer is refused as today and a missing file never resolves", () => {
   const { repo, p } = pair("mr-c11");
   const traced = (ptr) => `Traced: ${ptr}\nRelated: tests/a.test.ts\nResearch: none needed: local`;
+  openedFiles(repo, [`${p}/src/a.py`]);
   cli(repo, "note", ["context", traced(`${p}/src/a.py:3`)]);
   assert.match(refused(repo, "note", ["context", traced(`${p}/src/missing.py:3`)]), /does not resolve/);
 
@@ -644,6 +647,8 @@ test("C11 boundary: a Traced pointer and a huddle evidence pointer into the decl
   const sp = "../mr-c11-sym-other";
   assert.deepEqual(prefixesOf(link), [sp]);
   assert.equal(existsSync(path.join(link, sp)), false, "the prefix does not resolve from the link");
+  // a real Read, logged by the hook: its key is the declared repo's prefix, as the note's is
+  hook(link, { hook_event_name: "PostToolUse", tool_name: "Read", tool_input: { file_path: path.join(realOther, "src/a.py") }, tool_response: {} });
   cli(link, "note", ["context", traced(`${sp}/src/a.py:3`)]);
   cli(link, "huddle", ["add", "qa", "--summary", "wrote the tests"]);
   const linkItem = /H\d+\.\d+/.exec(cli(link, "huddle", ["acton", "H1", "the parser drops a row"]))[0];

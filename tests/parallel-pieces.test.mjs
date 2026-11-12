@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { gate, makeRepo, planChecked, readyToEdit } from "./helpers.mjs";
+import { gate, makeRepo, planChecked, readyToEdit, openedTarget } from "./helpers.mjs";
 import { readEvents } from "../scripts/lib/events.mjs";
 import { workerRuns } from "../scripts/lib/rules.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
@@ -33,6 +33,7 @@ const hook = (repo, payload) => execFileSync(process.execPath, [gate, "log"], { 
 // who: null for the lead, else [agent id, role]
 function fence(repo, tool, tool_input, who = null) {
   const payload = { hook_event_name: "PreToolUse", session_id: "S1", cwd: repo, tool_name: tool, tool_input, ...(who ? { agent_id: who[0], agent_type: `done-gate:${who[1]}` } : {}) };
+  openedTarget(repo, payload);
   const r = spawnSync(process.execPath, [gate, "fence"], { input: JSON.stringify(payload), encoding: "utf8", env: envFor(repo) });
   assert.equal(r.status, 0, r.stderr);
   const out = r.stdout.trim();

@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { eventsFromHookInput, readEvents, appendEvents } from "../scripts/lib/events.mjs";
-import { makeRepo, gate, write, here, readyToEdit, planChecked } from "./helpers.mjs";
+import { makeRepo, gate, write, here, readyToEdit, planChecked, openedTarget } from "./helpers.mjs";
 import { decide } from "../scripts/lib/guard.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
@@ -238,6 +238,7 @@ test("`gate fence` emits the PreToolUse deny envelope and logs the attempt; allo
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /evidence/);
   const events = readFileSync(path.join(repo, ".claude", "gate", "sessions", "S1", "events.jsonl"), "utf8");
   assert.match(events, /"kind":"deny"/);
+  openedTarget(repo, input("Write", `${repo}/docs/notes.md`));
   const allowed = run(input("Write", `${repo}/docs/notes.md`));
   assert.equal(allowed.stdout.trim(), "");
 });
@@ -304,6 +305,7 @@ const pre = (repo, tool, file_path, extra = {}) => ({
 // `gate fence` on stdin: null when the call is allowed (the hook stays silent),
 // otherwise the deny reason the model is shown.
 function fence(repo, payload) {
+  openedTarget(repo, payload);
   const r = spawnSync(process.execPath, [gate, "fence"], {
     input: JSON.stringify(payload),
     encoding: "utf8",

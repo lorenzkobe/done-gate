@@ -33,7 +33,8 @@ function endOf(ledger) {
   return end ? Date.parse(end) * 1000 + 999 : Infinity;
 }
 export const inRun = (ledger) => (e) => e.seq > (ledger.openedSeq ?? 0) && e.seq <= endOf(ledger);
-const deniesIn = (ledger, events) => events.filter((e) => e.kind === "deny" && !e.delegate && inRun(ledger)(e));
+// a refusal to edit a file not opened yet is no write to gate files
+const deniesIn = (ledger, events) => events.filter((e) => e.kind === "deny" && !e.delegate && !e.unopened && inRun(ledger)(e));
 
 // A command written over several lines, on one, for the one-line For you summary.
 const oneLine = (text) => String(text).replace(/\s*\n\s*/g, " ");

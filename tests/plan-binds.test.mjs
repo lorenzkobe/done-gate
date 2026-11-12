@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { gate, makeRepo, planChecked, readyToEdit } from "./helpers.mjs";
+import { gate, makeRepo, planChecked, readyToEdit, openedTarget } from "./helpers.mjs";
 import { decide } from "../scripts/lib/guard.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { IGNORE_CASE } from "../scripts/lib/paths.mjs";
@@ -35,6 +35,7 @@ const hook = (repo, payload) => execFileSync(process.execPath, [gate, "log"], { 
 // null when the call is allowed, else the reason the model is shown
 function fence(repo, tool, tool_input, agent = null) {
   const payload = { hook_event_name: "PreToolUse", session_id: "S1", cwd: repo, tool_name: tool, tool_input, ...(agent ? { agent_id: `${agent}-1`, agent_type: `done-gate:${agent}` } : {}) };
+  openedTarget(repo, payload);
   const r = spawnSync(process.execPath, [gate, "fence"], { input: JSON.stringify(payload), encoding: "utf8", env: envFor(repo) });
   assert.equal(r.status, 0, r.stderr);
   const out = r.stdout.trim();

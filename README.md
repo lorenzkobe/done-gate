@@ -240,6 +240,33 @@ and every helper packet carries it in its Lookups section, so helpers use grep a
 that kind. Helpers are checked at `gate huddle add|reply` and by R17; QA searches memory only,
 since a code search would show it the new implementation.
 
+## Open it first
+
+What an agent remembers of a file points at it; the file decides. The log hook records each
+file an agent opened, with a hash of its content: a Read that succeeded, a shell command that
+succeeded and prints lines of the file (`cat`, `head`, `tail`, `sed` without `-i`, `grep`, `rg`,
+`awk`, `nl`, `less`, `more` naming the file, not a folder), and the agent's own Edit, Write or
+MultiEdit. A shell command does not count when it prints no line of the file: a search that
+counts or only names files (`-c`, `-q`, `-l`), output sent to a file or `/dev/null`, a pipe into
+anything but a program that passes lines on (`head`, `tail`, `cut`, `sort`, `grep` and the
+like; not `wc`). The pattern of a search is not taken for a file. A `cd <path>` that leads the
+command is followed; any other folder change (a second `cd`, `pushd`, one in a subshell or
+after another command, a path with a `$`) records no read at all. Two things are refused for a file the agent has not opened as it is
+now:
+
+- **An edit.** The fence refuses Edit, Write, MultiEdit and NotebookEdit on an existing file
+  until the calling agent has opened its present content, with or without a run open. A new
+  file, a scratch file and the gate's own folder are not checked.
+- **A citation.** `gate note context` refuses a Traced `file:line` whose file the lead has not
+  opened as it is now, naming each file. An absolute path outside every repo is not checked.
+
+Each agent opens a file itself: a helper's read does not count for the lead, nor the lead's for
+a worker, and after a /clear the new session opens it again. A file changed by someone else, a
+pull, a formatter or a shell command is opened again; a file put back to content already opened
+is not. Edges: a Read of a few lines counts as opened; the Grep tool does not count; a shell
+write (`sed -i`, a heredoc) is neither checked nor an own write, so the next edit tool asks for
+a read; a read before a compaction still counts in the same session.
+
 ## Guarantees, and their edges
 
 - **Can't end a turn with a gap, and can't give up.** From the third *identical* block in a

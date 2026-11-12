@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, here, lookedUp, CODE_LOOKUP, MEMORY_LOOKUP, waiveArgs, redRun } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, here, lookedUp, openedFiles, CODE_LOOKUP, MEMORY_LOOKUP, waiveArgs, redRun } from "./helpers.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { eventsFromHookInput, appendEvents, readEvents } from "../scripts/lib/events.mjs";
 
@@ -118,6 +118,8 @@ function opened(name, { files = {} } = {}) {
   const repo = committed(name, files);
   cli(repo, "open", [name, "feature"]);
   cli(repo, "note", ["task", "Add a badge to the venue card. [inferred]"]);
+  // the files CONTEXT cites, opened by the lead: these tests are about its searches
+  openedFiles(repo, ["src/a.ts", "src/app/page.tsx"]);
   return repo;
 }
 // opened + the lead's lookups + context (with `contextArgs`) + plan + a case
@@ -292,6 +294,7 @@ test("C7 boundary: a helper's or Explore's lookups do not satisfy the lead; a le
   mcp(between, MEMORY_LOOKUP);
   cli(between, "open", ["srch-c7-between", "feature"]);
   cli(between, "note", ["task", "Add a badge. [inferred]"]);
+  openedFiles(between, ["src/a.ts", "src/app/page.tsx"]);
   cli(between, "note", ["context", CONTEXT]);
   assert.equal(stepOf(between, "context").state, "DONE");
 });

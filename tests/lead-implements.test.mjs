@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { makeRepo, write, gate, pluginRoot, lookedUp, planChecked } from "./helpers.mjs";
+import { makeRepo, write, gate, pluginRoot, lookedUp, planChecked, openedTarget } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { loadPolicy } from "../scripts/lib/size.mjs";
@@ -45,7 +45,9 @@ function hook(repo, verb, payload, session = "S1") {
 }
 // null when allowed, else the deny reason
 function fence(repo, tool, file, extra = {}) {
-  const out = hook(repo, "fence", { hook_event_name: "PreToolUse", tool_name: tool, tool_input: { file_path: path.join(repo, file) }, ...extra });
+  const payload = { hook_event_name: "PreToolUse", tool_name: tool, tool_input: { file_path: path.join(repo, file) }, ...extra };
+  openedTarget(repo, payload);
+  const out = hook(repo, "fence", payload);
   return out ? out.hookSpecificOutput.permissionDecisionReason : null;
 }
 const leadEdit = (repo, file) => hook(repo, "log", { hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: path.join(repo, file) }, tool_output: "" });

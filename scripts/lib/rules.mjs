@@ -222,7 +222,8 @@ export function tracedPointers(text, root, repos = []) {
       const lines = readFileSync(full, "utf8").replace(/\n$/, "").split("\n").length;
       exists = line <= lines;
     }
-    out.push({ file, line, exists });
+    // the key a read event stores; an absolute path outside every repo has none
+    out.push({ file, line, exists, rel: full === null ? null : toPosixRel(root, full, repos) });
   }
   return out;
 }

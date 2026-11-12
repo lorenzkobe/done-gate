@@ -1,10 +1,11 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { toPosixRel } from "./paths.mjs";
+import { repoPath, toPosixRel } from "./paths.mjs";
 import { configPath } from "./config.mjs";
 import { commandReflog } from "./tree.mjs";
 // guard.mjs imports this module back: both sides only call each other inside functions
-import { gitMoves, gitWrites, ownFileWrites, readsOnly, runsInline, scratchOnly, segments, withoutHeredocs } from "./guard.mjs";
+import { filesShown, gitMoves, gitWrites, ownFileWrites, readsOnly, runsInline, scratchOnly, segments, withoutHeredocs } from "./guard.mjs";
 import { failedTests, runsTests, testTotals } from "./verify.mjs";
 import { FINDINGS, sealEvents, sealWritten } from "./seal.mjs";
 
@@ -37,8 +38,52 @@ function base(input) {
 
 function editPaths(input, root, repos) {
   const ti = input.tool_input ?? {};
-  const raw = input.tool_name === "MultiEdit" ? (ti.edits ?? []).map((e) => e?.file_path) : [ti.file_path ?? ti.notebook_path];
-  return raw.map((p) => toPosixRel(root, p, repos)).filter((p) => p !== null && p !== "");
+  // MultiEdit names its file once, at the top; an older shape put it on each edit
+  const raw = input.tool_name === "MultiEdit" ? [ti.file_path, ...(ti.edits ?? []).map((e) => e?.file_path)] : [ti.file_path ?? ti.notebook_path];
+  return [...new Set(raw.map((p) => toPosixRel(root, p, repos)).filter((p) => p !== null && p !== ""))];
+}
+
+// What a stored path holds now: the first 16 hex of the sha1 of its bytes, null when it is no
+// regular file. An agent has opened a file as it is now when a read or an edit of its own
+// carries this hash.
+export function fileHash(root, rel, repos = []) {
+  const hashAt = (file) => {
+    try {
+      return statSync(file).isFile() ? createHash("sha1").update(readFileSync(file)).digest("hex").slice(0, 16) : null;
+    } catch {
+      return null;
+    }
+  };
+  // `repos` may be a function, called only for a path the root does not hold: a declared repo's
+  // file when the root was reached through a symlink, so that a read inside the root loads no ledger
+  const inRoot = hashAt(path.join(root, rel));
+  if (inRoot !== null) return inRoot;
+  const at = repoPath(root, rel, typeof repos === "function" ? repos() : repos);
+  return at.index === -1 ? null : hashAt(path.join(at.repoRoot, at.rel));
+}
+
+const readsOf = (paths, tool, root, repos, b) => paths.flatMap((p) => {
+  const hash = fileHash(root, p, repos);
+  return hash ? [{ ...b(), kind: "read", tool, path: p, hash }] : [];
+});
+
+// Whether this agent of this session opened or wrote the file with this content. A session file
+// runs to megabytes, so only the lines that name the path are parsed.
+export function seen(stateDir, session, agent, rel, hash) {
+  const file = path.join(sessionDir(stateDir, session), "events.jsonl");
+  if (!hash || !existsSync(file)) return false;
+  const named = JSON.stringify(rel);
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    if (!line.includes(named) || !line.includes(hash)) continue;
+    let e;
+    try {
+      e = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if ((e.kind === "read" || e.kind === "edit") && e.path === rel && e.hash === hash && (e.agent ?? null) === agent) return true;
+  }
+  return false;
 }
 
 function exitOf(response) {
@@ -110,8 +155,12 @@ export function eventsFromHookInput(input, root, repos = []) {
   if (event !== "PostToolUse") return [];
 
   if (EDIT_TOOLS.has(tool)) {
-    return editPaths(input, root, repos).map((p) => ({ ...b(), kind: "edit", tool, path: p }));
+    return editPaths(input, root, repos).map((p) => {
+      const hash = fileHash(root, p, repos);
+      return { ...b(), kind: "edit", tool, path: p, ...(hash ? { hash } : {}) };
+    });
   }
+  if (tool === "Read") return readsOf([toPosixRel(root, input.tool_input?.file_path, repos)].filter(Boolean), tool, root, repos, b);
   if (tool === "Bash") {
     // a background run reports at launch, before it can fail, so its exit is never known
     const background = input.tool_input?.run_in_background === true;
@@ -125,7 +174,9 @@ export function eventsFromHookInput(input, root, repos = []) {
     const task = background ? backgroundTask(input.tool_response) : null;
     const r = input.tool_response;
     const output = !background && r && typeof r === "object" ? `${r.stdout ?? ""}\n${r.stderr ?? ""}` : "";
-    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...(background ? {} : readings(cmd, output, root)), ...toolUse(input), ...(background ? { background: true } : {}), ...(task ? { task } : {}), ...(git ? { git: true, commits: !gitMoves(cmd), ...reflogField(root) } : {}), ...(readOnly ? { readOnly: true } : {}), ...(runsInline(cmd) ? { runs: true } : {}), ...(scratch ? { scratch: true } : {}) }, ...own];
+    // the hash is taken now, after the command: what a later segment showed is what an earlier one wrote
+    const shown = background ? [] : readsOf(filesShown(cmd, input.cwd, root, repos), tool, root, repos, b);
+    return [{ ...b(), kind: "command", tool, cmd: cmd.slice(0, TEXT_LIMIT), exit: background ? null : exitOf(input.tool_response), ...(background ? {} : readings(cmd, output, root)), ...toolUse(input), ...(background ? { background: true } : {}), ...(task ? { task } : {}), ...(git ? { git: true, commits: !gitMoves(cmd), ...reflogField(root) } : {}), ...(readOnly ? { readOnly: true } : {}), ...(runsInline(cmd) ? { runs: true } : {}), ...(scratch ? { scratch: true } : {}) }, ...own, ...shown];
   }
   if (STOP_TOOLS.has(tool)) {
     const task = input.tool_input?.task_id ?? input.tool_input?.shell_id;

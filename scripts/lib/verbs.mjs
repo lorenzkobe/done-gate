@@ -16,7 +16,7 @@ import { diffSnapshots, gitHead, snapshot, withoutRepos } from "./tree.mjs";
 import { weakened } from "./slop.mjs";
 import { pointerFile } from "./verify.mjs";
 import { endStanding, waiveStanding } from "./standing.mjs";
-import { appendEvents, backgroundItems, backgroundLine, backgroundOpen, readEvents } from "./events.mjs";
+import { appendEvents, backgroundItems, backgroundLine, backgroundOpen, fileHash, readEvents, seen } from "./events.mjs";
 
 // A reviewer's finding closed unfixed: on a run that shows it wrong, or on the user's words. A
 // dispute still waiting is the reviewer's to answer; an upheld one is the user's call.
@@ -253,6 +253,16 @@ function checkContext(text, root, repos) {
   }
 }
 
+// A Traced file the lead has not opened as it is now is refused. Only this session's own reads
+// count: after a /clear the lead holds nothing of what an earlier session opened.
+function checkOpened(ctx, text) {
+  const pointers = tracedPointers(contextPart(text, "Traced"), ctx.root, ctx.repos);
+  const stale = [...new Set(pointers.map((p) => p.rel).filter(Boolean))].filter((rel) => !seen(ctx.stateDir, ctx.session, null, rel, fileHash(ctx.root, rel, ctx.repos)));
+  if (!stale.length) return;
+  const many = stale.length > 1;
+  throw new UsageError(`Traced: ${stale.join(", ")} not opened as ${many ? "they are" : "it is"} now: open ${many ? "each" : "it"} (Read, or cat, sed -n or grep on it), then cite the lines you read. What you remember of a file points at it; the file decides.`);
+}
+
 // The kinds the lead declares missing (--no-code / --no-memory "<why>"). Refused while a kind is
 // neither declared nor searched by the lead itself since the user's message.
 function checkLookups(ctx, ledger, rest) {
@@ -438,6 +448,7 @@ export const verbs = {
     if (section === "context") {
       checkContext(text, ctx.root, ctx.repos);
       gap = checkLookups(ctx, open(ctx).ledger, rest);
+      checkOpened(ctx, text);
     }
     const named = section === "plan" ? (files ?? "").split(",").map((f) => f.trim()).filter(Boolean) : [];
     const outside = named.filter((f) => toPosixRel(ctx.root, f, ctx.repos) === null);
