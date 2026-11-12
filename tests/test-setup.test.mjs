@@ -10,6 +10,8 @@ import path from "node:path";
 import { makeRepo, write, gate, clearedFrom } from "./helpers.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
 import { needsSetup, pendingOffers } from "../scripts/lib/setup.mjs";
+import { nextSeq } from "../scripts/lib/events.mjs";
+import { updateSession } from "../scripts/lib/session-state.mjs";
 
 function envFor(repo) {
   const e = { ...process.env, CLAUDE_PROJECT_DIR: repo, DONE_GATE_SESSION: "S1" };
@@ -400,6 +402,47 @@ test("3.13 C6 an e2e command already in verify gets only the driver; a repo with
   const cmds = proposal(defaults).json.verify.map((v) => (typeof v === "string" ? v : v.cmd));
   for (const cmd of before) assert.ok(cmds.includes(cmd), cmd);
   assert.ok(cmds.includes("npm run test:e2e"));
+});
+
+// what gate close does to the session: the edits before now are history
+const closedARun = (repo) => updateSession(path.join(repo, ".claude", "gate"), "S1", { baselineSeq: nextSeq() });
+
+test("an answer given before a run closed still declines or applies after it", () => {
+  const declined = setUpRepo("ts-late-no");
+  startContext(declined);
+  proposal(declined);
+  words(declined, "no to the new setting");
+  closedARun(declined);
+  const no = run(declined, "setup", ["--decline", "--user-ok", "no to the new setting"]);
+  assert.equal(no.status, 0, no.stderr);
+  assert.deepEqual(gateJson(declined).offered, ["e2e"]);
+
+  const taken = setUpRepo("ts-late-yes");
+  startContext(taken);
+  proposal(taken);
+  words(taken, "yes add those settings");
+  closedARun(taken);
+  const yes = run(taken, "setup", ["--apply", "--user-ok", "yes add those settings"]);
+  assert.equal(yes.status, 0, yes.stderr);
+  assert.equal(gateJson(taken).driver, "cmd:npm run test:e2e");
+});
+
+test("words that answered one setup do not answer the next, and unsaid or a helper's words stay refused after a run closed", () => {
+  const repo = setUpRepo("ts-late-reuse");
+  startContext(repo);
+  applied(repo);
+  write(repo, ".claude/gate.json", SET_UP[".claude/gate.json"]);
+  assert.equal(pendingOffers(repo).length, 1);
+  assert.match(run(repo, "setup", ["--apply", "--user-ok", "yes add those settings"]).stderr, /did not say/);
+
+  const other = setUpRepo("ts-late-unsaid");
+  startContext(other);
+  run(other, "log", [], JSON.stringify({ session_id: "S1", cwd: other, hook_event_name: "UserPromptSubmit", prompt: "no to that setting", agent_id: "A1", agent_type: "done-gate:reviewer" }));
+  closedARun(other);
+  for (const said of ["no thanks not those", "no to that setting"]) {
+    assert.match(run(other, "setup", ["--decline", "--user-ok", said]).stderr, /did not say/, said);
+  }
+  assert.equal(gateJson(other).offered, undefined);
 });
 
 test("3.13 C7 first setup carries the same offers and records them", () => {

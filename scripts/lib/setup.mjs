@@ -3,7 +3,7 @@ import path from "node:path";
 import { configPath, loadConfig, matchGlob } from "./config.mjs";
 import { segments, withoutHeredocs } from "./guard.mjs";
 import { UsageError } from "./context.mjs";
-import { readEvents } from "./events.mjs";
+import { nextSeq, readEvents } from "./events.mjs";
 import { currentLedger, isDone, openRuns, saveLedger, staleForeign } from "./ledger.mjs";
 import { saidSince } from "./rules.mjs";
 import { loadSession, saveSession } from "./session-state.mjs";
@@ -272,8 +272,9 @@ function userOk(ctx, args) {
   const words = at >= 0 ? args[at + 1] : undefined;
   const tell = 'show the user the proposal and ask; then pass --user-ok "<their words, at least three>"';
   if (!words?.trim() || words.startsWith("--")) throw new UsageError(`changing gate.json is the user's call: ${tell}`);
-  const session = loadSession(ctx.stateDir, ctx.session);
-  if (!saidSince(readEvents(ctx.stateDir, ctx.session), session?.baselineSeq ?? 0, words)) throw new UsageError(`the user did not say "${words}" in this session: ${tell}`);
+  // not since the baseline: a close moves it past an answer given while the run was open
+  const answered = loadSession(ctx.stateDir, ctx.session)?.setupAnsweredSeq ?? 0;
+  if (!saidSince(readEvents(ctx.stateDir, ctx.session), answered, words)) throw new UsageError(`the user did not say "${words}" in this session: ${tell}`);
   return words.trim();
 }
 
@@ -292,7 +293,7 @@ function writeConfig(ctx, json) {
   if (!session) return;
   const entry = snapshot(ctx.root, session.lastTree ?? session.baseline).files[GATE_JSON];
   const at = (tree) => (tree ? { ...tree, files: { ...tree.files, [GATE_JSON]: entry } } : tree);
-  saveSession(ctx.stateDir, { ...session, baseline: at(session.baseline), ...(session.lastTree ? { lastTree: at(session.lastTree) } : {}) });
+  saveSession(ctx.stateDir, { ...session, baseline: at(session.baseline), ...(session.lastTree ? { lastTree: at(session.lastTree) } : {}), setupAnsweredSeq: nextSeq() });
 }
 
 export const verbs = {

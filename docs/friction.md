@@ -210,6 +210,15 @@ files (project docs, not the gate's job), issue-tracker and teaching skills (out
 
 ## Done (moved here when a release fixes it, with the version)
 
+From the trial of 2026-11-12 on courtly's discount engine (run setup-answer-survives-close):
+
+- The lead ran `gate setup` with a run open, the user said no, and `gate setup --decline` was
+  refused twice: first for the open run, then after the close with "the user did not say", since
+  the close moves the session's baseline past the answer. The proposal would have been asked
+  again in the next session. Now the user's words count since the session's last answered
+  setup. Left as they are: `gate open --setup-later` and `gate waive --standing` read the same
+  window, and neither is refused while a run is open.
+
 Built after 0.22.1 on the owner's word, with no friction item behind it (run read-before-relying,
 2026-11-12):
 

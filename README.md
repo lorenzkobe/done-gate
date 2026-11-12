@@ -609,7 +609,9 @@ A repo already set up is asked once about what later releases added: `gate setup
 new keys, and `--apply` or `--decline` records them in `offered`. It finds an end-to-end run (a
 `test:e2e` script, a script holding `playwright test` or `cypress run`, or a config file) and offers it
 as the final check and the driver, saying what that costs; an existing driver is kept, with a note. No
-task waits for this answer.
+task waits for this answer. An answer the user gave while a run was open is recorded after it
+closes: their words count from the session's last answered setup, and words that answered one
+proposal do not answer the next.
 
 A repo with tests and no `testFiles` key is asked once, at session start and before any run
 opens: `gate setup` prints a proposal built from the repo (the runner it can prove, the verify
