@@ -1,3 +1,6 @@
 node_modules/
 tests/.tmp/
 .claude/gate/
+.DS_Store
+.claude/settings.local.json
+reports/
