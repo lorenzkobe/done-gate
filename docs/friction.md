@@ -61,6 +61,21 @@ From RollCall, run 2026-11-13-ticket-3437-stop-zone (0.23.0; main repo rollcall,
   Evidence: the run's verify.json (four green commands, among them `manage.py test
   app_rollcall.test_stop_zone …` and the wrapper) and `gate check` R18 after each of them.
 
+- 2026-11-12, kwenta.cc, 0.23.0, no run open (a read-only check after the split-editor run): a
+  red run through the repo's own `testFiles` command cannot close a reviewer finding. kwenta.cc
+  sets `"testFiles": "node scripts/test-files.mjs {files}"`, and its CLAUDE.md names that script as
+  the way to run a mixed list of tests. `runsTests` is called without `config.testFiles` in
+  `scripts/lib/events.mjs:227`, so the event gets no `tests` reading, and in
+  `scripts/lib/rules.mjs:431` (`testRun`, which `proofProblem`'s `red` needs), while
+  `rules.mjs:1570` and `:1575` pass it. The exit 1 is recorded, but `red(e)` is false and the
+  finding gets PROOF_TEXT. Checked by calling 0.23.0's `runsTests` from `verify.mjs` directly:
+  `node scripts/test-files.mjs src/money/split.test.ts` is false without the template and true
+  with it, while `npx vitest run`, `rtk vitest run`, `npm run test` and `npx playwright test` are
+  true. Not yet met on a real run: the split-editor session (3fbf1d04, 0.22.1) ran test-files.mjs
+  7 times, every one with no `tests` reading, but there every failed exit was lost anyway (see
+  Done, failed-commands-recorded). Workaround: `npx vitest run <file>` or `gate test <file>`.
+  Likely fix: pass the config's `testFiles` at both calls.
+
 From the run records of courtly, kwenta.cc and this repo, 2026-11-10 to 11-12 (0.22.0 and 0.22.1),
 left after the fence let a gate read run beside an unrelated command:
 
@@ -438,7 +453,13 @@ Fixed after 0.22.1 (run failed-commands-recorded, 2026-11-11):
   read the failure text from `tool_error`, the name a 2026-10-03 lookup gave; Claude Code sends it
   as `error` (hooks page, read 2026-11-11). Every red-first rule had been judged from piped output
   only. Reviewer findings in courtly and kwenta.cc since 11-10 took 957 and 332 close attempts for
-  545 and 161 findings. Not yet measured on a real run with the fix.
+  545 and 161 findings. Measured on 0.23.0 in kwenta.cc, 2026-11-12 (session 45aafe55, probes in
+  the scratchpad): `exit 3`, a red `npx vitest run` (exit 1, 1 failed, the test's name) and a red
+  `rtk vitest run` (exit 1, no totals: RTK printed "vitest parser: All parsing tiers failed")
+  were all recorded with their exits. Before it, the split-editor session (3fbf1d04, 0.22.1)
+  logged 255 commands and none with a failing exit; its 8 reviewer findings closed on a waiver.
+  Passing runs still record `exit: null`, as Claude Code's success payload has no exit code;
+  the rules read null as 0.
 
 Fixed in 0.22.1:
 
