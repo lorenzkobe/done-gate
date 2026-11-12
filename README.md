@@ -66,7 +66,14 @@ Three things make this hard to game:
   edit invalidates it.
 - **Evidence files are fenced.** A PreToolUse hook denies writes to `events.jsonl`,
   `verify.json`, `ledger.json` and friends, for the model and every helper. Attempts are
-  counted in the report.
+  counted in the report. A command that names the gate folder must be a plain read (`cat`,
+  `grep`, `ls`, a `gate` verb). A read may share a shell line with a command that has nothing
+  to do with it (`npx vitest run x | tail; cat .claude/gate/lessons.md`): that command gets
+  the checks it gets alone. A `$` outside single quotes, a function, a loop or `if`, a shell
+  builtin such as `export` or `eval`, or an assignment keeps the refusal, and the message
+  says which and to run the read alone. A pipe between the two, a `cd` into `.claude` and
+  `xargs` are refused as a write. This lets ordinary lines through; it does not stop a
+  command built to get past the fence.
 - **Helpers read packets, not the ledger.** `gate brief <role>` writes each helper's inputs
   (ask, plan, case table, size, test conventions, and for the reviewer the diff and check
   results) into the run dir, and the model spawns it with one sentence. QA's packet withholds
@@ -297,6 +304,15 @@ since a code search would show it the new implementation.
 - **Every block is logged.** When the Stop hook refuses to end the turn, a `block` event with
   the unmet rule ids lands in the session's events, and the report counts them, so a turn
   that could not end can be diagnosed afterwards.
+- **A run outlives a compaction.** Before Claude Code compacts the conversation, a PreCompact
+  hook tells the summary what to keep while a run is open: the run's name and folder, your
+  answers in your words, what is in work, what failed, the open finding ids. The session start
+  after a compaction, a /clear or a resume points at `gate report`, which prints the run's
+  Task, Context, Plan, cases and findings.
+- **A long conversation is said.** When a run closes clean and the conversation holds 100k
+  tokens or more, the short report ends with a line to start the next task in a fresh session
+  (`/clear`), with the count: every turn reads the whole conversation again. The gate cannot
+  clear it for you.
 - **A stale ledger can be let go.** After a /clear the new session joins the run the cleared
   session was on (found through the pid of the Claude process, which a /clear keeps), never
   another terminal's; a resume or compaction keeps its own run; any other new session is only

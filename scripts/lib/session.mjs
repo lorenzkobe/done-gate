@@ -51,6 +51,20 @@ function mandate(ctx) {
 }
 
 export const verbs = {
+  // Its stdout is instructions for the compaction summary: what only the conversation holds is
+  // kept, what the run's records hold is left for the session start after it to point at.
+  "pre-compact"(ctx) {
+    // only the payload's own id: the marker a shell verb falls back to may be another session's
+    if (ctx.input?.agent_id || !ctx.input?.session_id || !ctx.session) return;
+    const current = currentLedger(ctx.stateDir, ctx.session);
+    if (!current || isDone(current.ledger)) return;
+    const { ledger, dir } = current;
+    process.stdout.write(
+      `A done-gate run is open: ${ledger.slug} (${ledger.playbook}), in ${path.relative(ctx.root, dir)}. ` +
+        "Keep in the summary: this run's name and folder; each answer and decision the user gave on this task, in their own words; the file and step being worked on now; what was tried and did not work; the ids of findings still open. " +
+        "Leave out the Task, Context, Plan and case table and the text of gate messages: `gate report` prints the first four with the findings, and `gate check` prints what is unmet.\n",
+    );
+  },
   async "session-start"(ctx) {
     if (ctx.input?.agent_id) return; // subagents get no mandate and no snapshot
     if (!ctx.session) return;
@@ -130,6 +144,7 @@ export const verbs = {
         parts.push(
           `\n<done-gate-status>\nOpen ledger: ${state.dir} (${state.ledger.playbook}, ${state.ledger.status}). ` +
             `${unmetCount(unmet)} unmet gate item(s). Run \`gate check\` before continuing.` +
+            (continuing ? " `gate report` prints its Task, Context, Plan, cases and findings: read it before going on." : "") +
             (inherited ? ` This ledger was opened by another session on ${String(state.ledger.openedAt).slice(0, 10)}; if that work looks over, ask the user before giving it up.` : "") +
             `\n</done-gate-status>`,
         );

@@ -7,6 +7,19 @@ evidence is (a run folder, a session, a command and its output).
 
 ## Open
 
+From the run records of courtly, kwenta.cc and this repo, 2026-11-10 to 11-12 (0.22.0 and 0.22.1),
+left after the fence let a gate read run beside an unrelated command:
+
+- A helper's fix to its own findings file through a python heredoc is still refused (it is told
+  Write or `sed -i`): 9 of courtly's 77 evidence refusals in those days and 1 of kwenta.cc's 17.
+- A deny event keeps the first 200 characters of its command, so a replay of the recorded
+  refusals through a changed fence is rough: longer commands end in an unclosed quote.
+- The lead's lookup of an event number (`SEQ=$(grep … events.jsonl | tail -1 | …)`) beside a test
+  run stays refused: any `$` keeps the refusal.
+- Older than this change, found by its reviewer and not fixed: `cat x >& .claude/gate/runs/<run>/verify.json`
+  passes the fence as a read. `redirect()` in scripts/lib/guard.mjs takes every `>&` for a stream
+  copy, though `>& file` writes the file.
+
 From this repo, run stats-input-tokens, 2026-11-11 (0.22.1, an interactive session, not headless):
 
 - A scratch probe written as `! node --test … > /dev/null && echo …` (exit 0 when the test fails)
@@ -196,6 +209,34 @@ Left out: an interview until every choice is settled (more questions), glossary 
 files (project docs, not the gate's job), issue-tracker and teaching skills (outside the gate).
 
 ## Done (moved here when a release fixes it, with the version)
+
+Fixed after 0.22.1 (run compaction-and-fresh-session, 2026-11-12):
+
+- Sessions ran task after task in one conversation. In the transcripts since 2026-10-20 the
+  median session peaked at 449k tokens in this repo (24 sessions), 545k in courtly (33) and 536k
+  in kwenta.cc (7), with 6, 22 and 1 compactions; every turn reads all of it again. Now a clean
+  close says to start the next task in a fresh session once the conversation holds 100k tokens
+  (the owner's number), and a PreCompact hook tells the summary what a run needs kept. Not seen
+  live: whether a summary Claude Code built ahead of time takes the hook's text (one auto
+  compaction here was precomputed), so the session start after a compaction also points at
+  `gate report`.
+
+Fixed after 0.22.1 (run fence-read-beside, 2026-11-12):
+
+- A read of the gate folder beside another command in one shell line was refused and told to run
+  the other command alone: 28 of courtly's 77 evidence refusals from 2026-11-10 to 11-12, 8 of
+  kwenta.cc's 17 and 1 of this repo's 7, the other command being vitest, eslint, tsc, `gate test`,
+  `git remote -v`, `node --version` or `docker ps`. Now it runs when nothing connects the two: no
+  pipe between them, no `$` outside single quotes, no function or compound command, no shell
+  builtin or assignment, no `cd` into `.claude` and no `xargs`. A line refused for a `$`, a
+  function, a compound command, a builtin or an assignment is told which and to run the read
+  alone; a pipe, a `cd` into `.claude` and `xargs` are refused as a write. On 2026-11-06 the refusal was kept because judging
+  the parts one by one had eight ways past it; each of those keeps the refusal here. The owner
+  chose on 2026-11-12 to let ordinary lines through and not to hold the line against a command
+  built to get past the fence. So the lead's `git stash`, `pkill` or a `git tag`, `branch`,
+  `reflog` or `worktree` write beside a gate read now runs, as each does alone. Replayed through
+  the new fence, the recorded commands still refused fall from 43 to 33 in courtly and from 10 to
+  7 in kwenta.cc (a rough count: see Open).
 
 Fixed after 0.22.1 (run size-by-behaviour, 2026-11-12):
 

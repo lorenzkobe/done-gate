@@ -9,6 +9,9 @@
         ]
       }
     ],
+    "PreCompact": [
+      { "hooks": [ { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/gate.mjs\" pre-compact", "timeout": 10 } ] }
+    ],
     "PreToolUse": [
       {
         "matcher": "Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit|Bash|AskUserQuestion",

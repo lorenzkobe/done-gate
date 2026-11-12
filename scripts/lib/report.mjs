@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { buildState, readVerifyStarted, unmetCount } from "./assess.mjs";
 import { evaluate, proofReading, uiFiles, unfinishedVerify } from "./rules.mjs";
@@ -560,7 +561,44 @@ function gateErrorsIn(state) {
   return errors.filter(([first]) => first.slice(0, 24) >= since && first.slice(0, 24) <= until).map((e) => e.join("\n"));
 }
 
-function renderBrief(state, unmet) {
+const LONG_CONVERSATION = 100_000;
+const TAIL_BYTES = 1024 * 1024;
+
+// The tokens the session's last turn read, which every later turn reads again: the newest
+// main-thread usage line in the last megabyte of its transcript. Null when there is none.
+export function contextTokens(session, home = process.env.DONE_GATE_HOME || homedir()) {
+  if (!/^[\w-]+$/.test(session ?? "")) return null;
+  const projects = path.join(home, ".claude", "projects");
+  try {
+    const file = readdirSync(projects).map((name) => path.join(projects, name, `${session}.jsonl`)).find((f) => existsSync(f));
+    if (!file) return null;
+    const { size } = statSync(file);
+    const tail = Buffer.alloc(Math.min(size, TAIL_BYTES));
+    const fd = openSync(file, "r");
+    try {
+      readSync(fd, tail, 0, tail.length, size - tail.length);
+    } finally {
+      closeSync(fd);
+    }
+    for (const line of tail.toString("utf8").split("\n").reverse()) {
+      if (!line.includes('"usage"')) continue;
+      let entry;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const usage = entry?.message?.usage;
+      if (entry?.isSidechain || typeof usage?.output_tokens !== "number") continue;
+      return (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+    }
+  } catch {
+    // no projects folder, or a transcript that cannot be read
+  }
+  return null;
+}
+
+function renderBrief(state, unmet, tokens = null) {
   const { ledger, dir } = state;
   const out = [];
   out.push(unmet.length ? `${ledger.slug}: not finished (${plural(unmetCount(unmet), "thing")} missing)` : `${ledger.slug}: done`);
@@ -571,6 +609,7 @@ function renderBrief(state, unmet) {
   out.push(appLine(state));
   out.push(forYouLine(state, unmet));
   if (ledger.caveats?.length) out.push(`Caveats: ${ledger.caveats.map((c) => plain(c).replace(/\s+/g, " ").replace(/\.$/, "")).join("; ")}.`);
+  if (!unmet.length && ledger.status !== "abandoned" && !ledger.overridden && tokens >= LONG_CONVERSATION) out.push(`Next task: start a fresh session (/clear). This conversation holds about ${Math.round(tokens / 1000)}k tokens, and every turn reads them again.`);
   out.push("");
   out.push(`Full report: ${path.join(dir, "report.md")} · done-gate ${ledger.version ?? "unknown"}`);
   return `${out.join("\n")}\n`;
@@ -595,6 +634,6 @@ export const verbs = {
     const full = { ...state, stateDir: ctx.stateDir };
     const md = renderReport(full, unmet);
     writeFileSync(path.join(state.dir, "report.md"), md);
-    process.stdout.write(brief ? renderBrief(full, unmet) : md);
+    process.stdout.write(brief ? renderBrief(full, unmet, contextTokens(ctx.session)) : md);
   },
 };

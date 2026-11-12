@@ -5,7 +5,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync, chmodSync, mkdirS
 import path from "node:path";
 import { makeRepo, write, gate, here, pluginRoot, doneArgs, lookedUp, waiveArgs, naArgs, abandonArgs, redRun } from "./helpers.mjs";
 import { loadLedger } from "../scripts/lib/ledger.mjs";
-import { actOnRows, pauseLines, stageOutcome } from "../scripts/lib/report.mjs";
+import { actOnRows, contextTokens, pauseLines, stageOutcome } from "../scripts/lib/report.mjs";
 import { unmetLines } from "../scripts/lib/assess.mjs";
 import { loadSession } from "../scripts/lib/session-state.mjs";
 import { evaluate } from "../scripts/lib/rules.mjs";
@@ -360,6 +360,58 @@ test("C5 happy: `gate report --brief` prints the short plain-language form", () 
   const clean = cleanClosingFixture("brief-c5-clean", "tidy");
   assert.equal(cli(clean, "check").stdout.trim(), "clean");
   assert.equal(lines(brief(clean))[0], "tidy: done");
+});
+
+const usageLine = (tokens, extra = {}) => JSON.stringify({ type: "assistant", timestamp: "2026-11-12T00:00:00.000Z", message: { id: "m1", model: "claude-opus-5-5", usage: { input_tokens: 9, cache_read_input_tokens: tokens - 10, cache_creation_input_tokens: 1, output_tokens: 5 } }, ...extra });
+function homeWith(name, session, lines) {
+  const home = path.join(here, ".tmp", `home-${name}`);
+  rmSync(home, { recursive: true, force: true });
+  mkdirSync(path.join(home, ".claude", "projects", "-some-project"), { recursive: true });
+  mkdirSync(path.join(home, ".claude", "projects", "-other-project"), { recursive: true });
+  if (lines) writeFileSync(path.join(home, ".claude", "projects", "-some-project", `${session}.jsonl`), `${lines.join("\n")}\n`);
+  return home;
+}
+const briefAt = (repo, home) => cli(repo, "report", ["--brief"], { extraEnv: { DONE_GATE_HOME: home } }).stdout;
+const FRESH = /^Next task: start a fresh session \(\/clear\)\. This conversation holds about (\d+)k tokens, and every turn reads them again\.$/m;
+
+test("fresh C4 boundary: a clean closed run's brief ends on the fresh-session line at 100000 tokens and has none at 99999", () => {
+  const repo = cleanClosingFixture("fresh-c4", "tidy");
+  const at = briefAt(repo, homeWith("fresh-c4-at", "S1", [usageLine(40000), usageLine(100000)]));
+  assert.equal(FRESH.exec(at)?.[1], "100", at);
+  const all = lines(at);
+  assert.match(all[all.length - 2], FRESH, "the line sits just above the report's path");
+  assert.doesNotMatch(briefAt(repo, homeWith("fresh-c4-under", "S1", [usageLine(400000), usageLine(99999)])), /fresh session/);
+  assert.equal(FRESH.exec(briefAt(repo, homeWith("fresh-c4-big", "S1", [usageLine(448931)])))?.[1], "449");
+  assert.equal(contextTokens("S1", homeWith("fresh-c4-sum", "S1", [usageLine(123456)])), 123456);
+});
+
+test("fresh C5 edge: no line for a run that is not finished, was abandoned or was braked, with no transcript or no usage; sidechain and broken lines are skipped", () => {
+  const heavy = homeWith("fresh-c5-heavy", "S1", [usageLine(500000)]);
+  assert.doesNotMatch(briefAt(standardFixture("fresh-c5-open"), heavy), /fresh session/);
+  const abandoned = makeRepo("fresh-c5-abandoned");
+  cli(abandoned, "open", ["t", "plan"]);
+  cli(abandoned, "abandon", abandonArgs(abandoned, "t", "this case stops here"));
+  assert.doesNotMatch(cli(abandoned, "report", ["--brief", "--run", "t"], { extraEnv: { DONE_GATE_HOME: heavy } }).stdout, /fresh session/);
+  const braked = cleanClosingFixture("fresh-c5-braked", "tidy");
+  const ledgerFile = path.join(closedRunDir(braked), "ledger.json");
+  writeFileSync(ledgerFile, JSON.stringify({ ...JSON.parse(readFileSync(ledgerFile, "utf8")), overridden: { at: "2026-11-12T00:00:00.000Z", session: "S1", blocks: 20, unmet: [{ rule: "R5" }] } }));
+  assert.doesNotMatch(briefAt(braked, heavy), /fresh session/);
+  const clean = cleanClosingFixture("fresh-c5", "tidy");
+  assert.match(briefAt(clean, heavy), FRESH, "premise: this fixture shows the line");
+  assert.doesNotMatch(briefAt(clean, homeWith("fresh-c5-none", "S1", null)), /fresh session/);
+  assert.doesNotMatch(briefAt(clean, homeWith("fresh-c5-nousage", "S1", [JSON.stringify({ type: "user", message: { content: "usage" } }), "{broken"])), /fresh session/);
+  assert.doesNotMatch(briefAt(clean, path.join(here, ".tmp", "home-fresh-c5-missing")), /fresh session/);
+  const mixed = homeWith("fresh-c5-mixed", "S1", [usageLine(20000), usageLine(900000, { isSidechain: true }), '{"message":{"usage":{"output_tokens":', usageLine(900000).slice(0, 60)]);
+  assert.equal(contextTokens("S1", mixed), 20000);
+  assert.equal(contextTokens("S1", homeWith("fresh-c5-tail", "S1", [usageLine(700000), "x".repeat(1024 * 1024 + 10), usageLine(150000)])), 150000, "only the last megabyte is read");
+  assert.equal(contextTokens("S1", homeWith("fresh-c5-far", "S1", [usageLine(700000), "x".repeat(1024 * 1024 + 10)])), null, "a usage line before the last megabyte is not read");
+});
+
+test("fresh C6 refused: a session id that is no plain name reads no file", () => {
+  const home = homeWith("fresh-c6", "S1", [usageLine(500000)]);
+  writeFileSync(path.join(home, ".claude", "S1.jsonl"), `${usageLine(500000)}\n`);
+  for (const id of ["../S1", "-some-project/../-some-project/S1", "a/b", "", null, undefined, ".."]) assert.equal(contextTokens(id, home), null, String(id));
+  assert.equal(contextTokens("S1", home), 500000);
 });
 
 // ---------------------------------------------------------------------------

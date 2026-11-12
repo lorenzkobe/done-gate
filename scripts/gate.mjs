@@ -15,6 +15,7 @@ const VERSION = JSON.parse(
 // verb → { hook: reads a hook payload from stdin, load: lazy module import }
 const VERBS = {
   "session-start": { hook: true, load: () => import("./lib/session.mjs") },
+  "pre-compact": { hook: true, load: () => import("./lib/session.mjs") },
   fence: { hook: true, load: () => import("./lib/guard.mjs") },
   log: { hook: true, load: () => import("./lib/events.mjs") },
   stop: { hook: true, load: () => import("./lib/stop.mjs") },

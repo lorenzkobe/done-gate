@@ -138,7 +138,6 @@ test("C4 refused: awk that writes and git stash push are still writes", () => {
     `awk 'BEGIN { system("rm x") }' ${EVIDENCE}`,
     `awk -i inplace '{ print }' ${EVIDENCE}`,
     `awk '{ print | "sh" }' ${EVIDENCE}`,
-    `git stash; cat ${EVIDENCE}`,
     `rtk proxy rm ${EVIDENCE}`,
     `awk 'BEGIN { "date" | getline d }' ${EVIDENCE}`,
     "cd .claude/gate/runs/x && rm *",
@@ -161,6 +160,7 @@ test("C4 refused: awk that writes and git stash push are still writes", () => {
   assert.equal(helper("rtk proxy rm src/a.ts"), true, "a helper's rtk proxy rm outside scratch is a write");
   assert.equal(helper("cp src/a.ts src/b.ts"), true, "premise: a helper's plain repo write is denied");
   assert.equal(readsOnly("git stash push -m x"), false);
+  assert.equal(readsOnly("git stash"), false);
   for (const cmd of ["rm - x", "mv + y", "npm test -- badge", "run-tests", "/usr/bin/git commit -m x", "X=rm; $X - *", "shred - *", "n + 1"]) assert.equal(readsOnly(cmd), false, `the arithmetic rule never covers a writer: ${cmd}`);
 });
 
@@ -365,9 +365,8 @@ test("C3 refused: writes to gate files and look-alikes of reads are still denied
     `find ${RUN} -name '*.md' | xargs rm`,
     `ls ${RUN} | xargs -n 1 sed -i '' s/a/b/`,
     `$(echo rm) ${RUN}/review-1.md`,
-    `read PATH; cat ${RUN}/review-1.md`,
     `cat ${RUN}/review-1.md | tee >(cat > x)`,
-    `npx vitest run >/dev/null 2>&1; ls ${RUN}`,
+    `read PATH; cat ${RUN}/review-1.md`,
     `S=/tmp/x; cat a > $S/b; cp $S/b ${RUN}/review-1.md`,
     `cat ${RUN}/review-1.md > /tmp/x/r.md; mv /tmp/x/r.md ${RUN}/review-1.md`,
     `rm /tmp/proj/${RUN}/verify.started.json`,
@@ -376,7 +375,7 @@ test("C3 refused: writes to gate files and look-alikes of reads are still denied
   ]) {
     assert.equal(decide(bash(cmd), repo, cfg).deny, true, cmd);
   }
-  for (const cmd of ["read -r PAGER", "read GIT_SSH_COMMAND", "xargs -I {} rm {}", "xargs -0 sed -i s/a/b/", "$(ls) x"]) assert.equal(readsOnly(cmd), false, cmd);
+  for (const cmd of ["npx vitest run >/dev/null 2>&1", "read -r PAGER", "read GIT_SSH_COMMAND", "xargs -I {} rm {}", "xargs -0 sed -i s/a/b/", "$(ls) x"]) assert.equal(readsOnly(cmd), false, cmd);
 });
 
 test("C4 edge: the deny names the part that is not a plain read, and points the file's owner at the edit tools", () => {
@@ -384,10 +383,10 @@ test("C4 edge: the deny names the part that is not a plain read, and points the 
   assert.equal(ledger.deny, true);
   assert.match(ledger.reason, /`cat >> \S*ledger\.md/, ledger.reason);
   assert.match(ledger.reason, /Edit or Write tool, or sed -i with plain s or d commands, on ledger\.md/, ledger.reason);
-  const other = decide(bash(`npx vitest run >/dev/null 2>&1; ls ${RUN}`), repo, cfg);
+  const other = decide(bash(`npx vitest run 2>&1 | grep -f ${RUN}/notes.txt`), repo, cfg);
   assert.match(other.reason, /`npx vitest run/, other.reason);
   assert.doesNotMatch(other.reason, /Edit or Write tool/, other.reason);
-  const long = decide(bash(`node scripts/x.mjs ${"--flag ".repeat(40)}; ls ${RUN}`), repo, cfg);
+  const long = decide(bash(`node scripts/x.mjs ${"--flag ".repeat(40)} | grep -f ${RUN}/notes.txt`), repo, cfg);
   assert.ok(long.reason.length < 600, `the quoted part is cut short: ${long.reason.length}`);
 });
 
@@ -746,23 +745,25 @@ test("other paths, write forms and names stay refused beside a gate path", () =>
     `/usr/local/bin/grep x ${RUN_DIR}/verify.json`,
     `/bin/sed -i s/a/b/ ${RUN_DIR}/verify.json`,
     `./bin/cat ${RUN_DIR}/verify.json`,
-    `git tag -d v1; ls ${RUN_DIR}`,
-    `git tag -a v1; ls ${RUN_DIR}`,
-    `git tag v1; ls ${RUN_DIR}`,
-    `git tag -l -d v1; ls ${RUN_DIR}`,
-    `git branch -D x; ls ${RUN_DIR}`,
-    `git branch -d x; ls ${RUN_DIR}`,
-    `git branch x; ls ${RUN_DIR}`,
-    `git branch -m a b; ls ${RUN_DIR}`,
-    `git branch -a x; ls ${RUN_DIR}`,
-    `git branch -u origin/x; ls ${RUN_DIR}`,
-    `git branch --list -D x; ls ${RUN_DIR}`,
-    `git reflog expire --all; ls ${RUN_DIR}`,
-    `git reflog delete HEAD@{0}; ls ${RUN_DIR}`,
-    `git --no-pager commit -m x; ls ${RUN_DIR}`,
-    `git -c core.pager=evil log; ls ${RUN_DIR}`,
     `rtk read x > ${RUN_DIR}/ledger.json`,
   ]) assert.equal(verdict(cmd).deny, true, cmd);
+  for (const cmd of [
+    "git tag -d v1",
+    "git tag -a v1",
+    "git tag v1",
+    "git tag -l -d v1",
+    "git branch -D x",
+    "git branch -d x",
+    "git branch x",
+    "git branch -m a b",
+    "git branch -a x",
+    "git branch -u origin/x",
+    "git branch --list -D x",
+    "git reflog expire --all",
+    "git reflog delete HEAD@{0}",
+    "git --no-pager commit -m x",
+    "git -c core.pager=evil log",
+  ]) assert.equal(readsOnly(cmd), false, cmd);
 });
 
 test("a reviewer's write through /bin/ or /usr/bin/ is refused", () => {
@@ -830,18 +831,32 @@ test("the cd form stays refused when it reaches anything but the helper's own fi
   ]) assert.equal(verdict(cmd, "done-gate:worker").deny, true, cmd);
 });
 
-test("a read beside another command names the part to run alone, and a real write keeps its wording", () => {
-  const beside = verdict(`npx vitest run x; ls ${RUN_DIR}`).reason;
-  assert.match(beside, /reading the gate folder beside `npx vitest run x`/);
-  assert.match(beside, /Run `npx vitest run x` as its own command/);
-  assert.doesNotMatch(beside, /writes gate evidence/);
+test("a read beside a command the fence cannot see past says what it is and to run the read alone, and a real write keeps its wording", () => {
+  for (const [cmd, what] of [
+    [`npx vitest run x; tail -$N ${RUN_DIR}/ledger.md`, "a `$`"],
+    [`t() { npx vitest run x; }; t; ls ${RUN_DIR}`, "a function"],
+    [`for i in 1 2; do npm test; done; ls ${RUN_DIR}`, "`for`"],
+    [`if npm test; then ls ${RUN_DIR}; fi`, "`if`"],
+    [`PAGER=sh; git log; ls ${RUN_DIR}`, "an assignment"],
+    [`export CI=1; npm test; ls ${RUN_DIR}`, "`export`"],
+  ]) {
+    const beside = verdict(cmd).reason;
+    assert.ok(beside.startsWith(`done-gate: reading the gate folder beside another command is refused when the line holds ${what}:`), `${cmd}: ${beside}`);
+    assert.match(beside, /Run the read as its own command/);
+    assert.doesNotMatch(beside, /writes gate evidence/);
+  }
   const write = verdict(`echo x >> ${RUN_DIR}/verify.json`).reason;
   assert.match(write, /writes gate evidence files/);
   assert.doesNotMatch(write, /as its own command/);
-  for (const leads of [`cd ${RUN_DIR} && rm ledger.json`, `D=${RUN_DIR}; rm $D/ledger.json`, `for f in ${RUN_DIR}/*; do rm $f; done`, `ls ${RUN_DIR} | xargs rm`]) {
+  for (const leads of [`cd ${RUN_DIR} && rm ledger.json`, `D=${RUN_DIR}; rm $D/ledger.json`, `for f in ${RUN_DIR}/*; do rm $f; done`, `ls ${RUN_DIR} | xargs rm`, `cd "${repo}"/.claude; npm test; cat gate/lessons.md`, `cat ${RUN_DIR}/ledger.md | node x.mjs $X`]) {
     const v = verdict(leads);
     assert.equal(v.deny, true, leads);
     assert.doesNotMatch(v.reason, /as its own command/, `running this part alone would still reach the gate folder: ${leads}`);
+  }
+  for (const last of ["echo $HOME", "export CI=1", "npm test"]) {
+    const heredoc = verdict(`python3 - <<'E'\nopen('${RUN_DIR}/verify.json','w').write('x')\nE\n${last}`).reason;
+    assert.match(heredoc, /writes gate evidence files/, last);
+    assert.doesNotMatch(heredoc, /as its own command/, last);
   }
   const both = verdict(`npm test; echo x >> ${RUN_DIR}/verify.json`).reason;
   assert.match(both, /writes gate evidence files/, "the write decides when both are there");
@@ -1004,12 +1019,12 @@ test("F4 C4 reported-surface: a gate call through a variable set elsewhere is re
 test("F4 C5 boundary: pgrep beside a gate path reads; pkill does not", () => {
   assert.equal(verdict(`pgrep -f vitest; cat ${RUN_DIR}/verify.json`).deny, false);
   assert.equal(readsOnly("pgrep -fl 'next dev'"), true);
-  assert.equal(verdict(`pkill -f vitest; cat ${RUN_DIR}/verify.json`).deny, true);
+  assert.equal(readsOnly("pkill -f vitest"), false);
 });
 
 test("F4 C6 boundary: git worktree remove outside the repo, prune and list pass beside a gate path; inside the repo or add stays refused", () => {
   for (const cmd of [`git worktree remove --force /tmp/uitrial-head && grep T16 ${RUN_DIR}/ledger.md`, `git worktree prune; ls ${RUN_DIR}`, `git worktree list; ls ${RUN_DIR}`]) assert.equal(verdict(cmd).deny, false, cmd);
-  for (const cmd of [`git worktree remove --force ${repo}/wt; ls ${RUN_DIR}`, `git worktree remove wt; ls ${RUN_DIR}`, `git worktree add /tmp/x HEAD; ls ${RUN_DIR}`]) assert.equal(verdict(cmd).deny, true, cmd);
+  for (const cmd of [`git worktree remove --force ${repo}/wt`, "git worktree remove wt", "git worktree add /tmp/x HEAD"]) assert.equal(readsOnly(cmd, repo), false, cmd);
 });
 
 test("F4 C7 refused: the lead appends to its current run's ledger.md from the shell; another run's, ledger.json and a helper's append stay refused", () => {
@@ -1038,7 +1053,203 @@ test("F4 C8 refused: an s command's w or e flag after any delimiter, or a delimi
   }
   assert.equal(verdict(`sed -i '' 's/[0-9]*x/y/g' ${RUN_DIR}/review-1.md`, "done-gate:reviewer").deny, false, "brackets without the delimiter stay plain");
   assert.equal(readsOnly("sed -n '/^## Work/,/^## Why/p' x.md"), true);
-  for (const cmd of [`cd /tmp && git worktree remove x; ls ${RUN_DIR}`, `git -C /tmp worktree remove x; ls ${RUN_DIR}`]) assert.equal(verdict(cmd).deny, true, cmd);
+  for (const cmd of ["cd /tmp && git worktree remove x", "git -C /tmp worktree remove x"]) assert.equal(readsOnly(cmd, repo), false, cmd);
   assert.doesNotMatch(verdict(`$EDITOR notes.txt; ls ${RUN_DIR}`).reason, /gate\(\)/, "no gate verb: no gate() advice");
+});
+}
+
+// A gate read beside a command that shares nothing with it passes; a pipe, a `$`, a function,
+// a cd, a loop or xargs between them keeps the refusal.
+{
+const repo = makeRepo("fence-beside");
+const cfg = loadConfig(repo);
+const RUN_DIR = ".claude/gate/runs/2026-11-12-x";
+const asked = (command, agent_type) => ({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: repo, session_id: "S1", ...(agent_type ? { agent_id: "A1", agent_type } : {}) });
+const verdict = (command, agent_type) => decide(asked(command, agent_type), repo, cfg, RUN_DIR);
+const passes = (cmds, role) => {
+  for (const cmd of cmds) assert.equal(verdict(cmd, role).deny, false, cmd);
+};
+const refused = (cmds, role) => {
+  for (const cmd of cmds) assert.equal(verdict(cmd, role).deny, true, cmd);
+};
+
+test("beside C1 reported-surface: the commands the run records were refused for pass beside a gate read", () => {
+  passes([
+    `npx vitest run "tests/app/(app)/superadmin/moderation" 2>&1 | tail -30; tail -40 .claude/gate/lessons.md`,
+    `cat .claude/gate/lessons.md | head -80; npx vitest run "tests/app/(app)/superadmin/contact" 2>&1 | tail -25`,
+    `timeout 120 npx eslint "src/app/(app)/tournaments/create/page.tsx" src/components/x.tsx 2>&1 | tail -8; cat .claude/gate/lessons.md | tail -20`,
+    `npx tsc --noEmit -p . 2>&1 | grep -cE "error TS"; ls .claude/gate/sessions/ | tail -3`,
+    `ls -a; ls .claude; ls -t .claude/gate/runs 2>/dev/null | head -3; git remote -v`,
+    `ls ${RUN_DIR}/; ipconfig getifaddr en0; lsof -iTCP:3000`,
+    `node --version && ls ${RUN_DIR}`,
+    `docker ps --format '{{.Names}}'\ngrep -c kind ${RUN_DIR}/ledger.md`,
+    `(npx vitest run tests/lib/posts 2>&1 | tail -15) ; cat .claude/gate/lessons.md | head -60`,
+  ]);
+  passes([`timeout 300 npx vitest run tests/a.test.tsx 2>&1 | tail -15; cat .claude/gate/lessons.md`], "done-gate:reviewer");
+});
+
+test("beside C2 happy: a command let through still gets the checks it gets alone", () => {
+  const helper = verdict(`cp src/a.ts src/b.ts; cat ${RUN_DIR}/ledger.md`, "done-gate:reviewer");
+  assert.equal(helper.deny, true);
+  assert.match(helper.reason, /helpers write through the shell only under scratch paths/);
+  const lead = verdict(`cp src/a.ts src/b.ts; cat ${RUN_DIR}/ledger.md`);
+  assert.equal(lead.deny, true);
+  assert.match(lead.reason, /writes src\/b\.ts and no run is open/);
+  const worker = verdict(`git stash; cat ${RUN_DIR}/ledger.md`, "done-gate:worker");
+  assert.equal(worker.deny, true);
+  assert.match(worker.reason, /a worker runs no git command that moves the tree/);
+  mkdirSync(path.join(repo, ".claude", "gate"), { recursive: true });
+  symlinkSync(path.join(repo, ".claude", "gate"), path.join(repo, "g"));
+  const linked = verdict(`rm ${repo}/g/x.txt; cat ${RUN_DIR}/ledger.md`);
+  unlinkSync(path.join(repo, "g"));
+  assert.equal(linked.deny, true);
+  assert.match(linked.reason, /in the gate's evidence folder/);
+  assert.equal(verdict(`cd .claude; rm -rf gate; cat ${RUN_DIR}/ledger.md`).deny, true);
+});
+
+test("beside C3 refused: a non-read piped from or to a gate read, and it is not told to run alone", () => {
+  for (const cmd of [
+    `cat ${RUN_DIR}/ledger.md | node x.mjs`,
+    `cat ${RUN_DIR}/ledger.md |& node x.mjs`,
+    `cat ${RUN_DIR}/ledger.md |\n  node x.mjs`,
+    `cat ${RUN_DIR}/ledger.md | head -3 | node x.mjs`,
+    `node x.mjs | grep -f ${RUN_DIR}/ledger.md`,
+    `npm test; find .claude/gate -name '*.md' | python3 x.py`,
+    `(cat ${RUN_DIR}/ledger.md; echo) | node x.mjs`,
+    `cat ${RUN_DIR}/ledger.md <&0 | node x.mjs`,
+    `cat ${RUN_DIR}/ledger.md 3<&0 | node x.mjs`,
+    `cat ${RUN_DIR}/ledger.md 2>&1 <&0 | node x.mjs`,
+    `node x.mjs <&3 | grep -f ${RUN_DIR}/ledger.md`,
+    `cat ${RUN_DIR}/ledger.md | (cd /tmp; node x.mjs)`,
+  ]) {
+    const v = verdict(cmd);
+    assert.equal(v.deny, true, cmd);
+    assert.match(v.reason, /is not a plain read/, cmd);
+    assert.doesNotMatch(v.reason, /as its own command/, cmd);
+  }
+});
+
+test("beside C4 refused: any $ keeps the refusal; the gate wrapper's \"$@\" does not", () => {
+  refused([
+    `F=tests/a.test.ts; npx vitest run $F; cat ${RUN_DIR}/ledger.md`,
+    `ls ${RUN_DIR}/ledger.json; node x.mjs $_`,
+    `npm test; cat $(ls ${RUN_DIR} | head -1)`,
+    `npm test; tail -$N ${RUN_DIR}/ledger.md`,
+    "npm test; cat `ls " + RUN_DIR + "`",
+    `diff <(cat ${RUN_DIR}/a.md) b.md; npm test`,
+    `sed -n "$((L-25)),5p" ${RUN_DIR}/ledger.md; npm test`,
+    `X=$(cat ${RUN_DIR}/ledger.md); echo "$X" | sh`,
+    `npm test "$@"; cat ${RUN_DIR}/ledger.md`,
+    `npx vitest run x | grep -E "passed$"; cat ${RUN_DIR}/ledger.md`,
+    `npx vitest run x; cat "${RUN_DIR}/$N.md"`,
+  ]);
+  passes([
+    `npx vitest run x 2>&1 | grep -E 'passed$'; awk '{ print $1 }' ${RUN_DIR}/ledger.md`,
+    `node x.mjs 'a$b' \\$HOME; grep -c 'x$' ${RUN_DIR}/ledger.md`,
+  ]);
+  passes([`gate() { node "${gate}" "$@"; }; gate check; npx vitest run x; cat ${RUN_DIR}/ledger.md`, `${WRAPPER}; npx vitest run x | tail -3\ngate check; ls ${RUN_DIR}`]);
+});
+
+test("beside C5 refused: a shell builtin or an assignment, which can change what a later word runs, keeps the refusal", () => {
+  refused([
+    `read PATH; cat ${RUN_DIR}/review-1.md`,
+    `read PATH <<< /tmp/evil; cat ${RUN_DIR}/ledger.md`,
+    `readonly PATH=/tmp/evil; cat ${RUN_DIR}/ledger.md`,
+    `local PATH=/tmp/evil; cat ${RUN_DIR}/ledger.md`,
+    `path=(/tmp/evil); cat ${RUN_DIR}/ledger.md`,
+    `CDPATH=.claude; cd gate; node x.mjs; cat ${RUN_DIR}/ledger.md`,
+    `cdpath=(.claude); cd gate; node x.mjs; cat ${RUN_DIR}/ledger.md`,
+    `noglob alias cat=sh\ncat ${RUN_DIR}/ledger.md`,
+    `- alias cat=sh\ncat ${RUN_DIR}/ledger.md`,
+    `nocorrect eval "npm test"; cat ${RUN_DIR}/ledger.md`,
+    `command eval "npm test"; cat ${RUN_DIR}/ledger.md`,
+    `builtin alias cat=sh; cat ${RUN_DIR}/ledger.md`,
+    `FOO=1; npm test; cat ${RUN_DIR}/ledger.md`,
+    `alias cat=rm\ncat ${RUN_DIR}/ledger.json`,
+    `export PATH=/tmp/bin:/usr/bin; cat ${RUN_DIR}/ledger.json`,
+    `PATH=/tmp/bin; cat ${RUN_DIR}/ledger.json`,
+    `eval "npm test"; cat ${RUN_DIR}/ledger.md`,
+    `source ./env.sh; cat ${RUN_DIR}/ledger.md`,
+    `. ./env.sh && cat ${RUN_DIR}/ledger.md`,
+    `set -o allexport; cat ${RUN_DIR}/ledger.md`,
+    `trap 'npm test' EXIT; cat ${RUN_DIR}/ledger.md`,
+  ]);
+});
+
+test("beside C5 refused: a function other than the gate wrapper, or a compound command, keeps the refusal", () => {
+  refused([
+    `{ cat ${RUN_DIR}/ledger.md; } | node x.mjs`,
+    `if true; then cat ${RUN_DIR}/ledger.md; fi | node x.mjs`,
+    `cat ${RUN_DIR}/ledger.md | while read l; do node x.mjs; done`,
+    `case x in x) cat ${RUN_DIR}/ledger.md;; esac | node x.mjs`,
+    `t() { npx vitest run x; }; t; cat ${RUN_DIR}/ledger.md`,
+    `function t { npx vitest run x; }; t; cat ${RUN_DIR}/ledger.md`,
+    `function t() { npx vitest run x; }\nt\ncat ${RUN_DIR}/ledger.md`,
+    `cat() { sh; }; echo "rm -rf ${RUN_DIR}" | cat`,
+    `"cat"() sh x.sh; cat ${RUN_DIR}/ledger.md`,
+    `'cat' () sh x.sh\ncat ${RUN_DIR}/ledger.md`,
+    `gate() { node "${gate}" "$@"; }; cat () { sh; }; npm test; echo "rm ${RUN_DIR}/ledger.json" | cat`,
+  ]);
+});
+
+test("beside C6 refused: what led to the gate folder before still does", () => {
+  refused([
+    `cd ${RUN_DIR} && node x.mjs`,
+    `if cd ${RUN_DIR}; then node x.mjs; fi`,
+    `D=${RUN_DIR}; node x.mjs`,
+    `for f in ${RUN_DIR}/*; do node x.mjs; done`,
+    `ls ${RUN_DIR} | xargs node`,
+    `ls ${RUN_DIR}; echo a | xargs node`,
+    `npm test; cat ${RUN_DIR}/ledger.md $(`,
+    `cd -- ${RUN_DIR} && find . -delete`,
+    `cd -P ${RUN_DIR}; node x.mjs`,
+    `\\cd ${RUN_DIR}; node x.mjs`,
+    `"cd" ${RUN_DIR}; node x.mjs`,
+    `c\\d ${RUN_DIR}; node x.mjs`,
+    `cd -- .claude; node x.mjs; cat gate/lessons.md`,
+    "cd .claude/ && rm -rf ./gate",
+    "cd .claude; node x.mjs gate; cat gate/lessons.md",
+    `pushd "${repo}/.claude"; npm test; cat gate/lessons.md`,
+    `echo '{"hook_event_name":"PostToolUse","tool_name":"Bash"}' | node "${gate}" log; ls ${RUN_DIR}`,
+  ]);
+});
+
+test("beside C7 refused: a write that names the gate folder beside a read", () => {
+  for (const cmd of ['echo "<"& rm -rf x', "echo '<'&rm -rf x", "echo \\<& rm -rf x", 'echo "a<"& rm -rf x', 'echo ">"& rm -rf x', "echo \\>& rm -rf x", 'echo >""& rm -rf x', 'cat <<<"x<"& rm -rf x']) assert.equal(readsOnly(cmd), false, cmd);
+  for (const cmd of ["cat x 2>&1 | head", "cat x <&0 | head", "cat x 3<&0", "cat x >&2"]) assert.equal(readsOnly(cmd), true, cmd);
+  refused([
+    `echo "<"& rm -rf ${RUN_DIR}`,
+    `grep "<"& rm ${RUN_DIR}/ledger.json`,
+    `echo ">"& rm -rf ${RUN_DIR}`,
+    `cat ${RUN_DIR}/ledger.md | grep "<"& rm -rf ${RUN_DIR}`,
+    `npm test; echo x >> ${RUN_DIR}/verify.json`,
+    `cat ${RUN_DIR}/ledger.md; rm ${RUN_DIR}/verify.json`,
+    `npm test | tee ${RUN_DIR}/out.txt`,
+    `cat ${RUN_DIR}/ledger.md; sed -i '' s/a/b/ ${RUN_DIR}/ledger.json`,
+    `npm test; node -e "require('fs').writeFileSync('${RUN_DIR}/verify.json','x')"`,
+    `npm test; node x.mjs ${RUN_DIR}/verify.json`,
+  ]);
+});
+
+test("beside C8 boundary: || and & split like ; does, a pipe inside the other command does not join it to the read", () => {
+  passes([
+    `npm test || cat ${RUN_DIR}/ledger.md`,
+    `npm run dev & tail -5 ${RUN_DIR}/ledger.md`,
+    `npx vitest run x 2>&1 | tail -5; cat ${RUN_DIR}/ledger.md | head -3`,
+    `cat ${RUN_DIR}/ledger.md | head -3\nnpm test | tail -2`,
+    `npm test &> /dev/null; ls ${RUN_DIR}`,
+  ]);
+  refused([`npm test || cat ${RUN_DIR}/ledger.md | node x.mjs`, `cat ${RUN_DIR}/ledger.md | node x.mjs & npm test`]);
+  passes([`test -f ${RUN_DIR}/ledger.md && npm test`]);
+  // stricter than it has to be: a subshell is read as one pipeline, [[ as a compound command
+  refused([`(npm test; cat ${RUN_DIR}/ledger.md)`, `[[ -f ${RUN_DIR}/ledger.md ]] && npm test`]);
+});
+
+test("beside C9 edge: a heredoc fed to python passes beside a gate read unless its code names an evidence file and writes", () => {
+  passes([`python3 - <<'E'\nopen('/tmp/x.txt','w').write('x')\nE\ncat ${RUN_DIR}/ledger.md`]);
+  refused([
+    `python3 - <<'E'\nopen('${RUN_DIR}/verify.json','w').write('x')\nE\nnpm test`,
+    `cat ${RUN_DIR}/ledger.md | python3 - <<'E'\nopen('/tmp/x.txt','w').write('x')\nE`,
+  ]);
 });
 }

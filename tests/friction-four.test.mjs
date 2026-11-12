@@ -150,3 +150,52 @@ test("C9 refused: the verify start marker is an evidence file; a Write to it or 
   assert.equal(decide(tool("Bash", { command: `rm ${marker}` }), repo, cfg).deny, true);
   assert.equal(decide(tool("Bash", { command: `cat ${marker}` }), repo, cfg).deny, false);
 });
+
+const preCompact = (repo, session, extra = {}) => run(repo, "pre-compact", session, { hook_event_name: "PreCompact", trigger: "auto", custom_instructions: null, ...extra });
+
+test("compaction C1 happy: with a run open, pre-compact tells the summariser what to keep and what the run folder already holds", () => {
+  const repo = makeRepo("ff-precompact");
+  run(repo, "open", "S1", {}, ["badge", "feature"]);
+  const r = preCompact(repo, "S1");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^A done-gate run is open: badge \(feature\), in \.claude\/gate\/runs\/\d{4}-\d\d-\d\d-badge\./);
+  assert.match(r.stdout, /Keep in the summary:.*the user gave on this task, in their own words/s);
+  assert.match(r.stdout, /what was tried and did not work/);
+  assert.match(r.stdout, /Leave out the Task, Context, Plan and case table[^\n]*`gate report` prints the first four/);
+  assert.throws(() => JSON.parse(r.stdout), "plain text, not a hook JSON answer");
+  assert.equal(preCompact(repo, "S1", { trigger: "manual", custom_instructions: "keep the diff" }).stdout, r.stdout);
+  const hooks = JSON.parse(readFileSync(path.join(path.dirname(gate), "..", "hooks", "hooks.json"), "utf8")).hooks;
+  assert.ok((hooks.PreCompact ?? []).some((h) => !h.matcher && h.hooks.some((x) => /gate\.mjs" pre-compact$/.test(x.command))), "hooks.json has no PreCompact entry calling gate pre-compact");
+});
+
+test("compaction C2 refused: pre-compact prints nothing with no run, a closed or abandoned run, a subagent's payload or no session id", () => {
+  const none = makeRepo("ff-precompact-none");
+  assert.deepEqual([preCompact(none, "S1").status, preCompact(none, "S1").stdout], [0, ""]);
+  const repo = makeRepo("ff-precompact-other");
+  run(repo, "open", "S1", {}, ["badge", "feature"]);
+  assert.equal(preCompact(repo, "S2").stdout, "", "another session's run");
+  assert.equal(preCompact(repo, "S1", { agent_id: "A1", agent_type: "done-gate:reviewer" }).stdout, "", "a subagent");
+  start(repo, "S1", "startup");
+  assert.match(preCompact(repo, "S1").stdout, /badge/, "premise: S1's run is open and the session marker is written");
+  const bare = spawnSync(process.execPath, [gate, "pre-compact"], { input: JSON.stringify({ cwd: repo, hook_event_name: "PreCompact" }), encoding: "utf8", env: (({ DONE_GATE_SESSION: _s, CLAUDE_CODE_SESSION_ID: _c, ...e }) => ({ ...e, CLAUDE_PROJECT_DIR: repo }))(process.env) });
+  assert.deepEqual([bare.status, bare.stdout, bare.stderr], [0, "", ""]);
+  const ledgerFile = path.join(runDir(repo), "ledger.json");
+  writeFileSync(ledgerFile, JSON.stringify({ ...JSON.parse(readFileSync(ledgerFile, "utf8")), status: "abandoned" }));
+  assert.deepEqual([preCompact(repo, "S1").status, preCompact(repo, "S1").stdout], [0, ""]);
+});
+
+test("compaction C3 happy: a session that joins a run after a compact, clear or resume is pointed at gate report; a startup is not", () => {
+  for (const source of ["compact", "clear", "resume"]) {
+    const repo = makeRepo(`ff-pointer-${source}`);
+    run(repo, "open", "S1", {}, ["badge", "feature"]);
+    const ctx = startContext(repo, "S1", source);
+    assert.match(ctx, /Open ledger: [^\n]*badge[^\n]*`gate report` prints its Task, Context, Plan, cases and findings: read it before going on\./, source);
+    const report = run(repo, "report", "S1").stdout;
+    for (const heading of ["## Task", "## Context", "## Plan", "## Case table"]) assert.ok(report.includes(heading), `${source}: gate report has no ${heading}`);
+  }
+  const repo = makeRepo("ff-pointer-startup");
+  run(repo, "open", "S1", {}, ["badge", "feature"]);
+  const ctx = startContext(repo, "S1", "startup");
+  assert.match(ctx, /Open ledger/);
+  assert.doesNotMatch(ctx, /read it before going on/);
+});

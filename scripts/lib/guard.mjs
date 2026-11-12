@@ -22,7 +22,7 @@ const EVIDENCE_IN_COMMAND = /\.claude\/done-gate\/seals\b|\.claude\/gate\/\S*(st
 const namesGateDir = (text) => {
   // a commit message only mentions the path
   const t = text.replace(/\.claude\/gate\.json/g, "").replace(/(\bgit\b[^;&|]*\scommit\b[^;&|]*?\s-[a-zA-Z]*m)\s*("[^"]*"|'[^']*')/g, "$1");
-  return /\.claude["']?\/(?:\.\/)*["']?gate\b/.test(t) || (/(?:^|[\s;&|])(?:cd|pushd)\s+["']?[^\s;&|]*\.claude["']?\/?(?=[\s;&|]|$)/.test(t) && /(?:^|[\s/"'])gate(?=[/\s;&|"']|$)/.test(t));
+  return /\.claude["']?\/(?:\.\/)*["']?gate\b/.test(t) || (/(?:^|[\s;&|])(?:cd|pushd)\s+(?:-\S*\s+)*["']?[^\s;&|]*\.claude["']?\/?(?=[\s;&|]|$)/.test(t) && /(?:^|[\s/"'])gate(?=[/\s;&|"']|$)/.test(t));
 };
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const HELPER_ROLES = ["skeptic", "qa", "reviewer", "reviewer-2"];
@@ -85,6 +85,8 @@ function heredocBodies(raw) {
 // word where it stood, so `diff <(a) b` keeps `b` as an argument and `> $(echo f)` keeps its target.
 // Segments inside `$((…))` carry `arith`. An unclosed one leaves an UNCLOSED segment, which no rule reads,
 // and so does a `case` inside one, whose pattern's `)` the frames would take for the close.
+// Each segment carries `pipeline`: one number for the segments a `|` joins, a subshell's among them.
+// A word carries `expands` when the shell expands something in it: a `$` outside single quotes or a substitution.
 const SUBSTITUTED = "$(…)";
 const UNCLOSED = "(unclosed";
 export function segments(text) {
@@ -97,9 +99,18 @@ export function segments(text) {
   let redir = false;
   let quote = null;
   const frames = []; // { kind: "sub" | "tick" | "arith" | "paren", outer: the command and quote the substitution sits in }
+  let pipeline = 0;
+  let last = 0;
+  let piped = false;
+  let expands = false;
+  // the length of `tok` right after a bare `<` or `>`: only then is a following `&` part of the redirect
+  let angleAt = -1;
   const inArith = () => frames.findLast((f) => f.kind !== "paren")?.kind === "arith";
   const open = (kind) => {
-    frames.push({ kind, outer: { seg, tok, has, quoted, assign, redir, quote } });
+    frames.push({ kind, outer: { seg, tok, has, quoted, assign, redir, quote, pipeline, expands } });
+    pipeline = ++last;
+    expands = false;
+    angleAt = -1;
     quote = null;
     seg = [];
     tok = "";
@@ -111,14 +122,18 @@ export function segments(text) {
   const close = () => {
     cut();
     const { outer } = frames.pop();
-    ({ seg, tok, quoted, assign, redir, quote } = outer);
+    ({ seg, tok, quoted, assign, redir, quote, pipeline } = outer);
+    expands = true;
+    angleAt = -1;
     tok += SUBSTITUTED;
     has = true;
   };
   let caseInside = false;
   const push = () => {
     if (has && !quoted && tok === "case" && frames.some((f) => f.kind !== "paren")) caseInside = true;
-    if (has) seg.push({ text: tok, quoted, redir, assign: assign || (!quoted && /^[A-Za-z_]\w*=/.test(tok)) });
+    if (has) seg.push({ text: tok, quoted, redir, assign: assign || (!quoted && /^[A-Za-z_]\w*=/.test(tok)), ...(expands ? { expands } : {}) });
+    expands = false;
+    angleAt = -1;
     tok = "";
     has = false;
     quoted = false;
@@ -129,9 +144,16 @@ export function segments(text) {
     push();
     if (seg.length) {
       if (inArith()) seg.arith = true;
+      seg.pipeline = pipeline;
       out.push(seg);
+      piped = false;
     }
     seg = [];
+  };
+  // a subshell is one member of the pipeline around it, whatever it holds
+  const endPipeline = () => {
+    cut();
+    if (!frames.some((f) => f.kind === "paren")) pipeline = ++last;
   };
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
@@ -142,7 +164,10 @@ export function segments(text) {
         open("sub");
         i++;
       } else if (quote === '"' && c === "`") open("tick");
-      else tok += c;
+      else {
+        if (c === "$" && quote === '"') expands = true;
+        tok += c;
+      }
       continue;
     }
     if (c === "`") {
@@ -163,6 +188,7 @@ export function segments(text) {
     }
     if (c === '"' || c === "'") {
       if (!quoted && /^[A-Za-z_]\w*=/.test(tok)) assign = true;
+      angleAt = -1;
       quote = c;
       has = true;
       quoted = true;
@@ -175,14 +201,14 @@ export function segments(text) {
     }
     if (c === "&") {
       if (text[i + 1] === "&") {
-        cut();
+        endPipeline();
         i++;
-      } else if (tok.endsWith(">")) tok += c;
+      } else if (angleAt === tok.length) tok += c;
       else if (text[i + 1] === ">") {
         push();
         tok = "&";
         has = true;
-      } else cut();
+      } else endPipeline();
       continue;
     }
     if (c === "$" && text[i + 1] === "(") {
@@ -216,16 +242,27 @@ export function segments(text) {
       if (frames.at(-1)?.kind === "paren") frames.pop();
       continue;
     }
-    if ("|;\n".includes(c)) {
+    if (c === "|" && text[i + 1] !== "|") {
       cut();
+      piped = true;
+      if (text[i + 1] === "&") i++;
+      continue;
+    }
+    if ("|;\n".includes(c)) {
+      // a line that ends on a pipe goes on with the next one
+      if (c === "\n" && piped && !has && !seg.length) continue;
+      endPipeline();
+      if (c === "|") i++;
       continue;
     }
     if (/\s/.test(c)) {
       push();
       continue;
     }
+    if (c === "$") expands = true;
     tok += c;
     has = true;
+    if (c === "<" || c === ">") angleAt = tok.length;
   }
   cut();
   while (frames.length) {
@@ -823,6 +860,43 @@ const LEADS_TO_GATE = /(?:^|[;&|(\s])cd\s+["']?[^\s;&|]*\.claude\/gate|=["']?[^\
 const NO_EDIT_TOOL = new Set(["reviewer", "reviewer-2", "skeptic"]);
 const GATE_LINE = `gate() { node "${path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "gate.mjs")}" "$@"; }`;
 const VARIABLE = /^\$\{?(\w+)\}?$/;
+const touchesGate = (seg) => {
+  const t = seg.map((w) => w.text).join(" ");
+  return EVIDENCE_IN_COMMAND.test(t) || namesGateDir(t) || OWNED_FILE.test(t);
+};
+const sharesPipeline = (part, all) => all.some((seg) => seg.pipeline === part.pipeline && touchesGate(seg));
+// read with quoted strings blanked: zsh takes a quoted name too (`"cat"() sh x.sh`)
+const DEFINES = /(?:^|[;&|\n({])\s*function\s+[A-Za-z_]|\(\s*\)/;
+// a `;` inside one of these does not end the pipeline around it, which the pipeline numbers do not follow
+const COMPOUND = new Set(["{", "}", "[[", "if", "then", "else", "elif", "fi", "while", "until", "do", "done", "for", "in", "case", "esac", "select"]);
+// a builtin can change what a later word runs (`alias cat=rm`, `read PATH`, `eval`), behind zsh's precommand words too
+const SHELL_WORDS = new Set([...BUILTINS, "unalias", "setopt", "unsetopt", "emulate", "disable", "autoload", "zmodload", "noglob", "nocorrect", "-"]);
+
+// What keeps a gate read from running beside the rest of its command. "write": a part that is
+// no plain read names the gate folder, is led or piped to it, or cannot be read. Else the thing
+// the fence cannot see past, outside the gate wrapper: a `$`, a function, a compound command, a
+// shell builtin, an assignment. Null: the two share nothing, and the rest gets the checks it gets alone.
+function besideRead(cmd, root) {
+  const text = withoutHeredocs(cmd);
+  const all = segments(text);
+  const parts = notReads(cmd, root);
+  const wrappers = definedFunctions(cmd);
+  const program = (seg) => shift(seg).words[0]?.text;
+  const intoClaude = (seg) => ["cd", "pushd"].includes(program(seg)) && seg.some((w) => w.text.includes(".claude"));
+  // a gate.mjs call that is no plain read is a hook verb, which writes the gate folder
+  const reaches = (part) => touchesGate(part) || part.some((w) => /gate\.mjs$/.test(w.text)) || wrappers.has(program(part)) || program(part) === "xargs" || sharesPipeline(part, all);
+  if (LEADS_TO_GATE.test(text) || all.some((seg) => intoClaude(seg) || seg.some((w) => w.text === UNCLOSED)) || parts.some(reaches)) return "write";
+  const outside = text.replace(new RegExp(`${WRAPPER}\\s*;?\\s*\\}`, "g"), (whole, a, b) => (wrappers.has(a ?? b) ? ";" : whole));
+  const rest = segments(outside);
+  if (rest.some((seg) => seg.some((w) => w.expands))) return "a `$`";
+  if (DEFINES.test(bare(outside))) return "a function";
+  const compound = rest.find((seg) => !seg[0].quoted && COMPOUND.has(seg[0].text));
+  if (compound) return `\`${compound[0].text}\``;
+  if (rest.some((seg) => !program(seg) && seg.some((w) => w.assign))) return "an assignment";
+  const builtin = parts.map(program).find((name) => SHELL_WORDS.has(name));
+  return builtin ? `\`${builtin}\`` : null;
+}
+
 function evidenceDeny(cmd, agentType, root = null) {
   const parts = notReads(cmd, root);
   // a gate call through a variable set in an earlier command: the fence cannot tell it is the gate
@@ -831,18 +905,16 @@ function evidenceDeny(cmd, agentType, root = null) {
     const variable = VARIABLE.test(through[0].text) ? through[0].text : through[1].text;
     return `done-gate: the fence cannot see through \`${variable}\`: it cannot tell the variable holds the gate, so this reads as a write. Start the command with the gate() line instead: \`${GATE_LINE}; gate <verb> …\`.`;
   }
-  const touchesGate = (seg) => {
-    const t = seg.map((w) => w.text).join(" ");
-    return EVIDENCE_IN_COMMAND.test(t) || namesGateDir(t) || OWNED_FILE.test(t);
-  };
-  const part = parts.find(touchesGate) ?? parts[0] ?? null;
+  const all = segments(withoutHeredocs(cmd));
+  const part = parts.find(touchesGate) ?? parts.find((seg) => sharesPipeline(seg, all)) ?? parts[0] ?? null;
+  // inline code that writes a named evidence file is a write, whatever else the line holds
+  const beside = EVIDENCE_IN_COMMAND.test(cmd) && inlineWrites(cmd) ? "write" : besideRead(cmd, root);
+  if (beside && beside !== "write") return `done-gate: reading the gate folder beside another command is refused when the line holds ${beside}: the fence cannot tell that the two share nothing. Run the read as its own command.`;
   // a script fed through a heredoc names its file only inside the body
   const named = (part && OWNED_FILE.exec(part.map((w) => w.text).join(" "))) ?? OWNED_FILE.exec(withoutHeredocs(cmd)) ?? OWNED_FILE.exec(cmd);
   const owner = named && (named[2] ? FILE_OWNER[named[2]] : null);
   const caller = agentType?.replace(/^done-gate:/, "") ?? null;
   const owns = named && (named[2] ? owner === caller : agentType === null);
-  // The other part names no gate path and nothing leads it there: the fence just cannot judge the two together.
-  if (part && !touchesGate(part) && !LEADS_TO_GATE.test(withoutHeredocs(cmd)) && !parts.some((seg) => /\$|^xargs\b/.test(seg.map((w) => w.text).join(" ")))) return `done-gate: reading the gate folder beside \`${shown(part)}\` is refused, because the fence cannot tell the two apart. Run \`${shown(part)}\` as its own command.`;
   return [
     `done-gate: that command writes gate evidence files (.claude/gate/...)${part ? `: \`${shown(part)}\` is not a plain read` : ""}.`,
     "Evidence is written only by `gate` verbs; read it with cat, grep or `gate report`.",
@@ -1159,7 +1231,7 @@ export function decide(input, root, config = null, currentRun = null, ledger = n
     // a heredoc that quotes an evidence path is text; the command around it is what runs,
     // unless the heredoc feeds an interpreter whose code writes
     // a write only under scratch paths cannot reach evidence, whatever it read
-    if (((EVIDENCE_IN_COMMAND.test(withoutHeredocs(cmd)) || namesGateDir(withoutHeredocs(cmd))) && !readsOnly(cmd, root) && !scratchOnly(cmd)) || (EVIDENCE_IN_COMMAND.test(cmd) && inlineWrites(cmd))) {
+    if (((EVIDENCE_IN_COMMAND.test(withoutHeredocs(cmd)) || namesGateDir(withoutHeredocs(cmd))) && !readsOnly(cmd, root) && !scratchOnly(cmd) && besideRead(cmd, root) !== null) || (EVIDENCE_IN_COMMAND.test(cmd) && inlineWrites(cmd))) {
       return { deny: true, reason: evidenceDeny(cmd, agentType, root), paths: [] };
     }
     // a link made earlier hides the gate dir from the text; the real path of each target does not
