@@ -9,8 +9,8 @@ import path from "node:path";
 import { AT_GIT_TOPLEVEL, gate, here, lookedUp, makeRepo, planChecked, pluginRoot } from "./helpers.mjs";
 
 const OLD_COMMIT = "8218139";
-// 0.22.1, the release before this one: its runs are this copy's own kind
-const LAST_RELEASE = "d8a11b6";
+// 0.23.0, the release before this one: its runs are this copy's own kind
+const LAST_RELEASE = "3ea2722";
 const has = (commit) => AT_GIT_TOPLEVEL && spawnSync("git", ["cat-file", "-e", `${commit}^{commit}`], { cwd: pluginRoot }).status === 0;
 const skip = has(OLD_COMMIT) ? false : `needs the plugin's git history with ${OLD_COMMIT}`;
 const skipLast = has(LAST_RELEASE) ? false : `needs the plugin's git history with ${LAST_RELEASE}`;
@@ -194,18 +194,18 @@ test("C7 happy: the old copy reads and closes a run whose steps the gate closed"
   assert.equal(close.status, 0, `${close.stdout}${close.stderr}`);
 });
 
-test("C8 happy: a run 0.22.1 opened is this copy's own kind: the same open items, a reviewer brief that records what it carried, and 0.22.1 reads the run afterwards", { skip: skipLast }, () => {
-  const last = oldGate(LAST_RELEASE, "old-0.22.1");
+test("C8 happy: a run 0.23.0 opened is this copy's own kind: the same open items, a reviewer brief that records what it carried, and 0.23.0 reads the run afterwards", { skip: skipLast }, () => {
+  const last = oldGate(LAST_RELEASE, "old-0.23.0");
   const repo = committed("ov-c8");
   opened(last, repo, "ov-c8");
   planAndEdit(last, repo);
   edit(last, repo, "src/a.ts", "a0 = 0", "a0 = 2");
   edit(last, repo, "tests/a.test.ts", "'a'", "'a0 is 2'");
   const before = ruleIds(run(last, repo, ["check"]).stdout);
-  assert.ok(before.length > 0 && !before.includes("R13"), `premise: 0.22.1 lists open items: ${before.join(", ")}`);
-  assert.deepEqual(ruleIds(run(gate, repo, ["check"]).stdout), before, "no older-version item for a 0.22.1 run");
+  assert.ok(before.length > 0 && !before.includes("R13"), `premise: 0.23.0 lists open items: ${before.join(", ")}`);
+  assert.deepEqual(ruleIds(run(gate, repo, ["check"]).stdout), before, "no older-version item for a 0.23.0 run");
   assert.match(ok(gate, repo, ["brief", "reviewer"]), /^packet: /m);
   assert.ok(ledgerOf(repo).seen["review-1.md"].carried["tests/a.test.ts"], "this copy records what the packet carried");
-  assert.deepEqual(ruleIds(run(last, repo, ["check"]).stdout), ruleIds(run(gate, repo, ["check"]).stdout), "0.22.1 reads the run with the new record in it");
+  assert.deepEqual(ruleIds(run(last, repo, ["check"]).stdout), ruleIds(run(gate, repo, ["check"]).stdout), "0.23.0 reads the run with the new record in it");
   assert.match(ok(last, repo, ["brief", "reviewer"]), /^packet: /m, "and briefs it again");
 });

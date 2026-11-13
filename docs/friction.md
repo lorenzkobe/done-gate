@@ -7,60 +7,6 @@ evidence is (a run folder, a session, a command and its output).
 
 ## Open
 
-From RollCall, run 2026-11-13-ticket-3437-stop-zone (0.23.0; main repo rollcall, declared repo
-../studentsync-api, a Django project with no gate.json of its own):
-
-- A Django repo's tests can never satisfy R18. The run's 13 cases all point at
-  `../studentsync-api/app_rollcall/test_stop_zone.py`. Its 17 tests went red before the fix and
-  green after, and passed in every `gate verify`, yet R18 kept saying no test command covers them.
-  The run could only close on a coverage waiver.
-  - `manage.py test` is not a runner. `RUNNERS` (scripts/lib/verify.mjs:209) and the test verbs
-    beside it have no Django entry, so `.venv/bin/python manage.py test app_rollcall.test_stop_zone`
-    reads as no test run at all.
-  - Django names tests by dotted module (`app_rollcall.test_stop_zone`), but `testScopes`
-    (verify.mjs:254) only counts paths, folders and globs that exist on disk. Django refuses a
-    file path outright: "One of the test labels is a path to a file … which is not supported. Use a
-    dotted module name or path to a directory instead."
-  - The `testFiles` template (`templateAt`, verify.mjs:233) assumes the runner takes file paths,
-    so a declared repo's gate.json cannot describe Django either.
-  - A declared repo's own `testFiles` is never read at all: `coverageGaps` (verify.mjs:365) passes
-    the main repo's `config.testFiles` for every repo's commands, as do verify.mjs:137 and
-    rules.mjs:1570 and :1575. In this run rollcall's `scripts/test_db.sh run {files}` was the
-    template applied to the studentsync-api commands. Not Django-only: any declared repo with its
-    own template is judged by the main repo's.
-  - A template also misses a command that starts with an env assignment: `templateAt` matches its
-    words from the segment's first word, so `DJANGO_SETTINGS_MODULE=… .venv/bin/python manage.py
-    test …` is not a test run under the template `.venv/bin/python manage.py test {files}`
-    (`runsTests` gives false with the prefix, true without). `runnerAt` scans every word, so the
-    built-in runners are not affected.
-  - A scratch wrapper that takes the path (`python run_ss_test_file.py
-    ../studentsync-api/app_rollcall/test_stop_zone.py`, which runs django.setup() then unittest)
-    went green but did not count: `python` is not a runner and the wrapper is not a template (it
-    lived in the session's scratchpad, so it could not have been one).
-  - `unittest` is a runner: `python -m unittest app_rollcall/test_stop_zone.py` counts
-    (`runsTests` gives true). That route is closed only because Django's tests need django.setup()
-    first; unittest inside `python -c` is one word to the gate.
-  - The file itself is judged a test: the default tests globs (scripts/lib/config.mjs:78) include
-    `**/test_*.py`. Only the link from the command to the file is missing.
-  - A possible fix: read `manage.py test` (also `python -m django test` and `django-admin test`)
-    as a runner, and map each dotted label to `a/b/c.py` or the package folder `a/b/c/` under the
-    segment's base, so the existing `holds` check applies. A bare `manage.py test` covers its
-    folder, as a bare pytest does. The mapping is required, not optional: `testScopes` drops a
-    name not on disk, and a scope with no names covers its whole folder (`holds(base, ".")`), so
-    the runner alone would let one green dotted run cover every test in the repo. A label may end
-    in a class or method (`app.test_x.Class.test_m`): map the longest prefix that exists. Skip env
-    assignments before the program. Also: read a declared repo's own `testFiles` for its commands,
-    and let `templateAt` skip leading env assignments.
-  - Not checked: the related entry was skipped with "no related test files". `relatedTests` keeps
-    only paths that do not start with `../`, so a declared repo's tests never run through it.
-    Whether that is meant is open.
-- Cost in that run: five tries at a command R18 would count (dotted `manage.py test`, a file path
-  to `manage.py test`, a search for pytest, unittest inside `python -c`, the wrapper), and the
-  waiver asked for in six messages. The user asked "but why waive a test? no tests?": a waiver
-  reads to the user as "the tests were skipped".
-  Evidence: the run's verify.json (four green commands, among them `manage.py test
-  app_rollcall.test_stop_zone …` and the wrapper) and `gate check` R18 after each of them.
-
 - 2026-11-12, kwenta.cc, 0.23.0, no run open (a read-only check after the split-editor run): a
   red run through the repo's own `testFiles` command cannot close a reviewer finding. kwenta.cc
   sets `"testFiles": "node scripts/test-files.mjs {files}"`, and its CLAUDE.md names that script as
@@ -292,6 +238,66 @@ Left out: an interview until every choice is settled (more questions), glossary 
 files (project docs, not the gate's job), issue-tracker and teaching skills (outside the gate).
 
 ## Done (moved here when a release fixes it, with the version)
+
+Fixed in 0.23.1 (run django-declared-repo-r18, 2026-11-13): Django test commands are runners, dotted
+labels map to their files or folders on disk, a declared repo is judged by its own `testFiles`,
+and a template matches past leading env assignments. Still open from this entry: Django's and
+unittest's totals are not read (a label that runs 0 tests goes green), `gate test` and related
+tests hand Django file paths, and commands Claude runs itself use the main repo's `testFiles`.
+
+The entry, from RollCall, run 2026-11-13-ticket-3437-stop-zone (0.23.0; main repo rollcall, declared repo
+../studentsync-api, a Django project with no gate.json of its own):
+
+- A Django repo's tests can never satisfy R18. The run's 13 cases all point at
+  `../studentsync-api/app_rollcall/test_stop_zone.py`. Its 17 tests went red before the fix and
+  green after, and passed in every `gate verify`, yet R18 kept saying no test command covers them.
+  The run could only close on a coverage waiver.
+  - `manage.py test` is not a runner. `RUNNERS` (scripts/lib/verify.mjs:209) and the test verbs
+    beside it have no Django entry, so `.venv/bin/python manage.py test app_rollcall.test_stop_zone`
+    reads as no test run at all.
+  - Django names tests by dotted module (`app_rollcall.test_stop_zone`), but `testScopes`
+    (verify.mjs:254) only counts paths, folders and globs that exist on disk. Django refuses a
+    file path outright: "One of the test labels is a path to a file … which is not supported. Use a
+    dotted module name or path to a directory instead."
+  - The `testFiles` template (`templateAt`, verify.mjs:233) assumes the runner takes file paths,
+    so a declared repo's gate.json cannot describe Django either.
+  - A declared repo's own `testFiles` is never read at all: `coverageGaps` (verify.mjs:365) passes
+    the main repo's `config.testFiles` for every repo's commands, as do verify.mjs:137 and
+    rules.mjs:1570 and :1575. In this run rollcall's `scripts/test_db.sh run {files}` was the
+    template applied to the studentsync-api commands. Not Django-only: any declared repo with its
+    own template is judged by the main repo's.
+  - A template also misses a command that starts with an env assignment: `templateAt` matches its
+    words from the segment's first word, so `DJANGO_SETTINGS_MODULE=… .venv/bin/python manage.py
+    test …` is not a test run under the template `.venv/bin/python manage.py test {files}`
+    (`runsTests` gives false with the prefix, true without). `runnerAt` scans every word, so the
+    built-in runners are not affected.
+  - A scratch wrapper that takes the path (`python run_ss_test_file.py
+    ../studentsync-api/app_rollcall/test_stop_zone.py`, which runs django.setup() then unittest)
+    went green but did not count: `python` is not a runner and the wrapper is not a template (it
+    lived in the session's scratchpad, so it could not have been one).
+  - `unittest` is a runner: `python -m unittest app_rollcall/test_stop_zone.py` counts
+    (`runsTests` gives true). That route is closed only because Django's tests need django.setup()
+    first; unittest inside `python -c` is one word to the gate.
+  - The file itself is judged a test: the default tests globs (scripts/lib/config.mjs:78) include
+    `**/test_*.py`. Only the link from the command to the file is missing.
+  - A possible fix: read `manage.py test` (also `python -m django test` and `django-admin test`)
+    as a runner, and map each dotted label to `a/b/c.py` or the package folder `a/b/c/` under the
+    segment's base, so the existing `holds` check applies. A bare `manage.py test` covers its
+    folder, as a bare pytest does. The mapping is required, not optional: `testScopes` drops a
+    name not on disk, and a scope with no names covers its whole folder (`holds(base, ".")`), so
+    the runner alone would let one green dotted run cover every test in the repo. A label may end
+    in a class or method (`app.test_x.Class.test_m`): map the longest prefix that exists. Skip env
+    assignments before the program. Also: read a declared repo's own `testFiles` for its commands,
+    and let `templateAt` skip leading env assignments.
+  - Not checked: the related entry was skipped with "no related test files". `relatedTests` keeps
+    only paths that do not start with `../`, so a declared repo's tests never run through it.
+    Whether that is meant is open.
+- Cost in that run: five tries at a command R18 would count (dotted `manage.py test`, a file path
+  to `manage.py test`, a search for pytest, unittest inside `python -c`, the wrapper), and the
+  waiver asked for in six messages. The user asked "but why waive a test? no tests?": a waiver
+  reads to the user as "the tests were skipped".
+  Evidence: the run's verify.json (four green commands, among them `manage.py test
+  app_rollcall.test_stop_zone …` and the wrapper) and `gate check` R18 after each of them.
 
 Built in run closing-message-shows-skips, 2026-11-12, on the owner's question whether anything
 checks the honesty line of session-start:
