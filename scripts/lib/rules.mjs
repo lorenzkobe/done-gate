@@ -6,7 +6,7 @@ import { nextSeq } from "./events.mjs";
 import { blank, delegatedTier, effectiveTier, inPlan, noTrial, outsidePlan, policyFor, requires, samePiece, tierOf, tiered, trialHolds } from "./size.mjs";
 import { baseCopy, changedUnits, fileDiff, gitTracked, hasReindent, indentMatters, sliceEnd } from "./tree.mjs";
 import { scanDiff } from "./slop.mjs";
-import { coverageGaps, runsTests } from "./verify.mjs";
+import { coverageGaps, djangoTestFiles, runsTests, testFilesFor } from "./verify.mjs";
 import { sealProblems } from "./seal.mjs";
 import { repoPath, toPosixRel } from "./paths.mjs";
 
@@ -417,7 +417,7 @@ export function proofProblem(state, item, ptr) {
     return e && (e.kind === "browser" || red(e) || (ranCleanly(e) && (e.exit ?? 0) === 0 && !testRun(e))) ? null : PROOF_TEXT;
   }
   const file = String(ptr ?? "").replace(/:[^/]*$/, "");
-  const names = (e) => wordsOf(e).some((w) => w === file || w.endsWith(`/${file}`));
+  const names = (e) => wordsOf(e).some((w) => w === file || w.endsWith(`/${file}`)) || djangoTestFiles(e.cmd ?? "", state.root).includes(path.resolve(state.root, file));
   return state.config.isTest(file) && since.some((e) => red(e) && names(e)) ? null : PROOF_TEXT;
 }
 
@@ -462,7 +462,8 @@ function namesFinding(e, files, config) {
 }
 // The test files a run named that exist, by repo path.
 function testFilesNamed(e, config, root) {
-  return wordsOf(e).map((w) => (path.isAbsolute(w) && root && w.startsWith(`${root}/`) ? w.slice(root.length + 1) : w)).filter((w) => config.isTest(w) && root && existsSync(path.join(root, w)));
+  const labels = root ? djangoTestFiles(e.cmd ?? "", root).map((abs) => path.relative(root, abs).split(path.sep).join("/")) : [];
+  return [...wordsOf(e), ...labels].map((w) => (path.isAbsolute(w) && root && w.startsWith(`${root}/`) ? w.slice(root.length + 1) : w)).filter((w) => config.isTest(w) && root && existsSync(path.join(root, w)));
 }
 
 // What a run reached, for a close's line and the report: a test run's totals, a call's status, a page.
@@ -1572,7 +1573,7 @@ export function settleSteps(state) {
     // output was piped, when the exit is the pipe's last command's
     const piped = run && /(?<!\|)\|(?!\|)/.test(String(run.cmd ?? "").replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, "''"));
     if (run) close("tests", `${list(tests)} ran by \`${ranText(run).slice(0, 80)}\` ${(run.exit ?? 0) !== 0 ? `exit ${run.exit}` : piped ? "ran (its exit is the pipe's, not the tests')" : "passed"}`, `events#${run.seq}`);
-    else if (codeAt === Infinity && verify && Date.parse(verify.finishedAt) > since && (verify.commands ?? []).some((c) => !c.skipped && runsTests(c.cmd, config.testFiles))) close("tests", `gate verify ran the tests after ${list(tests)}`, "verify.json");
+    else if (codeAt === Infinity && verify && Date.parse(verify.finishedAt) > since && (verify.commands ?? []).some((c) => !c.skipped && runsTests(c.cmd, testFilesFor(config, c.repo)))) close("tests", `gate verify ran the tests after ${list(tests)}`, "verify.json");
   }
 
   // on a pieces run the code is whole once every group was briefed and no worker is out or cut

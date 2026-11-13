@@ -134,7 +134,7 @@ function changeAdded(ctx, flag, cmd) {
     // the last test command is what R18 cannot catch once no case points at a test file; a repo
     // that configured none gives nothing up
     const config = loadConfig(ctx.root, ledger.repos);
-    const testEntry = (v) => v.related || runsTests(v.cmd, config.testFiles);
+    const testEntry = (v) => v.related || runsTests(v.cmd, testFilesFor(config, v.repo));
     if (config.verify.some(testEntry) && verifyEntries(config, ledger).filter((v) => v.cmd !== cmd && testEntry(v)).length === 0 && verifyEntries(config, ledger).some((v) => v.cmd === cmd && testEntry(v))) {
       const tell = 'dropping the last test command is the user\'s call: ask them, then pass --user-ok "<their words, at least three, naming the tests>"';
       if (!words || words.startsWith("--")) throw new UsageError(tell);
@@ -210,6 +210,9 @@ const RUNNERS = new Set(["pytest", "py.test", "jest", "vitest", "mocha", "ava", 
 const SCRIPT_TOOLS = new Set(["npm", "pnpm", "yarn", "bun", "make", "just", "task", "rake"]);
 const TEST_VERBS = new Set(["go", "cargo", "mix", "dotnet", "deno", "mvn", "gradle", "gradlew"]);
 const PATH_FLAGS = new Set(["-p", "--project", "-c", "--config", "--dir", "--cwd", "--root", "-C", "--prefix"]);
+// Django's test command: manage.py test, django-admin test, python -m django test
+const DJANGO = new Set(["manage.py", "django-admin", "django-admin.py"]);
+const djangoTest = (words, at) => words[at] === "test" && at > 0 && (DJANGO.has(path.basename(words[at - 1])) || (words[at - 1] === "django" && words[at - 2] === "-m"));
 const runnerWord = (words, i) => {
   const dir = path.basename(path.dirname(words[i]));
   return RUNNERS.has(path.basename(words[i])) && (!words[i].includes("/") || dir === "bin" || dir === ".bin") && !PATH_FLAGS.has(words[i - 1]);
@@ -220,6 +223,7 @@ function runnerAt(words) {
     const script = SCRIPT_TOOLS.has(name) ? words.findIndex((w, j) => j > i && /^test[:\w-]*$/.test(w)) : -1;
     if (script >= 0) return script;
     if (TEST_VERBS.has(name) && words[i + 1] === "test") return i + 1;
+    if (djangoTest(words, i + 1)) return i + 1;
     if ((name === "node" || name === "bun") && words.includes("--test")) return words.indexOf("--test");
     if (runnerWord(words, i)) return i;
     if ((name === "playwright" && words[i + 1] === "test") || (name === "cypress" && words[i + 1] === "run")) return i + 1;
@@ -232,10 +236,13 @@ function runnerAt(words) {
 // is another task, while nothing, a flag or a path is a test run.
 function templateAt(words, template) {
   const parts = template ? template.trim().split(/\s+/) : [];
-  const lead = parts.slice(0, Math.max(0, parts.indexOf("{files}")));
-  if (!lead.length || !lead.every((w, i) => words[i] === w)) return -1;
-  const next = words[lead.length];
-  return lead.length > 1 || next === undefined || /^-|[/.*?[]/.test(next) ? lead.length - 1 : -1;
+  // VAR=value words in front, the template's or the command's, are environment, not the runner
+  const assigns = (list) => Math.max(0, list.findIndex((w) => !/^[A-Za-z_]\w*=/.test(w)));
+  const lead = parts.slice(assigns(parts), Math.max(0, parts.indexOf("{files}")));
+  const from = assigns(words);
+  if (!lead.length || !lead.every((w, i) => words[from + i] === w)) return -1;
+  const next = words[from + lead.length];
+  return lead.length > 1 || next === undefined || /^-|[/.*?[]/.test(next) ? from + lead.length - 1 : -1;
 }
 const testRunnerAt = (words, template) => {
   const at = runnerAt(words);
@@ -246,6 +253,32 @@ export const runsTests = (cmd, template = null) => segments(withoutHeredocs(cmd)
 const GLOB = /[*?[{]/;
 const DROPS = new Set(["--ignore", "--ignore-glob", "--deselect"]);
 const TAKES_VALUE = new Set([...DROPS, "-k", "-m", "-c", "-p", "-t", "-g", "--config", "--rootdir", "--junitxml", "--reporter", "--testNamePattern", "--testPathIgnorePatterns", "--exclude", "--grep", "--coverage-dir", "--outputFile"]);
+const DJANGO_VALUE = new Set(["--settings", "--testrunner", "--tag", "--exclude-tag", "--pythonpath", "--durations", "-v", "--verbosity", "--pattern", "--top-level-directory", "--parallel", "--shuffle"]);
+// argparse gives these their value only when the next word is not a flag
+const DJANGO_OPTIONAL = new Set(["--parallel", "--shuffle"]);
+const djangoTakes = (flag, next) => DJANGO_VALUE.has(flag) && (!DJANGO_OPTIONAL.has(flag) || (next !== undefined && !next.startsWith("-")));
+// A Django label (app.test_x.Class.test_m) as the file or package folder it imports: the longest
+// prefix on disk, never a shorter one, so app.tests does not widen to app/.
+function labelPath(label, base) {
+  if (!/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(label)) return null;
+  const parts = label.split(".");
+  for (let k = parts.length; k > 0; k--) {
+    const at = path.join(base, ...parts.slice(0, k));
+    if (existsSync(`${at}.py`)) return `${at}.py`;
+    if (existsSync(at) && statSync(at).isDirectory()) return at;
+  }
+  return null;
+}
+
+// A segment's words without its redirects: `2>&1`, and `>` or `2>` with the file after it.
+function unredirected(seg) {
+  const words = [];
+  for (let i = 0; i < seg.length; i++) {
+    if (seg[i].redir) i += /^(?:\d*|&)?(?:>>?|<)$/.test(seg[i].text) ? 1 : 0;
+    else if (seg[i].text !== "") words.push(seg[i].text);
+  }
+  return words;
+}
 
 // What one verify command runs and leaves out, per test-runner segment (a `cd` is followed):
 // the folders, globs and test files it names after the runner (none: the folder it runs in),
@@ -255,29 +288,43 @@ function testScopes(cmd, cwd, isTest, template = null) {
   const scopes = [];
   let base = cwd;
   for (const seg of segments(withoutHeredocs(cmd))) {
-    const words = seg.map((w) => w.text).filter((w) => w !== "");
+    const words = unredirected(seg);
     if (words[0] === "cd" && words[1]) {
       base = path.resolve(base, words[1]);
       continue;
     }
     const at = testRunnerAt(words, template);
     if (at < 0) continue;
-    const scope = { base, names: [], drops: [] };
+    const django = djangoTest(words, at);
+    // dotted labels import from manage.py's folder
+    const labelBase = django && path.basename(words[at - 1]) === "manage.py" ? path.resolve(base, path.dirname(words[at - 1])) : base;
+    const scope = { base, names: [], drops: [], labelFiles: [] };
     for (let i = at + 1; i < words.length; i++) {
       const flag = /^(--?[\w.-]+)(?:=(.*))?$/.exec(words[i]);
       if (flag) {
-        const value = flag[2] ?? (TAKES_VALUE.has(flag[1]) ? words[++i] : undefined);
+        const value = flag[2] ?? (TAKES_VALUE.has(flag[1]) || (django && djangoTakes(flag[1], words[i + 1])) ? words[++i] : undefined);
         if (value !== undefined && DROPS.has(flag[1])) scope.drops.push(value.split("::")[0]);
         continue;
       }
       const w = words[i].split("::")[0].replace(/\/\.\.\.$/, "/");
       const abs = path.resolve(base, w);
       if (GLOB.test(w) || (existsSync(abs) && (statSync(abs).isDirectory() || isTest(abs)))) scope.names.push(w);
+      else if (django) {
+        // a label that maps to nothing still names something, so the scope never widens to its folder
+        const mapped = labelPath(w, labelBase);
+        scope.names.push(mapped ?? abs);
+        if (mapped?.endsWith(".py")) scope.labelFiles.push(mapped);
+      }
     }
     scopes.push(scope);
   }
   return scopes;
 }
+
+// The files a command's Django labels import, as absolute paths (a cd is followed).
+export const djangoTestFiles = (cmd, cwd) => testScopes(cmd, cwd, () => false).flatMap((s) => s.labelFiles);
+// A declared repo's commands run its own testFiles; the main repo's names a program of the main repo.
+export const testFilesFor = (config, prefix) => (prefix ? (config.repos ?? []).find((r) => r.prefix === prefix)?.config.testFiles ?? null : config.testFiles);
 
 function holds(base, entry, abs) {
   if (GLOB.test(entry)) return matchAny([entry.replace(/^\.\//, "")], path.relative(base, abs).split(path.sep).join("/"));
@@ -362,7 +409,7 @@ export function coverageGaps(state) {
     .filter((c) => c.covers || (!c.skipped && c.exit === 0 && !c.timedOut))
     .flatMap((c) => {
       const cwd = repoRoot(c.repo ?? null);
-      return cwd ? testScopes(c.cmd, cwd, (abs) => config.isTest(path.relative(root, abs).split(path.sep).join("/")), config.testFiles) : [];
+      return cwd ? testScopes(c.cmd, cwd, (abs) => config.isTest(path.relative(root, abs).split(path.sep).join("/")), testFilesFor(config, c.repo)) : [];
     });
   const listed = new Set(verify.commands.filter((c) => (c.covers || (!c.skipped && c.exit === 0 && !c.timedOut)) && Array.isArray(c.files)).flatMap((c) => c.files));
   const gaps = [];
@@ -748,7 +795,7 @@ async function runVerify(ctx, { stepKey = "verify", final = false, force = false
     }
     ctx.err(`verify: ${name} (timeout ${entry.timeout}s)`);
     // a related template handed only source may find no test for it: the final suite runs later
-    const readsTotals = runsTests(run.cmd, config.testFiles) && !(config.testRelated && entry.related && !row.files.length);
+    const readsTotals = runsTests(run.cmd, testFilesFor(config, entry.repo)) && !(config.testRelated && entry.related && !row.files.length);
     const ranAt = Date.now();
     const spawnOptions = { onSpawn: (pgid) => lock?.setGroup(pgid), env: lock ? { [HELD_ENV]: String(process.pid) } : {} };
     const { output, ...result } = { ...row, ...(await runCommand({ ...run, whole: readsTotals }, entry.cwd ?? ctx.root, spawnOptions)) };

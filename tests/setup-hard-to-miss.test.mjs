@@ -6,7 +6,8 @@ import path from "node:path";
 import { makeRepo, gate, write } from "./helpers.mjs";
 import { proposeSetup } from "../scripts/lib/setup.mjs";
 import { loadConfig } from "../scripts/lib/config.mjs";
-import { coverageGaps } from "../scripts/lib/verify.mjs";
+import { coverageGaps, runsTests } from "../scripts/lib/verify.mjs";
+import { proofProblem, runProblem } from "../scripts/lib/rules.mjs";
 
 // From the 0.20.0 review, 3.3: the setup notice was missed in 14 sessions, gate.json kept the last
 // tickets' test files, and a wrapper that runs named test files did not count as a test command.
@@ -188,4 +189,120 @@ test("C9 edge: the setup refusal's --setup-later line keeps the --repo and --old
   const r = run(repo, "open", ["t", "feature", "--repo", "../x y", "--old-version-ok", "fine, carry on"]);
   assert.notEqual(r.status, 0, r.stdout);
   assert.ok(r.stderr.includes(`gate open t feature --repo '../x y' --old-version-ok 'fine, carry on' --setup-later "<their words, at least three>"`), r.stderr);
+});
+
+// RollCall run 2026-11-13-ticket-3437-stop-zone: a Django repo's tests never satisfied R18, since
+// manage.py test was no runner and its dotted labels are not paths; a declared repo was judged by
+// the main repo's testFiles; a template missed a command with VAR=value words in front.
+const DJANGO = {
+  "manage.py": "", "app/__init__.py": "", "app/test_x.py": "x\n", "app/tests.py": "t\n", "app/models.py": "m\n",
+  "other/test_y.py": "y\n", "sub/manage.py": "", "sub/app/test_x.py": "x\n",
+};
+const djangoGaps = (repo, cmd, file) => gapsFor(repo, cmd, file).map((g) => g.id);
+
+test("C1 happy: Django's test commands are test runs, its other commands are not", () => {
+  for (const cmd of [".venv/bin/python manage.py test app.test_x", "./manage.py test", "python -m django test app", "django-admin test app", "cd api && python manage.py test --keepdb"]) assert.equal(runsTests(cmd), true, cmd);
+  for (const cmd of ["python manage.py runserver", "python manage.py testserver", "python -m django check", "python manage.py migrate test"]) assert.equal(runsTests(cmd), false, cmd);
+});
+
+test("C2 reported-surface: a green manage.py test app.test_x covers app/test_x.py and no other test", () => {
+  const repo = makeRepo("shm-dj2", DJANGO);
+  assert.deepEqual(djangoGaps(repo, ".venv/bin/python manage.py test app.test_x", "app/test_x.py"), []);
+  assert.deepEqual(djangoGaps(repo, ".venv/bin/python manage.py test app.test_x", "other/test_y.py"), ["C1"]);
+});
+
+test("C3 edge: a label ending in a class or method covers its module only", () => {
+  const repo = makeRepo("shm-dj3", DJANGO);
+  assert.deepEqual(djangoGaps(repo, "python manage.py test app.test_x.StopZoneTests.test_m", "app/test_x.py"), []);
+  assert.deepEqual(djangoGaps(repo, "python manage.py test app.test_x.StopZoneTests.test_m", "other/test_y.py"), ["C1"]);
+});
+
+test("C4 boundary: a package label or a folder path covers the tests under it and nothing outside", () => {
+  const repo = makeRepo("shm-dj4", DJANGO);
+  for (const cmd of ["python manage.py test app", "python manage.py test app/"]) {
+    assert.deepEqual(djangoGaps(repo, cmd, "app/test_x.py"), [], cmd);
+    assert.deepEqual(djangoGaps(repo, cmd, "other/test_y.py"), ["C1"], cmd);
+  }
+});
+
+test("C5 refused: a label not on disk covers nothing, not the whole folder", () => {
+  const repo = makeRepo("shm-dj5", DJANGO);
+  assert.deepEqual(djangoGaps(repo, "python manage.py test missing.mod", "app/test_x.py"), ["C1"]);
+});
+
+test("C6 boundary: a bare manage.py test, flags only, covers the folder it runs in", () => {
+  const repo = makeRepo("shm-dj6", DJANGO);
+  for (const cmd of ["python manage.py test --keepdb --noinput", "python manage.py test --keepdb 2>&1 | tail -20", "python manage.py test > out.txt", "python manage.py test 2> err.txt"]) assert.deepEqual(djangoGaps(repo, cmd, "other/test_y.py"), [], cmd);
+  assert.deepEqual(djangoGaps(repo, "python manage.py test app.test_x 2>&1 | tail -5", "other/test_y.py"), ["C1"]);
+});
+
+test("C7 edge: labels map under manage.py's folder", () => {
+  const repo = makeRepo("shm-dj7", DJANGO);
+  assert.deepEqual(djangoGaps(repo, "python sub/manage.py test app.test_x", "sub/app/test_x.py"), []);
+  assert.deepEqual(djangoGaps(repo, "python sub/manage.py test app.test_x", "app/test_x.py"), ["C1"]);
+});
+
+test("C8 edge: VAR=value words in front of a Django run or a template run do not hide it", () => {
+  const repo = makeRepo("shm-dj8", DJANGO);
+  assert.deepEqual(djangoGaps(repo, "DJANGO_SETTINGS_MODULE=s .venv/bin/python manage.py test app.test_x", "app/test_x.py"), []);
+  const tmpl = makeRepo("shm-dj8b", { ...WRAPPED([]), ".claude/gate.json": JSON.stringify({ tests: ["tests/**"], testFiles: "scripts/test_db.sh run {files} -q" }) });
+  assert.deepEqual(gapsFor(tmpl, "A=1 B=2 scripts/test_db.sh run tests/test_a.py -q"), []);
+  assert.deepEqual(gapsFor(tmpl, "A=1 scripts/test_db.sh run tests/test_b.py -q").map((g) => g.id), ["C1"]);
+});
+
+const declared = (name, own) => {
+  const main = makeRepo(name, { "scripts/test_db.sh": "#!/bin/sh\n", ".claude/gate.json": JSON.stringify({ testFiles: "scripts/test_db.sh run {files}" }) });
+  const other = makeRepo(`${name}-other`, { "t.sh": "#!/bin/sh\n", "app/test_x.py": "x\n", ".claude/gate.json": own === null ? null : JSON.stringify({ testFiles: own }) });
+  const prefix = `../${name}-other`;
+  const config = loadConfig(main, [{ prefix, root: other }]);
+  return (cmd) => coverageGaps({ root: main, config, ledger: { cases: [{ id: "C1", status: "closed", test: `${prefix}/app/test_x.py::t` }] }, verify: { commands: [{ cmd, exit: 0, repo: prefix }] } }).map((g) => g.id);
+};
+
+test("C9 reported-surface: a declared repo's command is judged by that repo's own testFiles", () => {
+  const gaps = declared("shm-dj9", "./t.sh {files}");
+  assert.deepEqual(gaps("./t.sh app/test_x.py"), []);
+  assert.deepEqual(gaps("scripts/test_db.sh run app/test_x.py"), ["C1"]);
+});
+
+test("C10 refused: a declared repo with no testFiles takes no template from the main repo; a built-in runner still counts", () => {
+  const gaps = declared("shm-dj10", null);
+  assert.deepEqual(gaps("scripts/test_db.sh run app/test_x.py"), ["C1"]);
+  assert.deepEqual(gaps("pytest app/test_x.py"), []);
+});
+
+test("C12 edge: a bare Django run with value flags covers its folder: the values are not labels", () => {
+  const repo = makeRepo("shm-dj12", DJANGO);
+  assert.deepEqual(djangoGaps(repo, "python manage.py test --settings proj.settings_test --parallel 4 --tag slow -v 2", "other/test_y.py"), []);
+  assert.deepEqual(djangoGaps(repo, "python manage.py test --settings=proj.settings_test --exclude-tag slow app.test_x", "other/test_y.py"), ["C1"]);
+});
+
+test("C13 boundary: a label stops at the longest part on disk and never widens to its folder", () => {
+  const repo = makeRepo("shm-dj13", DJANGO);
+  assert.deepEqual(djangoGaps(repo, "python manage.py test app.tests", "app/test_x.py"), ["C1"]);
+  assert.deepEqual(djangoGaps(repo, "python manage.py test app.models", "app/test_x.py"), ["C1"]);
+});
+
+test("C14 reported-surface: a case closes on a green Django run that names its test file; a non-test label names none", () => {
+  const repo = makeRepo("shm-dj14", DJANGO);
+  const opts = { config: loadConfig(repo), root: repo };
+  const run = (cmd) => runProblem({}, { kind: "command", cmd, tests: null }, opts);
+  assert.equal(run("python manage.py test app.test_x.StopZoneTests"), null);
+  assert.match(run("python manage.py test app.models") ?? "", /names no test file/);
+});
+
+test("C15 reported-surface: a reviewer finding on a Django test closes on a red run of its label, not of another", () => {
+  const repo = makeRepo("shm-dj15", DJANGO);
+  const state = (cmd) => ({
+    root: repo, config: loadConfig(repo),
+    ledger: { huddles: [{ role: "reviewer", seq: 1, actOn: [{ id: "H1.1" }] }] },
+    events: [{ kind: "command", seq: 2, cmd, exit: 1, tests: null }],
+  });
+  assert.equal(proofProblem(state("python manage.py test app.test_x"), { id: "H1.1" }, "app/test_x.py:test_m"), null);
+  assert.notEqual(proofProblem(state("python manage.py test other.test_y"), { id: "H1.1" }, "app/test_x.py:test_m"), null);
+});
+
+test("C16 edge: a template that starts with VAR=value words matches its command with or without them", () => {
+  const tmpl = "DJANGO_SETTINGS_MODULE=s.test .venv/bin/python run.py {files}";
+  for (const cmd of ["DJANGO_SETTINGS_MODULE=s.test .venv/bin/python run.py tests/a.py", ".venv/bin/python run.py tests/a.py", "A=1 .venv/bin/python run.py tests/a.py"]) assert.equal(runsTests(cmd, tmpl), true, cmd);
+  assert.equal(runsTests(".venv/bin/python other.py tests/a.py", tmpl), false);
 });
